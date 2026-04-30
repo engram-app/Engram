@@ -48,6 +48,54 @@ defmodule EngramWeb.AuthControllerTest do
     end
   end
 
+  describe "GET /api-keys" do
+    setup %{conn: conn} do
+      user = insert(:user)
+      insert(:vault, user: user, is_default: true)
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "setup-key")
+      authed = put_req_header(conn, "authorization", "Bearer #{raw_key}")
+      %{conn: authed, user: user}
+    end
+
+    test "lists keys belonging to the current user", %{conn: conn, user: user} do
+      {:ok, _, _} = Engram.Accounts.create_api_key(user, "second-key")
+
+      conn = get(conn, "/api/api-keys")
+      assert %{"keys" => keys} = json_response(conn, 200)
+      assert length(keys) == 2
+
+      names = Enum.map(keys, & &1["name"])
+      assert "setup-key" in names
+      assert "second-key" in names
+
+      key = hd(keys)
+      assert Map.has_key?(key, "id")
+      assert Map.has_key?(key, "created_at")
+      assert Map.has_key?(key, "last_used")
+      refute Map.has_key?(key, "key_hash")
+      refute Map.has_key?(key, "key")
+    end
+
+    test "does not return keys from other users", %{conn: conn} do
+      other = insert(:user)
+      {:ok, _, _} = Engram.Accounts.create_api_key(other, "other-key")
+
+      conn = get(conn, "/api/api-keys")
+      %{"keys" => keys} = json_response(conn, 200)
+      names = Enum.map(keys, & &1["name"])
+      refute "other-key" in names
+    end
+
+    test "returns 401 without auth", %{conn: conn} do
+      conn =
+        conn
+        |> delete_req_header("authorization")
+        |> get("/api/api-keys")
+
+      assert json_response(conn, 401)
+    end
+  end
+
   describe "DELETE /api-keys/:id" do
     setup %{conn: conn} do
       user = insert(:user)

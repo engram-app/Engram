@@ -64,6 +64,7 @@ defmodule EngramWeb.Router do
     post "/auth/device/authorize", DeviceAuthController, :authorize
 
     # API key management
+    get "/api-keys", AuthController, :list_api_keys
     post "/api-keys", AuthController, :create_api_key
     delete "/api-keys/:id", AuthController, :revoke_api_key
 

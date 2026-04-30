@@ -1,10 +1,14 @@
-import { createBrowserRouter } from 'react-router'
+import { Navigate, createBrowserRouter } from 'react-router'
 import AuthGuard from './auth/auth-guard'
 import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
+import ApiKeysPage from './settings/api-keys-page'
+import BillingPlaceholder from './settings/billing-placeholder'
+import EncryptionPage from './settings/encryption-page'
+import SettingsLayout from './settings/settings-layout'
 import Dashboard from './viewer/dashboard'
 import NotePage from './viewer/note-page'
 import SearchPage from './viewer/search-page'
@@ -26,6 +30,16 @@ export const router = createBrowserRouter(
             { path: '/note/*', element: <NotePage /> },
             { path: '/search', element: <SearchPage /> },
             { path: '/billing', element: <BillingPage /> },
+            {
+              path: '/settings',
+              element: <SettingsLayout />,
+              children: [
+                { index: true, element: <Navigate to="api-keys" replace /> },
+                { path: 'api-keys', element: <ApiKeysPage /> },
+                { path: 'encryption', element: <EncryptionPage /> },
+                { path: 'billing', element: <BillingPlaceholder /> },
+              ],
+            },
           ],
         },
         { path: '/link', element: <DeviceLinkPage /> },

@@ -3,6 +3,23 @@ defmodule EngramWeb.AuthController do
 
   alias Engram.Accounts
 
+  def list_api_keys(conn, _params) do
+    user = conn.assigns.current_user
+    keys = Accounts.list_api_keys(user)
+
+    json(conn, %{
+      keys:
+        Enum.map(keys, fn k ->
+          %{
+            id: k.id,
+            name: k.name,
+            created_at: k.created_at,
+            last_used: k.last_used
+          }
+        end)
+    })
+  end
+
   def create_api_key(conn, %{"name" => name}) do
     user = conn.assigns.current_user
 

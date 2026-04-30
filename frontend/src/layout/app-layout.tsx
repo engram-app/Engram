@@ -54,6 +54,9 @@ export default function AppLayout() {
             <Link to="/billing" className="text-sm text-gray-600 hover:text-gray-900 hover:underline">
               Billing
             </Link>
+            <Link to="/settings" className="text-sm text-gray-600 hover:text-gray-900 hover:underline">
+              Settings
+            </Link>
             <Suspense fallback={null}>
               {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
             </Suspense>
