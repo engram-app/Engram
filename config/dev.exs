@@ -76,6 +76,12 @@ config :engram, :qdrant_collection, "engram_notes"
 # Enable dev routes for dashboard and mailbox
 config :engram, dev_routes: true
 
+# Disable SPA index.html cache so `vite build` (or `bun run build`)
+# rewriting priv/static/app/index.html is picked up immediately —
+# without this, Phoenix keeps serving the old asset hash and the
+# browser 404s on the (now-deleted) JS file, producing a white page.
+config :engram, :spa_cache_enabled?, false
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

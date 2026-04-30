@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   type ApiKey,
   type CreatedApiKey,
@@ -191,12 +191,19 @@ function RevealKeyModal({
   createdKey: CreatedApiKey
   onClose: () => void
 }) {
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const keyFieldRef = useRef<HTMLInputElement>(null)
 
   async function copy() {
-    await navigator.clipboard.writeText(createdKey.key)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    const ok = await copyToClipboard(createdKey.key)
+    setCopyState(ok ? 'copied' : 'error')
+    if (ok) {
+      setTimeout(() => setCopyState('idle'), 2000)
+    }
+  }
+
+  function selectAll() {
+    keyFieldRef.current?.select()
   }
 
   return (
@@ -206,23 +213,40 @@ function RevealKeyModal({
           This is the only time the key will be shown. Copy it now and store it somewhere safe.
         </p>
 
-        <section className="rounded-md border border-gray-200 bg-gray-50 p-3">
-          <p className="break-all font-mono text-sm text-gray-900">{createdKey.key}</p>
-        </section>
+        <div className="flex items-stretch gap-2">
+          <input
+            ref={keyFieldRef}
+            readOnly
+            value={createdKey.key}
+            onFocus={selectAll}
+            onClick={selectAll}
+            className="flex-1 min-w-0 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            aria-label="API key"
+          />
+          <button
+            type="button"
+            onClick={copy}
+            aria-label="Copy API key"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 active:bg-blue-800 active:scale-[0.98]"
+          >
+            <CopyIcon copied={copyState === 'copied'} />
+            <span className="min-w-12 text-left">
+              {copyState === 'copied' ? 'Copied' : 'Copy'}
+            </span>
+          </button>
+        </div>
 
-        <button
-          type="button"
-          onClick={copy}
-          className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          {copied ? 'Copied!' : 'Copy to clipboard'}
-        </button>
+        {copyState === 'error' && (
+          <p className="text-sm text-red-700" role="alert">
+            Copy failed — click the field and press Cmd/Ctrl+C to copy manually.
+          </p>
+        )}
 
         <footer className="flex justify-end pt-2">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
           >
             Done
           </button>
@@ -230,6 +254,66 @@ function RevealKeyModal({
       </div>
     </ModalShell>
   )
+}
+
+function CopyIcon({ copied }: { copied: boolean }) {
+  if (copied) {
+    return (
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+        className="h-4 w-4"
+        aria-hidden="true"
+      >
+        <path
+          fillRule="evenodd"
+          d="M16.704 5.293a1 1 0 010 1.414l-7.5 7.5a1 1 0 01-1.414 0l-3.5-3.5a1 1 0 111.414-1.414L8.5 12.086l6.79-6.793a1 1 0 011.414 0z"
+          clipRule="evenodd"
+        />
+      </svg>
+    )
+  }
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      className="h-4 w-4"
+      aria-hidden="true"
+    >
+      <path d="M7 3a2 2 0 00-2 2v9a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2H7z" />
+      <path d="M3 7a2 2 0 012-2h.5a.5.5 0 010 1H5a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1v-.5a.5.5 0 011 0v.5a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+    </svg>
+  )
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // fall through to legacy fallback
+    }
+  }
+
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.top = '0'
+    ta.style.left = '0'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
 }
 
 function ModalShell({

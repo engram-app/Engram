@@ -15,16 +15,28 @@ defmodule EngramWeb.SpaController do
   # Cache the split around </head> so each request only interpolates
   # the (cheap) config script. Config changes are picked up on every
   # request since we never cache the rendered output.
+  #
+  # In :dev/:test the cache is disabled (see config/dev.exs) so a
+  # `vite build` rewriting priv/static/app/index.html with new asset
+  # hashes is picked up on the next request without restarting Phoenix.
   defp cached_split do
-    case :persistent_term.get({__MODULE__, :split}, nil) do
-      nil ->
-        split = build_split()
-        :persistent_term.put({__MODULE__, :split}, split)
-        split
+    if cache_enabled?() do
+      case :persistent_term.get({__MODULE__, :split}, nil) do
+        nil ->
+          split = build_split()
+          :persistent_term.put({__MODULE__, :split}, split)
+          split
 
-      cached ->
-        cached
+        cached ->
+          cached
+      end
+    else
+      build_split()
     end
+  end
+
+  defp cache_enabled? do
+    Application.get_env(:engram, :spa_cache_enabled?, true)
   end
 
   defp build_split do
