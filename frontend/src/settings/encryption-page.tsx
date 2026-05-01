@@ -15,9 +15,7 @@ export default function EncryptionPage() {
     return <p className="text-sm text-gray-500">Loading…</p>
   }
 
-  const vault = vaults?.[0]
-
-  if (!vault) {
+  if (!vaults || vaults.length === 0) {
     return (
       <article className="space-y-4">
         <h1 className="text-2xl font-bold text-gray-900">Encryption at Rest</h1>
@@ -30,78 +28,97 @@ export default function EncryptionPage() {
     )
   }
 
-  return <EncryptionPanel vault={vault} />
+  return (
+    <article className="space-y-6">
+      <header>
+        <h1 className="text-2xl font-bold text-gray-900">Encryption at Rest</h1>
+        <p className="mt-1 text-sm text-gray-600">
+          {vaults.length === 1
+            ? 'Vault encryption status.'
+            : `${vaults.length} vaults — manage encryption per vault.`}
+        </p>
+      </header>
+
+      <ul className="space-y-4">
+        {vaults.map((v) => (
+          <li key={v.id}>
+            <VaultEncryptionCard vault={v} />
+          </li>
+        ))}
+      </ul>
+    </article>
+  )
 }
 
-function EncryptionPanel({ vault }: { vault: Vault }) {
+function VaultEncryptionCard({ vault }: { vault: Vault }) {
   const inFlight =
     vault.encryption_status === 'encrypting' || vault.encryption_status === 'decrypt_pending'
-
   const { data: progress } = useEncryptionProgress(vault.id, inFlight)
   const encrypt = useEncryptVault()
   const [confirming, setConfirming] = useState(false)
 
   return (
-    <article className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold text-gray-900">Encryption at Rest</h1>
-        <p className="mt-1 text-sm text-gray-600">Vault: {vault.name}</p>
+    <section className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold text-gray-900">{vault.name}</h2>
+          {vault.is_default && (
+            <p className="text-xs text-gray-500">Default vault</p>
+          )}
+        </div>
+        <StatusBadge status={vault.encryption_status} />
       </header>
 
-      <section className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
-        <StatusBadge status={vault.encryption_status} />
-
-        {vault.encryption_status === 'none' && (
-          <>
-            <p className="text-sm text-gray-700">
-              Notes and vector payloads are stored as plaintext on the server. Enabling
-              encryption protects your data with a key derived from your account.
-            </p>
-            {vault.cooldown_days != null && vault.cooldown_days > 0 && (
-              <p className="text-xs text-gray-500">
-                After enabling, you cannot disable encryption for {vault.cooldown_days} days.
-              </p>
-            )}
-            {!confirming ? (
-              <button
-                type="button"
-                onClick={() => setConfirming(true)}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Encrypt Vault
-              </button>
-            ) : (
-              <ConfirmEncrypt
-                cooldownDays={vault.cooldown_days}
-                isPending={encrypt.isPending}
-                error={encrypt.error}
-                onCancel={() => setConfirming(false)}
-                onConfirm={() => {
-                  encrypt.mutate(vault.id, { onSuccess: () => setConfirming(false) })
-                }}
-              />
-            )}
-          </>
-        )}
-
-        {inFlight && progress && (
-          <ProgressView
-            processed={progress.processed}
-            total={progress.total}
-            status={progress.status}
-          />
-        )}
-
-        {vault.encryption_status === 'encrypted' && (
+      {vault.encryption_status === 'none' && (
+        <>
           <p className="text-sm text-gray-700">
-            All notes and vector payloads are encrypted.
-            {vault.encrypted_at && (
-              <> Enabled {new Date(vault.encrypted_at).toLocaleDateString()}.</>
-            )}
+            Notes and vector payloads are stored as plaintext on the server. Enabling encryption
+            protects your data with a key derived from your account.
           </p>
-        )}
-      </section>
-    </article>
+          {vault.cooldown_days != null && vault.cooldown_days > 0 && (
+            <p className="text-xs text-gray-500">
+              After enabling, you cannot disable encryption for {vault.cooldown_days} days.
+            </p>
+          )}
+          {!confirming ? (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Encrypt Vault
+            </button>
+          ) : (
+            <ConfirmEncrypt
+              cooldownDays={vault.cooldown_days}
+              isPending={encrypt.isPending && encrypt.variables === vault.id}
+              error={encrypt.variables === vault.id ? encrypt.error : null}
+              onCancel={() => setConfirming(false)}
+              onConfirm={() => {
+                encrypt.mutate(vault.id, { onSuccess: () => setConfirming(false) })
+              }}
+            />
+          )}
+        </>
+      )}
+
+      {inFlight && progress && (
+        <ProgressView
+          processed={progress.processed}
+          total={progress.total}
+          status={progress.status}
+        />
+      )}
+
+      {vault.encryption_status === 'encrypted' && (
+        <p className="text-sm text-gray-700">
+          All notes and vector payloads are encrypted.
+          {vault.encrypted_at && (
+            <> Enabled {new Date(vault.encrypted_at).toLocaleDateString()}.</>
+          )}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -144,7 +161,7 @@ function StatusBadge({ status }: { status: EncryptionStatus | string }) {
 
   return (
     <span
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${s.bg} ${s.text}`}
+      className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${s.bg} ${s.text}`}
     >
       <span className={`h-2 w-2 rounded-full ${s.dot}`} />
       {s.label}

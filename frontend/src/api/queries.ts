@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
+import { useActiveVaultId } from './active-vault'
 
 // Types matching backend JSON responses
 export interface Folder {
@@ -36,16 +37,18 @@ export interface User {
 // Query hooks
 
 export function useFolders() {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['folders'],
+    queryKey: ['folders', vaultId],
     queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
     select: (data) => data.folders,
   })
 }
 
 export function useFolderNotes(folder: string) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['folderNotes', folder],
+    queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: (data) => data.notes,
@@ -54,16 +57,18 @@ export function useFolderNotes(folder: string) {
 }
 
 export function useNote(path: string) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['note', path],
+    queryKey: ['note', vaultId, path],
     queryFn: () => api.get<Note>(`/notes/${encodeURIComponent(path)}`),
     enabled: !!path,
   })
 }
 
 export function useSearch(query: string) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['search', query],
+    queryKey: ['search', vaultId, query],
     queryFn: () => api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }),
     select: (data) => data.results,
     enabled: query.length > 0,
@@ -71,8 +76,9 @@ export function useSearch(query: string) {
 }
 
 export function useTags() {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['tags'],
+    queryKey: ['tags', vaultId],
     queryFn: () => api.get<{ tags: string[] }>('/tags'),
     select: (data) => data.tags,
   })

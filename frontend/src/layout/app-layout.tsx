@@ -10,6 +10,7 @@ const LocalUserMenu = lazy(() => import('../auth/local-user-menu'))
 import { useChannel } from '../api/use-channel'
 import { useBillingStatus } from '../api/queries'
 import FolderTree from '../viewer/folder-tree'
+import VaultSwitcher from './vault-switcher'
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -71,7 +72,12 @@ export default function AppLayout() {
               sidebarOpen ? 'w-64' : 'w-0'
             } shrink-0 overflow-y-auto border-r border-gray-200 bg-gray-50 transition-all duration-200`}
           >
-            {sidebarOpen && <FolderTree />}
+            {sidebarOpen && (
+              <>
+                <VaultSwitcher />
+                <FolderTree />
+              </>
+            )}
           </aside>
 
           <main className="flex-1 overflow-y-auto p-6">

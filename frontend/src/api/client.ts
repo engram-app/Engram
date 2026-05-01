@@ -1,3 +1,5 @@
+import { getActiveVaultId } from './active-vault'
+
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null
 
@@ -19,6 +21,10 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
   headers.set('Content-Type', 'application/json')
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
+  }
+  const vaultId = getActiveVaultId()
+  if (vaultId != null) {
+    headers.set('X-Vault-ID', String(vaultId))
   }
 
   const response = await fetch(`/api${path}`, { ...options, headers })
