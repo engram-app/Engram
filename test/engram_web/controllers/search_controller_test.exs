@@ -50,18 +50,27 @@ defmodule EngramWeb.SearchControllerTest do
       conn = post(conn, "/api/search", %{query: "iron panel"})
       assert %{"results" => results} = json_response(conn, 200)
       assert length(results) == 1
-      assert hd(results)["score"] == 0.95
-      assert hd(results)["source_path"] == "Health/Iron Panel.md"
+      [hit] = results
+      assert hit["score"] == 0.95
+      assert hit["path"] == "Health/Iron Panel.md"
+      assert hit["title"] == "Iron Panel"
+      assert hit["folder"] == "Health"
+      assert hit["snippet"] == "Ferritin levels."
+      assert hit["match_count"] == 1
     end
 
-    test "passes limit param", %{conn: conn, bypass: bypass} do
+    test "over-fetches chunks so grouping can return the requested number of notes",
+         %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
-        assert decoded["limit"] == 10
+        # Client requests 10 notes → controller asks Qdrant for 40 chunks
+        # (10 * @overfetch_factor) so multiple chunks per note don't cap
+        # the visible result set below 10 notes.
+        assert decoded["limit"] == 40
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -77,14 +86,15 @@ defmodule EngramWeb.SearchControllerTest do
       assert json_response(conn, 422)
     end
 
-    test "clamps limit to valid range", %{conn: conn, bypass: bypass} do
+    test "clamps note limit then over-fetches chunks", %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
-        assert decoded["limit"] <= 50
+        # 999 notes → clamped to 50 → 50 * 4 = 200 chunks asked of Qdrant.
+        assert decoded["limit"] == 200
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -137,5 +147,89 @@ defmodule EngramWeb.SearchControllerTest do
       conn = post(conn, "/api/search", %{query: "nothing here"})
       assert %{"results" => []} = json_response(conn, 200)
     end
+
+    test "groups repeated chunks from the same note into one result with match_count",
+         %{conn: conn, bypass: bypass, user: user} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Three top hits all point at the same note plus one different note —
+      # before the over-fetch + group_by_note fix, repeated chunks would
+      # crowd out the second note even though there were enough candidates.
+      qdrant_result = %{
+        "result" => [
+          chunk("uuid-a1", 0.95, "Health/Iron Panel.md", "Iron Panel", "Ferritin section.", user),
+          chunk("uuid-a2", 0.91, "Health/Iron Panel.md", "Iron Panel", "TIBC section.", user),
+          chunk("uuid-a3", 0.88, "Health/Iron Panel.md", "Iron Panel", "Notes on saturation.", user),
+          chunk("uuid-b1", 0.80, "Health/Vitamin D.md", "Vitamin D", "Levels by season.", user)
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      conn = post(conn, "/api/search", %{query: "iron", limit: 5})
+      assert %{"results" => results} = json_response(conn, 200)
+
+      # Two unique notes, sorted by best chunk score.
+      assert length(results) == 2
+      [iron, vitd] = results
+
+      assert iron["path"] == "Health/Iron Panel.md"
+      assert iron["match_count"] == 3
+      assert iron["snippet"] == "Ferritin section."
+      assert iron["score"] == 0.95
+
+      assert vitd["path"] == "Health/Vitamin D.md"
+      assert vitd["match_count"] == 1
+    end
+
+    test "honors the requested note limit when more unique notes are available",
+         %{conn: conn, bypass: bypass, user: user} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      result = %{
+        "result" =>
+          for i <- 1..10 do
+            chunk(
+              "uuid-#{i}",
+              1.0 - i * 0.01,
+              "F/Note #{i}.md",
+              "Note #{i}",
+              "snippet #{i}",
+              user
+            )
+          end
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(result))
+      end)
+
+      conn = post(conn, "/api/search", %{query: "note", limit: 3})
+      %{"results" => results} = json_response(conn, 200)
+      assert length(results) == 3
+    end
+  end
+
+  defp chunk(id, score, source_path, title, text, user) do
+    %{
+      "id" => id,
+      "score" => score,
+      "payload" => %{
+        "text" => text,
+        "title" => title,
+        "heading_path" => title,
+        "source_path" => source_path,
+        "tags" => [],
+        "user_id" => to_string(user.id)
+      }
+    }
   end
 end

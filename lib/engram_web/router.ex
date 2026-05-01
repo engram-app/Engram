@@ -63,9 +63,15 @@ defmodule EngramWeb.Router do
     # Device flow authorization (authenticated — web app confirms)
     post "/auth/device/authorize", DeviceAuthController, :authorize
 
-    # API key management
-    post "/api-keys", AuthController, :create_api_key
-    delete "/api-keys/:id", AuthController, :revoke_api_key
+    # API key management — session/JWT only. An API key (especially a
+    # vault-restricted one) must never be able to enumerate, mint, or
+    # revoke other API keys for the same user.
+    scope "/" do
+      pipe_through EngramWeb.Plugs.RequireSession
+      get "/api-keys", AuthController, :list_api_keys
+      post "/api-keys", AuthController, :create_api_key
+      delete "/api-keys/:id", AuthController, :revoke_api_key
+    end
 
     # Vault management (user-level, not vault-scoped)
     get "/vaults", VaultsController, :index

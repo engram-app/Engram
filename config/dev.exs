@@ -36,8 +36,12 @@ config :engram, EngramWeb.Endpoint,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "hZXoe4bVk7sJkF6CT/1jG+/4X03lcdTECjUFOWwKSlF0KAecv1CROWuFYqrtzY3k",
+  # No Vite watcher here — Phoenix spawns watchers as Port children that
+  # don't get cleaned up on BEAM SIGKILL, leaving orphan node processes
+  # holding :5173+ across restarts. Run `make frontend-dev` separately
+  # when you want hot-reload at :5173, or `bun run build` to refresh the
+  # bundle Phoenix serves at :4000 / engram.ras.band.
   watchers: [
-    npm: ["run", "dev", "--", "--clearScreen", "false", cd: Path.expand("../frontend", __DIR__)],
     tailwind: {Tailwind, :install_and_run, [:marketing, ~w(--watch)]}
   ]
 
@@ -75,6 +79,12 @@ config :engram, :qdrant_collection, "engram_notes"
 
 # Enable dev routes for dashboard and mailbox
 config :engram, dev_routes: true
+
+# Disable SPA index.html cache so `vite build` (or `bun run build`)
+# rewriting priv/static/app/index.html is picked up immediately —
+# without this, Phoenix keeps serving the old asset hash and the
+# browser 404s on the (now-deleted) JS file, producing a white page.
+config :engram, :spa_cache_enabled?, false
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"

@@ -1,5 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
+import { useActiveVaultId } from './active-vault'
+
+// Encode each path segment but preserve slashes so Phoenix's splat
+// routes match. encodeURIComponent on a full path produces %2F, which
+// Plug.Static rejects with 400 InvalidPathError before the router runs.
+function encodePathSegments(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
 
 // Types matching backend JSON responses
 export interface Folder {
@@ -24,8 +32,11 @@ export interface Note extends NoteSummary {
 export interface SearchResult {
   path: string
   title: string
+  folder: string
+  heading_path: string | null
   snippet: string
   score: number
+  match_count: number
 }
 
 export interface User {
@@ -36,34 +47,38 @@ export interface User {
 // Query hooks
 
 export function useFolders() {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['folders'],
+    queryKey: ['folders', vaultId],
     queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
     select: (data) => data.folders,
   })
 }
 
-export function useFolderNotes(folder: string) {
+export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['folderNotes', folder],
+    queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: (data) => data.notes,
-    enabled: !!folder,
+    enabled: options?.enabled ?? folder.length > 0,
   })
 }
 
 export function useNote(path: string) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['note', path],
-    queryFn: () => api.get<Note>(`/notes/${encodeURIComponent(path)}`),
+    queryKey: ['note', vaultId, path],
+    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
     enabled: !!path,
   })
 }
 
 export function useSearch(query: string) {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['search', query],
+    queryKey: ['search', vaultId, query],
     queryFn: () => api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }),
     select: (data) => data.results,
     enabled: query.length > 0,
@@ -71,8 +86,9 @@ export function useSearch(query: string) {
 }
 
 export function useTags() {
+  const vaultId = useActiveVaultId()
   return useQuery({
-    queryKey: ['tags'],
+    queryKey: ['tags', vaultId],
     queryFn: () => api.get<{ tags: string[] }>('/tags'),
     select: (data) => data.tags,
   })
@@ -104,5 +120,102 @@ export function useBillingStatus() {
   return useQuery({
     queryKey: ['billing', 'status'],
     queryFn: () => api.get<BillingStatus>('/billing/status'),
+  })
+}
+
+// API key types
+
+export interface ApiKey {
+  id: number
+  name: string
+  created_at: string
+  last_used: string | null
+}
+
+export interface CreatedApiKey {
+  id: number
+  name: string
+  key: string
+}
+
+// API key hooks
+
+export function useApiKeys() {
+  return useQuery({
+    queryKey: ['api-keys'],
+    queryFn: () => api.get<{ keys: ApiKey[] }>('/api-keys'),
+    select: (data) => data.keys,
+  })
+}
+
+export function useCreateApiKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.post<CreatedApiKey>('/api-keys', { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
+  })
+}
+
+export function useRevokeApiKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.del<{ deleted: boolean }>(`/api-keys/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
+  })
+}
+
+// Vault types (encryption fields are the ones we care about for settings)
+
+export type EncryptionStatus = 'none' | 'encrypting' | 'encrypted' | 'decrypt_pending'
+
+export interface Vault {
+  id: number
+  name: string
+  description: string | null
+  slug: string
+  is_default: boolean
+  created_at: string
+  encrypted: boolean
+  encryption_status: EncryptionStatus
+  encrypted_at: string | null
+  decrypt_requested_at: string | null
+  last_toggle_at: string | null
+  cooldown_days: number | null
+}
+
+export interface EncryptionProgress {
+  processed: number
+  total: number
+  status: EncryptionStatus
+  started_at: string | null
+}
+
+// Vault hooks
+
+export function useVaults() {
+  return useQuery({
+    queryKey: ['vaults'],
+    queryFn: () => api.get<{ vaults: Vault[] }>('/vaults'),
+    select: (data) => data.vaults,
+  })
+}
+
+export function useEncryptVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ vault: Vault }>(`/vaults/${id}/encrypt`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vaults'] })
+      qc.invalidateQueries({ queryKey: ['encryption-progress'] })
+    },
+  })
+}
+
+export function useEncryptionProgress(vaultId: number | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['encryption-progress', vaultId],
+    queryFn: () => api.get<EncryptionProgress>(`/vaults/${vaultId}/encryption_progress`),
+    enabled: enabled && vaultId !== undefined,
+    refetchInterval: enabled ? 3000 : false,
   })
 }

@@ -127,11 +127,32 @@ defmodule EngramWeb.MissingFeaturesTest do
   # API key revocation  # ---------------------------------------------------------------------------
 
   describe "DELETE /api-keys/:id" do
-    test "revokes an API key", %{conn: conn, user: user} do
-      # Create a second key to revoke
+    test "revokes an API key (session auth)", %{user: user} do
+      # API-key auth is no longer permitted on /api-keys/* — must use a
+      # session JWT. See EngramWeb.Plugs.RequireSession.
+      user_with_ext =
+        if user.external_id in [nil, ""] do
+          {:ok, u} =
+            user
+            |> Ecto.Changeset.change(external_id: "test-#{user.id}")
+            |> Engram.Repo.update(skip_tenant_check: true)
+
+          u
+        else
+          user
+        end
+
+      {:ok, jwt} =
+        Engram.Auth.Providers.Local.issue_access_token(
+          user_with_ext.external_id,
+          user_with_ext.email
+        )
+
+      session_conn = build_conn() |> put_req_header("authorization", "Bearer #{jwt}")
+
       {:ok, temp_key, temp_api_key} = Engram.Accounts.create_api_key(user, "temp-key")
 
-      conn2 = delete(conn, "/api/api-keys/#{temp_api_key.id}")
+      conn2 = delete(session_conn, "/api/api-keys/#{temp_api_key.id}")
       assert json_response(conn2, 200)
 
       # Revoked key should be rejected

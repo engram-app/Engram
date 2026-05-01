@@ -215,7 +215,10 @@ class TestSearchAPI:
         )
 
         results = resp.json().get("results", [])
-        paths = [r.get("source_path", "?") for r in results]
+        # /api/search now returns one row per note (not per chunk) with `path`
+        # carrying the source path. The Qdrant scroll above still uses
+        # `source_path` because that's the raw payload field name.
+        paths = [r.get("path", "?") for r in results]
         assert any(note_path in p for p in paths), (
             f"Expected '{note_path}' in /api/search results. "
             f"Got {len(results)} results with paths: {paths}"

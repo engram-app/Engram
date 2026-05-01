@@ -6,6 +6,7 @@ let channel: Channel | null = null
 
 interface ConnectOptions {
   userId: number
+  vaultId: number
   getToken: () => Promise<string | null>
   queryClient: QueryClient
 }
@@ -16,7 +17,7 @@ interface NoteChangedPayload {
   kind: string
 }
 
-export async function connectChannel({ userId, getToken, queryClient }: ConnectOptions) {
+export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
   disconnectChannel()
 
   const token = await getToken()
@@ -27,20 +28,21 @@ export async function connectChannel({ userId, getToken, queryClient }: ConnectO
 
   socket.connect()
 
-  channel = socket.channel(`sync:${userId}`)
+  const topic = `sync:${userId}:${vaultId}`
+  channel = socket.channel(topic)
 
   channel.on('note_changed', (payload: NoteChangedPayload) => {
     if (payload.kind === 'note') {
-      queryClient.invalidateQueries({ queryKey: ['note', payload.path] })
-      queryClient.invalidateQueries({ queryKey: ['folders'] })
-      queryClient.invalidateQueries({ queryKey: ['folderNotes'] })
-      queryClient.invalidateQueries({ queryKey: ['search'] })
+      queryClient.invalidateQueries({ queryKey: ['note', vaultId, payload.path] })
+      queryClient.invalidateQueries({ queryKey: ['folders', vaultId] })
+      queryClient.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      queryClient.invalidateQueries({ queryKey: ['search', vaultId] })
     }
   })
 
   channel
     .join()
-    .receive('ok', () => console.log(`Joined sync:${userId}`))
+    .receive('ok', () => console.log(`Joined ${topic}`))
     .receive('error', (resp) => console.error('Channel join failed', resp))
 }
 

@@ -5,22 +5,32 @@ defmodule EngramWeb.SearchController do
 
   @max_search_limit 50
 
+  # The web client wants N unique notes, but Qdrant ranks chunks. We
+  # over-fetch chunks so grouping has enough material to populate the
+  # requested number of notes — without this, several top chunks from
+  # the same note silently cap the result list well below N.
+  @overfetch_factor 4
+  @min_overfetch 20
+
   def search(conn, %{"query" => query} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    limit = params["limit"] |> clamp_limit()
+    note_limit = params["limit"] |> clamp_limit()
     tags = params["tags"]
     folder = params["folder"]
     cross_vault = Map.get(params, "cross_vault", false)
 
+    chunk_limit = max(note_limit * @overfetch_factor, @min_overfetch)
+
     opts =
-      [limit: limit, cross_vault: cross_vault]
+      [limit: chunk_limit, cross_vault: cross_vault]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
 
     case Search.search(user, vault, query, opts) do
       {:ok, results} ->
-        json(conn, %{results: results})
+        notes = results |> group_by_note() |> Enum.take(note_limit)
+        json(conn, %{results: notes})
 
       {:error, :feature_not_available} ->
         conn
@@ -54,4 +64,41 @@ defmodule EngramWeb.SearchController do
   end
 
   defp clamp_limit(_), do: 5
+
+  # Collapse per-chunk Qdrant hits into one row per note. The web UI shows
+  # a card per note; the MCP path bypasses this and gets raw chunks.
+  defp group_by_note(chunks) do
+    chunks
+    |> Enum.reject(fn c -> is_nil(Map.get(c, :source_path)) end)
+    |> Enum.group_by(&Map.fetch!(&1, :source_path))
+    |> Enum.map(fn {path, group} ->
+      [best | _] = Enum.sort_by(group, & &1.score, :desc)
+
+      %{
+        path: path,
+        title: best[:title] || derive_title(path),
+        folder: derive_folder(path),
+        heading_path: best[:heading_path],
+        snippet: best[:text],
+        score: best.score,
+        match_count: length(group)
+      }
+    end)
+    |> Enum.sort_by(& &1.score, :desc)
+  end
+
+  defp derive_folder(path) do
+    case String.split(path, "/") do
+      [_only_file] -> ""
+      segments -> segments |> Enum.drop(-1) |> Enum.join("/")
+    end
+  end
+
+  defp derive_title(path) do
+    path
+    |> String.split("/")
+    |> List.last()
+    |> Kernel.||("")
+    |> String.replace_suffix(".md", "")
+  end
 end

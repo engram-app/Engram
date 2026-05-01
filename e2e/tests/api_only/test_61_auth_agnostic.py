@@ -36,29 +36,44 @@ class TestMeEndpoint:
 
 
 class TestApiKeyAuth:
-    """API key creation and usage — works with any auth provider."""
+    """API key usage — works with any auth provider.
 
-    def test_create_and_use_api_key(self, api_sync, sync_user):
-        """Create an API key, then use it to authenticate."""
-        # Create API key
-        resp = api_sync.session.post(
-            f"{API_URL}/api-keys",
-            json={"name": "e2e-agnostic-test"},
-            timeout=10,
-        )
-        assert resp.status_code == 200, f"API key creation failed: {resp.text}"
-        api_key = resp.json().get("key")
-        assert api_key is not None
-        assert api_key.startswith("engram_")
+    API key *creation* via API-key auth is intentionally rejected (see
+    test_api_key_cannot_mint_more_keys); minting only happens via session
+    JWT, which the provision_user fixture exercises during setup.
+    """
 
-        # Use the new API key for /me
-        me_resp = requests.get(
+    def test_existing_api_key_authenticates_user_scoped_route(self, sync_user):
+        """The bootstrap API key authenticates /me regardless of provider."""
+        api_key = sync_user[2]
+        resp = requests.get(
             f"{API_URL}/me",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
-        assert me_resp.status_code == 200
-        assert me_resp.json()["user"]["email"] == sync_user[0]
+        assert resp.status_code == 200
+        assert resp.json()["user"]["email"] == sync_user[0]
+
+    def test_api_key_cannot_mint_more_keys(self, api_sync):
+        """API-key auth on /api-keys returns 403.
+
+        Previously a vault-restricted API key could enumerate, mint, or
+        revoke sibling keys for the same user; the EngramWeb.Plugs.RequireSession
+        plug now restricts /api-keys/* to session/JWT auth only.
+        """
+        resp = api_sync.session.post(
+            f"{API_URL}/api-keys",
+            json={"name": "should-be-rejected"},
+            timeout=10,
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+        assert resp.json().get("error") == "api_key_not_allowed"
+
+    def test_api_key_cannot_list_keys(self, api_sync):
+        """API-key auth on GET /api-keys returns 403 — credential enumeration block."""
+        resp = api_sync.session.get(f"{API_URL}/api-keys", timeout=10)
+        assert resp.status_code == 403
+        assert resp.json().get("error") == "api_key_not_allowed"
 
 
 class TestTokenRejection:
