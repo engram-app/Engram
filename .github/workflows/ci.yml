@@ -940,18 +940,37 @@ jobs:
       - name: Verify deployment from CI runner
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          for i in $(seq 1 15); do
-            HEALTH=$(curl -sf http://10.0.20.214:8000/api/health 2>/dev/null || true)
-            if [ -n "$HEALTH" ]; then
-              RUNNING=$(echo "$HEALTH" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
-              if [ "$RUNNING" = "$VERSION" ]; then
-                echo "FastRaid deploy verified — engram ${VERSION} is healthy"
-                exit 0
-              else
-                echo "Version mismatch: expected ${VERSION}, got ${RUNNING:-no response}"
+
+          # Two containers, two ports. Both must report the new version.
+          declare -A TARGETS=(
+            [engram-saas]=8000
+            [engram-selfhost]=8001
+          )
+
+          for name in "${!TARGETS[@]}"; do
+            port="${TARGETS[$name]}"
+            echo "==> Verifying ${name} on port ${port}"
+
+            ok=false
+            for i in $(seq 1 15); do
+              HEALTH=$(curl -sf "http://10.0.20.214:${port}/api/health" 2>/dev/null || true)
+              if [ -n "$HEALTH" ]; then
+                RUNNING=$(echo "$HEALTH" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+                if [ "$RUNNING" = "$VERSION" ]; then
+                  echo "${name}: ${VERSION} is healthy"
+                  ok=true
+                  break
+                else
+                  echo "${name}: version mismatch (expected ${VERSION}, got ${RUNNING:-no response})"
+                fi
               fi
+              sleep 2
+            done
+
+            if [ "$ok" != "true" ]; then
+              echo "ERROR: FastRaid deploy failed — ${name} not running ${VERSION} after 30s"
+              exit 1
             fi
-            sleep 2
           done
-          echo "ERROR: FastRaid deploy failed — version ${VERSION} not running after 30s"
-          exit 1
+
+          echo "FastRaid deploy verified — both engram containers running ${VERSION}"
