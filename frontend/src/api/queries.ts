@@ -2,6 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { useActiveVaultId } from './active-vault'
 
+// Encode each path segment but preserve slashes so Phoenix's splat
+// routes match. encodeURIComponent on a full path produces %2F, which
+// Plug.Static rejects with 400 InvalidPathError before the router runs.
+function encodePathSegments(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
 // Types matching backend JSON responses
 export interface Folder {
   name: string
@@ -60,7 +67,7 @@ export function useNote(path: string) {
   const vaultId = useActiveVaultId()
   return useQuery({
     queryKey: ['note', vaultId, path],
-    queryFn: () => api.get<Note>(`/notes/${encodeURIComponent(path)}`),
+    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
     enabled: !!path,
   })
 }
