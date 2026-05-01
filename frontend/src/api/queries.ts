@@ -150,7 +150,7 @@ export function useRevokeApiKey() {
 
 // Vault types (encryption fields are the ones we care about for settings)
 
-export type EncryptionStatus = 'disabled' | 'encrypting' | 'enabled' | 'decrypting'
+export type EncryptionStatus = 'none' | 'encrypting' | 'encrypted' | 'decrypt_pending'
 
 export interface Vault {
   id: number

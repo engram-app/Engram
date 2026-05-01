@@ -35,7 +35,7 @@ export default function EncryptionPage() {
 
 function EncryptionPanel({ vault }: { vault: Vault }) {
   const inFlight =
-    vault.encryption_status === 'encrypting' || vault.encryption_status === 'decrypting'
+    vault.encryption_status === 'encrypting' || vault.encryption_status === 'decrypt_pending'
 
   const { data: progress } = useEncryptionProgress(vault.id, inFlight)
   const encrypt = useEncryptVault()
@@ -51,7 +51,7 @@ function EncryptionPanel({ vault }: { vault: Vault }) {
       <section className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
         <StatusBadge status={vault.encryption_status} />
 
-        {vault.encryption_status === 'disabled' && (
+        {vault.encryption_status === 'none' && (
           <>
             <p className="text-sm text-gray-700">
               Notes and vector payloads are stored as plaintext on the server. Enabling
@@ -92,7 +92,7 @@ function EncryptionPanel({ vault }: { vault: Vault }) {
           />
         )}
 
-        {vault.encryption_status === 'enabled' && (
+        {vault.encryption_status === 'encrypted' && (
           <p className="text-sm text-gray-700">
             All notes and vector payloads are encrypted.
             {vault.encrypted_at && (
@@ -105,31 +105,42 @@ function EncryptionPanel({ vault }: { vault: Vault }) {
   )
 }
 
-function StatusBadge({ status }: { status: EncryptionStatus }) {
-  const styles: Record<EncryptionStatus, { bg: string; text: string; dot: string; label: string }> =
-    {
-      disabled: { bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-400', label: 'Disabled' },
-      encrypting: {
-        bg: 'bg-blue-50',
-        text: 'text-blue-700',
-        dot: 'bg-blue-500 animate-pulse',
-        label: 'Encrypting…',
-      },
-      enabled: {
-        bg: 'bg-green-50',
-        text: 'text-green-700',
-        dot: 'bg-green-500',
-        label: 'Encrypted',
-      },
-      decrypting: {
-        bg: 'bg-amber-50',
-        text: 'text-amber-700',
-        dot: 'bg-amber-500 animate-pulse',
-        label: 'Decrypting…',
-      },
-    }
+type BadgeStyle = { bg: string; text: string; dot: string; label: string }
 
-  const s = styles[status]
+const STATUS_STYLES: Record<EncryptionStatus, BadgeStyle> = {
+  none: { bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-400', label: 'Not encrypted' },
+  encrypting: {
+    bg: 'bg-blue-50',
+    text: 'text-blue-700',
+    dot: 'bg-blue-500 animate-pulse',
+    label: 'Encrypting…',
+  },
+  encrypted: {
+    bg: 'bg-green-50',
+    text: 'text-green-700',
+    dot: 'bg-green-500',
+    label: 'Encrypted',
+  },
+  decrypt_pending: {
+    bg: 'bg-amber-50',
+    text: 'text-amber-700',
+    dot: 'bg-amber-500 animate-pulse',
+    label: 'Decrypt pending…',
+  },
+}
+
+const UNKNOWN_STYLE: BadgeStyle = {
+  bg: 'bg-gray-100',
+  text: 'text-gray-700',
+  dot: 'bg-gray-400',
+  label: 'Unknown',
+}
+
+function StatusBadge({ status }: { status: EncryptionStatus | string }) {
+  const s = STATUS_STYLES[status as EncryptionStatus] ?? {
+    ...UNKNOWN_STYLE,
+    label: `Unknown (${status})`,
+  }
 
   return (
     <span
@@ -151,7 +162,7 @@ function ProgressView({
   status: EncryptionStatus
 }) {
   const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
-  const verb = status === 'encrypting' ? 'Encrypting' : 'Decrypting'
+  const verb = status === 'encrypting' ? 'Encrypting' : 'Decrypt pending —'
 
   return (
     <section aria-live="polite" className="space-y-2">
