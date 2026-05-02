@@ -132,4 +132,30 @@ defmodule Engram.CryptoTest do
       refute filter_key == dek
     end
   end
+
+  describe "hmac_field/2" do
+    test "returns deterministic 32-byte binary" do
+      key = :crypto.strong_rand_bytes(32)
+
+      h1 = Crypto.hmac_field(key, "projects/2026-q3")
+      h2 = Crypto.hmac_field(key, "projects/2026-q3")
+
+      assert is_binary(h1)
+      assert byte_size(h1) == 32
+      assert h1 == h2
+    end
+
+    test "different inputs yield different hashes for the same key" do
+      key = :crypto.strong_rand_bytes(32)
+
+      refute Crypto.hmac_field(key, "a") == Crypto.hmac_field(key, "b")
+    end
+
+    test "different keys yield different hashes for the same input" do
+      k1 = :crypto.strong_rand_bytes(32)
+      k2 = :crypto.strong_rand_bytes(32)
+
+      refute Crypto.hmac_field(k1, "x") == Crypto.hmac_field(k2, "x")
+    end
+  end
 end

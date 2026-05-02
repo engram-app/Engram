@@ -415,6 +415,23 @@ defmodule Engram.Crypto do
     end
   end
 
+  @doc """
+  Computes an HMAC-SHA256 fingerprint of `value` using `filter_key`.
+
+  Used to produce indexed equality predicates on encrypted-at-rest fields:
+  `WHERE folder_hmac = hmac_field(filter_key, "projects/2026-q3")`.
+
+  Always 32 bytes. Deterministic — same inputs always produce the same
+  output, which is what makes equality lookups possible. This is also why
+  the filter key MUST NOT be reused for content encryption (same-key reuse
+  across deterministic and randomized cryptographic operations weakens both).
+  """
+  @spec hmac_field(binary(), binary()) :: binary()
+  def hmac_field(filter_key, value)
+      when is_binary(filter_key) and byte_size(filter_key) == 32 and is_binary(value) do
+    :crypto.mac(:hmac, :sha256, filter_key, value)
+  end
+
   @decrypt_delay_hours 24
 
   @spec request_decrypt_vault(Engram.Vaults.Vault.t(), Engram.Accounts.User.t()) ::
