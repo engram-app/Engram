@@ -6,6 +6,9 @@ defmodule Engram.Attachments.Attachment do
 
   schema "attachments" do
     field :path, :string
+    field :path_ciphertext, :binary
+    field :path_nonce, :binary
+    field :path_hmac, :binary
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
@@ -29,6 +32,9 @@ defmodule Engram.Attachments.Attachment do
     attachment
     |> cast(attrs, [
       :path,
+      :path_ciphertext,
+      :path_nonce,
+      :path_hmac,
       :content_hash,
       :mime_type,
       :size_bytes,
