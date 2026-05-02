@@ -27,7 +27,7 @@ import pytest
 from helpers.api import ApiClient
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.cdp import CdpClient
-from helpers.cleanup import cleanup_test_data, cleanup_vaults
+from helpers.cleanup import cleanup_minio_bucket, cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
 
 
@@ -357,5 +357,12 @@ def session_cleanup(request, auth_provider):
             cleanup_test_data(pattern)
         except Exception as e:
             logging.getLogger(__name__).error("DB cleanup failed for %s: %s", pattern, e)
+    # Blob cleanup — purge the MinIO bucket so per-session re-runs do not
+    # accumulate orphan attachment objects. Skips silently outside CI when
+    # the container name doesn't match.
+    try:
+        cleanup_minio_bucket()
+    except Exception as e:
+        logging.getLogger(__name__).error("MinIO cleanup failed: %s", e)
     # Vault cleanup
     cleanup_vaults()

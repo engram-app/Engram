@@ -106,8 +106,10 @@ def _fetch_attachment_row(vault_id: int, path: str) -> dict:
 
 def _minio_object_size(storage_key: str) -> int | None:
     """Return the object's bytes-on-disk via `mc stat --json`. Returns None
-    when the MinIO container isn't reachable from the test host (e.g.,
-    parity-disabled stack)."""
+    when the MinIO container isn't reachable from the test host AND the
+    suite is not running in CI. In CI (`CI=true`), a missing container is
+    a hard error — we never want a green test that silently skipped the
+    real ciphertext-on-disk check."""
     cmd = [
         "docker", "exec", CI_MINIO_CONTAINER,
         "mc", "stat", "--json", f"local/{CI_MINIO_BUCKET}/{storage_key}",
@@ -116,6 +118,13 @@ def _minio_object_size(storage_key: str) -> int | None:
     if result.returncode != 0:
         stderr = result.stderr.strip()
         if "No such container" in stderr or "not running" in stderr:
+            if os.environ.get("CI") == "true":
+                raise RuntimeError(
+                    f"MinIO container {CI_MINIO_CONTAINER!r} not reachable in CI — "
+                    f"set CI_MINIO_CONTAINER to the project-suffixed name "
+                    f"(e.g. ${{CI_PROJECT}}-minio-1). Refusing to silently skip "
+                    f"the ciphertext-on-disk probe."
+                )
             return None
         raise RuntimeError(f"mc stat failed: {stderr}\nkey={storage_key!r}")
 
