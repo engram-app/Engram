@@ -88,7 +88,7 @@ defmodule Engram.Attachments do
 
         case Storage.adapter().get(key) do
           {:ok, binary} ->
-            maybe_decrypt_attachment(att, binary, user)
+            decrypt_if_needed(att, binary, user)
 
           {:error, :not_found} ->
             # Live row with missing blob = storage corruption, not a normal 404
@@ -256,22 +256,20 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp maybe_decrypt_attachment(%Attachment{encryption_version: 1, content_nonce: nonce} = att, binary, user)
-       when is_binary(nonce) do
-    # Reload user to ensure encrypted_dek is present — the caller may hold a struct
-    # provisioned before ensure_user_dek ran (e.g., DEK was just lazily created on first put).
-    fresh_user = Repo.reload!(user)
-
-    with {:ok, dek} <- Crypto.get_dek(fresh_user) do
-      case Envelope.decrypt(binary, nonce, dek) do
-        {:ok, plaintext} -> {:ok, %{att | content: plaintext}}
-        :error -> {:error, {:storage, :decrypt_failed}}
-      end
-    end
+  defp decrypt_if_needed(%Attachment{encryption_version: 0} = att, binary, _user) do
+    {:ok, %{att | content: binary}}
   end
 
-  defp maybe_decrypt_attachment(att, binary, _user) do
-    {:ok, %{att | content: binary}}
+  defp decrypt_if_needed(%Attachment{encryption_version: 1, content_nonce: nonce} = att, ciphertext, user) do
+    fresh_user = if is_nil(user.encrypted_dek), do: Repo.reload!(user), else: user
+
+    with {:ok, dek} <- Crypto.get_dek(fresh_user),
+         {:ok, plaintext} <- Envelope.decrypt(ciphertext, nonce, dek) do
+      {:ok, %{att | content: plaintext}}
+    else
+      :error -> {:error, :decrypt_failed}
+      {:error, _} -> {:error, :decrypt_failed}
+    end
   end
 
   defp decode_base64(nil), do: {:error, :missing_content}

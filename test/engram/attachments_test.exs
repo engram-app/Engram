@@ -1,6 +1,7 @@
 defmodule Engram.AttachmentsTest do
   use Engram.DataCase, async: false
 
+  import Ecto.Query
   import ExUnit.CaptureLog
   import Mox
 
@@ -192,6 +193,53 @@ defmodule Engram.AttachmentsTest do
       assert fetched.content == plaintext
       assert fetched.encryption_version == 1
       assert is_binary(fetched.content_nonce)
+    end
+
+    test "legacy BYTEA row is returned without decrypt attempt" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.Storage.Database)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "legacy.bin",
+          "content_base64" => Base.encode64("legacy plaintext"),
+          "mtime" => 0.0
+        })
+
+      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "legacy.bin")
+      assert fetched.content == "legacy plaintext"
+      assert fetched.encryption_version == 0
+      assert is_nil(fetched.content_nonce)
+    end
+
+    test "encrypted row with corrupt nonce returns {:error, :decrypt_failed}" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+
+      # Upload a real encrypted attachment so the user has a DEK and the row
+      # has matching ciphertext on disk.
+      {:ok, _real} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "ghost.bin",
+          "content_base64" => Base.encode64("real plaintext"),
+          "mtime" => 0.0
+        })
+
+      # Corrupt the row's content_nonce so decryption will fail.
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(a in Engram.Attachments.Attachment,
+            where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "ghost.bin"
+          )
+          |> Engram.Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
+        end)
+
+      assert {:error, :decrypt_failed} =
+               Engram.Attachments.get_attachment(user, vault, "ghost.bin")
     end
   end
 
