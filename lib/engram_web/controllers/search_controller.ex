@@ -39,7 +39,7 @@ defmodule EngramWeb.SearchController do
 
       {:error, reason} ->
         require Logger
-        Logger.error("Search failed: #{inspect(reason)}")
+        Logger.error("Search failed", reason: inspect(reason))
 
         conn
         |> put_status(500)

@@ -40,17 +40,21 @@ defmodule Engram.Rerankers.Jina do
         {:ok, blended |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
 
       {:ok, %{status: status}} ->
-        Logger.warning("Jina reranker returned #{status}, falling back to vector scores")
+        Logger.warning("Jina reranker non-200, falling back to vector scores", status: status)
         {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
 
       {:error, reason} ->
-        Logger.warning("Jina reranker failed: #{inspect(reason)}, falling back to vector scores")
+        Logger.warning("Jina reranker failed, falling back to vector scores",
+          reason: inspect(reason)
+        )
+
         {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
     end
   rescue
     e ->
-      Logger.warning(
-        "Jina reranker exception: #{Exception.message(e)}, falling back to vector scores"
+      Logger.warning("Jina reranker exception, falling back to vector scores",
+        exception: inspect(e.__struct__),
+        message: Exception.message(e)
       )
 
       {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}

@@ -18,7 +18,12 @@ defmodule EngramWeb.WebhookController do
           json(conn, %{status: "ok"})
 
         {:error, reason} ->
-          Logger.warning("Stripe webhook processing failed: #{inspect(reason)}")
+          Logger.warning("Stripe webhook processing failed",
+            event_type: event["type"],
+            event_id: event["id"],
+            reason: format_reason(reason)
+          )
+
           json(conn, %{status: "ok"})
       end
     else
@@ -86,4 +91,15 @@ defmodule EngramWeb.WebhookController do
       _ -> {:error, "invalid signature format"}
     end
   end
+
+  # Ecto changesets stringify with their changed values — for webhook events
+  # those values come from Stripe (potentially echoing emails or customer
+  # input). Reduce to the error tuple list, which carries only field names
+  # and validator messages.
+  defp format_reason(%Ecto.Changeset{} = cs) do
+    Ecto.Changeset.traverse_errors(cs, fn {msg, _opts} -> msg end) |> inspect()
+  end
+
+  defp format_reason(reason) when is_atom(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 end
