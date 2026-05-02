@@ -241,6 +241,82 @@ defmodule Engram.AttachmentsTest do
       assert {:error, :decrypt_failed} =
                Engram.Attachments.get_attachment(user, vault, "ghost.bin")
     end
+
+    test "row with version=1 AND non-nil BYTEA content decrypts the BYTEA in place" do
+      # Guards against the failure mode where Storage.Database.put overwrites
+      # the BYTEA `content` column with ciphertext while the worker also flips
+      # `encryption_version=1`. The read path MUST route through decrypt_if_needed
+      # — short-circuiting on `content non-nil` would serve raw ciphertext.
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+      plaintext = "double-stored bytes"
+
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "double.bin",
+          "content_base64" => Base.encode64(plaintext),
+          "mtime" => 0.0
+        })
+
+      # Pull the ciphertext out of InMemory storage and stuff it into the row's
+      # BYTEA content column to simulate the post-corruption shape.
+      key = "#{user.id}/#{vault.id}/double.bin"
+      {:ok, ciphertext} = Engram.Storage.InMemory.get(key)
+
+      {:ok, {1, _}} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(a in Engram.Attachments.Attachment,
+            where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "double.bin"
+          )
+          |> Engram.Repo.update_all(set: [content: ciphertext])
+        end)
+
+      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "double.bin")
+      assert fetched.content == plaintext
+    end
+
+    test "S3 re-upload over a legacy BYTEA row clears stale content column" do
+      # Guards against the upsert leaving stale plaintext in `content` after
+      # switching a row from version=0 BYTEA to version=1 S3.
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+
+      # Step 1: write a legacy BYTEA row using the Database adapter.
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.Storage.Database)
+
+      {:ok, _legacy} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "migrate.bin",
+          "content_base64" => Base.encode64("legacy plaintext"),
+          "mtime" => 0.0
+        })
+
+      # Step 2: flip back to S3 (InMemory) and re-upload the same path.
+      Application.put_env(:engram, :storage, prev)
+
+      {:ok, _new} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "migrate.bin",
+          "content_base64" => Base.encode64("fresh plaintext"),
+          "mtime" => 1.0
+        })
+
+      # Row's BYTEA content must be cleared so the read path doesn't serve stale
+      # bytes via the `content non-nil` short-circuit.
+      {:ok, raw} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.one(
+            from(a in Engram.Attachments.Attachment,
+              where:
+                a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "migrate.bin",
+              select: a.content
+            )
+          )
+        end)
+
+      assert is_nil(raw)
+    end
   end
 
   describe "get_attachment/3 with S3 storage (content nil)" do
