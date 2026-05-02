@@ -19,6 +19,8 @@ import requests
 logger = logging.getLogger(__name__)
 
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
+CI_MINIO_CONTAINER = os.environ.get("CI_MINIO_CONTAINER", "engram-ci-minio-1")
+CI_MINIO_BUCKET = os.environ.get("CI_MINIO_BUCKET", "engram-attachments")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 
@@ -78,6 +80,95 @@ def assert_note_ciphertext_at_rest(vault_id: int, path: str) -> None:
         failures.append("title_nonce is NULL")
     assert not failures, (
         f"Expected ciphertext at rest for vault_id={vault_id} path={path!r}; "
+        f"failures: {failures}"
+    )
+
+
+def _fetch_attachment_row(vault_id: int, path: str) -> dict:
+    """SELECT the encryption metadata + storage_key for an attachment."""
+    sql = (
+        f"\\set target_path '{path}'\n"
+        f"SELECT encryption_version, content_nonce IS NOT NULL, size_bytes, storage_key "
+        f"FROM attachments WHERE vault_id = {int(vault_id)} "
+        f"AND path = :'target_path' AND deleted_at IS NULL;"
+    )
+    out = _psql(sql, fetch=True)
+    assert out, f"Attachment not found in DB: vault_id={vault_id} path={path!r}"
+    line = out.splitlines()[0]
+    version, nonce_present, size_bytes, storage_key = line.split("|")
+    return {
+        "encryption_version": int(version),
+        "content_nonce_present": nonce_present == "t",
+        "size_bytes": int(size_bytes),
+        "storage_key": storage_key,
+    }
+
+
+def _minio_object_size(storage_key: str) -> int | None:
+    """Return the object's bytes-on-disk via `mc stat --json`. Returns None
+    when the MinIO container isn't reachable from the test host AND the
+    suite is not running in CI. In CI (`CI=true`), a missing container is
+    a hard error — we never want a green test that silently skipped the
+    real ciphertext-on-disk check.
+
+    The mc client inside the minio container has no persistent alias
+    config (the alias was set in the now-exited minio-init sidecar), so
+    we configure it inline on every invocation. `mc alias set` is
+    idempotent and writes to ~/.mc which lives only for the exec scope.
+    """
+    inline = (
+        "mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null && "
+        f"mc stat --json local/{CI_MINIO_BUCKET}/{storage_key}"
+    )
+    cmd = ["docker", "exec", CI_MINIO_CONTAINER, "sh", "-c", inline]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "No such container" in stderr or "not running" in stderr:
+            if os.environ.get("CI") == "true":
+                raise RuntimeError(
+                    f"MinIO container {CI_MINIO_CONTAINER!r} not reachable in CI — "
+                    f"set CI_MINIO_CONTAINER to the project-suffixed name "
+                    f"(e.g. ${{CI_PROJECT}}-minio-1). Refusing to silently skip "
+                    f"the ciphertext-on-disk probe."
+                )
+            return None
+        raise RuntimeError(
+            f"mc stat failed (exit={result.returncode}): "
+            f"stdout={result.stdout!r} stderr={stderr!r} key={storage_key!r}"
+        )
+
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    return int(payload["size"])
+
+
+def assert_attachment_ciphertext_at_rest(vault_id: int, path: str) -> None:
+    """Assert the attachment row is encryption_version=1 with a 12-byte
+    content_nonce, and that the object in MinIO weighs exactly
+    `size_bytes + 16` (the AES-256-GCM tag suffix)."""
+    row = _fetch_attachment_row(vault_id, path)
+
+    failures = []
+    if row["encryption_version"] != 1:
+        failures.append(f"encryption_version is {row['encryption_version']} (want 1)")
+    if not row["content_nonce_present"]:
+        failures.append("content_nonce is NULL")
+
+    object_size = _minio_object_size(row["storage_key"])
+    if object_size is None:
+        # MinIO not reachable — fall back to row metadata only. Stack flagged
+        # storage as disabled.
+        logger.debug("MinIO probe skipped — container %s not present", CI_MINIO_CONTAINER)
+    else:
+        expected = row["size_bytes"] + 16
+        if object_size != expected:
+            failures.append(
+                f"MinIO object size is {object_size}, "
+                f"expected size_bytes + 16 = {expected}"
+            )
+
+    assert not failures, (
+        f"Expected attachment ciphertext at rest for vault_id={vault_id} path={path!r}; "
         f"failures: {failures}"
     )
 
