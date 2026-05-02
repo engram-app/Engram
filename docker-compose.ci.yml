@@ -44,7 +44,11 @@ services:
       KEY_PROVIDER: ${KEY_PROVIDER:-local}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-vZ+e130Hffn5T1ljBb3FH1rFIKc42kTK86jmUEusLio=}
       ENCRYPTION_MASTER_KEY_PREVIOUS: ${ENCRYPTION_MASTER_KEY_PREVIOUS:-}
-      # S3-compatible attachment storage (MinIO sidecar)
+      # S3-compatible attachment storage (MinIO sidecar). STORAGE_BACKEND=s3
+      # is required because runtime.exs defaults to the BYTEA `database` adapter
+      # otherwise — without this, attachments would land in Postgres BYTEA and
+      # the ciphertext-at-rest probe would find no MinIO object.
+      STORAGE_BACKEND: s3
       STORAGE_BUCKET: engram-attachments
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
