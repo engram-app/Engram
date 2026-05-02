@@ -24,9 +24,9 @@ config :engram, EngramWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() != :test do
-  # Storage backend — S3-only as of A.4 (PR #61). The legacy `database` adapter
-  # still exists for read-only access to pre-encryption BYTEA rows but cannot
-  # accept new writes. Setting STORAGE_BACKEND=database is a misconfiguration.
+  # Storage backend — S3-compatible only (A.5, PR #62). The legacy BYTEA
+  # `Storage.Database` adapter is gone; STORAGE_BACKEND is informational and
+  # only "s3" is accepted (default).
   case System.get_env("STORAGE_BACKEND", "s3") do
     "s3" ->
       config :engram, :storage, Engram.Storage.S3
@@ -42,16 +42,12 @@ if config_env() != :test do
         host: System.get_env("STORAGE_HOST"),
         port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
 
-    "database" ->
-      raise """
-      STORAGE_BACKEND=database is no longer supported (A.4, PR #61).
-      Attachment writes go to S3-compatible object storage only.
-      Set STORAGE_BACKEND=s3 plus STORAGE_BUCKET, STORAGE_ACCESS_KEY_ID,
-      STORAGE_SECRET_ACCESS_KEY, STORAGE_HOST (and friends).
-      """
-
     other ->
-      raise "Unknown STORAGE_BACKEND=#{inspect(other)} — expected \"s3\""
+      raise """
+      Unknown STORAGE_BACKEND=#{inspect(other)} — only \"s3\" is supported
+      since A.5 (PR #62). The BYTEA Storage.Database adapter was removed
+      along with the `attachments.content` column.
+      """
   end
 
   # Embedder — select adapter from EMBED_BACKEND env var (voyage or ollama)

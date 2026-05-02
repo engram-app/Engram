@@ -6,14 +6,17 @@ defmodule Engram.Attachments.Attachment do
 
   schema "attachments" do
     field :path, :string
-    field :content, :binary
+    # Decoded plaintext is materialized into this virtual field by the read
+    # path (`Engram.Attachments.get_attachment/3`). It never persists; the
+    # actual ciphertext lives in S3-compatible object storage.
+    field :content, :binary, virtual: true
     field :content_hash, :string
     field :mime_type, :string
     field :size_bytes, :integer
     field :mtime, :float
     field :storage_key, :string
     field :deleted_at, :utc_datetime
-    field :encryption_version, :integer, default: 0
+    field :encryption_version, :integer, default: 1
     field :content_nonce, :binary
 
     belongs_to :user, Engram.Accounts.User
@@ -26,7 +29,6 @@ defmodule Engram.Attachments.Attachment do
     attachment
     |> cast(attrs, [
       :path,
-      :content,
       :content_hash,
       :mime_type,
       :size_bytes,
@@ -39,27 +41,13 @@ defmodule Engram.Attachments.Attachment do
       :content_nonce
     ])
     |> validate_required([:path, :user_id, :vault_id, :content_hash, :mime_type, :size_bytes])
-    |> validate_inclusion(:encryption_version, [0, 1])
+    |> validate_inclusion(:encryption_version, [1])
     |> validate_number(:size_bytes, less_than_or_equal_to: @max_attachment_bytes)
-    |> validate_nonce_consistency()
-    |> unique_constraint([:user_id, :vault_id, :path], name: :attachments_user_vault_path_active_index)
+    |> validate_required(:content_nonce)
+    |> unique_constraint([:user_id, :vault_id, :path],
+      name: :attachments_user_vault_path_active_index
+    )
   end
 
   def max_attachment_bytes, do: @max_attachment_bytes
-
-  defp validate_nonce_consistency(changeset) do
-    version = get_field(changeset, :encryption_version) || 0
-    nonce = get_field(changeset, :content_nonce)
-
-    cond do
-      version == 1 and is_nil(nonce) ->
-        add_error(changeset, :content_nonce, "must be present when encryption_version = 1")
-
-      version == 0 and not is_nil(nonce) ->
-        add_error(changeset, :content_nonce, "must be nil when encryption_version = 0")
-
-      true ->
-        changeset
-    end
-  end
 end

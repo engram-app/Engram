@@ -20,8 +20,7 @@ defmodule Engram.AttachmentsTest do
 
     user = insert(:user)
     vault = insert(:vault, user: user)
-    storage_key = "#{user.id}/#{vault.id}/#{@path}"
-    %{user: user, vault: vault, storage_key: storage_key}
+    %{user: user, vault: vault}
   end
 
   describe "upsert_attachment/3" do
@@ -38,25 +37,6 @@ defmodule Engram.AttachmentsTest do
       assert att.user_id == user.id
       assert att.vault_id == vault.id
       assert att.size_bytes == byte_size("test image content")
-    end
-
-    test "refuses to write when storage adapter is Storage.Database", %{user: user, vault: vault} do
-      # A.4 cut writes to S3-only. If a deploy still has STORAGE_BACKEND=database
-      # (or template drift unsets it), we must NOT silently fall through to the
-      # S3 write path that would push ciphertext into the BYTEA `content` column —
-      # that's the exact corruption shape from the 2026-05-02 incident.
-      #
-      # Application env is process-global; restore on exit so async tests in
-      # other files (e.g. AttachmentsControllerTest) don't see Database leak in.
-      prev = Application.get_env(:engram, :storage)
-      Application.put_env(:engram, :storage, Engram.Storage.Database)
-      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-
-      assert {:error, :writes_disabled} =
-               Attachments.upsert_attachment(user, vault, %{
-                 "path" => @path,
-                 "content_base64" => @valid_content
-               })
     end
 
     test "rejects attachment over max size", %{user: user, vault: vault} do
@@ -120,30 +100,8 @@ defmodule Engram.AttachmentsTest do
   end
 
   describe "changeset validations" do
-    test "rejects encryption_version outside [0, 1]" do
-      user = insert(:user)
-      vault = insert(:vault, user: user)
-
-      attrs = %{
-        path: "x.png",
-        content_hash: "abc",
-        mime_type: "image/png",
-        size_bytes: 10,
-        user_id: user.id,
-        vault_id: vault.id,
-        encryption_version: 7
-      }
-
-      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
-      refute changeset.valid?
-      assert "is invalid" in errors_on(changeset).encryption_version
-    end
-
-    test "requires content_nonce when encryption_version = 1" do
-      user = insert(:user)
-      vault = insert(:vault, user: user)
-
-      attrs = %{
+    setup %{user: user, vault: vault} do
+      base = %{
         path: "x.png",
         content_hash: "abc",
         mime_type: "image/png",
@@ -151,26 +109,32 @@ defmodule Engram.AttachmentsTest do
         user_id: user.id,
         vault_id: vault.id,
         encryption_version: 1,
-        content_nonce: nil
+        content_nonce: :crypto.strong_rand_bytes(12)
       }
 
-      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
+      %{base: base}
+    end
+
+    test "rejects encryption_version other than 1", %{base: base} do
+      changeset = Attachment.changeset(%Attachment{}, %{base | encryption_version: 0})
       refute changeset.valid?
-      assert "must be present when encryption_version = 1" in errors_on(changeset).content_nonce
+      assert "is invalid" in errors_on(changeset).encryption_version
+    end
+
+    test "requires content_nonce", %{base: base} do
+      changeset = Attachment.changeset(%Attachment{}, %{base | content_nonce: nil})
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).content_nonce
     end
   end
 
   describe "encrypted S3 storage path" do
     setup do
-      prev = Application.get_env(:engram, :storage)
-      Application.put_env(:engram, :storage, Engram.MockStorage)
-      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
       :ok
     end
 
-    test "encrypts attachment content before put when active backend is S3" do
+    test "encrypts attachment content before put" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
       plaintext = "secret bytes"
@@ -184,7 +148,7 @@ defmodule Engram.AttachmentsTest do
       end)
 
       {:ok, _att} =
-        Engram.Attachments.upsert_attachment(user, vault, %{
+        Attachments.upsert_attachment(user, vault, %{
           "path" => "secret.bin",
           "content_base64" => b64,
           "mtime" => 0.0
@@ -192,7 +156,8 @@ defmodule Engram.AttachmentsTest do
 
       assert_receive {:put_bytes, stored}, 500
       refute stored == plaintext
-      assert byte_size(stored) >= byte_size(plaintext) + 16
+      # AES-GCM ciphertext: plaintext bytes + 16-byte authentication tag
+      assert byte_size(stored) == byte_size(plaintext) + 16
     end
 
     test "round-trips encrypted attachment via get_attachment" do
@@ -202,208 +167,63 @@ defmodule Engram.AttachmentsTest do
       b64 = Base.encode64(plaintext)
 
       {:ok, _att} =
-        Engram.Attachments.upsert_attachment(user, vault, %{
+        Attachments.upsert_attachment(user, vault, %{
           "path" => "rt.bin",
           "content_base64" => b64,
           "mtime" => 0.0
         })
 
-      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "rt.bin")
+      {:ok, fetched} = Attachments.get_attachment(user, vault, "rt.bin")
       assert fetched.content == plaintext
       assert fetched.encryption_version == 1
       assert is_binary(fetched.content_nonce)
     end
 
-    test "legacy BYTEA row is returned without decrypt attempt" do
-      user = insert(:user)
-      vault = insert(:vault, user: user)
-
-      seed_legacy_bytea_row!(user, vault, "legacy.bin", "legacy plaintext")
-
-      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "legacy.bin")
-      assert fetched.content == "legacy plaintext"
-      assert fetched.encryption_version == 0
-      assert is_nil(fetched.content_nonce)
-    end
-
-    test "encrypted row with corrupt nonce returns {:error, :decrypt_failed}" do
+    test "returns {:error, :decrypt_failed} when stored nonce is corrupted" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
 
-      # Upload a real encrypted attachment so the user has a DEK and the row
-      # has matching ciphertext on disk.
       {:ok, _real} =
-        Engram.Attachments.upsert_attachment(user, vault, %{
+        Attachments.upsert_attachment(user, vault, %{
           "path" => "ghost.bin",
           "content_base64" => Base.encode64("real plaintext"),
           "mtime" => 0.0
         })
 
-      # Corrupt the row's content_nonce so decryption will fail.
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
-          from(a in Engram.Attachments.Attachment,
+          from(a in Attachment,
             where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "ghost.bin"
           )
           |> Engram.Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
         end)
 
-      assert {:error, :decrypt_failed} =
-               Engram.Attachments.get_attachment(user, vault, "ghost.bin")
+      assert {:error, :decrypt_failed} = Attachments.get_attachment(user, vault, "ghost.bin")
     end
 
-    test "row with version=1 AND non-nil BYTEA content decrypts the BYTEA in place" do
-      # Guards against the failure mode where Storage.Database.put overwrites
-      # the BYTEA `content` column with ciphertext while the worker also flips
-      # `encryption_version=1`. The read path MUST route through decrypt_if_needed
-      # — short-circuiting on `content non-nil` would serve raw ciphertext.
+    test "logs and returns {:error, {:storage, :blob_missing}} when storage object is gone" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
-      plaintext = "double-stored bytes"
+      path = "missing.bin"
 
       {:ok, _att} =
-        Engram.Attachments.upsert_attachment(user, vault, %{
-          "path" => "double.bin",
-          "content_base64" => Base.encode64(plaintext),
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => path,
+          "content_base64" => Base.encode64("orphan me"),
           "mtime" => 0.0
         })
 
-      # Pull the ciphertext out of InMemory storage and stuff it into the row's
-      # BYTEA content column to simulate the post-corruption shape.
-      key = "#{user.id}/#{vault.id}/double.bin"
-      {:ok, ciphertext} = Engram.Storage.InMemory.get(key)
-
-      {:ok, {1, _}} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          from(a in Engram.Attachments.Attachment,
-            where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "double.bin"
-          )
-          |> Engram.Repo.update_all(set: [content: ciphertext])
-        end)
-
-      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "double.bin")
-      assert fetched.content == plaintext
-    end
-
-    test "S3 re-upload over a legacy BYTEA row clears stale content column" do
-      # Guards against the upsert leaving stale plaintext in `content` after
-      # switching a row from version=0 BYTEA to version=1 S3.
-      user = insert(:user) |> Engram.Repo.reload!()
-      vault = insert(:vault, user: user)
-
-      seed_legacy_bytea_row!(user, vault, "migrate.bin", "legacy plaintext")
-
-      # Re-upload the same path via the (current) S3 path.
-      {:ok, _new} =
-        Engram.Attachments.upsert_attachment(user, vault, %{
-          "path" => "migrate.bin",
-          "content_base64" => Base.encode64("fresh plaintext"),
-          "mtime" => 1.0
-        })
-
-      # Row's BYTEA content must be cleared so the read path doesn't serve stale
-      # bytes via the `content non-nil` short-circuit.
-      {:ok, raw} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.one(
-            from(a in Engram.Attachments.Attachment,
-              where:
-                a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "migrate.bin",
-              select: a.content
-            )
-          )
-        end)
-
-      assert is_nil(raw)
-    end
-  end
-
-  describe "get_attachment/3 with S3 storage (content nil)" do
-    test "fetches binary from storage backend when content is nil", %{
-      user: user,
-      vault: vault,
-      storage_key: storage_key
-    } do
-      # Insert an attachment row with content: nil and a storage_key
-      {:ok, _att} =
-        Repo.with_tenant(user.id, fn ->
-          %Attachment{}
-          |> Attachment.changeset(%{
-            path: @path,
-            content: nil,
-            content_hash: "abc123",
-            mime_type: "image/png",
-            size_bytes: 42,
-            user_id: user.id,
-            vault_id: vault.id,
-            storage_key: storage_key
-          })
-          |> Repo.insert()
-        end)
-
-      expect(Engram.MockStorage, :get, fn _key ->
-        {:ok, "binary content"}
-      end)
-
-      assert {:ok, %Attachment{content: "binary content"}} =
-               Attachments.get_attachment(user, vault, @path)
-    end
-
-    test "returns storage error when blob is missing for live row", %{
-      user: user,
-      vault: vault,
-      storage_key: storage_key
-    } do
-      {:ok, _att} =
-        Repo.with_tenant(user.id, fn ->
-          %Attachment{}
-          |> Attachment.changeset(%{
-            path: @path,
-            content: nil,
-            content_hash: "abc123",
-            mime_type: "image/png",
-            size_bytes: 42,
-            user_id: user.id,
-            vault_id: vault.id,
-            storage_key: storage_key
-          })
-          |> Repo.insert()
-        end)
-
-      expect(Engram.MockStorage, :get, fn _key ->
-        {:error, :not_found}
-      end)
+      # Delete the underlying object directly to simulate storage corruption
+      # while leaving the DB row live.
+      Engram.Storage.InMemory.delete("#{user.id}/#{vault.id}/#{path}")
 
       log =
         capture_log(fn ->
           assert {:error, {:storage, :blob_missing}} =
-                   Attachments.get_attachment(user, vault, @path)
+                   Attachments.get_attachment(user, vault, path)
         end)
 
       assert log =~ "Attachment blob missing"
     end
-  end
-
-  # Insert a legacy `encryption_version=0` row with plaintext in the BYTEA
-  # `content` column — same shape `Storage.Database` produced before A.4.
-  # Used to verify the read path still serves pre-encryption attachments
-  # until A.5 retires the column entirely.
-  defp seed_legacy_bytea_row!(user, vault, path, plaintext) do
-    Repo.with_tenant(user.id, fn ->
-      %Attachment{}
-      |> Attachment.changeset(%{
-        path: path,
-        content: plaintext,
-        content_hash: :crypto.hash(:md5, plaintext) |> Base.encode16(case: :lower),
-        mime_type: "application/octet-stream",
-        size_bytes: byte_size(plaintext),
-        mtime: 0.0,
-        user_id: user.id,
-        vault_id: vault.id,
-        storage_key: "#{user.id}/#{vault.id}/#{path}",
-        encryption_version: 0
-      })
-      |> Repo.insert!()
-    end)
   end
 end

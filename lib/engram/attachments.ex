@@ -3,8 +3,9 @@ defmodule Engram.Attachments do
   Attachments context — CRUD for binary file attachments.
   All operations are tenant-scoped via Repo.with_tenant/2.
 
-  Binary storage is delegated to the configured storage adapter
-  (Database for BYTEA in Postgres, S3 for MinIO/Tigris).
+  Binary storage goes to the configured S3-compatible adapter
+  (MinIO locally, Tigris in prod). Ciphertext only — every row
+  is `encryption_version = 1` since A.5 (PR #62, 2026-05-02).
   """
 
   import Ecto.Query
@@ -28,9 +29,9 @@ defmodule Engram.Attachments do
 
     with {:ok, plaintext} <- decode_base64(content_b64),
          :ok <- validate_size(plaintext),
-         {:ok, key, changeset_attrs, blob_to_store} <-
+         {:ok, key, changeset_attrs, ciphertext} <-
            prepare_upload(user, vault, path, plaintext, mtime, explicit_mime),
-         :ok <- store_external(key, blob_to_store, changeset_attrs.mime_type) do
+         :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
       Repo.with_tenant(user.id, fn ->
         existing =
           Repo.one(
@@ -78,19 +79,12 @@ defmodule Engram.Attachments do
       {:ok, nil} ->
         {:ok, nil}
 
-      {:ok, %Attachment{content: content} = att} when not is_nil(content) ->
-        # Content in the BYTEA column. Route through decrypt_if_needed so
-        # version=1 rows whose ciphertext lives in `content` (e.g. from a
-        # mis-configured backfill) still decrypt instead of serving raw bytes.
-        decrypt_if_needed(att, content, user)
-
       {:ok, %Attachment{} = att} ->
-        # Content stored externally (S3 adapter) — fetch it
         key = att.storage_key || Storage.key(user.id, vault.id, path)
 
         case Storage.adapter().get(key) do
-          {:ok, binary} ->
-            decrypt_if_needed(att, binary, user)
+          {:ok, ciphertext} ->
+            decrypt(att, ciphertext, user)
 
           {:error, :not_found} ->
             # Live row with missing blob = storage corruption, not a normal 404
@@ -128,17 +122,15 @@ defmodule Engram.Attachments do
     end)
 
     # Best-effort blob cleanup — row is already soft-deleted so this is safe to retry later
-    delete_external(Storage.adapter(), user.id, vault.id, path)
+    delete_external(user.id, vault.id, path)
 
     :ok
   end
 
-  defp delete_external(Storage.Database, _user_id, _vault_id, _path), do: :ok
-
-  defp delete_external(backend, user_id, vault_id, path) do
+  defp delete_external(user_id, vault_id, path) do
     key = Storage.key(user_id, vault_id, path)
 
-    case backend.delete(key) do
+    case Storage.adapter().delete(key) do
       :ok ->
         :ok
 
@@ -219,48 +211,31 @@ defmodule Engram.Attachments do
   end
 
   defp prepare_upload(user, vault, path, plaintext, mtime, explicit_mime) do
-    # A.4 — writes are S3-only. If the adapter is still `Storage.Database`
-    # (legacy deploy or template drift), refuse rather than silently writing
-    # ciphertext into the BYTEA `content` column.
-    if Storage.adapter() == Storage.Database do
-      {:error, :writes_disabled}
-    else
-      do_prepare_upload(user, vault, path, plaintext, mtime, explicit_mime)
-    end
-  end
-
-  defp do_prepare_upload(user, vault, path, plaintext, mtime, explicit_mime) do
     mime = explicit_mime || detect_mime(path)
     hash = :crypto.hash(:md5, plaintext) |> Base.encode16(case: :lower)
     key = Storage.key(user.id, vault.id, path)
-
-    base_attrs = %{
-      path: path,
-      content_hash: hash,
-      mime_type: mime,
-      size_bytes: byte_size(plaintext),
-      mtime: mtime,
-      user_id: user.id,
-      vault_id: vault.id,
-      storage_key: key,
-      deleted_at: nil
-    }
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
       {ciphertext, nonce} = Envelope.encrypt(plaintext, dek)
 
-      attrs =
-        base_attrs
-        |> Map.put(:encryption_version, 1)
-        |> Map.put(:content_nonce, nonce)
-        |> Map.put(:content, nil)
+      attrs = %{
+        path: path,
+        content_hash: hash,
+        mime_type: mime,
+        size_bytes: byte_size(plaintext),
+        mtime: mtime,
+        user_id: user.id,
+        vault_id: vault.id,
+        storage_key: key,
+        deleted_at: nil,
+        encryption_version: 1,
+        content_nonce: nonce
+      }
 
       {:ok, key, attrs, ciphertext}
     end
   end
-
-  defp store_external(_key, :skip, _mime), do: :ok
 
   defp store_external(key, binary, mime) do
     case Storage.adapter().put(key, binary, content_type: mime) do
@@ -269,15 +244,7 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp decrypt_if_needed(%Attachment{encryption_version: 0} = att, binary, _user) do
-    {:ok, %{att | content: binary}}
-  end
-
-  defp decrypt_if_needed(
-         %Attachment{encryption_version: 1, content_nonce: nonce} = att,
-         ciphertext,
-         user
-       ) do
+  defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
     fresh_user = if is_nil(user.encrypted_dek), do: Repo.reload!(user), else: user
 
     with {:ok, dek} <- Crypto.get_dek(fresh_user),

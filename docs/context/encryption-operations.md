@@ -23,6 +23,16 @@ Notes-level encryption is shipped (Phase 1-6, PRs #37/#38/#43/#50). Attachments 
 - Defense in depth: even if adapter somehow resolves to `Storage.Database`, `prepare_upload/6` returns `{:error, :writes_disabled}` rather than silently overwriting BYTEA with ciphertext (the 2026-05-02 corruption shape).
 - BYTEA `content` column + `Storage.Database` adapter retire in PR #62 (A.5) once selfhost is verified at zero `WHERE encryption_version = 0 AND content IS NOT NULL` rows.
 
+### A.5 — Drop BYTEA `content` column + retire `Storage.Database` (PR #62, 0.5.19)
+
+- Migration `20260502093330_drop_attachment_bytea_content` drops the `content` column and the `attachments_legacy_plaintext_idx` partial index. **Irreversible** — `down/0` raises.
+- Pre-merge probe (2026-05-02): saas had 105 attachments, 0 legacy; selfhost had 0 attachments. Zero rows lost.
+- Schema: `Engram.Attachments.Attachment.content` is now a `:virtual` field — set in-memory by `decrypt/3` only.
+- Read path (`get_attachment/3`) collapsed to a single S3 fetch + decrypt; the `content non-nil` short-circuit is gone.
+- `Engram.Storage.Database` module deleted. `Engram.Workers.BackfillByteaToS3` worker + `mix engram.backfill_bytea_to_s3` task deleted (no callers left).
+- `runtime.exs` only accepts `STORAGE_BACKEND=s3`; any other value (including `database`) raises at boot.
+- Validations now require `encryption_version == 1` and `content_nonce` on every row. The dual-version branch in `decrypt_if_needed` is gone — version 0 is unrepresentable.
+
 ## What This Is
 Operator runbook for encryption toggling, per-user cooldown, and incident triage. Companion to the architecture spec at `docs/superpowers/specs/2026-04-07-encryption-at-rest-design.md`.
 
