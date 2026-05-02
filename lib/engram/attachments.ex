@@ -79,8 +79,10 @@ defmodule Engram.Attachments do
         {:ok, nil}
 
       {:ok, %Attachment{content: content} = att} when not is_nil(content) ->
-        # Content already in the row (Database adapter)
-        {:ok, att}
+        # Content in the BYTEA column. Route through decrypt_if_needed so
+        # version=1 rows whose ciphertext lives in `content` (e.g. from a
+        # mis-configured backfill) still decrypt instead of serving raw bytes.
+        decrypt_if_needed(att, content, user)
 
       {:ok, %Attachment{} = att} ->
         # Content stored externally (S3 adapter) — fetch it
@@ -241,6 +243,7 @@ defmodule Engram.Attachments do
             base_attrs
             |> Map.put(:encryption_version, 1)
             |> Map.put(:content_nonce, nonce)
+            |> Map.put(:content, nil)
 
           {:ok, key, attrs, ciphertext}
         end
