@@ -9,6 +9,7 @@ defmodule Engram.Repo.Migrations.AddAttachmentEncryption do
 
     create index(:attachments, [:encryption_version],
              where: "encryption_version = 0",
-             name: :attachments_legacy_plaintext_idx)
+             name: :attachments_legacy_plaintext_idx
+           )
   end
 end

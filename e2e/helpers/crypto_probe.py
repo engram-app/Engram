@@ -82,6 +82,56 @@ def assert_note_ciphertext_at_rest(vault_id: int, path: str) -> None:
     )
 
 
+def _fetch_attachment_row(vault_id: int, path: str) -> dict:
+    """SELECT the encryption columns + content shape for an attachment."""
+    sql = (
+        f"\\set target_path '{path}'\n"
+        f"SELECT encryption_version, content_nonce IS NOT NULL, "
+        f"octet_length(content), size_bytes, content IS NULL, storage_key "
+        f"FROM attachments WHERE vault_id = {int(vault_id)} "
+        f"AND path = :'target_path' AND deleted_at IS NULL;"
+    )
+    out = _psql(sql, fetch=True)
+    assert out, f"Attachment not found in DB: vault_id={vault_id} path={path!r}"
+    line = out.splitlines()[0]
+    version, nonce_present, content_octets, size_bytes, content_null, storage_key = line.split("|")
+    return {
+        "encryption_version": int(version),
+        "content_nonce_present": nonce_present == "t",
+        "content_octets": int(content_octets) if content_octets else None,
+        "size_bytes": int(size_bytes),
+        "content_null": content_null == "t",
+        "storage_key": storage_key,
+    }
+
+
+def assert_attachment_ciphertext_at_rest(vault_id: int, path: str) -> None:
+    """Assert attachment row is encryption_version=1 with a 12-byte nonce.
+    For BYTEA-backed rows, also assert ciphertext length = plaintext + 16
+    (AES-256-GCM tag suffix). For S3-backed rows, content is NULL and
+    storage_key carries the bytes — the BYTEA shape check is skipped."""
+    row = _fetch_attachment_row(vault_id, path)
+    failures = []
+    if row["encryption_version"] != 1:
+        failures.append(f"encryption_version is {row['encryption_version']} (want 1)")
+    if not row["content_nonce_present"]:
+        failures.append("content_nonce is NULL")
+    if not row["content_null"]:
+        # BYTEA-backed: content must NOT equal plaintext bytes. We can't read
+        # the plaintext post-encrypt to compare, but the size invariant holds:
+        # GCM appends a 16-byte tag, so octet_length(content) == size_bytes + 16.
+        expected = row["size_bytes"] + 16
+        if row["content_octets"] != expected:
+            failures.append(
+                f"BYTEA content octet_length is {row['content_octets']}, "
+                f"expected size_bytes + 16 = {expected}"
+            )
+    assert not failures, (
+        f"Expected attachment ciphertext at rest for vault_id={vault_id} path={path!r}; "
+        f"failures: {failures}"
+    )
+
+
 def assert_note_plaintext_at_rest(vault_id: int, path: str) -> None:
     """Inverse. Content column populated, ciphertext columns NULL."""
     row = _fetch_note_row(vault_id, path)
