@@ -45,7 +45,12 @@ defmodule Engram.AttachmentsTest do
       # (or template drift unsets it), we must NOT silently fall through to the
       # S3 write path that would push ciphertext into the BYTEA `content` column —
       # that's the exact corruption shape from the 2026-05-02 incident.
+      #
+      # Application env is process-global; restore on exit so async tests in
+      # other files (e.g. AttachmentsControllerTest) don't see Database leak in.
+      prev = Application.get_env(:engram, :storage)
       Application.put_env(:engram, :storage, Engram.Storage.Database)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
 
       assert {:error, :writes_disabled} =
                Attachments.upsert_attachment(user, vault, %{

@@ -1,5 +1,10 @@
 defmodule EngramWeb.AttachmentsControllerTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false because AttachmentsTest (also async: false) mutates the
+  # global :storage adapter via Application.put_env. ExUnit runs async: true
+  # cases first, then async: false serially — making this file async: false
+  # serializes it against AttachmentsTest and prevents adapter races where
+  # a POST/GET pair straddles a flip to MockStorage or Storage.Database.
+  use EngramWeb.ConnCase, async: false
 
   @sample_content "Hello, binary world!"
   @sample_base64 Base.encode64("Hello, binary world!")
