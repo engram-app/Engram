@@ -13,6 +13,8 @@ defmodule Engram.Attachments.Attachment do
     field :mtime, :float
     field :storage_key, :string
     field :deleted_at, :utc_datetime
+    field :encryption_version, :integer, default: 0
+    field :content_nonce, :binary
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -32,12 +34,32 @@ defmodule Engram.Attachments.Attachment do
       :user_id,
       :vault_id,
       :storage_key,
-      :deleted_at
+      :deleted_at,
+      :encryption_version,
+      :content_nonce
     ])
     |> validate_required([:path, :user_id, :vault_id, :content_hash, :mime_type, :size_bytes])
+    |> validate_inclusion(:encryption_version, [0, 1])
     |> validate_number(:size_bytes, less_than_or_equal_to: @max_attachment_bytes)
+    |> validate_nonce_consistency()
     |> unique_constraint([:user_id, :vault_id, :path], name: :attachments_user_vault_path_active_index)
   end
 
   def max_attachment_bytes, do: @max_attachment_bytes
+
+  defp validate_nonce_consistency(changeset) do
+    version = get_field(changeset, :encryption_version) || 0
+    nonce = get_field(changeset, :content_nonce)
+
+    cond do
+      version == 1 and is_nil(nonce) ->
+        add_error(changeset, :content_nonce, "must be present when encryption_version = 1")
+
+      version == 0 and not is_nil(nonce) ->
+        add_error(changeset, :content_nonce, "must be nil when encryption_version = 0")
+
+      true ->
+        changeset
+    end
+  end
 end

@@ -99,6 +99,47 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "changeset validations" do
+    test "rejects encryption_version outside [0, 1]" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      attrs = %{
+        path: "x.png",
+        content_hash: "abc",
+        mime_type: "image/png",
+        size_bytes: 10,
+        user_id: user.id,
+        vault_id: vault.id,
+        encryption_version: 7
+      }
+
+      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).encryption_version
+    end
+
+    test "requires content_nonce when encryption_version = 1" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      attrs = %{
+        path: "x.png",
+        content_hash: "abc",
+        mime_type: "image/png",
+        size_bytes: 10,
+        user_id: user.id,
+        vault_id: vault.id,
+        encryption_version: 1,
+        content_nonce: nil
+      }
+
+      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
+      refute changeset.valid?
+      assert "must be present when encryption_version = 1" in errors_on(changeset).content_nonce
+    end
+  end
+
   describe "get_attachment/3 with S3 storage (content nil)" do
     test "fetches binary from storage backend when content is nil", %{user: user, vault: vault, storage_key: storage_key} do
       # Insert an attachment row with content: nil and a storage_key
