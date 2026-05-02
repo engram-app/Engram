@@ -1,4 +1,6 @@
-# Parity mode override — use with:
+# Parity mode override — flips the CI stack from Ollama→Voyage embeddings
+# while keeping the base MinIO + Postgres services from docker-compose.ci.yml.
+# Use with:
 #   VOYAGE_API_KEY=xxx docker compose -f docker-compose.ci.yml -f docker-compose.parity.yml -p engram-ci up -d --build --wait
 #   VOYAGE_API_KEY=xxx bash validate_parity.sh
 
@@ -12,38 +14,3 @@ services:
       QUERY_EMBED_MODEL: voyage-4-lite
       VOYAGE_API_KEY: "${VOYAGE_API_KEY:?Set VOYAGE_API_KEY}"
       QDRANT_COLLECTION: ci_parity_notes
-      STORAGE_BACKEND: s3
-      STORAGE_BUCKET: engram-attachments
-      STORAGE_ACCESS_KEY_ID: minioadmin
-      STORAGE_SECRET_ACCESS_KEY: minioadmin
-      STORAGE_SCHEME: "http://"
-      STORAGE_HOST: minio
-      STORAGE_PORT: "9000"
-      STORAGE_REGION: us-east-1
-    depends_on:
-      minio:
-        condition: service_healthy
-
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/engram-attachments;
-      exit 0;
-      "
