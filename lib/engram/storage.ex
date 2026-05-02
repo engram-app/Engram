@@ -1,7 +1,6 @@
 defmodule Engram.Storage do
   @moduledoc """
-  Behaviour for S3-compatible attachment storage. Tigris in prod, MinIO
-  in dev/CI, ETS-backed in-memory adapter in unit tests.
+  Behaviour for file storage backends (S3, database, etc.).
   All keys are scoped by user_id and vault_id prefix: "user_id/vault_id/path".
   """
 
@@ -18,7 +17,7 @@ defmodule Engram.Storage do
               boolean()
 
   @doc "Returns the configured storage adapter module."
-  def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
+  def adapter, do: Application.get_env(:engram, :storage, __MODULE__.Database)
 
   @doc "Build a storage key from user_id, vault_id, and attachment path."
   def key(user_id, vault_id, path)

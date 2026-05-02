@@ -3,7 +3,6 @@ defmodule Engram.Workers.CleanupVaultTest do
   use Oban.Testing, repo: Engram.Repo
 
   import ExUnit.CaptureLog
-  import Mox
 
   alias Engram.Attachments.Attachment
   alias Engram.Notes.{Chunk, Note}
@@ -11,9 +10,6 @@ defmodule Engram.Workers.CleanupVaultTest do
   alias Engram.Vaults
   alias Engram.Vaults.Vault
   alias Engram.Workers.CleanupVault
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
 
   # ---------------------------------------------------------------------------
   # enqueue/2
@@ -166,26 +162,19 @@ defmodule Engram.Workers.CleanupVaultTest do
       note: note,
       attachment: attachment
     } do
+      # Qdrant succeeds, but we can verify that DB cleanup is not blocked by blob issues
       Bypass.expect(bypass, fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
       end)
 
-      # Override the default InMemory adapter with MockStorage and have it
-      # raise on delete to exercise the cleanup-proceeds-despite-blob-failure
-      # branch.
-      prev = Application.get_env(:engram, :storage)
-      Application.put_env(:engram, :storage, Engram.MockStorage)
-      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-
-      stub(Engram.MockStorage, :delete, fn _key -> raise "simulated S3 failure" end)
-
       log =
         capture_log(fn ->
           assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
         end)
 
+      # storage_key "test/blob.png" is invalid format → raises ArgumentError
       assert log =~ "storage delete raised"
 
       # DB cleanup completed successfully

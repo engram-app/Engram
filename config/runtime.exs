@@ -24,20 +24,25 @@ config :engram, EngramWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() != :test do
-  # Storage backend — S3-compatible only. STORAGE_HOST is required; defaults
-  # are tuned for Tigris in prod, MinIO in dev/CI.
-  config :engram, :storage, Engram.Storage.S3
-  config :engram, :storage_bucket, System.get_env("STORAGE_BUCKET", "engram-attachments")
+  # Storage backend — select adapter from STORAGE_BACKEND env var (s3 or database)
+  case System.get_env("STORAGE_BACKEND", "database") do
+    "s3" ->
+      config :engram, :storage, Engram.Storage.S3
+      config :engram, :storage_bucket, System.get_env("STORAGE_BUCKET", "engram-attachments")
 
-  config :ex_aws,
-    access_key_id: System.get_env("STORAGE_ACCESS_KEY_ID"),
-    secret_access_key: System.get_env("STORAGE_SECRET_ACCESS_KEY"),
-    region: System.get_env("STORAGE_REGION", "auto")
+      config :ex_aws,
+        access_key_id: System.get_env("STORAGE_ACCESS_KEY_ID"),
+        secret_access_key: System.get_env("STORAGE_SECRET_ACCESS_KEY"),
+        region: System.get_env("STORAGE_REGION", "auto")
 
-  config :ex_aws, :s3,
-    scheme: System.get_env("STORAGE_SCHEME", "https://"),
-    host: System.get_env("STORAGE_HOST"),
-    port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
+      config :ex_aws, :s3,
+        scheme: System.get_env("STORAGE_SCHEME", "https://"),
+        host: System.get_env("STORAGE_HOST"),
+        port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
+
+    _ ->
+      config :engram, :storage, Engram.Storage.Database
+  end
 
   # Embedder — select adapter from EMBED_BACKEND env var (voyage or ollama)
   case System.get_env("EMBED_BACKEND", "voyage") do
@@ -104,13 +109,11 @@ end
 
 # Auth provider selection: "local" (built-in email/password) or "clerk" (SaaS JWKS)
 # Default: local — self-hosters get working auth with zero third-party config.
-auth_provider =
-  case System.get_env("AUTH_PROVIDER", "local") do
-    "local" -> :local
-    "clerk" -> :clerk
-    other -> raise "Invalid AUTH_PROVIDER=#{other}. Valid values: local, clerk"
-  end
-
+auth_provider = case System.get_env("AUTH_PROVIDER", "local") do
+  "local" -> :local
+  "clerk" -> :clerk
+  other -> raise "Invalid AUTH_PROVIDER=#{other}. Valid values: local, clerk"
+end
 config :engram, :auth_provider, auth_provider
 
 # Rate limit override for CI E2E tests (only effective when CI=true).
@@ -123,16 +126,12 @@ end
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.
 if auth_provider == :clerk do
-  clerk_jwks_url =
-    System.get_env("CLERK_JWKS_URL") ||
-      raise "CLERK_JWKS_URL is required when AUTH_PROVIDER=clerk"
-
+  clerk_jwks_url = System.get_env("CLERK_JWKS_URL") ||
+    raise "CLERK_JWKS_URL is required when AUTH_PROVIDER=clerk"
   config :engram, :clerk_jwks_url, String.trim(clerk_jwks_url)
 
-  clerk_issuer =
-    System.get_env("CLERK_ISSUER") ||
-      raise "CLERK_ISSUER is required when AUTH_PROVIDER=clerk"
-
+  clerk_issuer = System.get_env("CLERK_ISSUER") ||
+    raise "CLERK_ISSUER is required when AUTH_PROVIDER=clerk"
   config :engram, :clerk_issuer, String.trim(clerk_issuer)
 
   clerk_pub_key =
@@ -141,7 +140,6 @@ if auth_provider == :clerk do
       "" -> raise "CLERK_PUBLISHABLE_KEY is set but empty when AUTH_PROVIDER=clerk"
       key -> key
     end
-
   config :engram, :clerk_publishable_key, clerk_pub_key
 end
 
@@ -182,11 +180,7 @@ phx_hosts = Engram.HostOrigins.parse(System.get_env("PHX_HOST"))
 
 if phx_hosts do
   scheme = System.get_env("PHX_SCHEME") || if(config_env() == :prod, do: "https", else: "http")
-
-  url_port =
-    String.to_integer(
-      System.get_env("PHX_PORT") || if(config_env() == :prod, do: "443", else: "80")
-    )
+  url_port = String.to_integer(System.get_env("PHX_PORT") || if(config_env() == :prod, do: "443", else: "80"))
 
   config :engram, EngramWeb.Endpoint,
     url: [host: phx_hosts.canonical_host, port: url_port, scheme: scheme]

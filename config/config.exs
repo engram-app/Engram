@@ -30,10 +30,8 @@ config :engram, :websocket_check_origin, false
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 
-# Storage adapter — S3-compatible (MinIO in dev/CI, Tigris in prod). BYTEA
-# storage was retired 2026-05-01; the Storage behaviour now requires an
-# external blob store.
-config :engram, :storage, Engram.Storage.S3
+# Storage adapter (database = BYTEA in Postgres, s3 = MinIO/Tigris)
+config :engram, :storage, Engram.Storage.Database
 
 # Hammer rate limiting (ETS backend)
 config :hammer,

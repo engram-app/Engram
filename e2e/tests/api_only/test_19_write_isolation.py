@@ -9,13 +9,9 @@ Migrated to API-only: seeds data via api_sync.create_note() instead of Obsidian
 vault writes, so these 11 tests run during the Obsidian boot gap in CI.
 """
 
-import os
 import time
-import uuid
 
 import pytest
-
-from helpers.crypto_probe import assert_attachment_ciphertext_at_rest
 
 
 # ---------------------------------------------------------------------------
@@ -166,32 +162,6 @@ async def test_write_isolation_cannot_read_other_user_attachment(api_sync, api_i
         f"SECURITY BREACH: isolation-user read sync-user's attachment! "
         f"Status: {resp.status_code}"
     )
-
-
-@pytest.mark.asyncio
-async def test_attachment_ciphertext_at_rest(api_sync):
-    """Tier 2 Phase A: uploaded attachment must be ciphertext in BYTEA, with
-    encryption_version=1 + content_nonce, while the API still returns
-    plaintext on round-trip."""
-    plaintext = b"\x89PNG\r\n\x1a\n" + os.urandom(256)
-    att_path = f"E2E/cipher-proof-{uuid.uuid4().hex}.png"
-
-    status = api_sync.upload_attachment(att_path, plaintext)
-    assert status in (200, 201), f"upload failed: {status}"
-
-    vaults = api_sync.list_vaults()
-    assert vaults, "sync user has no vault — conftest setup broken"
-    vault_id = vaults[0]["id"]
-
-    assert_attachment_ciphertext_at_rest(vault_id, att_path)
-
-    # API round-trip must still return the original bytes (decrypt on read).
-    resp = api_sync.get_attachment(att_path)
-    assert resp.status_code == 200, f"GET failed: {resp.status_code}"
-    body = resp.json()
-    import base64
-    returned = base64.b64decode(body["content_base64"])
-    assert returned == plaintext, "GET /attachments did not round-trip plaintext"
 
 
 @pytest.mark.asyncio
