@@ -27,6 +27,8 @@ CONFIG_PATHS = [
 
 # CI compose project name — matches the directory name where docker-compose.ci.yml lives
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
+CI_MINIO_CONTAINER = os.environ.get("CI_MINIO_CONTAINER", "engram-ci-minio-1")
+CI_MINIO_BUCKET = os.environ.get("CI_MINIO_BUCKET", "engram-attachments")
 
 
 _SAFE_EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._@%+-]+$")
@@ -134,10 +136,40 @@ def cleanup_vaults() -> None:
             logger.info("Removed %s", path)
 
 
+def cleanup_minio_bucket() -> None:
+    """Best-effort purge of every object under the test bucket via `mc rm`.
+
+    Required since attachments now land in MinIO; without this, repeated
+    test runs accumulate orphan blobs across the bucket. No-op when the
+    MinIO container is absent (e.g., a stack run with storage disabled).
+    """
+    # mc inside the minio container has no persistent alias config (the
+    # minio-init sidecar that set the alias has exited), so configure
+    # inline. `mc alias set` is idempotent.
+    inline = (
+        "mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null && "
+        f"mc rm --recursive --force local/{CI_MINIO_BUCKET}/"
+    )
+    cmd = ["docker", "exec", CI_MINIO_CONTAINER, "sh", "-c", inline]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "No such container" in stderr or "not running" in stderr:
+            logger.debug("MinIO purge skipped — container %s not present", CI_MINIO_CONTAINER)
+            return
+        # `mc rm` on an empty prefix prints "Failed to remove ...: Object does not exist"
+        # but exits non-zero — treat as success.
+        if "Object does not exist" in stderr or not stderr:
+            return
+        logger.warning("MinIO purge non-fatal error: %s", stderr)
+
+
 def full_cleanup() -> None:
-    """Run both DB and vault cleanup."""
+    """Run DB, blob, and vault cleanup."""
     cleanup_test_data("e2e-%@example.com")
     cleanup_test_data("e2e-%@test.local")
+    cleanup_minio_bucket()
     cleanup_vaults()
 
 

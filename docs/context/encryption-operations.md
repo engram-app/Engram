@@ -5,6 +5,16 @@ _Last verified: 2026-04-30_
 ## Status
 Notes-level encryption is shipped (Phase 1-6, PRs #37/#38/#43/#50). Attachments remain plaintext (Phase 7 pending — see `docs/encryption-toggle-followups.md`).
 
+### Phase A — Attachment encryption (PR #58, 0.5.15)
+
+- New uploads encrypt before S3 put when `STORAGE_BACKEND=s3` is active.
+- Legacy BYTEA reads continue to work unchanged (dual-flow `get_attachment`).
+- `mix engram.backfill_bytea_to_s3` enqueues one Oban job per (user, vault) with legacy rows.
+- Worker is idempotent and cursor-driven; rerun is safe.
+- BYTEA column NOT yet dropped — happens in PR #60 after PR #59 cuts writes to S3-only.
+- Telemetry events for encrypt/decrypt are deferred to PR #59 (Phase A reland keeps surface area minimal).
+- See `docs/superpowers/plans/2026-05-02-encryption-attachments-reland.md` for the full reland plan + production runbook.
+
 ## What This Is
 Operator runbook for encryption toggling, per-user cooldown, and incident triage. Companion to the architecture spec at `docs/superpowers/specs/2026-04-07-encryption-at-rest-design.md`.
 

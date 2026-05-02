@@ -1,6 +1,7 @@
 defmodule Engram.AttachmentsTest do
   use Engram.DataCase, async: false
 
+  import Ecto.Query
   import ExUnit.CaptureLog
   import Mox
 
@@ -96,6 +97,149 @@ defmodule Engram.AttachmentsTest do
 
       # vault_b has no attachment at this path — MockStorage get would only be called if found
       assert {:ok, nil} = Attachments.get_attachment(user, vault_b, @path)
+    end
+  end
+
+  describe "changeset validations" do
+    test "rejects encryption_version outside [0, 1]" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      attrs = %{
+        path: "x.png",
+        content_hash: "abc",
+        mime_type: "image/png",
+        size_bytes: 10,
+        user_id: user.id,
+        vault_id: vault.id,
+        encryption_version: 7
+      }
+
+      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).encryption_version
+    end
+
+    test "requires content_nonce when encryption_version = 1" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      attrs = %{
+        path: "x.png",
+        content_hash: "abc",
+        mime_type: "image/png",
+        size_bytes: 10,
+        user_id: user.id,
+        vault_id: vault.id,
+        encryption_version: 1,
+        content_nonce: nil
+      }
+
+      changeset = Engram.Attachments.Attachment.changeset(%Engram.Attachments.Attachment{}, attrs)
+      refute changeset.valid?
+      assert "must be present when encryption_version = 1" in errors_on(changeset).content_nonce
+    end
+  end
+
+  describe "encrypted S3 storage path" do
+    setup do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "encrypts attachment content before put when active backend is S3" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+      plaintext = "secret bytes"
+      b64 = Base.encode64(plaintext)
+
+      test_pid = self()
+
+      Mox.expect(Engram.MockStorage, :put, fn _key, bytes, _opts ->
+        send(test_pid, {:put_bytes, bytes})
+        :ok
+      end)
+
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "secret.bin",
+          "content_base64" => b64,
+          "mtime" => 0.0
+        })
+
+      assert_receive {:put_bytes, stored}, 500
+      refute stored == plaintext
+      assert byte_size(stored) >= byte_size(plaintext) + 16
+    end
+
+    test "round-trips encrypted attachment via get_attachment" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+      plaintext = "round trip me"
+      b64 = Base.encode64(plaintext)
+
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "rt.bin",
+          "content_base64" => b64,
+          "mtime" => 0.0
+        })
+
+      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "rt.bin")
+      assert fetched.content == plaintext
+      assert fetched.encryption_version == 1
+      assert is_binary(fetched.content_nonce)
+    end
+
+    test "legacy BYTEA row is returned without decrypt attempt" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.Storage.Database)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "legacy.bin",
+          "content_base64" => Base.encode64("legacy plaintext"),
+          "mtime" => 0.0
+        })
+
+      {:ok, fetched} = Engram.Attachments.get_attachment(user, vault, "legacy.bin")
+      assert fetched.content == "legacy plaintext"
+      assert fetched.encryption_version == 0
+      assert is_nil(fetched.content_nonce)
+    end
+
+    test "encrypted row with corrupt nonce returns {:error, :decrypt_failed}" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+
+      # Upload a real encrypted attachment so the user has a DEK and the row
+      # has matching ciphertext on disk.
+      {:ok, _real} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "ghost.bin",
+          "content_base64" => Base.encode64("real plaintext"),
+          "mtime" => 0.0
+        })
+
+      # Corrupt the row's content_nonce so decryption will fail.
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(a in Engram.Attachments.Attachment,
+            where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "ghost.bin"
+          )
+          |> Engram.Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
+        end)
+
+      assert {:error, :decrypt_failed} =
+               Engram.Attachments.get_attachment(user, vault, "ghost.bin")
     end
   end
 

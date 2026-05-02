@@ -48,8 +48,8 @@ config :engram, :embedder, Engram.MockEmbedder
 config :engram, :qdrant_collection, "engram_notes"
 config :engram, :qdrant_retry, false
 
-# Use real database storage in tests (backward-compatible default)
-config :engram, :storage, Engram.Storage.Database
+# Use in-memory ETS storage in tests — no DB I/O, no S3 required
+config :engram, :storage, Engram.Storage.InMemory
 
 # Disable Oban queues/plugins in test — jobs must be triggered explicitly via perform_job/2
 # Use Oban.Testing.with_testing_mode(:inline, fn -> ... end) in tests that need inline execution
