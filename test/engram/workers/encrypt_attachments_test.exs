@@ -154,4 +154,54 @@ defmodule Engram.Workers.EncryptAttachmentsTest do
       assert is_nil(reloaded.content)
     end
   end
+
+  describe "enqueue_legacy_vaults/0" do
+    test "enqueues one job per vault holding legacy attachments", %{user: user, vault: vault_a} do
+      vault_b = insert(:vault, user: user)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          %Attachment{}
+          |> Attachment.changeset(%{
+            path: "legacy.bin",
+            content: "abc",
+            content_hash: "deadbeef",
+            mime_type: "application/octet-stream",
+            size_bytes: 3,
+            user_id: user.id,
+            vault_id: vault_a.id,
+            storage_key: "#{user.id}/#{vault_a.id}/legacy.bin",
+            encryption_version: 0
+          })
+          |> Repo.insert()
+        end)
+
+      {:ok, count} = EncryptAttachments.enqueue_legacy_vaults()
+      assert count == 1
+
+      assert_enqueued worker: EncryptAttachments,
+                      args: %{"vault_id" => vault_a.id, "user_id" => user.id, "cursor" => 0}
+
+      refute_enqueued worker: EncryptAttachments, args: %{"vault_id" => vault_b.id}
+    end
+
+    test "ignores already-encrypted attachments", %{user: user, vault: vault} do
+      pid = self()
+
+      expect(Engram.MockStorage, :put, fn _key, ct, _opts ->
+        send(pid, {:put, ct})
+        :ok
+      end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "fresh.bin",
+          "content_base64" => Base.encode64("hello")
+        })
+
+      {:ok, count} = EncryptAttachments.enqueue_legacy_vaults()
+      assert count == 0
+      refute_enqueued worker: EncryptAttachments
+    end
+  end
 end

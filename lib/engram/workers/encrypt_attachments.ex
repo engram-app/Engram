@@ -26,6 +26,33 @@ defmodule Engram.Workers.EncryptAttachments do
 
   @batch_size 100
 
+  @doc """
+  Scan every vault holding at least one legacy plaintext attachment
+  (`encryption_version = 0`, not soft-deleted) and enqueue one
+  `EncryptAttachments` job per vault. Returns `{:ok, enqueued_count}`.
+
+  Skips tenant scoping — the legacy partial index is the source of truth
+  and the worker scopes per-vault on dispatch.
+  """
+  @spec enqueue_legacy_vaults() :: {:ok, non_neg_integer()}
+  def enqueue_legacy_vaults do
+    pairs =
+      from(a in Attachment,
+        where: a.encryption_version == 0 and is_nil(a.deleted_at),
+        distinct: true,
+        select: {a.user_id, a.vault_id}
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    Enum.each(pairs, fn {uid, vid} ->
+      %{user_id: uid, vault_id: vid, cursor: 0}
+      |> __MODULE__.new()
+      |> Oban.insert()
+    end)
+
+    {:ok, length(pairs)}
+  end
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"vault_id" => vault_id, "user_id" => user_id, "cursor" => cursor}}) do
     case load_batch(vault_id, user_id, cursor) do
