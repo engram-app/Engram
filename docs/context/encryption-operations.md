@@ -1,9 +1,15 @@
 # Context Doc: Encryption-at-Rest Operations
 
-_Last verified: 2026-04-30_
+_Last verified: 2026-05-02_
 
 ## Status
-Notes-level encryption is shipped (Phase 1-6, PRs #37/#38/#43/#50). Attachments remain plaintext (Phase 7 pending — see `docs/encryption-toggle-followups.md`).
+
+**Two parallel surfaces — different rules:**
+
+- **Notes (Phase 1-6, PRs #37/#38/#43/#50):** per-user opt-in toggle, encryption-at-rest in Postgres + Qdrant payload. Toggle/cooldown semantics described below still apply. Will be retired under Tier 2 Phase E.
+- **Attachments (Tier 2 Phase A complete, PRs #58→#62, 0.5.19):** **mandatory at-rest encryption** for every user, no toggle. Bytes live in S3-compatible storage only (MinIO local / Tigris prod). The legacy BYTEA `content` column was dropped in PR #62. `STORAGE_BACKEND=s3` is the only accepted value at boot.
+
+The toggle described in this runbook governs **notes only**. Attachments encrypt unconditionally — no operator action needed.
 
 ### Phase A — Attachment encryption (PR #58, 0.5.15)
 
@@ -89,10 +95,11 @@ The 24-hour `decrypt_pending` window is **cancellable**: the user can `DELETE /a
 |---------|----------|--------|
 | Postgres `notes` | `content`, `title`, `tags` | ✅ ciphertext when vault is encrypted |
 | Qdrant payload | `text`, `title`, `heading_path` | ✅ ciphertext (Jina/Voyage never sees plaintext for encrypted vaults) |
-| Postgres `attachments` | `content`, `name` | ❌ plaintext (Phase 7 pending) |
-| Tigris/S3 attachment bytes | binary blob | ❌ plaintext (Phase 7 pending) |
+| Postgres `attachments` | `content` column | ✅ **dropped entirely** (PR #62) — bytes live in S3 only |
+| Postgres `attachments` | `name` / `path` | ❌ plaintext (Tier 2 Phase B pending) |
+| Tigris/S3 attachment bytes | binary blob | ✅ ciphertext (mandatory, AES-GCM via per-user DEK; PR #58→#62) |
 
-**Don't claim "encryption at rest" without that caveat.** Attachment-bearing vaults are not fully encrypted today — communicate this in support contexts.
+**Remaining plaintext surfaces under Tier 2:** attachment paths/names, note source paths, folder names, tags. These get HMAC fingerprints + encrypted display values in Phase B. Until Phase B ships, communicate this honestly in support contexts — bytes are sealed, but field names that index them are not.
 
 ## Triage Recipes
 
