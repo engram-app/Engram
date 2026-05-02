@@ -22,29 +22,33 @@ defmodule Engram.Vaults do
   Returns {:ok, vault} or {:error, :vault_limit_reached} or {:error, changeset}.
   """
   def create_vault(user, attrs) do
-    Repo.with_tenant(user.id, fn ->
-      current_count = count_vaults(user.id)
+    # Ensure user has a DEK before Phase B injection
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+      Repo.with_tenant(user.id, fn ->
+        current_count = count_vaults(user.id)
 
-      case Billing.check_limit(user, "max_vaults", current_count) do
-        {:error, :limit_reached} ->
-          {:error, :vault_limit_reached}
+        case Billing.check_limit(user, "max_vaults", current_count) do
+          {:error, :limit_reached} ->
+            {:error, :vault_limit_reached}
 
-        :ok ->
-          is_default = current_count == 0
-          name = attrs[:name] || attrs["name"] || ""
-          slug = unique_slug(user.id, slugify(name))
+          :ok ->
+            is_default = current_count == 0
+            name = attrs[:name] || attrs["name"] || ""
+            slug = unique_slug(user.id, slugify(name))
 
-          vault_attrs =
-            attrs
-            |> atomize_keys()
-            |> Map.merge(%{slug: slug, user_id: user.id, is_default: is_default})
+            vault_attrs =
+              attrs
+              |> atomize_keys()
+              |> inject_name_phase_b(user)
+              |> Map.merge(%{slug: slug, user_id: user.id, is_default: is_default})
 
-          %Vault{}
-          |> Vault.changeset(vault_attrs)
-          |> Repo.insert()
-      end
-    end)
-    |> unwrap_transaction()
+            %Vault{}
+            |> Vault.changeset(vault_attrs)
+            |> Repo.insert()
+        end
+      end)
+      |> unwrap_transaction()
+    end
   end
 
   # ── Register (idempotent) ───────────────────────────────────────────────────
@@ -59,42 +63,47 @@ defmodule Engram.Vaults do
     {:error, :vault_limit_reached}
   """
   def register_vault(user, name, client_id) do
-    result =
-      Repo.with_tenant(user.id, fn ->
-        existing = find_by_client_id(user.id, client_id)
+    # Ensure user has a DEK before Phase B injection
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+      result =
+        Repo.with_tenant(user.id, fn ->
+          existing = find_by_client_id(user.id, client_id)
 
-        case existing do
-          %Vault{} = vault ->
-            {:ok, vault, :existing}
+          case existing do
+            %Vault{} = vault ->
+              {:ok, vault, :existing}
 
-          nil ->
-            current_count = count_vaults(user.id)
+            nil ->
+              current_count = count_vaults(user.id)
 
-            case Billing.check_limit(user, "max_vaults", current_count) do
-              {:error, :limit_reached} ->
-                {:error, :vault_limit_reached}
+              case Billing.check_limit(user, "max_vaults", current_count) do
+                {:error, :limit_reached} ->
+                  {:error, :vault_limit_reached}
 
-              :ok ->
-                is_default = current_count == 0
-                slug = unique_slug(user.id, slugify(name))
+                :ok ->
+                  is_default = current_count == 0
+                  slug = unique_slug(user.id, slugify(name))
 
-                attrs = %{
-                  name: name,
-                  client_id: client_id,
-                  slug: slug,
-                  user_id: user.id,
-                  is_default: is_default
-                }
+                  attrs = %{
+                    name: name,
+                    client_id: client_id,
+                    slug: slug,
+                    user_id: user.id,
+                    is_default: is_default
+                  }
 
-                case Repo.insert(Vault.changeset(%Vault{}, attrs)) do
-                  {:ok, vault} -> {:ok, vault, :created}
-                  {:error, cs} -> {:error, cs}
-                end
-            end
-        end
-      end)
+                  attrs = inject_name_phase_b(attrs, user)
 
-    unwrap_register_transaction(result)
+                  case Repo.insert(Vault.changeset(%Vault{}, attrs)) do
+                    {:ok, vault} -> {:ok, vault, :created}
+                    {:error, cs} -> {:error, cs}
+                  end
+              end
+          end
+        end)
+
+      unwrap_register_transaction(result)
+    end
   end
 
   # ── List ────────────────────────────────────────────────────────────────────
@@ -207,7 +216,11 @@ defmodule Engram.Vaults do
           {:error, :not_found}
 
         vault ->
-          attrs = attrs |> atomize_keys() |> then(&maybe_regenerate_slug(user.id, vault, &1))
+          attrs =
+            attrs
+            |> atomize_keys()
+            |> then(&maybe_regenerate_slug(user.id, vault, &1))
+            |> inject_name_phase_b(user)
 
           if Map.get(attrs, :is_default) == true do
             clear_defaults(user.id, vault_id)
@@ -244,7 +257,10 @@ defmodule Engram.Vaults do
 
           result =
             vault
-            |> Vault.changeset(%{deleted_at: DateTime.utc_now() |> DateTime.truncate(:second), is_default: false})
+            |> Vault.changeset(%{
+              deleted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+              is_default: false
+            })
             |> Repo.update()
 
           if was_default do
@@ -303,7 +319,10 @@ defmodule Engram.Vaults do
     `encryption_status`. For terminal states ("none", "encrypted") progress
     is considered complete (`processed == total`).
   """
-  @spec encryption_progress(Vault.t()) :: %{processed: non_neg_integer(), total: non_neg_integer()}
+  @spec encryption_progress(Vault.t()) :: %{
+          processed: non_neg_integer(),
+          total: non_neg_integer()
+        }
   def encryption_progress(%Vault{} = vault) do
     {:ok, counts} =
       Repo.with_tenant(vault.user_id, fn ->
@@ -337,6 +356,31 @@ defmodule Engram.Vaults do
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────
+
+  # Phase B.1 — inject HMAC + ciphertext for the vault name. Skips if user
+  # has no DEK (test scaffolding edge case).
+  defp inject_name_phase_b(attrs, user) do
+    name = attrs[:name] || attrs["name"]
+
+    if is_binary(name) do
+      case Engram.Crypto.get_dek(user) do
+        {:ok, dek} ->
+          {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+          {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek)
+
+          Map.merge(attrs, %{
+            name_ciphertext: ct,
+            name_nonce: n,
+            name_hmac: Engram.Crypto.hmac_field(filter_key, name)
+          })
+
+        _ ->
+          attrs
+      end
+    else
+      attrs
+    end
+  end
 
   defp count_vaults(user_id) do
     Repo.one!(

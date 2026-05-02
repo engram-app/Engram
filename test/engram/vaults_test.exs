@@ -233,7 +233,10 @@ defmodule Engram.VaultsTest do
       assert {:error, :not_found} = Vaults.get_vault(user, 0)
     end
 
-    test "returns {:error, :not_found} for another user's vault", %{user: user, other_user: other_user} do
+    test "returns {:error, :not_found} for another user's vault", %{
+      user: user,
+      other_user: other_user
+    } do
       {:ok, their_vault} = Vaults.create_vault(other_user, %{name: "Theirs"})
       assert {:error, :not_found} = Vaults.get_vault(user, their_vault.id)
     end
@@ -377,7 +380,10 @@ defmodule Engram.VaultsTest do
       assert :ok = Vaults.check_api_key_access(api_key, vault)
     end
 
-    test "restricted key without matching vault returns :forbidden", %{user: user, other_user: other_user} do
+    test "restricted key without matching vault returns :forbidden", %{
+      user: user,
+      other_user: other_user
+    } do
       {:ok, vault} = Vaults.create_vault(user, %{name: "V"})
       {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other"})
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
@@ -401,6 +407,7 @@ defmodule Engram.VaultsTest do
 
       assert Map.keys(result) |> Enum.sort() ==
                Enum.sort([to_string(v1.id), to_string(v2.id)])
+
       assert result[to_string(v1.id)].id == v1.id
     end
 
@@ -438,6 +445,7 @@ defmodule Engram.VaultsTest do
 
     test "excludes soft-deleted vaults" do
       user = insert(:user)
+
       deleted =
         insert(:vault,
           user: user,
@@ -445,6 +453,40 @@ defmodule Engram.VaultsTest do
         )
 
       assert Engram.Vaults.list_for_ids(user, [to_string(deleted.id)]) == %{}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Phase B.1 dual-write
+  # ---------------------------------------------------------------------------
+
+  describe "Phase B dual-write" do
+    setup do
+      user = insert(:user) |> Engram.Crypto.ensure_user_dek() |> elem(1)
+      %{user: user}
+    end
+
+    test "create_vault populates name_hmac/ciphertext/nonce", %{user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "client-acme"})
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected_hmac = Engram.Crypto.hmac_field(filter_key, "client-acme")
+
+      assert vault.name_hmac == expected_hmac
+      assert is_binary(vault.name_ciphertext)
+      assert byte_size(vault.name_nonce) == 12
+      assert vault.name == "client-acme"
+    end
+
+    test "update_vault re-encrypts name on change", %{user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "old-name"})
+      {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "new-name"})
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected = Engram.Crypto.hmac_field(filter_key, "new-name")
+
+      assert updated.name_hmac == expected
+      refute updated.name_hmac == vault.name_hmac
     end
   end
 end
