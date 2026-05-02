@@ -143,11 +143,14 @@ def cleanup_minio_bucket() -> None:
     test runs accumulate orphan blobs across the bucket. No-op when the
     MinIO container is absent (e.g., a stack run with storage disabled).
     """
-    cmd = [
-        "docker", "exec", CI_MINIO_CONTAINER,
-        "mc", "rm", "--recursive", "--force",
-        f"local/{CI_MINIO_BUCKET}/",
-    ]
+    # mc inside the minio container has no persistent alias config (the
+    # minio-init sidecar that set the alias has exited), so configure
+    # inline. `mc alias set` is idempotent.
+    inline = (
+        "mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null && "
+        f"mc rm --recursive --force local/{CI_MINIO_BUCKET}/"
+    )
+    cmd = ["docker", "exec", CI_MINIO_CONTAINER, "sh", "-c", inline]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
     if result.returncode != 0:

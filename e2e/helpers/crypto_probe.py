@@ -109,11 +109,18 @@ def _minio_object_size(storage_key: str) -> int | None:
     when the MinIO container isn't reachable from the test host AND the
     suite is not running in CI. In CI (`CI=true`), a missing container is
     a hard error — we never want a green test that silently skipped the
-    real ciphertext-on-disk check."""
-    cmd = [
-        "docker", "exec", CI_MINIO_CONTAINER,
-        "mc", "stat", "--json", f"local/{CI_MINIO_BUCKET}/{storage_key}",
-    ]
+    real ciphertext-on-disk check.
+
+    The mc client inside the minio container has no persistent alias
+    config (the alias was set in the now-exited minio-init sidecar), so
+    we configure it inline on every invocation. `mc alias set` is
+    idempotent and writes to ~/.mc which lives only for the exec scope.
+    """
+    inline = (
+        "mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null && "
+        f"mc stat --json local/{CI_MINIO_BUCKET}/{storage_key}"
+    )
+    cmd = ["docker", "exec", CI_MINIO_CONTAINER, "sh", "-c", inline]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -126,7 +133,10 @@ def _minio_object_size(storage_key: str) -> int | None:
                     f"the ciphertext-on-disk probe."
                 )
             return None
-        raise RuntimeError(f"mc stat failed: {stderr}\nkey={storage_key!r}")
+        raise RuntimeError(
+            f"mc stat failed (exit={result.returncode}): "
+            f"stdout={result.stdout!r} stderr={stderr!r} key={storage_key!r}"
+        )
 
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     return int(payload["size"])
