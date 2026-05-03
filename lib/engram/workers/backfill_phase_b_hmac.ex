@@ -17,7 +17,7 @@ defmodule Engram.Workers.BackfillPhaseBHmac do
   """
 
   use Oban.Worker,
-    queue: :backfill,
+    queue: :crypto_backfill,
     max_attempts: 5,
     # Intentionally excludes `executing` — the worker re-enqueues itself for
     # the next batch from inside `perform/1`, where its own job is still in the
