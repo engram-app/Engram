@@ -519,6 +519,10 @@ defmodule Engram.VaultsTest do
   # ---------------------------------------------------------------------------
 
   describe "list_vaults ordering" do
+    # Regression: two vaults inserted in the same Postgres-rounded second tied on
+    # created_at; without the `asc: v.id` tiebreaker the order was undefined and
+    # tests flaked. These tests pin that the id tiebreaker is always respected.
+
     test "orders deterministically when created_at ties", %{user: user} do
       insert(:user_override, user: user, overrides: %{"max_vaults" => 10})
       same_time = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -538,6 +542,29 @@ defmodule Engram.VaultsTest do
 
       assert ids == Enum.sort(ids),
              "expected ascending id tiebreaker, got #{inspect(ids)}"
+    end
+
+    test "id tiebreaker holds for three vaults at the same timestamp", %{user: user} do
+      insert(:user_override, user: user, overrides: %{"max_vaults" => 10})
+      same_time = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, v1} = Vaults.create_vault(user, %{name: "alpha"})
+      {:ok, v2} = Vaults.create_vault(user, %{name: "beta"})
+      {:ok, v3} = Vaults.create_vault(user, %{name: "gamma"})
+
+      Engram.Repo.update_all(
+        Ecto.Query.from(v in Engram.Vaults.Vault,
+          where: v.id in ^[v1.id, v2.id, v3.id]
+        ),
+        [set: [created_at: same_time]],
+        skip_tenant_check: true
+      )
+
+      vaults = Vaults.list_vaults(user)
+      ids = Enum.map(vaults, & &1.id)
+
+      assert ids == Enum.sort(ids),
+             "expected ascending id order across 3-way tie, got #{inspect(ids)}"
     end
   end
 end
