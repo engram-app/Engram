@@ -117,7 +117,7 @@ defmodule Engram.Vaults do
         Repo.all(
           from v in Vault,
             where: v.user_id == ^user.id and is_nil(v.deleted_at),
-            order_by: [asc: fragment("created_at")]
+            order_by: [asc: fragment("created_at"), asc: v.id]
         )
       end)
 
