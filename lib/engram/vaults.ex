@@ -210,28 +210,31 @@ defmodule Engram.Vaults do
   Returns {:ok, vault} or {:error, :not_found} or {:error, changeset}.
   """
   def update_vault(user, vault_id, attrs) do
-    Repo.with_tenant(user.id, fn ->
-      case fetch_active(user.id, vault_id) do
-        nil ->
-          {:error, :not_found}
+    # Ensure user has a DEK before Phase B injection
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+      Repo.with_tenant(user.id, fn ->
+        case fetch_active(user.id, vault_id) do
+          nil ->
+            {:error, :not_found}
 
-        vault ->
-          attrs =
-            attrs
-            |> atomize_keys()
-            |> then(&maybe_regenerate_slug(user.id, vault, &1))
-            |> inject_name_phase_b(user)
+          vault ->
+            attrs =
+              attrs
+              |> atomize_keys()
+              |> then(&maybe_regenerate_slug(user.id, vault, &1))
+              |> inject_name_phase_b(user)
 
-          if Map.get(attrs, :is_default) == true do
-            clear_defaults(user.id, vault_id)
-          end
+            if Map.get(attrs, :is_default) == true do
+              clear_defaults(user.id, vault_id)
+            end
 
-          vault
-          |> Vault.changeset(attrs)
-          |> Repo.update()
-      end
-    end)
-    |> unwrap_transaction()
+            vault
+            |> Vault.changeset(attrs)
+            |> Repo.update()
+        end
+      end)
+      |> unwrap_transaction()
+    end
   end
 
   # ── Delete (soft) ───────────────────────────────────────────────────────────

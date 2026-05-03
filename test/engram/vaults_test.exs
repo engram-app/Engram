@@ -488,5 +488,56 @@ defmodule Engram.VaultsTest do
       assert updated.name_hmac == expected
       refute updated.name_hmac == vault.name_hmac
     end
+
+    test "update_vault ensures user DEK before name HMAC injection", _ctx do
+      # Create via raw Repo.insert! (bypasses ensure_user_dek so encrypted_dek starts nil)
+      raw_user =
+        Engram.Repo.insert!(%Engram.Accounts.User{
+          email: "dek-test-#{System.unique_integer()}@test.com",
+          display_name: "DEK Test",
+          external_id: nil
+        })
+
+      raw_vault =
+        Engram.Repo.insert!(%Engram.Vaults.Vault{
+          name: "pre-dek",
+          slug: "pre-dek-#{System.unique_integer()}",
+          user_id: raw_user.id,
+          is_default: true
+        })
+
+      # update_vault must provision the DEK and then write name_hmac
+      assert {:ok, updated} = Vaults.update_vault(raw_user, raw_vault.id, %{name: "newname"})
+      assert updated.name == "newname"
+      assert is_binary(updated.name_hmac)
+      assert byte_size(updated.name_hmac) > 0
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # list_vaults — same-second created_at ordering
+  # ---------------------------------------------------------------------------
+
+  describe "list_vaults ordering" do
+    test "orders deterministically when created_at ties", %{user: user} do
+      insert(:user_override, user: user, overrides: %{"max_vaults" => 10})
+      same_time = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, v1} = Vaults.create_vault(user, %{name: "vault-order-a"})
+      {:ok, v2} = Vaults.create_vault(user, %{name: "vault-order-b"})
+
+      # Force both vaults to the same created_at timestamp via Repo.update_all
+      Engram.Repo.update_all(
+        Ecto.Query.from(v in Engram.Vaults.Vault, where: v.id in ^[v1.id, v2.id]),
+        [set: [created_at: same_time]],
+        skip_tenant_check: true
+      )
+
+      vaults = Vaults.list_vaults(user)
+      ids = Enum.map(vaults, & &1.id)
+
+      assert ids == Enum.sort(ids),
+             "expected ascending id tiebreaker, got #{inspect(ids)}"
+    end
   end
 end
