@@ -360,26 +360,23 @@ defmodule Engram.Vaults do
 
   # ── Private helpers ─────────────────────────────────────────────────────────
 
-  # Phase B.1 — inject HMAC + ciphertext for the vault name. Skips if user
-  # has no DEK (test scaffolding edge case).
+  # Phase B.1 — inject HMAC + ciphertext for the vault name.
+  # Callers MUST call ensure_user_dek/1 before invoking this helper.
+  # If get_dek still fails after ensure, that is a real bug — raises rather
+  # than silently skipping to enforce the "Phase B is mandatory" contract.
   defp inject_name_phase_b(attrs, user) do
     name = attrs[:name] || attrs["name"]
 
     if is_binary(name) do
-      case Engram.Crypto.get_dek(user) do
-        {:ok, dek} ->
-          {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-          {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek)
+      {:ok, dek} = Engram.Crypto.get_dek(user)
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek)
 
-          Map.merge(attrs, %{
-            name_ciphertext: ct,
-            name_nonce: n,
-            name_hmac: Engram.Crypto.hmac_field(filter_key, name)
-          })
-
-        _ ->
-          attrs
-      end
+      Map.merge(attrs, %{
+        name_ciphertext: ct,
+        name_nonce: n,
+        name_hmac: Engram.Crypto.hmac_field(filter_key, name)
+      })
     else
       attrs
     end

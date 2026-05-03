@@ -23,7 +23,8 @@ defmodule Engram.Notes do
     mtime = attrs["mtime"] || attrs[:mtime]
     client_version = attrs["version"] || attrs[:version]
 
-    with {:ok, path} <- validate_path(path),
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user),
+         {:ok, path} <- validate_path(path),
          sanitized_path = PathSanitizer.sanitize(path),
          title = Helpers.extract_title(content, sanitized_path),
          folder = Helpers.extract_folder(sanitized_path),
@@ -579,26 +580,24 @@ defmodule Engram.Notes do
   end
 
   # Phase B.1 dual-write — computes HMAC + envelope-encrypts each filterable field.
-  # Returns the original attrs map merged with phase_b_* fields. Skips silently
-  # if the user has no DEK yet (Phase B is mandatory but tests sometimes touch
-  # unprovisioned users; ensure_user_dek/1 in upsert_note handles that).
+  # Returns the original attrs map merged with phase_b_* fields.
+  # Callers MUST call ensure_user_dek/1 before invoking this helper.
+  # If get_dek still fails after ensure, that is a real bug — raises rather
+  # than silently skipping to enforce the "Phase B is mandatory" contract.
   defp inject_phase_b_fields(attrs, user, path, folder, tags) do
-    with {:ok, dek} <- Engram.Crypto.get_dek(user),
-         {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
-      {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
-      {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek)
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
+    {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek)
 
-      Map.merge(attrs, %{
-        path_ciphertext: path_ct,
-        path_nonce: path_n,
-        path_hmac: Engram.Crypto.hmac_field(filter_key, path),
-        folder_ciphertext: folder_ct,
-        folder_nonce: folder_n,
-        folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
-        tags_hmac: Enum.map(tags || [], &Engram.Crypto.hmac_field(filter_key, &1))
-      })
-    else
-      _ -> attrs
-    end
+    Map.merge(attrs, %{
+      path_ciphertext: path_ct,
+      path_nonce: path_n,
+      path_hmac: Engram.Crypto.hmac_field(filter_key, path),
+      folder_ciphertext: folder_ct,
+      folder_nonce: folder_n,
+      folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
+      tags_hmac: Enum.map(tags || [], &Engram.Crypto.hmac_field(filter_key, &1))
+    })
   end
 end
