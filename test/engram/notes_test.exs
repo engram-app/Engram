@@ -794,6 +794,30 @@ defmodule Engram.NotesTest do
       assert note.folder == "a/b"
       assert note.tags == ["t1"]
     end
+
+    test "upsert_note provisions DEK and writes Phase B fields even when user starts with no DEK" do
+      # Insert user without DEK — Phase B must NOT silently skip
+      raw_user =
+        Engram.Repo.insert!(%Engram.Accounts.User{
+          email: "no-dek-#{System.unique_integer()}@test.com",
+          display_name: "No DEK",
+          external_id: nil
+        })
+
+      vault = insert(:vault, user: raw_user)
+
+      assert {:ok, note} =
+               Engram.Notes.upsert_note(raw_user, vault, %{
+                 "path" => "secure/file.md",
+                 "content" => "hello"
+               })
+
+      assert is_binary(note.path_hmac),
+             "path_hmac must be set — Phase B must not silently skip for no-DEK user"
+
+      assert is_binary(note.path_ciphertext)
+      assert byte_size(note.path_nonce) == 12
+    end
   end
 
   # ---------------------------------------------------------------------------
