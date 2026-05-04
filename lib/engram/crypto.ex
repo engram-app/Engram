@@ -19,18 +19,28 @@ defmodule Engram.Crypto do
   def ensure_user_dek(%User{encrypted_dek: blob} = user) when is_binary(blob), do: {:ok, user}
 
   def ensure_user_dek(%User{} = user) do
-    provider = Resolver.provider_for(user.id)
-    dek = provider.generate_dek()
+    # The in-memory struct has no DEK, but the DB might already have one from
+    # an earlier write that the caller's struct didn't pick up. Reload before
+    # generating — without this, every caller holding a stale user struct
+    # silently rotates the DEK and corrupts every existing ciphertext.
+    case Accounts.get_user(user.id) do
+      %User{encrypted_dek: blob} = reloaded when is_binary(blob) ->
+        {:ok, reloaded}
 
-    with {:ok, wrapped} <- provider.wrap_dek(dek, %{user_id: user.id}),
-         {:ok, user} <-
-           Accounts.update_user_encryption(user, %{
-             encrypted_dek: wrapped,
-             dek_version: 1,
-             key_provider: Atom.to_string(provider.name())
-           }) do
-      DekCache.put(user.id, dek)
-      {:ok, user}
+      _ ->
+        provider = Resolver.provider_for(user.id)
+        dek = provider.generate_dek()
+
+        with {:ok, wrapped} <- provider.wrap_dek(dek, %{user_id: user.id}),
+             {:ok, user} <-
+               Accounts.update_user_encryption(user, %{
+                 encrypted_dek: wrapped,
+                 dek_version: 1,
+                 key_provider: Atom.to_string(provider.name())
+               }) do
+          DekCache.put(user.id, dek)
+          {:ok, user}
+        end
     end
   end
 

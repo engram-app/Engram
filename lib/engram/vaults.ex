@@ -112,6 +112,8 @@ defmodule Engram.Vaults do
   Returns all non-deleted vaults for a user, ordered by inserted_at ascending.
   """
   def list_vaults(user) do
+    user = fresh_user(user)
+
     {:ok, vaults} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
@@ -121,7 +123,7 @@ defmodule Engram.Vaults do
         )
       end)
 
-    vaults
+    Enum.map(vaults, &decrypt_vault_if_needed(&1, user))
   end
 
   @doc """
@@ -165,6 +167,8 @@ defmodule Engram.Vaults do
   or {:error, :not_found}.
   """
   def get_vault(user, vault_id) do
+    user = fresh_user(user)
+
     result =
       Repo.with_tenant(user.id, fn ->
         Repo.one(
@@ -175,7 +179,7 @@ defmodule Engram.Vaults do
 
     case result do
       {:ok, nil} -> {:error, :not_found}
-      {:ok, vault} -> {:ok, vault}
+      {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user)}
       _ -> {:error, :not_found}
     end
   end
@@ -184,6 +188,8 @@ defmodule Engram.Vaults do
   Returns {:ok, vault} for the user's default vault, or {:error, :no_default_vault}.
   """
   def get_default_vault(user) do
+    user = fresh_user(user)
+
     result =
       Repo.with_tenant(user.id, fn ->
         Repo.one(
@@ -194,7 +200,7 @@ defmodule Engram.Vaults do
 
     case result do
       {:ok, nil} -> {:error, :no_default_vault}
-      {:ok, vault} -> {:ok, vault}
+      {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user)}
       _ -> {:error, :no_default_vault}
     end
   end
@@ -497,5 +503,30 @@ defmodule Engram.Vaults do
       {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
       {k, v} -> {k, v}
     end)
+  end
+
+  # Reload the user struct if its in-memory `encrypted_dek` is nil — the
+  # caller may be holding a stale struct from before a write provisioned a
+  # DEK. Same hazard the Attachments context handles via fresh_user/1.
+  defp fresh_user(%Engram.Accounts.User{encrypted_dek: nil} = user), do: Repo.reload!(user)
+  defp fresh_user(%Engram.Accounts.User{} = user), do: user
+
+  # Decrypts vault.name from name_ciphertext when populated. On decrypt
+  # failure logs and returns the row unchanged — operator visibility without
+  # killing the request. Mirrors `decrypt_if_needed` in Notes context.
+  defp decrypt_vault_if_needed(%Vault{} = vault, user) do
+    case Engram.Crypto.maybe_decrypt_vault_fields(vault, user) do
+      {:ok, decrypted} ->
+        decrypted
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.error(
+          "vault decrypt_failed user_id=#{user.id} vault_id=#{vault.id} reason=#{inspect(reason)}"
+        )
+
+        vault
+    end
   end
 end

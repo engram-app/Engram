@@ -1,12 +1,47 @@
 defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
 
+  import Ecto.Query
+
   alias Engram.Vaults
+  alias Engram.Vaults.Vault
 
   setup do
     user = insert(:user)
     other_user = insert(:user)
     %{user: user, other_user: other_user}
+  end
+
+  describe "B.2.6 — name decrypt on read" do
+    test "list_vaults returns decrypt-sourced name even when plaintext name is tampered",
+         %{user: user} do
+      {:ok, created} = Vaults.create_vault(user, %{name: "My Real Vault"})
+
+      Repo.update_all(
+        from(v in Vault, where: v.id == ^created.id),
+        [set: [name: "TAMPERED"]],
+        skip_tenant_check: true
+      )
+
+      vaults = Vaults.list_vaults(user)
+      assert [vault] = vaults
+      assert vault.id == created.id
+      assert vault.name == "My Real Vault"
+    end
+
+    test "get_vault returns decrypt-sourced name even when plaintext name is tampered",
+         %{user: user} do
+      {:ok, created} = Vaults.create_vault(user, %{name: "Vault Alpha"})
+
+      Repo.update_all(
+        from(v in Vault, where: v.id == ^created.id),
+        [set: [name: "TAMPERED"]],
+        skip_tenant_check: true
+      )
+
+      assert {:ok, vault} = Vaults.get_vault(user, created.id)
+      assert vault.name == "Vault Alpha"
+    end
   end
 
   # ---------------------------------------------------------------------------
