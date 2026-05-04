@@ -111,6 +111,29 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Patch (overwrite-or-add) the given payload keys on the listed point ids.
+  Vectors are untouched — this is the cost-free path for re-shaping payloads
+  without re-running the embedder. Empty `point_ids` is a no-op.
+
+  Used by `Engram.Workers.QdrantPayloadPhaseB` to backfill `path_hmac` /
+  `folder_hmac` / `tags_hmac` onto pre-existing Qdrant points after the
+  Phase B.2.4 additive write lands but before the Phase B.2.3 read switch.
+  """
+  def set_payload(col \\ nil, point_ids, payload)
+  def set_payload(_col, [], _payload), do: :ok
+
+  def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
+    col = col || collection()
+    opts = [json: %{points: point_ids, payload: payload}] ++ req_opts()
+
+    case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Delete all points for a given user+vault+path combination.
   """
   def delete_by_note(col \\ nil, user_id, vault_id, path) do
@@ -191,6 +214,7 @@ defmodule Engram.Vector.Qdrant do
       else
         base
       end
+
     opts = [json: body] ++ req_opts()
 
     case Req.post("#{base_url()}/collections/#{col}/points/query", opts) do

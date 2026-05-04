@@ -71,6 +71,48 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "set_payload/3" do
+    test "patches payload onto specific point ids without re-upserting vectors", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["points"] == ["uuid-1", "uuid-2"]
+        assert decoded["payload"]["path_hmac"] == "AAAA"
+        assert decoded["payload"]["folder_hmac"] == "BBBB"
+        assert decoded["payload"]["tags_hmac"] == ["TTTT"]
+        # Vectors must NOT be sent — set_payload is a payload-only PATCH.
+        refute Map.has_key?(decoded, "vectors")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      payload = %{path_hmac: "AAAA", folder_hmac: "BBBB", tags_hmac: ["TTTT"]}
+      assert :ok = Qdrant.set_payload("test_col", ["uuid-1", "uuid-2"], payload)
+    end
+
+    test "returns :ok on empty point list without HTTP call", %{bypass: bypass} do
+      # No Bypass.expect — any call would fail the test
+      Bypass.stub(bypass, "POST", "/collections/test_col/points/payload", fn _ ->
+        flunk("set_payload must not call Qdrant for empty point list")
+      end)
+
+      assert :ok = Qdrant.set_payload("test_col", [], %{path_hmac: "x"})
+    end
+
+    test "returns error on non-200 response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"status":{"error":"bad request"}}))
+      end)
+
+      assert {:error, {400, _}} = Qdrant.set_payload("test_col", ["uuid-1"], %{path_hmac: "x"})
+    end
+  end
+
   describe "delete_by_vault/3" do
     test "posts correct filter with user_id and vault_id must conditions", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
