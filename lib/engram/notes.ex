@@ -181,15 +181,20 @@ defmodule Engram.Notes do
               )
 
             if count == 1 do
+              # Splice the freshly-encrypted Phase B fields into the in-memory
+              # struct too — without this, decrypt_for_broadcast would decrypt
+              # the OLD path_ciphertext and clobber `path` back to the old
+              # value when path/folder go through maybe_decrypt_note_fields.
               {:ok,
-               %{
-                 note
-                 | path: new_path,
-                   folder: new_folder,
-                   title: new_title,
-                   embed_hash: nil,
-                   updated_at: now
-               }}
+               note
+               |> struct!(phase_b_kw)
+               |> struct!(
+                 path: new_path,
+                 folder: new_folder,
+                 title: new_title,
+                 embed_hash: nil,
+                 updated_at: now
+               )}
             else
               :not_found
             end
@@ -422,30 +427,33 @@ defmodule Engram.Notes do
   """
   @spec list_notes_in_folder(map(), map(), String.t()) :: {:ok, [Note.t()]}
   def list_notes_in_folder(user, vault, folder) do
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn ->
-        query =
-          if folder == "" do
-            # Root-level notes have folder = nil or ""
-            from(n in Note,
-              where:
-                n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                  (is_nil(n.folder) or n.folder == ""),
-              order_by: n.title
-            )
-          else
-            from(n in Note,
-              where:
-                n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                  n.folder == ^folder,
-              order_by: n.title
-            )
-          end
+    # Phase B.2.6 — match by folder_hmac so the lookup survives B.3's drop of
+    # the plaintext `folder` column. Both root ("") and named folders go
+    # through the same HMAC equality check; the empty string has its own
+    # well-defined HMAC.
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        target_hmac = Engram.Crypto.hmac_field(filter_key, folder)
 
-        Repo.all(query)
-      end)
+        {:ok, notes} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    n.folder_hmac == ^target_hmac,
+                order_by: n.title
+              )
+            )
+          end)
 
-    {:ok, decrypt_if_needed(notes, user)}
+        {:ok, decrypt_if_needed(notes, user)}
+
+      {:error, :no_dek} ->
+        # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
+        # encrypted notes possible = empty result.
+        {:ok, []}
+    end
   end
 
   @doc """
