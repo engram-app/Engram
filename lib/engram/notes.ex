@@ -313,22 +313,35 @@ defmodule Engram.Notes do
   """
   @spec list_folders(map(), map()) :: {:ok, [String.t()]}
   def list_folders(user, vault) do
-    {:ok, folders} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                n.folder != "" and
-                not is_nil(n.folder),
-            select: n.folder,
-            distinct: true,
-            order_by: n.folder
-          )
-        )
-      end)
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        {:ok, dek} = Engram.Crypto.get_dek(user)
+        empty_hmac = Engram.Crypto.hmac_field(filter_key, "")
 
-    {:ok, folders}
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+                distinct: n.folder_hmac,
+                select: {n.folder_ciphertext, n.folder_nonce}
+              )
+            )
+          end)
+
+        folders =
+          rows
+          |> Enum.map(fn {ct, nonce} -> decrypt_envelope!(ct, nonce, dek) end)
+          |> Enum.sort()
+
+        {:ok, folders}
+
+      # No DEK = user has no encrypted data possible = no folders.
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
   end
 
   @doc """
@@ -368,22 +381,39 @@ defmodule Engram.Notes do
   @spec list_folders_with_counts(map(), map()) ::
           {:ok, [%{folder: String.t(), count: integer()}]}
   def list_folders_with_counts(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            group_by: n.folder,
-            select: %{folder: n.folder, count: count(n.id)},
-            order_by: n.folder
-          )
-        )
-      end)
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Engram.Crypto.get_dek(user)
 
-    # Normalize nil folder to ""
-    rows = Enum.map(rows, fn r -> %{r | folder: r.folder || ""} end)
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    not is_nil(n.folder_hmac),
+                distinct: n.folder_hmac,
+                select: %{
+                  ct: n.folder_ciphertext,
+                  nonce: n.folder_nonce,
+                  count: fragment("COUNT(*) OVER (PARTITION BY ?)", n.folder_hmac)
+                }
+              )
+            )
+          end)
 
-    {:ok, rows}
+        folders =
+          rows
+          |> Enum.map(fn %{ct: ct, nonce: nonce, count: count} ->
+            %{folder: decrypt_envelope!(ct, nonce, dek), count: count}
+          end)
+          |> Enum.sort_by(& &1.folder)
+
+        {:ok, folders}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
   end
 
   @doc """
@@ -557,6 +587,16 @@ defmodule Engram.Notes do
 
   defp decrypt_if_needed(notes, user) when is_list(notes) do
     Enum.map(notes, &decrypt_if_needed(&1, user))
+  end
+
+  # Decrypts an envelope (ciphertext + nonce) with the user's DEK.
+  # Raises if decryption fails — used in Phase B aggregations where a failure
+  # means data corruption, not a recoverable condition.
+  defp decrypt_envelope!(ct, nonce, dek) do
+    case Engram.Crypto.Envelope.decrypt(ct, nonce, dek) do
+      {:ok, plaintext} -> plaintext
+      :error -> raise "Phase B envelope decryption failed"
+    end
   end
 
   # Like decrypt_if_needed but logs a warning on decrypt failure before returning

@@ -466,6 +466,30 @@ defmodule Engram.NotesTest do
       {:ok, folders} = Notes.list_folders(user, vault)
       refute "Private Folder" in folders
     end
+
+    test "groups by folder_hmac and decrypts ciphertext (post-B.3 simulation)",
+         %{user: user, vault: vault} do
+      Notes.upsert_note(user, vault, %{
+        "path" => "Real/Note.md",
+        "content" => "x",
+        "mtime" => 1_000.0
+      })
+
+      # Tamper plaintext folder column — must not affect the grouped result.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(
+            from(n in Engram.Notes.Note,
+              where: n.user_id == ^user.id and n.vault_id == ^vault.id
+            ),
+            set: [folder: "TAMPERED"]
+          )
+        end)
+
+      {:ok, folders} = Notes.list_folders(user, vault)
+      assert "Real" in folders
+      refute "TAMPERED" in folders
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -645,6 +669,37 @@ defmodule Engram.NotesTest do
     test "returns empty list when no notes", %{user: user, vault: vault} do
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       assert folders == []
+    end
+
+    test "groups by folder_hmac and decrypts ciphertext (post-B.3 simulation)",
+         %{user: user, vault: vault} do
+      Notes.upsert_note(user, vault, %{
+        "path" => "Health/A.md",
+        "content" => "x",
+        "mtime" => 1_000.0
+      })
+
+      Notes.upsert_note(user, vault, %{
+        "path" => "Health/B.md",
+        "content" => "y",
+        "mtime" => 1_000.0
+      })
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(
+            from(n in Engram.Notes.Note,
+              where: n.user_id == ^user.id and n.vault_id == ^vault.id
+            ),
+            set: [folder: "TAMPERED"]
+          )
+        end)
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      health = Enum.find(folders, &(&1.folder == "Health"))
+      assert health
+      assert health.count == 2
+      refute Enum.any?(folders, &(&1.folder == "TAMPERED"))
     end
 
     test "excludes soft-deleted notes", %{user: user, vault: vault} do
