@@ -62,24 +62,33 @@ defmodule Engram.Attachments do
   """
   def get_attachment(user, vault, path) do
     path = PathSanitizer.sanitize(path)
+    user = fresh_user(user)
 
     result =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(a in Attachment,
-            where:
-              a.path == ^path and a.user_id == ^user.id and a.vault_id == ^vault.id and
-                is_nil(a.deleted_at)
+      with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+        path_hmac = Crypto.hmac_field(filter_key, path)
+
+        Repo.with_tenant(user.id, fn ->
+          Repo.one(
+            from(a in Attachment,
+              where:
+                a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+                  a.vault_id == ^vault.id and is_nil(a.deleted_at)
+            )
           )
-        )
-      end)
-      |> unwrap_tenant()
+        end)
+        |> unwrap_tenant()
+      end
 
     case result do
+      {:error, :no_dek} ->
+        {:ok, nil}
+
       {:ok, nil} ->
         {:ok, nil}
 
       {:ok, %Attachment{} = att} ->
+        {:ok, att} = Crypto.maybe_decrypt_attachment_fields(att, user)
         key = att.storage_key || Storage.key(user.id, vault.id, path)
 
         case Storage.adapter().get(key) do
@@ -115,21 +124,31 @@ defmodule Engram.Attachments do
   """
   def delete_attachment(user, vault, path) do
     path = PathSanitizer.sanitize(path)
+    user = fresh_user(user)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Repo.with_tenant(user.id, fn ->
-      from(a in Attachment,
-        where:
-          a.path == ^path and a.user_id == ^user.id and a.vault_id == ^vault.id and
-            is_nil(a.deleted_at)
-      )
-      |> Repo.update_all(set: [deleted_at: now, updated_at: now])
-    end)
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        path_hmac = Crypto.hmac_field(filter_key, path)
 
-    # Best-effort blob cleanup — row is already soft-deleted so this is safe to retry later
-    delete_external(user.id, vault.id, path)
+        Repo.with_tenant(user.id, fn ->
+          from(a in Attachment,
+            where:
+              a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+                a.vault_id == ^vault.id and is_nil(a.deleted_at)
+          )
+          |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+        end)
 
-    :ok
+        # Best-effort blob cleanup — row is already soft-deleted so this is safe to retry later
+        delete_external(user.id, vault.id, path)
+
+        :ok
+
+      {:error, :no_dek} ->
+        # No DEK = no attachments to delete; mirror get_attachment's defensive empty.
+        :ok
+    end
   end
 
   defp delete_external(user_id, vault_id, path) do
@@ -155,22 +174,39 @@ defmodule Engram.Attachments do
   Lists attachment changes since a given timestamp. Returns metadata only (no content).
   """
   def list_changes(user, vault, since) do
+    user = fresh_user(user)
+    # Phase B.2.6 — load full Attachment rows so path can be decrypted from
+    # ciphertext. The previous select-shape preview returned `a.path` directly
+    # which won't survive B.3's column drop. Metadata-only output preserved.
     Repo.with_tenant(user.id, fn ->
       from(a in Attachment,
         where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.updated_at >= ^since,
-        order_by: [asc: a.updated_at],
-        select: %{
-          path: a.path,
-          mime_type: a.mime_type,
-          size_bytes: a.size_bytes,
-          mtime: a.mtime,
-          updated_at: a.updated_at,
-          deleted_at: a.deleted_at
-        }
+        order_by: [asc: a.updated_at]
       )
       |> Repo.all()
     end)
     |> unwrap_tenant()
+    |> case do
+      {:ok, atts} ->
+        changes =
+          Enum.map(atts, fn att ->
+            {:ok, decrypted} = Crypto.maybe_decrypt_attachment_fields(att, user)
+
+            %{
+              path: decrypted.path,
+              mime_type: decrypted.mime_type,
+              size_bytes: decrypted.size_bytes,
+              mtime: decrypted.mtime,
+              updated_at: decrypted.updated_at,
+              deleted_at: decrypted.deleted_at
+            }
+          end)
+
+        {:ok, changes}
+
+      err ->
+        err
+    end
   end
 
   @doc """
@@ -255,10 +291,14 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
-    fresh_user = if is_nil(user.encrypted_dek), do: Repo.reload!(user), else: user
+  # Reload the user from DB if the in-memory struct doesn't reflect a DEK that
+  # was provisioned by an earlier write (the writer's user struct doesn't
+  # mutate the caller's). Read paths use this before any DEK derivation.
+  defp fresh_user(%Engram.Accounts.User{encrypted_dek: nil} = user), do: Repo.reload!(user)
+  defp fresh_user(%Engram.Accounts.User{} = user), do: user
 
-    with {:ok, dek} <- Crypto.get_dek(fresh_user),
+  defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
+    with {:ok, dek} <- Crypto.get_dek(fresh_user(user)),
          {:ok, plaintext} <- Envelope.decrypt(ciphertext, nonce, dek) do
       {:ok, %{att | content: plaintext}}
     else

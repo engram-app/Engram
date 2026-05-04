@@ -150,6 +150,50 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Decrypts the Phase B `path_ciphertext` on an attachment into the virtual
+  `path` field. No-op when ciphertext is nil (legacy pre-B.1 row).
+  """
+  @spec maybe_decrypt_attachment_fields(Engram.Attachments.Attachment.t(), User.t()) ::
+          {:ok, Engram.Attachments.Attachment.t()} | {:error, term()}
+  def maybe_decrypt_attachment_fields(
+        %Engram.Attachments.Attachment{path_ciphertext: nil} = att,
+        _user
+      ),
+      do: {:ok, att}
+
+  def maybe_decrypt_attachment_fields(
+        %Engram.Attachments.Attachment{} = att,
+        %User{} = user
+      ) do
+    with {:ok, dek} <- get_dek(user),
+         {:ok, path} <- Envelope.decrypt(att.path_ciphertext, att.path_nonce, dek) do
+      {:ok, %{att | path: path}}
+    else
+      :error -> {:error, :decrypt_failed}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Decrypts `name_ciphertext` on a vault into the virtual `name` field.
+  No-op when ciphertext is nil (legacy pre-B.1 row).
+  """
+  @spec maybe_decrypt_vault_fields(Engram.Vaults.Vault.t(), User.t()) ::
+          {:ok, Engram.Vaults.Vault.t()} | {:error, term()}
+  def maybe_decrypt_vault_fields(%Engram.Vaults.Vault{name_ciphertext: nil} = vault, _user),
+    do: {:ok, vault}
+
+  def maybe_decrypt_vault_fields(%Engram.Vaults.Vault{} = vault, %User{} = user) do
+    with {:ok, dek} <- get_dek(user),
+         {:ok, name} <- Envelope.decrypt(vault.name_ciphertext, vault.name_nonce, dek) do
+      {:ok, %{vault | name: name}}
+    else
+      :error -> {:error, :decrypt_failed}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
   If `vault.encrypted`, encrypts `text`, `title`, `heading_path` in the
   payload map using the user's DEK. Adds `text_nonce`, `title_nonce`,
   `heading_path_nonce` keys; all six crypto fields are base64-encoded

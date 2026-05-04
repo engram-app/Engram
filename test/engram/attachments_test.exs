@@ -183,6 +183,52 @@ defmodule Engram.AttachmentsTest do
       assert byte_size(stored) == byte_size(plaintext) + 16
     end
 
+    test "get_attachment locates row via path_hmac and returns decrypt-sourced path (B.2.6)" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+
+      {:ok, created} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Real/file.bin",
+          "content_base64" => Base.encode64("hello"),
+          "mtime" => 0.0
+        })
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, where: a.id == ^created.id)
+          |> Engram.Repo.update_all(set: [path: "TAMPERED-PATH"])
+        end)
+
+      assert {:ok, fetched} = Attachments.get_attachment(user, vault, "Real/file.bin")
+      assert fetched.id == created.id
+      # Response path comes from decrypted ciphertext, not the tampered column.
+      assert fetched.path == "Real/file.bin"
+    end
+
+    test "list_changes returns decrypt-sourced path even when plaintext column is tampered (B.2.6)" do
+      user = insert(:user) |> Engram.Repo.reload!()
+      vault = insert(:vault, user: user)
+
+      {:ok, created} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Notes/img.png",
+          "content_base64" => Base.encode64("img"),
+          "mtime" => 0.0
+        })
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(a in Attachment, where: a.id == ^created.id)
+          |> Engram.Repo.update_all(set: [path: "TAMPERED-PATH"])
+        end)
+
+      assert {:ok, [change]} =
+               Attachments.list_changes(user, vault, ~U[2000-01-01 00:00:00.000000Z])
+
+      assert change.path == "Notes/img.png"
+    end
+
     test "round-trips encrypted attachment via get_attachment" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
