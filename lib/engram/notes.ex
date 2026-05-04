@@ -99,21 +99,40 @@ defmodule Engram.Notes do
   """
   @spec get_note(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note(user, vault, path) do
-    result =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.path == ^path and
-                is_nil(n.deleted_at)
-          )
-        )
-      end)
-
-    case result do
+    case find_note_by_path(user, vault, path) do
       {:ok, nil} -> {:error, :not_found}
       {:ok, note} -> {:ok, decrypt_if_needed(note, user)}
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Phase B.2: single normalization helper for path lookups.
+  # All callers route through here so post-B.3 column drop is mechanical.
+  # Opens its own tenant context — use note_by_path_query/3 directly when
+  # already inside Repo.with_tenant (Repo.with_tenant does not nest safely:
+  # the inner `after` Process.delete clobbers the parent's tenant key).
+  defp find_note_by_path(user, vault, path) do
+    case note_by_path_query(user, vault, path) do
+      {:ok, query} ->
+        Repo.with_tenant(user.id, fn -> Repo.one(query) end)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Builds the HMAC-based note lookup query. Caller runs it inside their own
+  # tenant context (or via find_note_by_path/3 when none is active).
+  defp note_by_path_query(user, vault, path) do
+    with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
+      hmac = Engram.Crypto.hmac_field(filter_key, path)
+
+      {:ok,
+       from(n in Note,
+         where:
+           n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
+             is_nil(n.deleted_at)
+       )}
     end
   end
 
@@ -128,16 +147,17 @@ defmodule Engram.Notes do
     new_folder = Helpers.extract_folder(new_path)
     now = DateTime.utc_now()
 
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+      do_rename_note(user, vault, old_path, new_path, new_folder, now)
+    end
+  end
+
+  defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+    {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
+
     result =
       Repo.with_tenant(user.id, fn ->
-        # Fetch current note for content (to derive title from new path)
-        case Repo.one(
-               from(n in Note,
-                 where:
-                   n.user_id == ^user.id and n.vault_id == ^vault.id and n.path == ^old_path and
-                     is_nil(n.deleted_at)
-               )
-             ) do
+        case Repo.one(lookup_query) do
           nil ->
             :not_found
 
@@ -145,16 +165,19 @@ defmodule Engram.Notes do
             decrypted_note = decrypt_if_needed(note, user)
             new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
+            phase_b_kw = phase_b_keyword_for(user, new_path, new_folder, note.tags || [])
+
             {count, _} =
               from(n in Note, where: n.id == ^note.id)
               |> Repo.update_all(
-                set: [
-                  path: new_path,
-                  folder: new_folder,
-                  title: new_title,
-                  embed_hash: nil,
-                  updated_at: now
-                ]
+                set:
+                  [
+                    path: new_path,
+                    folder: new_folder,
+                    title: new_title,
+                    embed_hash: nil,
+                    updated_at: now
+                  ] ++ phase_b_kw
               )
 
             if count == 1 do
@@ -197,16 +220,11 @@ defmodule Engram.Notes do
   def delete_note(user, vault, path) do
     now = DateTime.utc_now()
 
-    {:ok, note} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.path == ^path and
-                is_nil(n.deleted_at)
-          )
-        )
-      end)
+    note =
+      case find_note_by_path(user, vault, path) do
+        {:ok, note} -> note
+        _ -> nil
+      end
 
     if note do
       Repo.with_tenant(user.id, fn ->
@@ -410,6 +428,12 @@ defmodule Engram.Notes do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
+    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+      do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+    end
+  end
+
+  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
     {:ok, notes} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
@@ -444,20 +468,23 @@ defmodule Engram.Notes do
           decrypted_note = decrypt_if_needed(note, user)
           new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
-          {note.id, note.path, new_path, new_note_folder, new_title}
+          {note.id, note.path, new_path, new_note_folder, new_title, note.tags || []}
         end)
 
       Repo.with_tenant(user.id, fn ->
-        Enum.each(updates, fn {id, _old_path, new_path, new_note_folder, new_title} ->
+        Enum.each(updates, fn {id, _old_path, new_path, new_note_folder, new_title, tags} ->
+          phase_b_kw = phase_b_keyword_for(user, new_path, new_note_folder, tags)
+
           from(n in Note, where: n.id == ^id)
           |> Repo.update_all(
-            set: [
-              path: new_path,
-              folder: new_note_folder,
-              title: new_title,
-              embed_hash: nil,
-              updated_at: now
-            ]
+            set:
+              [
+                path: new_path,
+                folder: new_note_folder,
+                title: new_title,
+                embed_hash: nil,
+                updated_at: now
+              ] ++ phase_b_kw
           )
         end)
       end)
@@ -465,17 +492,21 @@ defmodule Engram.Notes do
       # Insert soft-deleted tombstones for old paths so the HTTP changes feed
       # includes delete signals. Without these, polling clients retain stale
       # files at old paths after a folder rename.
-      old_paths = Enum.map(updates, fn {_id, old_path, _new, _folder, _title} -> old_path end)
+      old_paths =
+        Enum.map(updates, fn {_id, old_path, _new, _folder, _title, _tags} -> old_path end)
 
       mtime_float = DateTime.to_unix(now) + 0.0
 
       tombstones =
         Enum.map(old_paths, fn old_path ->
-          %{
+          old_path_folder = Helpers.extract_folder(old_path)
+          phase_b_kw = phase_b_keyword_for(user, old_path, old_path_folder, [])
+
+          base = %{
             path: old_path,
             content: "",
             title: "",
-            folder: Helpers.extract_folder(old_path),
+            folder: old_path_folder,
             tags: [],
             content_hash: "",
             mtime: mtime_float,
@@ -485,6 +516,8 @@ defmodule Engram.Notes do
             updated_at: now,
             deleted_at: now
           }
+
+          Map.merge(base, Map.new(phase_b_kw))
         end)
 
       Repo.with_tenant(user.id, fn ->
@@ -492,7 +525,7 @@ defmodule Engram.Notes do
       end)
 
       # Side effects outside the transaction — broadcast + reindex
-      Enum.each(updates, fn {id, old_note_path, new_path, _folder, _title} ->
+      Enum.each(updates, fn {id, old_note_path, new_path, _folder, _title, _tags} ->
         Oban.insert(Engram.Workers.EmbedNote.new_debounced(id, old_path: old_note_path))
         broadcast_change(user.id, vault.id, "delete", old_note_path)
         broadcast_change(user.id, vault.id, "upsert", new_path)
@@ -585,12 +618,20 @@ defmodule Engram.Notes do
   # If get_dek still fails after ensure, that is a real bug — raises rather
   # than silently skipping to enforce the "Phase B is mandatory" contract.
   defp inject_phase_b_fields(attrs, user, path, folder, tags) do
+    Map.merge(attrs, Map.new(phase_b_keyword_for(user, path, folder, tags)))
+  end
+
+  # Returns a keyword list of Phase B field updates suitable for splicing into
+  # `Repo.update_all(set: [...])` or `Repo.insert_all` rows. Single source of
+  # truth for HMAC + envelope computation across upsert and rename paths.
+  # Caller MUST have ensured the user has a DEK.
+  defp phase_b_keyword_for(user, path, folder, tags) do
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
     {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek)
 
-    Map.merge(attrs, %{
+    [
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Engram.Crypto.hmac_field(filter_key, path),
@@ -598,6 +639,6 @@ defmodule Engram.Notes do
       folder_nonce: folder_n,
       folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
       tags_hmac: Enum.map(tags || [], &Engram.Crypto.hmac_field(filter_key, &1))
-    })
+    ]
   end
 end

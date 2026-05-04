@@ -11,6 +11,11 @@ defmodule Engram.NotesTest do
     insert(:user_override, user: user, overrides: %{"max_vaults" => -1})
     insert(:user_override, user: other_user, overrides: %{"max_vaults" => -1})
 
+    # Phase B reads derive a filter key from the user's DEK. Provision DEK
+    # upfront so test users carry encrypted_dek in-struct without a reload.
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, other_user} = Engram.Crypto.ensure_user_dek(other_user)
+
     {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
     {:ok, other_vault} = Engram.Vaults.create_vault(other_user, %{name: "Test"})
 
@@ -226,6 +231,27 @@ defmodule Engram.NotesTest do
 
     test "returns not_found for nonexistent path", %{user: user, vault: vault} do
       assert {:error, :not_found} = Notes.get_note(user, vault, "Nope/Missing.md")
+    end
+
+    test "locates note via path_hmac, ignoring plaintext path column",
+         %{user: user, vault: vault} do
+      {:ok, created} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Hmac.md",
+          "content" => "# Hmac",
+          "mtime" => 1_000.0
+        })
+
+      # Tamper plaintext path to a sentinel — if lookup still uses `n.path == ^path`
+      # the row will not be found. If it uses `n.path_hmac`, the row is still found.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Engram.Notes.Note, where: n.id == ^created.id)
+          |> Repo.update_all(set: [path: "TAMPERED-DO-NOT-MATCH"])
+        end)
+
+      assert {:ok, found} = Notes.get_note(user, vault, "Test/Hmac.md")
+      assert found.id == created.id
     end
   end
 
@@ -890,6 +916,56 @@ defmodule Engram.NotesTest do
 
       # Other user's note untouched
       assert {:ok, _} = Notes.get_note(other_user, other_vault, "Shared/Note.md")
+    end
+
+    test "recomputes path_hmac and folder_hmac for the new path/folder",
+         %{user: user, vault: vault} do
+      {:ok, before} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Note.md",
+          "content" => "# Old",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      {:ok, after_row} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.one(from(n in Engram.Notes.Note, where: n.id == ^before.id))
+        end)
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      assert after_row.path_hmac == Engram.Crypto.hmac_field(filter_key, "New/Note.md")
+      assert after_row.folder_hmac == Engram.Crypto.hmac_field(filter_key, "New")
+      refute after_row.path_hmac == before.path_hmac
+      refute after_row.folder_hmac == before.folder_hmac
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # rename_note/4 path_hmac regression
+  # ---------------------------------------------------------------------------
+
+  describe "rename_note/4 phase B sync" do
+    test "recomputes path_hmac and folder_hmac for the new path/folder",
+         %{user: user, vault: vault} do
+      {:ok, before} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Folder/Old.md",
+          "content" => "# Old",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} = Notes.rename_note(user, vault, "Folder/Old.md", "Folder/New.md")
+
+      {:ok, after_row} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.one(from(n in Engram.Notes.Note, where: n.id == ^before.id))
+        end)
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      assert after_row.path_hmac == Engram.Crypto.hmac_field(filter_key, "Folder/New.md")
+      refute after_row.path_hmac == before.path_hmac
     end
   end
 end

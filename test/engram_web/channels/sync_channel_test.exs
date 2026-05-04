@@ -6,6 +6,8 @@ defmodule EngramWeb.SyncChannelTest do
   setup do
     user = insert(:user)
     other_user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, other_user} = Engram.Crypto.ensure_user_dek(other_user)
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "channel-test")
 
@@ -129,7 +131,10 @@ defmodule EngramWeb.SyncChannelTest do
                subscribe_and_join(socket, EngramWeb.SyncChannel, "sync:#{user.id}")
     end
 
-    test "unrestricted key (no api_key_vaults rows) can join any vault", %{user: user, vault: vault} do
+    test "unrestricted key (no api_key_vaults rows) can join any vault", %{
+      user: user,
+      vault: vault
+    } do
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "unrestricted-chan")
 
       socket = user_socket(user, api_key_record)
@@ -156,7 +161,11 @@ defmodule EngramWeb.SyncChannelTest do
       assert note["version"] == 1
     end
 
-    test "broadcasts note_changed to other subscribers", %{socket: socket, user: user, vault: vault} do
+    test "broadcasts note_changed to other subscribers", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
       # Second subscriber on the same channel topic
       other_socket = user_socket(user)
       {:ok, _, _} = join_sync(other_socket, user, vault)
@@ -184,7 +193,11 @@ defmodule EngramWeb.SyncChannelTest do
 
       # Notes context uses Endpoint.broadcast (not broadcast_from!), so sender
       # also receives the note_changed event. Clients should deduplicate by path/version.
-      assert_push "note_changed", %{"event_type" => "upsert", "path" => "Test/Echo.md", "content" => "# Echo"}
+      assert_push "note_changed", %{
+        "event_type" => "upsert",
+        "path" => "Test/Echo.md",
+        "content" => "# Echo"
+      }
     end
 
     test "sanitizes path in push_note", %{socket: socket} do
@@ -223,7 +236,11 @@ defmodule EngramWeb.SyncChannelTest do
       assert {:error, :not_found} = Notes.get_note(user, vault, "Test/ToDelete.md")
     end
 
-    test "broadcasts note_changed with event_type delete", %{socket: socket, user: user, vault: vault} do
+    test "broadcasts note_changed with event_type delete", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
       Notes.upsert_note(user, vault, %{
         "path" => "Test/Gone.md",
         "content" => "# Gone",
@@ -236,6 +253,7 @@ defmodule EngramWeb.SyncChannelTest do
         "event_type" => "delete",
         "path" => "Test/Gone.md"
       }
+
       # Notes context broadcasts via Endpoint.broadcast (includes sender)
     end
 
@@ -267,7 +285,11 @@ defmodule EngramWeb.SyncChannelTest do
       assert note["path"] == "Test/Renamed.md"
     end
 
-    test "broadcasts note_changed for old and new path", %{socket: socket, user: user, vault: vault} do
+    test "broadcasts note_changed for old and new path", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
       Notes.upsert_note(user, vault, %{
         "path" => "Test/MoveSrc.md",
         "content" => "# Move",

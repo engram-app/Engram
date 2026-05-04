@@ -7,6 +7,7 @@ defmodule EngramWeb.McpControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
@@ -537,6 +538,7 @@ defmodule EngramWeb.McpControllerTest do
   describe "MCP vault switching with restricted API key" do
     setup do
       user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault_a = insert(:vault, user: user, is_default: true, name: "Vault A")
 
       # Override limit so user can have 2 vaults

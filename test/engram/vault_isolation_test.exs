@@ -11,6 +11,9 @@ defmodule Engram.VaultIsolationTest do
     user = insert(:user)
     insert(:user_override, user: user, overrides: %{"max_vaults" => -1})
 
+    # Phase B reads derive a filter key from the user's DEK — provision upfront.
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
     {:ok, vault_a} = Vaults.create_vault(user, %{name: "Personal"})
     {:ok, vault_b} = Vaults.create_vault(user, %{name: "Work"})
 
@@ -22,7 +25,11 @@ defmodule Engram.VaultIsolationTest do
   # ---------------------------------------------------------------------------
 
   describe "note isolation across vaults" do
-    test "note in vault_a is not visible from vault_b", %{user: user, vault_a: vault_a, vault_b: vault_b} do
+    test "note in vault_a is not visible from vault_b", %{
+      user: user,
+      vault_a: vault_a,
+      vault_b: vault_b
+    } do
       {:ok, _} =
         Notes.upsert_note(user, vault_a, %{
           "path" => "test.md",
@@ -33,7 +40,11 @@ defmodule Engram.VaultIsolationTest do
       assert {:error, :not_found} = Notes.get_note(user, vault_b, "test.md")
     end
 
-    test "note in vault_b is not visible from vault_a", %{user: user, vault_a: vault_a, vault_b: vault_b} do
+    test "note in vault_b is not visible from vault_a", %{
+      user: user,
+      vault_a: vault_a,
+      vault_b: vault_b
+    } do
       {:ok, _} =
         Notes.upsert_note(user, vault_b, %{
           "path" => "test.md",
