@@ -63,20 +63,61 @@ defmodule Engram.Search do
     # Fetch more candidates when reranking is active
     fetch_limit = if reranker_active?(), do: max(limit * 4, @min_candidates), else: limit
 
-    with {:ok, [vector]} <- embed_for_search(query) do
-      search_opts =
-        [user_id: to_string(user.id), limit: fetch_limit]
-        |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
-        |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
-        |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
+    case translate_phase_b_filters(user, folder, tags) do
+      {:ok, phase_b_kw} ->
+        with {:ok, [vector]} <- embed_for_search(query) do
+          search_opts =
+            [user_id: to_string(user.id), limit: fetch_limit]
+            |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
+            |> Keyword.merge(phase_b_kw)
 
-      with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
-           vaults_by_id = load_candidate_vaults(user, vault, candidates),
-           {:ok, decrypted} <-
-             Engram.Crypto.maybe_decrypt_qdrant_candidates(candidates, user, vaults_by_id) do
-        reranker().rerank(query, decrypted, limit)
-      end
+          with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
+               vaults_by_id = load_candidate_vaults(user, vault, candidates),
+               {:ok, decrypted} <-
+                 Engram.Crypto.maybe_decrypt_qdrant_candidates(candidates, user, vaults_by_id) do
+            reranker().rerank(query, decrypted, limit)
+          end
+        end
+
+      :no_dek_with_filter ->
+        # Caller asked to filter by folder/tags but has no DEK provisioned —
+        # impossible to derive HMAC, and the user has no encrypted points to
+        # match anyway. Mirrors list_folders (B.2.2) defensive empty.
+        {:ok, []}
     end
+  end
+
+  # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...]
+  # subset to merge into Qdrant search opts, or :no_dek_with_filter when the
+  # caller asked for a filter but has no DEK to derive the HMAC. An unfiltered
+  # search (no folder, no tags) is always {:ok, []} — DEK not required.
+  defp translate_phase_b_filters(_user, nil, nil), do: {:ok, []}
+
+  defp translate_phase_b_filters(user, folder, tags) do
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        kw =
+          []
+          |> maybe_put_folder_hmac(filter_key, folder)
+          |> maybe_put_tags_hmac(filter_key, tags)
+
+        {:ok, kw}
+
+      {:error, :no_dek} ->
+        :no_dek_with_filter
+    end
+  end
+
+  defp maybe_put_folder_hmac(kw, _filter_key, nil), do: kw
+
+  defp maybe_put_folder_hmac(kw, filter_key, folder),
+    do: Keyword.put(kw, :folder_hmac, Base.encode64(Engram.Crypto.hmac_field(filter_key, folder)))
+
+  defp maybe_put_tags_hmac(kw, _filter_key, nil), do: kw
+
+  defp maybe_put_tags_hmac(kw, filter_key, tags) do
+    encoded = Enum.map(tags, &Base.encode64(Engram.Crypto.hmac_field(filter_key, &1)))
+    Keyword.put(kw, :tags_hmac, encoded)
   end
 
   # Single-vault search: return the passed-in vault directly — no extra DB query.

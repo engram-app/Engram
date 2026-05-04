@@ -13,7 +13,7 @@ defmodule Engram.SearchTest do
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
-    user = insert(:user)
+    {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}
   end
@@ -74,16 +74,26 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "query")
     end
 
-    test "passes folder filter to Qdrant", %{bypass: bypass, user: user, vault: vault} do
+    test "translates :folder opt into folder_hmac filter (Phase B.2.3)",
+         %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "Health"))
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
         conditions = decoded["filter"]["must"]
         keys = Enum.map(conditions, & &1["key"])
-        assert "folder" in keys
+
+        # Plaintext folder filter is gone; HMAC filter takes its place.
+        refute "folder" in keys
+        assert "folder_hmac" in keys
+
+        folder_cond = Enum.find(conditions, &(&1["key"] == "folder_hmac"))
+        assert folder_cond["match"]["value"] == expected_hmac
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -93,23 +103,50 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "query", folder: "Health")
     end
 
-    test "passes tags filter to Qdrant", %{bypass: bypass, user: user, vault: vault} do
+    test "translates :tags opt into tags_hmac filter (Phase B.2.3)",
+         %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+
+      expected_hmacs =
+        ["health", "labs"]
+        |> Enum.map(&Base.encode64(Engram.Crypto.hmac_field(filter_key, &1)))
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
         conditions = decoded["filter"]["must"]
         keys = Enum.map(conditions, & &1["key"])
-        assert "tags" in keys
+
+        refute "tags" in keys
+        assert "tags_hmac" in keys
+
+        tags_cond = Enum.find(conditions, &(&1["key"] == "tags_hmac"))
+        assert Enum.sort(tags_cond["match"]["any"]) == Enum.sort(expected_hmacs)
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query", tags: ["health"])
+      assert {:ok, []} = Search.search(user, vault, "query", tags: ["health", "labs"])
+    end
+
+    test "user without DEK returns empty result for filtered search instead of crashing",
+         %{bypass: bypass} do
+      # Brand-new user — no notes upserted, no DEK provisioned. Mirrors the
+      # multi-tenant edge case fixed for list_folders in B.2.2.
+      user_no_dek = insert(:user)
+      vault = insert(:vault, user: user_no_dek)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn _ ->
+        flunk("Qdrant must not be queried when caller has no DEK and supplied folder/tags")
+      end)
+
+      assert {:ok, []} = Search.search(user_no_dek, vault, "query", folder: "Health")
+      assert {:ok, []} = Search.search(user_no_dek, vault, "query", tags: ["x"])
     end
 
     test "returns error when embedder fails", %{user: user, vault: vault} do
@@ -119,7 +156,11 @@ defmodule Engram.SearchTest do
       assert {:error, _} = Search.search(user, vault, "iron panel")
     end
 
-    test "fetches 4x candidates when reranker is configured", %{bypass: bypass, user: user, vault: vault} do
+    test "fetches 4x candidates when reranker is configured", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       # Configure Jina reranker via behaviour
       jina_bypass = Bypass.open()
       Application.put_env(:engram, :reranker, Engram.Rerankers.Jina)
@@ -200,7 +241,11 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "test query")
     end
 
-    test "uses default embed when query model not configured", %{bypass: bypass, user: user, vault: vault} do
+    test "uses default embed when query model not configured", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       Application.delete_env(:engram, :query_embed_model)
 
       Engram.MockEmbedder
@@ -217,7 +262,11 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "test query")
     end
 
-    test "returns empty list when Qdrant returns no results", %{bypass: bypass, user: user, vault: vault} do
+    test "returns empty list when Qdrant returns no results", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
@@ -230,7 +279,10 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "nothing")
     end
 
-    test "cross-vault search returns error when feature disabled (free plan)", %{user: user, vault: vault} do
+    test "cross-vault search returns error when feature disabled (free plan)", %{
+      user: user,
+      vault: vault
+    } do
       # Free plan user has no plan_id; @default_limits has cross_vault_search: false
       assert user.plan_id == nil
 
@@ -238,7 +290,10 @@ defmodule Engram.SearchTest do
                Search.search(user, vault, "query", cross_vault: true)
     end
 
-    test "cross-vault search proceeds past billing gate when feature enabled (pro plan)", %{bypass: bypass, vault: vault} do
+    test "cross-vault search proceeds past billing gate when feature enabled (pro plan)", %{
+      bypass: bypass,
+      vault: vault
+    } do
       plan = insert(:plan, limits: %{"cross_vault_search" => true})
       pro_user = insert(:user, plan_id: plan.id)
 
@@ -255,7 +310,11 @@ defmodule Engram.SearchTest do
       refute result == {:error, :feature_not_available}
     end
 
-    test "default (non-cross-vault) search skips billing gate for free plan user", %{bypass: bypass, user: user, vault: vault} do
+    test "default (non-cross-vault) search skips billing gate for free plan user", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       # Free plan user — no cross_vault opt — should never hit the billing check
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)

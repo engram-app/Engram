@@ -226,6 +226,56 @@ defmodule Engram.Vector.QdrantTest do
       assert hd(results).score == 0.95
     end
 
+    test "translates :folder_hmac opt to folder_hmac filter key (Phase B.2.3)",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        conditions = decoded["filter"]["must"]
+
+        cond = Enum.find(conditions, &(&1["key"] == "folder_hmac"))
+        assert cond, "expected a folder_hmac filter, got #{inspect(conditions)}"
+        assert cond["match"]["value"] == "FOLDER-HMAC-B64"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
+      end)
+
+      vector = List.duplicate(0.1, 1024)
+
+      assert {:ok, []} =
+               Qdrant.search("test_col", vector,
+                 user_id: "1",
+                 folder_hmac: "FOLDER-HMAC-B64"
+               )
+    end
+
+    test "translates :tags_hmac opt to tags_hmac filter with match.any (Phase B.2.3)",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        conditions = decoded["filter"]["must"]
+
+        cond = Enum.find(conditions, &(&1["key"] == "tags_hmac"))
+        assert cond, "expected a tags_hmac filter, got #{inspect(conditions)}"
+        assert Enum.sort(cond["match"]["any"]) == Enum.sort(["HASH-A", "HASH-B"])
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
+      end)
+
+      vector = List.duplicate(0.1, 1024)
+
+      assert {:ok, []} =
+               Qdrant.search("test_col", vector,
+                 user_id: "1",
+                 tags_hmac: ["HASH-A", "HASH-B"]
+               )
+    end
+
     test "includes binary quantization rescore params", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)

@@ -182,24 +182,34 @@ defmodule Engram.Vector.Qdrant do
   Vector similarity search. Returns list of result structs with score + payload.
 
   Options:
-  - `:user_id`  — filter to this user's points (required for tenant isolation)
-  - `:vault_id` — filter to a specific vault (omit for cross-vault search)
-  - `:limit`    — number of results (default 5)
-  - `:tags`     — filter to points with ANY of these tags
-  - `:folder`   — filter to points in this folder
+  - `:user_id`     — filter to this user's points (required for tenant isolation)
+  - `:vault_id`    — filter to a specific vault (omit for cross-vault search)
+  - `:limit`       — number of results (default 5)
+  - `:folder_hmac` — filter to points whose folder_hmac equals this value
+                     (Phase B.2.3 — base64-encoded HMAC, no plaintext folder)
+  - `:tags_hmac`   — filter to points with ANY of these tag HMACs
+                     (Phase B.2.3 — base64-encoded list, no plaintext tags)
   """
   def search(col \\ nil, vector, search_opts) do
     col = col || collection()
     user_id = Keyword.fetch!(search_opts, :user_id)
     vault_id = Keyword.get(search_opts, :vault_id)
     limit = Keyword.get(search_opts, :limit, 5)
-    tags = Keyword.get(search_opts, :tags)
-    folder = Keyword.get(search_opts, :folder)
+    tags_hmac = Keyword.get(search_opts, :tags_hmac)
+    folder_hmac = Keyword.get(search_opts, :folder_hmac)
 
     must = [%{key: "user_id", match: %{value: user_id}}]
     must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
-    must = if tags, do: [%{key: "tags", match: %{any: tags}} | must], else: must
-    must = if folder, do: [%{key: "folder", match: %{value: folder}} | must], else: must
+
+    must =
+      if tags_hmac,
+        do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must],
+        else: must
+
+    must =
+      if folder_hmac,
+        do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must],
+        else: must
 
     base = %{
       query: vector,
