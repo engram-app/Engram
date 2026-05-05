@@ -123,13 +123,31 @@ class TestFilteredSearchOnEncryptedVault:
         for path, _, _ in note_specs:
             wait_for_qdrant_indexed(vault_id, path, timeout=90)
 
-        # 4. Unfiltered search must hit every note (sanity)
+        # 3a. Sanity — confirm frontmatter parsing landed `target_tag` on the
+        #     target note. Without this guard, a future regression in
+        #     `Helpers.extract_tags/1` could silently produce empty tags and
+        #     the tag filter test below would still narrow to one note (for
+        #     the wrong reason: matching no-tag rows vs. matching by HMAC).
+        target_note = client.get_note(target_path)
+        assert target_note is not None, (
+            f"Target note {target_path} should be retrievable for sanity check"
+        )
+        assert target_tag in (target_note.get("tags") or []), (
+            f"Frontmatter parser did not extract {target_tag!r}. "
+            f"Got tags={target_note.get('tags')!r} — tag filter test below "
+            f"would pass for the wrong reason without this guard."
+        )
+
+        # 4. Unfiltered search must hit every seeded note. Assert the count
+        #    so a regression that drops two of three results (and happens to
+        #    keep target_path) doesn't silently pass.
         unfiltered = self._search(client, "fingerprint", limit=20)
         unfiltered_paths = {r.get("path") for r in unfiltered}
-        for path, _, _ in note_specs:
-            assert path in unfiltered_paths, (
-                f"Unfiltered search missed {path}; got {unfiltered_paths}"
-            )
+        seeded_paths = {p for p, _, _ in note_specs}
+        assert seeded_paths <= unfiltered_paths, (
+            f"Unfiltered search missed seeded notes. "
+            f"Missing: {seeded_paths - unfiltered_paths}. Got: {unfiltered_paths}"
+        )
 
         # 5. Folder filter must narrow to one note
         by_folder = self._search(

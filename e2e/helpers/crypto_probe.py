@@ -365,8 +365,11 @@ def tamper_note_plaintext_columns(
     plaintext columns will fail; controllers that source from ciphertext stay
     correct.
 
-    The note is located via `path_hmac` of the original `path` so this works
-    even when the plaintext column has already been NULLed by encryption."""
+    The note is located via the plaintext `path` column (still populated in
+    Phase B.2 — additive write, drop comes in B.3). Once B.3 NULLs that
+    column this helper will hit `UPDATE 0` and raise — switch to a
+    note-id-based variant at that point. The defensive AssertionError below
+    surfaces that failure mode loudly."""
     sql = (
         f"\\set tamper_path '{new_path}'\n"
         f"\\set tamper_folder '{new_folder}'\n"

@@ -12,10 +12,10 @@ defmodule Mix.Tasks.Engram.QdrantPayloadPhaseBTest do
   alias Mix.Tasks.Engram.QdrantPayloadPhaseB
 
   describe "gather_pairs/0" do
-    test "returns {user_id, vault_id} pairs that have chunks" do
+    test "returns {user_id, vault_id} pairs that have chunks, excluding chunkless vaults" do
       user = insert(:user)
       vault = insert(:vault, user: user)
-      _other_vault = insert(:vault, user: user)
+      chunkless_vault = insert(:vault, user: user)
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -40,6 +40,7 @@ defmodule Mix.Tasks.Engram.QdrantPayloadPhaseBTest do
       pairs = QdrantPayloadPhaseB.gather_pairs()
 
       assert {user.id, vault.id} in pairs
+      refute {user.id, chunkless_vault.id} in pairs
     end
 
     test "deduplicates pairs across many chunks of the same (user, vault)" do
