@@ -24,7 +24,10 @@ defmodule Engram.Crypto.RequestDecryptVaultTest do
   end
 
   describe "request_decrypt_vault/2" do
-    test "flips vault to decrypt_pending and schedules DecryptVault at +24h", %{user: user, vault: vault} do
+    test "flips vault to decrypt_pending and schedules DecryptVault at +24h", %{
+      user: user,
+      vault: vault
+    } do
       assert {:ok, updated} = Crypto.request_decrypt_vault(vault, user)
       assert updated.encryption_status == "decrypt_pending"
       assert updated.decrypt_requested_at != nil
@@ -43,13 +46,19 @@ defmodule Engram.Crypto.RequestDecryptVaultTest do
       assert {:error, :bad_status} = Crypto.request_decrypt_vault(vault, user)
     end
 
-    test "returns :cooldown when last_toggle_at within configured cooldown", %{user: user, vault: vault} do
+    test "returns :cooldown when last_toggle_at within configured cooldown", %{
+      user: user,
+      vault: vault
+    } do
       recent = DateTime.utc_now() |> DateTime.add(-3, :day)
       {:ok, vault} = vault |> Ecto.Changeset.change(%{last_toggle_at: recent}) |> Repo.update()
       assert {:error, :cooldown} = Crypto.request_decrypt_vault(vault, user)
     end
 
-    test "skips cooldown when user.encryption_toggle_cooldown_days is NULL", %{user: user, vault: vault} do
+    test "skips cooldown when user.encryption_toggle_cooldown_days is NULL", %{
+      user: user,
+      vault: vault
+    } do
       {:ok, user} =
         user |> Ecto.Changeset.change(%{encryption_toggle_cooldown_days: nil}) |> Repo.update()
 

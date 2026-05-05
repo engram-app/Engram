@@ -20,7 +20,10 @@ defmodule EngramWeb.VaultsControllerEncryptionTest do
       assert json["vault"]["cooldown_days"] == 7
     end
 
-    test "202 even within would-be cooldown when user has no cooldown_days", %{conn: conn, user: user} do
+    test "202 even within would-be cooldown when user has no cooldown_days", %{
+      conn: conn,
+      user: user
+    } do
       {:ok, _} =
         user
         |> Ecto.Changeset.change(%{encryption_toggle_cooldown_days: nil})

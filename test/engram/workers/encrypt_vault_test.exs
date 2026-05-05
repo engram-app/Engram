@@ -58,7 +58,11 @@ defmodule Engram.Workers.EncryptVaultTest do
                })
     end
 
-    test "encrypts notes in batch and stamps ciphertext columns", %{bypass: bypass, vault: vault, user: user} do
+    test "encrypts notes in batch and stamps ciphertext columns", %{
+      bypass: bypass,
+      vault: vault,
+      user: user
+    } do
       stub_qdrant_set_payload(bypass)
 
       note = insert(:note, user: user, vault: vault, content: "secret body", title: "Top Secret")
@@ -76,7 +80,11 @@ defmodule Engram.Workers.EncryptVaultTest do
       assert reloaded.title_ciphertext != nil
     end
 
-    test "finalizes vault to encrypted when batch is under 100", %{bypass: bypass, vault: vault, user: user} do
+    test "finalizes vault to encrypted when batch is under 100", %{
+      bypass: bypass,
+      vault: vault,
+      user: user
+    } do
       stub_qdrant_set_payload(bypass)
       insert(:note, user: user, vault: vault, content: "x")
 
@@ -92,7 +100,11 @@ defmodule Engram.Workers.EncryptVaultTest do
       assert updated.encrypted_at != nil
     end
 
-    test "re-enqueues with new cursor when batch is full", %{bypass: bypass, vault: vault, user: user} do
+    test "re-enqueues with new cursor when batch is full", %{
+      bypass: bypass,
+      vault: vault,
+      user: user
+    } do
       stub_qdrant_set_payload(bypass)
       # Insert 100 notes — full batch.
       for i <- 1..100 do
@@ -114,7 +126,11 @@ defmodule Engram.Workers.EncryptVaultTest do
       assert_enqueued(worker: EncryptVault)
     end
 
-    test "emits :note_encrypted and :vault_encrypted telemetry", %{bypass: bypass, vault: vault, user: user} do
+    test "emits :note_encrypted and :vault_encrypted telemetry", %{
+      bypass: bypass,
+      vault: vault,
+      user: user
+    } do
       stub_qdrant_set_payload(bypass)
       insert(:note, user: user, vault: vault, content: "x")
 

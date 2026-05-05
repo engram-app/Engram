@@ -22,7 +22,11 @@ defmodule Engram.Auth.DeviceFlow do
   def start_device_flow(client_id) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
-    expires_at = DateTime.utc_now() |> DateTime.add(@device_code_ttl_seconds, :second) |> DateTime.truncate(:second)
+
+    expires_at =
+      DateTime.utc_now()
+      |> DateTime.add(@device_code_ttl_seconds, :second)
+      |> DateTime.truncate(:second)
 
     %DeviceAuthorization{}
     |> DeviceAuthorization.changeset(%{

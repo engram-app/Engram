@@ -36,6 +36,7 @@ defmodule EngramWeb.Assets.MarketingCSSTest do
 
       for class <- react_only_classes do
         escaped = String.replace(class, ":", "\\:")
+
         refute css =~ escaped,
                "marketing.css contains '#{class}' which is a React SPA class. " <>
                  "Check that assets/css/marketing.css uses source(none) to prevent auto-detection."

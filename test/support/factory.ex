@@ -91,11 +91,13 @@ defmodule Engram.Factory do
 
   def device_authorization_factory do
     %Engram.Auth.DeviceAuthorization{
-      device_code: sequence(:device_code, &"dc_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(8))}"),
-      user_code: sequence(:user_code, fn _n ->
-        code = String.upcase(Base.encode32(:crypto.strong_rand_bytes(4), padding: false))
-        String.slice(code, 0, 4) <> "-" <> String.slice(code, 4, 4)
-      end),
+      device_code:
+        sequence(:device_code, &"dc_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(8))}"),
+      user_code:
+        sequence(:user_code, fn _n ->
+          code = String.upcase(Base.encode32(:crypto.strong_rand_bytes(4), padding: false))
+          String.slice(code, 0, 4) <> "-" <> String.slice(code, 4, 4)
+        end),
       client_id: sequence(:client_id, &"client_#{&1}"),
       status: "pending",
       expires_at: DateTime.add(DateTime.utc_now(), 300, :second) |> DateTime.truncate(:second)
@@ -104,10 +106,12 @@ defmodule Engram.Factory do
 
   def device_refresh_token_factory do
     %Engram.Auth.DeviceRefreshToken{
-      token_hash: sequence(:token_hash, &"hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(16))}"),
+      token_hash:
+        sequence(:token_hash, &"hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(16))}"),
       user: build(:user),
       vault: build(:vault),
-      expires_at: DateTime.add(DateTime.utc_now(), 90 * 24 * 3600, :second) |> DateTime.truncate(:second),
+      expires_at:
+        DateTime.add(DateTime.utc_now(), 90 * 24 * 3600, :second) |> DateTime.truncate(:second),
       revoked_at: nil
     }
   end

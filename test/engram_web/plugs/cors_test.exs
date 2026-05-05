@@ -47,6 +47,7 @@ defmodule EngramWeb.Plugs.CORSTest do
       "http://engram.ax",
       "app://obsidian.md"
     ])
+
     on_exit(fn -> Application.delete_env(:engram, :cors_origin) end)
 
     conn =
@@ -62,6 +63,7 @@ defmodule EngramWeb.Plugs.CORSTest do
       "http://engram.ax",
       "app://obsidian.md"
     ])
+
     on_exit(fn -> Application.delete_env(:engram, :cors_origin) end)
 
     conn =

@@ -62,7 +62,11 @@ defmodule EngramWeb.NotesController do
         content = "# #{filename}\n\n#{text}"
         mtime = System.os_time(:second) * 1.0
 
-        case Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => mtime}) do
+        case Notes.upsert_note(user, vault, %{
+               "path" => path,
+               "content" => content,
+               "mtime" => mtime
+             }) do
           {:ok, note} ->
             json(conn, %{created: true, path: path, note: note_json(note)})
 

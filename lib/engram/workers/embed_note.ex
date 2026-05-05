@@ -78,7 +78,10 @@ defmodule Engram.Workers.EmbedNote do
                 end
 
               {:error, reason} ->
-                Logger.error("EmbedNote decrypt failed: user_id=#{note.user_id} note_id=#{note.id} reason=#{inspect(reason)}")
+                Logger.error(
+                  "EmbedNote decrypt failed: user_id=#{note.user_id} note_id=#{note.id} reason=#{inspect(reason)}"
+                )
+
                 {:error, reason}
             end
         end

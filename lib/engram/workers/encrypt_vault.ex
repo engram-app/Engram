@@ -29,7 +29,9 @@ defmodule Engram.Workers.EncryptVault do
   @batch_size 100
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"vault_id" => vault_id, "user_id" => user_id, "cursor" => cursor}}) do
+  def perform(%Oban.Job{
+        args: %{"vault_id" => vault_id, "user_id" => user_id, "cursor" => cursor}
+      }) do
     # 1. Load the batch (short tenant-scoped tx — fast queries only).
     case load_batch(vault_id, user_id, cursor) do
       :noop ->

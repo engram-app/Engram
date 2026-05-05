@@ -21,7 +21,10 @@ defmodule Engram.Crypto.CancelDecryptVaultTest do
   end
 
   describe "cancel_decrypt_vault/2" do
-    test "flips vault back to encrypted and clears decrypt_requested_at", %{user: user, vault: vault} do
+    test "flips vault back to encrypted and clears decrypt_requested_at", %{
+      user: user,
+      vault: vault
+    } do
       original_toggle = vault.last_toggle_at
       assert {:ok, updated} = Crypto.cancel_decrypt_vault(vault, user)
       assert updated.encryption_status == "encrypted"

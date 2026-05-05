@@ -11,7 +11,8 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
   describe "POST /api/auth/register" do
     test "creates user and returns access token + refresh cookie", %{conn: conn} do
-      conn = post(conn, "/api/auth/register", %{email: "new@test.com", password: "StrongPass123!"})
+      conn =
+        post(conn, "/api/auth/register", %{email: "new@test.com", password: "StrongPass123!"})
 
       assert %{"access_token" => token, "user" => %{"email" => "new@test.com", "role" => "admin"}} =
                json_response(conn, 201)
@@ -25,14 +26,24 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
     test "first user is admin, second is member", %{conn: conn} do
       post(conn, "/api/auth/register", %{email: "first@test.com", password: "StrongPass123!"})
-      conn2 = post(build_conn(), "/api/auth/register", %{email: "second@test.com", password: "StrongPass123!"})
+
+      conn2 =
+        post(build_conn(), "/api/auth/register", %{
+          email: "second@test.com",
+          password: "StrongPass123!"
+        })
 
       assert %{"user" => %{"role" => "member"}} = json_response(conn2, 201)
     end
 
     test "rejects duplicate email with generic error", %{conn: conn} do
       post(conn, "/api/auth/register", %{email: "dup@test.com", password: "StrongPass123!"})
-      conn2 = post(build_conn(), "/api/auth/register", %{email: "dup@test.com", password: "StrongPass123!"})
+
+      conn2 =
+        post(build_conn(), "/api/auth/register", %{
+          email: "dup@test.com",
+          password: "StrongPass123!"
+        })
 
       assert %{"error" => "registration_failed"} = json_response(conn2, 422)
     end
@@ -44,7 +55,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
     end
 
     test "rejects password over 72 bytes", %{conn: conn} do
-      conn = post(conn, "/api/auth/register", %{email: "long@test.com", password: String.duplicate("a", 73)})
+      conn =
+        post(conn, "/api/auth/register", %{
+          email: "long@test.com",
+          password: String.duplicate("a", 73)
+        })
 
       assert %{"error" => "password_too_long"} = json_response(conn, 422)
     end
@@ -85,7 +100,9 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
   describe "POST /api/auth/refresh" do
     test "issues new access token from refresh cookie", %{conn: conn} do
-      register_conn = post(conn, "/api/auth/register", %{email: "refresh@test.com", password: "StrongPass123!"})
+      register_conn =
+        post(conn, "/api/auth/register", %{email: "refresh@test.com", password: "StrongPass123!"})
+
       cookie = register_conn.resp_cookies["refresh_token"]
 
       conn2 =
@@ -108,7 +125,9 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
   describe "POST /api/auth/logout" do
     test "clears refresh cookie", %{conn: conn} do
-      register_conn = post(conn, "/api/auth/register", %{email: "logout@test.com", password: "StrongPass123!"})
+      register_conn =
+        post(conn, "/api/auth/register", %{email: "logout@test.com", password: "StrongPass123!"})
+
       cookie = register_conn.resp_cookies["refresh_token"]
 
       conn2 =
@@ -125,12 +144,16 @@ defmodule EngramWeb.LocalAuthControllerTest do
     test "returns 404 when auth_provider is clerk", %{conn: conn} do
       Application.put_env(:engram, :auth_provider, :clerk)
 
-      conn = post(conn, "/api/auth/register", %{email: "blocked@test.com", password: "StrongPass123!"})
+      conn =
+        post(conn, "/api/auth/register", %{email: "blocked@test.com", password: "StrongPass123!"})
+
       assert %{"error" => "not_found"} = json_response(conn, 404)
     end
 
     test "allows requests when auth_provider is local", %{conn: conn} do
-      conn = post(conn, "/api/auth/register", %{email: "allowed@test.com", password: "StrongPass123!"})
+      conn =
+        post(conn, "/api/auth/register", %{email: "allowed@test.com", password: "StrongPass123!"})
+
       assert json_response(conn, 201)
     end
   end

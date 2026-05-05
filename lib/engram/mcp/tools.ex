@@ -48,8 +48,7 @@ defmodule Engram.MCP.Tools do
   defp list_vaults_def do
     %{
       name: "list_vaults",
-      description:
-        "List all vaults owned by the current user with IDs, names, and descriptions.",
+      description: "List all vaults owned by the current user with IDs, names, and descriptions.",
       inputSchema: %{"type" => "object", "properties" => %{}},
       handler: &Handlers.handle("list_vaults", &1, &2, &3)
     }

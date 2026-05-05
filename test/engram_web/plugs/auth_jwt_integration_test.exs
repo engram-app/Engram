@@ -13,7 +13,13 @@ defmodule EngramWeb.Plugs.AuthJwtIntegrationTest do
   # malformed — meaning the signer is constructed correctly and the plug accepts
   # a well-formed token signature).
   test "request with valid JWT reaches the auth check (not rejected at signature level)" do
-    claims = %{"user_id" => 999, "iss" => "engram", "aud" => "engram", "exp" => Joken.current_time() + 3600}
+    claims = %{
+      "user_id" => 999,
+      "iss" => "engram",
+      "aud" => "engram",
+      "exp" => Joken.current_time() + 3600
+    }
+
     {:ok, good_token} = Joken.Signer.sign(claims, test_signer())
 
     conn =
@@ -27,7 +33,13 @@ defmodule EngramWeb.Plugs.AuthJwtIntegrationTest do
   end
 
   test "request with wrong-issuer JWT is rejected at the router level" do
-    claims = %{"user_id" => 999, "iss" => "other_app", "aud" => "engram", "exp" => Joken.current_time() + 3600}
+    claims = %{
+      "user_id" => 999,
+      "iss" => "other_app",
+      "aud" => "engram",
+      "exp" => Joken.current_time() + 3600
+    }
+
     {:ok, bad_token} = Joken.Signer.sign(claims, test_signer())
 
     conn =

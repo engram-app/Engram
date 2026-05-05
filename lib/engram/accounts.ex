@@ -82,28 +82,32 @@ defmodule Engram.Accounts do
     external_id = Ecto.UUID.generate()
     password_hash = Bcrypt.hash_pwd_salt(password)
 
-    Repo.transaction(fn ->
-      # Serialize bootstrap admin check so only one concurrent signup can win
-      Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [@admin_bootstrap_lock])
+    Repo.transaction(
+      fn ->
+        # Serialize bootstrap admin check so only one concurrent signup can win
+        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [@admin_bootstrap_lock])
 
-      role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
+        role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
 
-      case %User{
-             email: normalized_email,
-             external_id: external_id,
-             password_hash: password_hash,
-             role: role
-           }
-           |> Ecto.Changeset.change()
-           |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
-           |> Repo.insert(skip_tenant_check: true) do
-        {:ok, user} -> user
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end, skip_tenant_check: true)
+        case %User{
+               email: normalized_email,
+               external_id: external_id,
+               password_hash: password_hash,
+               role: role
+             }
+             |> Ecto.Changeset.change()
+             |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
+             |> Repo.insert(skip_tenant_check: true) do
+          {:ok, user} -> user
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end,
+      skip_tenant_check: true
+    )
   end
 
-  def create_user_with_password(_email, password) when byte_size(password) > @max_password_bytes do
+  def create_user_with_password(_email, password)
+      when byte_size(password) > @max_password_bytes do
     {:error, :password_too_long}
   end
 
@@ -159,42 +163,50 @@ defmodule Engram.Accounts do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     tx_result =
-      Repo.transaction(fn ->
-        # Atomically revoke: only succeeds if token exists and is not yet revoked
-        revoke_query =
-          from(rt in RefreshToken,
-            where: rt.token_hash == ^token_hash and is_nil(rt.revoked_at),
-            select: rt
-          )
+      Repo.transaction(
+        fn ->
+          # Atomically revoke: only succeeds if token exists and is not yet revoked
+          revoke_query =
+            from(rt in RefreshToken,
+              where: rt.token_hash == ^token_hash and is_nil(rt.revoked_at),
+              select: rt
+            )
 
-        case Repo.update_all(revoke_query, [set: [revoked_at: now]], skip_tenant_check: true) do
-          {1, [token]} ->
-            if DateTime.compare(now, token.expires_at) == :gt do
-              Repo.rollback(:expired)
-            else
-              user = Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id), skip_tenant_check: true)
+          case Repo.update_all(revoke_query, [set: [revoked_at: now]], skip_tenant_check: true) do
+            {1, [token]} ->
+              if DateTime.compare(now, token.expires_at) == :gt do
+                Repo.rollback(:expired)
+              else
+                user =
+                  Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id),
+                    skip_tenant_check: true
+                  )
 
-              case create_refresh_token(user, token.family_id) do
-                {:ok, new_raw, new_record} -> {user, new_raw, new_record}
-                {:error, _reason} -> Repo.rollback(:refresh_token_creation_failed)
+                case create_refresh_token(user, token.family_id) do
+                  {:ok, new_raw, new_record} -> {user, new_raw, new_record}
+                  {:error, _reason} -> Repo.rollback(:refresh_token_creation_failed)
+                end
               end
-            end
 
-          {0, _} ->
-            # Token doesn't exist or already revoked — check which case
-            case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^token_hash), skip_tenant_check: true) do
-              nil ->
-                Repo.rollback(:invalid_token)
+            {0, _} ->
+              # Token doesn't exist or already revoked — check which case
+              case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^token_hash),
+                     skip_tenant_check: true
+                   ) do
+                nil ->
+                  Repo.rollback(:invalid_token)
 
-              %RefreshToken{revoked_at: revoked} when not is_nil(revoked) ->
-                # Signal reuse — revocation happens AFTER the transaction commits
-                Repo.rollback({:token_reused, token_hash})
+                %RefreshToken{revoked_at: revoked} when not is_nil(revoked) ->
+                  # Signal reuse — revocation happens AFTER the transaction commits
+                  Repo.rollback({:token_reused, token_hash})
 
-              %RefreshToken{} ->
-                Repo.rollback(:invalid_token)
-            end
-        end
-      end, skip_tenant_check: true)
+                %RefreshToken{} ->
+                  Repo.rollback(:invalid_token)
+              end
+          end
+        end,
+        skip_tenant_check: true
+      )
 
     case tx_result do
       {:ok, {user, new_raw, new_record}} ->

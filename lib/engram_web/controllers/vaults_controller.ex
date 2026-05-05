@@ -63,8 +63,11 @@ defmodule EngramWeb.VaultsController do
     case parse_id(id) do
       {:ok, vault_id} ->
         case Vaults.update_vault(user, vault_id, attrs) do
-          {:ok, vault} -> json(conn, %{vault: vault_json(vault, user)})
-          {:error, :not_found} -> not_found(conn)
+          {:ok, vault} ->
+            json(conn, %{vault: vault_json(vault, user)})
+
+          {:error, :not_found} ->
+            not_found(conn)
 
           {:error, changeset} ->
             conn

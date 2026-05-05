@@ -6,10 +6,17 @@ defmodule Engram.Crypto.ConfigTest do
 
   setup do
     orig = Application.get_all_env(:engram)
+
     on_exit(fn ->
       Application.put_env(:engram, :key_provider, Keyword.get(orig, :key_provider))
-      Application.put_env(:engram, :encryption_master_key, Keyword.get(orig, :encryption_master_key))
+
+      Application.put_env(
+        :engram,
+        :encryption_master_key,
+        Keyword.get(orig, :encryption_master_key)
+      )
     end)
+
     :ok
   end
 

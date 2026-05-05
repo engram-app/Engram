@@ -10,7 +10,11 @@ defmodule EngramWeb.EndpointConfigTest do
   end
 
   test "Endpoint.check_origin/1 allows listed origins" do
-    Application.put_env(:engram, :websocket_check_origin, ["https://app.engram.dev", "app://obsidian.md"])
+    Application.put_env(:engram, :websocket_check_origin, [
+      "https://app.engram.dev",
+      "app://obsidian.md"
+    ])
+
     on_exit(fn -> Application.delete_env(:engram, :websocket_check_origin) end)
 
     assert EngramWeb.Endpoint.check_origin("https://app.engram.dev")

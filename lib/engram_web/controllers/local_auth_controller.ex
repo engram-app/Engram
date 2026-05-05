@@ -105,7 +105,9 @@ defmodule EngramWeb.LocalAuthController do
     conn = fetch_cookies(conn)
 
     case conn.req_cookies["refresh_token"] do
-      nil -> :ok
+      nil ->
+        :ok
+
       raw_token ->
         token_hash = Accounts.hash_refresh_token(raw_token)
         Accounts.revoke_token_family(token_hash)

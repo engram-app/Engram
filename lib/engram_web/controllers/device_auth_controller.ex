@@ -8,6 +8,7 @@ defmodule EngramWeb.DeviceAuthController do
 
   def start(conn, params) do
     client_id = Map.get(params, "client_id", "unknown")
+
     case DeviceFlow.start_device_flow(client_id) do
       {:ok, auth} ->
         base_url = EngramWeb.Endpoint.url()

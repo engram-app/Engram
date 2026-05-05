@@ -160,7 +160,14 @@ defmodule EngramWeb.SearchControllerTest do
         "result" => [
           chunk("uuid-a1", 0.95, "Health/Iron Panel.md", "Iron Panel", "Ferritin section.", user),
           chunk("uuid-a2", 0.91, "Health/Iron Panel.md", "Iron Panel", "TIBC section.", user),
-          chunk("uuid-a3", 0.88, "Health/Iron Panel.md", "Iron Panel", "Notes on saturation.", user),
+          chunk(
+            "uuid-a3",
+            0.88,
+            "Health/Iron Panel.md",
+            "Iron Panel",
+            "Notes on saturation.",
+            user
+          ),
           chunk("uuid-b1", 0.80, "Health/Vitamin D.md", "Vitamin D", "Levels by season.", user)
         ]
       }

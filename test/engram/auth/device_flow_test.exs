@@ -9,7 +9,12 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert auth.status == "pending"
       assert auth.client_id == "test_client_id"
       assert byte_size(auth.device_code) == 64
-      assert String.match?(auth.user_code, ~r/^[ABCDEFGHJKMNPQRSTUVWXYZ2345679]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ2345679]{4}$/)
+
+      assert String.match?(
+               auth.user_code,
+               ~r/^[ABCDEFGHJKMNPQRSTUVWXYZ2345679]{4}-[ABCDEFGHJKMNPQRSTUVWXYZ2345679]{4}$/
+             )
+
       assert DateTime.compare(auth.expires_at, DateTime.utc_now()) == :gt
     end
 
@@ -37,12 +42,16 @@ defmodule Engram.Auth.DeviceFlowTest do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
       auth
-      |> Ecto.Changeset.change(%{expires_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)})
+      |> Ecto.Changeset.change(%{
+        expires_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+      })
       |> Repo.update!()
 
       user = insert(:user)
       vault = insert(:vault, user: user)
-      assert {:error, :not_found_or_expired} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+
+      assert {:error, :not_found_or_expired} =
+               DeviceFlow.authorize_device(auth.user_code, user, vault.id)
     end
 
     test "rejects already-authorized device code" do
@@ -51,7 +60,8 @@ defmodule Engram.Auth.DeviceFlowTest do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
       {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
 
-      assert {:error, :not_found_or_expired} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      assert {:error, :not_found_or_expired} =
+               DeviceFlow.authorize_device(auth.user_code, user, vault.id)
     end
 
     test "rejects vault not owned by user" do
@@ -60,7 +70,8 @@ defmodule Engram.Auth.DeviceFlowTest do
       vault = insert(:vault, user: other_user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
-      assert {:error, :vault_not_found} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      assert {:error, :vault_not_found} =
+               DeviceFlow.authorize_device(auth.user_code, user, vault.id)
     end
   end
 
@@ -139,7 +150,8 @@ defmodule Engram.Auth.DeviceFlowTest do
       {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
       {:ok, _} = DeviceFlow.refresh_access_token(initial.refresh_token)
 
-      assert {:error, :invalid_refresh_token} = DeviceFlow.refresh_access_token(initial.refresh_token)
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(initial.refresh_token)
     end
 
     test "rejects unknown refresh token" do
@@ -152,7 +164,10 @@ defmodule Engram.Auth.DeviceFlowTest do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
       auth
-      |> Ecto.Changeset.change(%{expires_at: DateTime.utc_now() |> DateTime.add(-7200, :second) |> DateTime.truncate(:second)})
+      |> Ecto.Changeset.change(%{
+        expires_at:
+          DateTime.utc_now() |> DateTime.add(-7200, :second) |> DateTime.truncate(:second)
+      })
       |> Repo.update!()
 
       {deleted, _} = DeviceFlow.cleanup_expired()

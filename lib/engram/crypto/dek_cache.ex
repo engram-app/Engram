@@ -88,6 +88,7 @@ defmodule Engram.Crypto.DekCache do
 
   defp sweep do
     now = :erlang.system_time(:millisecond)
+
     :ets.foldl(
       fn {user_id, _dek, expires_at}, _acc ->
         if now >= expires_at, do: :ets.delete(@table, user_id)

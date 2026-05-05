@@ -40,28 +40,31 @@ defmodule Engram.Repo.Migrations.AddVaultsAndBilling do
 
     # One default vault per user (partial unique)
     create index(:vaults, [:user_id],
-      name: :vaults_user_id_default_index,
-      unique: true,
-      where: "is_default = true AND deleted_at IS NULL"
-    )
+             name: :vaults_user_id_default_index,
+             unique: true,
+             where: "is_default = true AND deleted_at IS NULL"
+           )
 
     # Unique slug per user among active vaults
     create index(:vaults, [:user_id, :slug],
-      name: :vaults_user_id_slug_index,
-      unique: true,
-      where: "deleted_at IS NULL"
-    )
+             name: :vaults_user_id_slug_index,
+             unique: true,
+             where: "deleted_at IS NULL"
+           )
 
     # Unique client_id per user when set and active
     create index(:vaults, [:user_id, :client_id],
-      name: :vaults_user_id_client_id_index,
-      unique: true,
-      where: "client_id IS NOT NULL AND deleted_at IS NULL"
-    )
+             name: :vaults_user_id_client_id_index,
+             unique: true,
+             where: "client_id IS NOT NULL AND deleted_at IS NULL"
+           )
 
     # ── API Key Vaults (join table) ────────────────────────────────
     create table(:api_key_vaults, primary_key: false) do
-      add :api_key_id, references(:api_keys, on_delete: :delete_all), null: false, primary_key: true
+      add :api_key_id, references(:api_keys, on_delete: :delete_all),
+        null: false,
+        primary_key: true
+
       add :vault_id, references(:vaults, on_delete: :delete_all), null: false, primary_key: true
     end
 
@@ -121,16 +124,16 @@ defmodule Engram.Repo.Migrations.AddVaultsAndBilling do
 
     # New unique indexes scoped by vault_id
     create index(:notes, [:user_id, :vault_id, :path],
-      name: :notes_user_id_vault_id_path_index,
-      unique: true,
-      where: "deleted_at IS NULL"
-    )
+             name: :notes_user_id_vault_id_path_index,
+             unique: true,
+             where: "deleted_at IS NULL"
+           )
 
     create index(:attachments, [:user_id, :vault_id, :path],
-      name: :attachments_user_id_vault_id_path_index,
-      unique: true,
-      where: "deleted_at IS NULL"
-    )
+             name: :attachments_user_id_vault_id_path_index,
+             unique: true,
+             where: "deleted_at IS NULL"
+           )
 
     # Regular vault_id indexes for efficient querying
     create index(:notes, [:vault_id])
@@ -175,7 +178,10 @@ defmodule Engram.Repo.Migrations.AddVaultsAndBilling do
 
     # Restore original unique indexes on notes and attachments
     drop index(:notes, [:user_id, :vault_id, :path], name: :notes_user_id_vault_id_path_index)
-    drop index(:attachments, [:user_id, :vault_id, :path], name: :attachments_user_id_vault_id_path_index)
+
+    drop index(:attachments, [:user_id, :vault_id, :path],
+           name: :attachments_user_id_vault_id_path_index
+         )
 
     create unique_index(:notes, [:user_id, :path])
     create unique_index(:attachments, [:user_id, :path])

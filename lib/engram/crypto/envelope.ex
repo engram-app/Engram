@@ -20,10 +20,12 @@ defmodule Engram.Crypto.Envelope do
   def decrypt(ct_with_tag, nonce, <<_::256>> = dek)
       when is_binary(ct_with_tag) and byte_size(nonce) == @nonce_bytes do
     size = byte_size(ct_with_tag) - @tag_bytes
+
     if size < 0 do
       :error
     else
       <<ct::binary-size(size), tag::binary-size(@tag_bytes)>> = ct_with_tag
+
       case :crypto.crypto_one_time_aead(@cipher, dek, nonce, ct, <<>>, tag, false) do
         plaintext when is_binary(plaintext) -> {:ok, plaintext}
         :error -> :error

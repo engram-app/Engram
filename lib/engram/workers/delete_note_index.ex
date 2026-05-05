@@ -11,7 +11,14 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Indexing
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"note_id" => note_id, "user_id" => user_id, "vault_id" => vault_id, "path" => path}}) do
+  def perform(%Oban.Job{
+        args: %{
+          "note_id" => note_id,
+          "user_id" => user_id,
+          "vault_id" => vault_id,
+          "path" => path
+        }
+      }) do
     note = %{id: note_id, user_id: user_id, vault_id: vault_id, path: path}
     Indexing.delete_note_index(note)
     :ok

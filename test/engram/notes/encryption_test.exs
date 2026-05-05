@@ -78,7 +78,8 @@ defmodule Engram.Notes.EncryptionTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, renamed} = Engram.Notes.rename_note(user, vault, "rename/before.md", "rename/after.md")
+      {:ok, renamed} =
+        Engram.Notes.rename_note(user, vault, "rename/before.md", "rename/after.md")
 
       # Returned struct must be plaintext
       assert renamed.path == "rename/after.md"

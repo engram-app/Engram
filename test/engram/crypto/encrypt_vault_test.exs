@@ -29,7 +29,11 @@ defmodule Engram.Crypto.EncryptVaultTest do
       assert updated.encrypted == true
       assert updated.encryption_status == "encrypting"
       assert updated.last_toggle_at != nil
-      assert_enqueued(worker: EncryptVault, args: %{"vault_id" => vault.id, "user_id" => user.id, "cursor" => 0})
+
+      assert_enqueued(
+        worker: EncryptVault,
+        args: %{"vault_id" => vault.id, "user_id" => user.id, "cursor" => 0}
+      )
     end
 
     test "returns :bad_status when already encrypted", %{user: user, vault: vault} do
@@ -42,23 +46,35 @@ defmodule Engram.Crypto.EncryptVaultTest do
       assert {:error, :bad_status} = Crypto.encrypt_vault(vault, user)
     end
 
-    test "returns :cooldown when last_toggle_at within configured cooldown", %{user: user, vault: vault} do
+    test "returns :cooldown when last_toggle_at within configured cooldown", %{
+      user: user,
+      vault: vault
+    } do
       vault = set_last_toggle(vault, 3)
       assert {:error, :cooldown} = Crypto.encrypt_vault(vault, user)
     end
 
-    test "succeeds when last_toggle_at older than configured cooldown", %{user: user, vault: vault} do
+    test "succeeds when last_toggle_at older than configured cooldown", %{
+      user: user,
+      vault: vault
+    } do
       vault = set_last_toggle(vault, 8)
       assert {:ok, _} = Crypto.encrypt_vault(vault, user)
     end
 
-    test "skips cooldown when user.encryption_toggle_cooldown_days is NULL", %{user: user, vault: vault} do
+    test "skips cooldown when user.encryption_toggle_cooldown_days is NULL", %{
+      user: user,
+      vault: vault
+    } do
       user = set_cooldown(user, nil)
       vault = set_last_toggle(vault, 1)
       assert {:ok, _} = Crypto.encrypt_vault(vault, user)
     end
 
-    test "skips cooldown when user.encryption_toggle_cooldown_days is 0", %{user: user, vault: vault} do
+    test "skips cooldown when user.encryption_toggle_cooldown_days is 0", %{
+      user: user,
+      vault: vault
+    } do
       user = set_cooldown(user, 0)
       vault = set_last_toggle(vault, 0)
       assert {:ok, _} = Crypto.encrypt_vault(vault, user)

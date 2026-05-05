@@ -21,7 +21,9 @@ defmodule Engram.Workers.EmbedNoteTest do
     user = insert(:user)
     vault = insert(:vault, user: user)
     # Use factory directly — avoids triggering EmbedNote inline during setup
-    note = insert(:note, user: user, vault: vault, path: "Test/Hello.md", content: "# Hello\n\nWorld.")
+    note =
+      insert(:note, user: user, vault: vault, path: "Test/Hello.md", content: "# Hello\n\nWorld.")
+
     %{bypass: bypass, user: user, vault: vault, note: note}
   end
 
@@ -160,7 +162,6 @@ defmodule Engram.Workers.EmbedNoteTest do
       updated = Repo.get!(Note, note.id, skip_tenant_check: true)
       assert updated.embed_hash == updated.content_hash
     end
-
   end
 
   describe "job scheduling" do
@@ -200,7 +201,11 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert length(jobs) == 1
     end
 
-    test "delete_note does not enqueue an additional embed job", %{bypass: bypass, user: user, vault: vault} do
+    test "delete_note does not enqueue an additional embed job", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       # Stub all Qdrant requests — the background delete_note_index Task may hit Qdrant
       Bypass.stub(bypass, "POST", "/collections/engram_notes/points/delete", fn conn ->
         conn

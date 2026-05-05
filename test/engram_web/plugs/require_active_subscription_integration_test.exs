@@ -31,7 +31,13 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
   end
 
   test "device authorize is reachable without a subscription", %{conn: conn} do
-    conn = post(conn, "/api/auth/device/authorize", %{user_code: "XXXX-XXXX", vault_id: "new", vault_name: "My Vault"})
+    conn =
+      post(conn, "/api/auth/device/authorize", %{
+        user_code: "XXXX-XXXX",
+        vault_id: "new",
+        vault_name: "My Vault"
+      })
+
     refute conn.status == 403
   end
 
@@ -46,6 +52,7 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
       },
       skip_tenant_check: true
     )
+
     conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
     assert conn.status in [200, 204]
   end
@@ -62,6 +69,7 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
         },
         skip_tenant_check: true
       )
+
       conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
       refute conn.status == 403
     end

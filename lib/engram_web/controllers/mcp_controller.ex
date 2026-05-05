@@ -78,8 +78,7 @@ defmodule EngramWeb.McpController do
         {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
 
       {:error, msg} ->
-        {:ok,
-         %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+        {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
     end
   catch
     kind, reason ->

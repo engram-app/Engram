@@ -14,7 +14,12 @@ defmodule Engram.RepoTenantTest do
       {:ok, _note} =
         Repo.with_tenant(user_a.id, fn ->
           %Note{}
-          |> Note.changeset(%{path: "secret.md", content: "private", user_id: user_a.id, vault_id: vault_a.id})
+          |> Note.changeset(%{
+            path: "secret.md",
+            content: "private",
+            user_id: user_a.id,
+            vault_id: vault_a.id
+          })
           |> Repo.insert()
         end)
 

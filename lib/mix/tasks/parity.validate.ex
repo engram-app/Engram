@@ -112,7 +112,9 @@ defmodule Mix.Tasks.Parity.Validate do
 
       if vectors["size"] == 1024 and quant == true,
         do: {:pass, "#{prod_collection}: size=#{vectors["size"]}, binary_quant=always_ram"},
-        else: {:fail, "expected 1024d + binary quant, got size=#{vectors["size"]}, quant=#{inspect(quant)}"}
+        else:
+          {:fail,
+           "expected 1024d + binary quant, got size=#{vectors["size"]}, quant=#{inspect(quant)}"}
     end)
 
     check("upsert point with real embedding", fn ->

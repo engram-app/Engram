@@ -25,11 +25,12 @@ repo_opts =
       [url: url]
   end
 
-config :engram, Engram.Repo,
-  Keyword.merge(repo_opts,
-    pool: Ecto.Adapters.SQL.Sandbox,
-    pool_size: System.schedulers_online() * 2
-  )
+config :engram,
+       Engram.Repo,
+       Keyword.merge(repo_opts,
+         pool: Ecto.Adapters.SQL.Sandbox,
+         pool_size: System.schedulers_online() * 2
+       )
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
@@ -89,5 +90,4 @@ config :engram, :auth_provider, :local
 # Stable test master key — 32 bytes of 0xAB, base64-encoded
 config :engram,
   key_provider: Engram.Crypto.KeyProvider.Local,
-  encryption_master_key:
-    Base.encode64(:binary.copy(<<0xAB>>, 32))
+  encryption_master_key: Base.encode64(:binary.copy(<<0xAB>>, 32))

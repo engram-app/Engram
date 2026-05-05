@@ -63,9 +63,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "returns 402 when vault limit reached", %{conn: conn, user: user} do
       # Override to limit of 1
-      Engram.Repo.delete_all(
-        from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id
-      )
+      Engram.Repo.delete_all(from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id)
       insert(:user_override, user: user, overrides: %{"max_vaults" => 1})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
@@ -156,9 +154,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 402 when vault limit reached", %{conn: conn, user: user} do
-      Engram.Repo.delete_all(
-        from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id
-      )
+      Engram.Repo.delete_all(from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id)
       insert(:user_override, user: user, overrides: %{"max_vaults" => 1})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})

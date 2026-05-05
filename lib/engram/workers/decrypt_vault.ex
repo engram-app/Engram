@@ -23,7 +23,9 @@ defmodule Engram.Workers.DecryptVault do
   @batch_size 100
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"vault_id" => vault_id, "user_id" => user_id, "cursor" => cursor}}) do
+  def perform(%Oban.Job{
+        args: %{"vault_id" => vault_id, "user_id" => user_id, "cursor" => cursor}
+      }) do
     Repo.with_tenant(user_id, fn ->
       vault = Repo.get!(Vault, vault_id)
       user = Repo.get!(User, user_id)

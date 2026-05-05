@@ -28,7 +28,13 @@ defmodule EngramWeb.EmbedStatusControllerTest do
       conn = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
       insert(:note, user: user, content_hash: "aaa", embed_hash: "aaa")
-      insert(:note, user: user, content_hash: "bbb", embed_hash: nil, deleted_at: DateTime.utc_now())
+
+      insert(:note,
+        user: user,
+        content_hash: "bbb",
+        embed_hash: nil,
+        deleted_at: DateTime.utc_now()
+      )
 
       resp = get(conn, "/api/embed-status") |> json_response(200)
 

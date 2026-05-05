@@ -31,7 +31,9 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       vault = insert(:vault, user: user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
 
-      conn = post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
+      conn =
+        post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
+
       assert %{"ok" => true} = json_response(conn, 200)
     end
 

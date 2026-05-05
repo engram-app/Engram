@@ -64,12 +64,22 @@ defmodule Engram.Workers.DecryptVaultTest do
       assert reloaded.encryption_status == "encrypted"
     end
 
-    test "flips to decrypting then none, clears ciphertext columns", %{bypass: bypass, user: user, vault: vault} do
+    test "flips to decrypting then none, clears ciphertext columns", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       stub_qdrant(bypass)
 
       # Seed an encrypted note using the real crypto helper.
       {:ok, _} = Crypto.ensure_user_dek(user)
-      {:ok, enc} = Crypto.maybe_encrypt_note_fields(%{content: "secret", title: "t", tags: ["x"]}, user, vault)
+
+      {:ok, enc} =
+        Crypto.maybe_encrypt_note_fields(
+          %{content: "secret", title: "t", tags: ["x"]},
+          user,
+          vault
+        )
 
       note =
         insert(:note,

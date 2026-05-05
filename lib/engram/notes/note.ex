@@ -66,7 +66,9 @@ defmodule Engram.Notes.Note do
         :user_id,
         :vault_id,
         :deleted_at
-      ] ++ @encryption_fields, empty_values: [])
+      ] ++ @encryption_fields,
+      empty_values: []
+    )
     |> validate_required([:path, :user_id, :vault_id])
     |> default_content()
     |> unique_constraint([:user_id, :vault_id, :path], name: :notes_user_vault_path_active_index)

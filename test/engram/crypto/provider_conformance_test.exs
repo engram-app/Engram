@@ -13,6 +13,7 @@ defmodule Engram.Crypto.ProviderConformanceTest do
       :encryption_master_key,
       Base.encode64(:crypto.strong_rand_bytes(32))
     )
+
     :ok
   end
 

@@ -13,14 +13,19 @@ defmodule Engram.Auth.Providers.LocalTest do
     end
 
     test "first user gets admin role" do
-      {:ok, %{external_id: ext_id}} = Local.register_user("admin@local.test", "StrongPass123!", %{})
+      {:ok, %{external_id: ext_id}} =
+        Local.register_user("admin@local.test", "StrongPass123!", %{})
+
       user = Engram.Repo.one!(from u in Engram.Accounts.User, where: u.external_id == ^ext_id)
       assert user.role == "admin"
     end
 
     test "second user gets member role" do
       {:ok, _} = Local.register_user("first@local.test", "StrongPass123!", %{})
-      {:ok, %{external_id: ext_id}} = Local.register_user("second@local.test", "StrongPass123!", %{})
+
+      {:ok, %{external_id: ext_id}} =
+        Local.register_user("second@local.test", "StrongPass123!", %{})
+
       user = Engram.Repo.one!(from u in Engram.Accounts.User, where: u.external_id == ^ext_id)
       assert user.role == "member"
     end
@@ -56,7 +61,8 @@ defmodule Engram.Auth.Providers.LocalTest do
 
   describe "authenticate_credentials/2" do
     test "returns external_id and email for valid credentials" do
-      {:ok, %{external_id: ext_id}} = Local.register_user("auth@local.test", "StrongPass123!", %{})
+      {:ok, %{external_id: ext_id}} =
+        Local.register_user("auth@local.test", "StrongPass123!", %{})
 
       assert {:ok, %{external_id: ^ext_id, email: "auth@local.test"}} =
                Local.authenticate_credentials("auth@local.test", "StrongPass123!")
