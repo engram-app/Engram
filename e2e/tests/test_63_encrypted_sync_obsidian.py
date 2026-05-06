@@ -57,6 +57,13 @@ def reset_vault_encryption(api_sync):
         backdate_last_toggle(vault_id, days=8)
 
 
+@pytest.mark.skip(
+    reason="Phase B.3: vault encrypt/decrypt toggle retires in B.4 — "
+    "DecryptVault writes back to plaintext columns that no longer exist, "
+    "so the toggle teardown can never reach status='none'. Re-enable as "
+    "part of the B.4 mandatory-encryption work or rewrite without the "
+    "toggle once every vault is encrypted by default."
+)
 @pytest.mark.asyncio
 async def test_encrypted_sync_obsidian(
     vault_a, vault_b, cdp_a, cdp_b, api_sync, reset_vault_encryption
