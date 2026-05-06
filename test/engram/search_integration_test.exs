@@ -79,8 +79,8 @@ defmodule Engram.SearchIntegrationTest do
     assert Enum.any?(results, fn r -> r.text =~ "searchable" end)
   end
 
-  describe "vault toggle round-trip" do
-    test "plaintext -> encrypt -> ciphertext at rest -> search -> decrypt -> plaintext",
+  describe "vault encrypt + search round-trip" do
+    test "plaintext -> encrypt -> ciphertext at rest -> search returns plaintext results",
          %{user: user} do
       insert(:user_override, user: user, overrides: %{"max_vaults" => 5})
 
@@ -98,7 +98,7 @@ defmodule Engram.SearchIntegrationTest do
 
       {:ok, _} = Engram.Indexing.index_note(note, vault)
 
-      # Toggle encryption on.
+      # Toggle encryption on (one-way — Phase B.3 retired the decrypt path).
       {:ok, vault} = Engram.Crypto.encrypt_vault(vault, user)
       :ok = Oban.drain_queue(queue: :crypto_backfill)
 
@@ -113,25 +113,6 @@ defmodule Engram.SearchIntegrationTest do
       vault = Engram.Repo.get!(Engram.Vaults.Vault, vault.id, skip_tenant_check: true)
       {:ok, results} = Engram.Search.search(user, vault, "Vaniel launch", limit: 5)
       assert length(results) > 0
-
-      # Backdate last_toggle_at to bypass the 7-day encrypt/decrypt cooldown.
-      old = DateTime.utc_now() |> DateTime.add(-8, :day)
-
-      {:ok, vault} =
-        vault
-        |> Ecto.Changeset.change(%{last_toggle_at: old})
-        |> Engram.Repo.update(skip_tenant_check: true)
-
-      # Toggle decrypt (simulate 24h with drain scheduled).
-      {:ok, _vault} = Engram.Crypto.request_decrypt_vault(vault, user)
-      :ok = Oban.drain_queue(queue: :crypto_backfill, with_scheduled: true)
-
-      # Plaintext restored.
-      restored =
-        Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
-
-      assert restored.content == "Project Vaniel launches Tuesday"
-      assert is_nil(restored.content_ciphertext)
     end
   end
 end

@@ -103,13 +103,10 @@ defmodule EngramWeb.VaultsController do
     toggle_action(conn, id, &Engram.Crypto.encrypt_vault/2)
   end
 
-  def request_decrypt(conn, %{"id" => id}) do
-    toggle_action(conn, id, &Engram.Crypto.request_decrypt_vault/2)
-  end
-
-  def cancel_decrypt(conn, %{"id" => id}) do
-    toggle_action(conn, id, &Engram.Crypto.cancel_decrypt_vault/2)
-  end
+  # Phase B.3: vault decryption actions retired. At-rest encryption is
+  # mandatory; per-note reads decrypt on demand. The toggle UI + the
+  # `vault.encrypted` / `encryption_status` schema fields are removed in
+  # B.4. Until then, the decrypt routes simply do not exist.
 
   def encryption_progress(conn, %{"id" => id}) do
     user = conn.assigns.current_user

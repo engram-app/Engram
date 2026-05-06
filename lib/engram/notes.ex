@@ -77,14 +77,14 @@ defmodule Engram.Notes do
             Oban.insert(EmbedNote.new_debounced(note.id))
           end
 
-          note = decrypt_for_broadcast(note, user)
+          note = decrypt_or_raise!(note, user)
           broadcast_change(user.id, vault.id, "upsert", note.path, note)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
           # Phase B.3: virtual path/folder/tags need to be populated from
           # ciphertext before the controller serializes the conflict response.
-          {:error, :version_conflict, decrypt_if_needed(existing, user)}
+          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
         {:ok, {:error, changeset}} ->
           {:error, changeset}
@@ -102,7 +102,7 @@ defmodule Engram.Notes do
   def get_note(user, vault, path) do
     case find_note_by_path(user, vault, path) do
       {:ok, nil} -> {:error, :not_found}
-      {:ok, note} -> {:ok, decrypt_if_needed(note, user)}
+      {:ok, note} -> {:ok, decrypt_or_raise!(note, user)}
       _ -> {:error, :not_found}
     end
   end
@@ -163,7 +163,7 @@ defmodule Engram.Notes do
             :not_found
 
           note ->
-            decrypted_note = decrypt_if_needed(note, user)
+            decrypted_note = decrypt_or_raise!(note, user)
             new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
             # Rename re-keys path/folder but not tags — preserve existing
@@ -206,7 +206,7 @@ defmodule Engram.Notes do
       {:ok, {:ok, note}} ->
         Oban.insert(EmbedNote.new_debounced(note.id, old_path: old_path))
         broadcast_change(user.id, vault.id, "delete", old_path)
-        decrypted = decrypt_for_broadcast(note, user)
+        decrypted = decrypt_or_raise!(note, user)
         broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
         {:ok, decrypted}
 
@@ -270,7 +270,7 @@ defmodule Engram.Notes do
 
     changes =
       Enum.map(notes, fn note ->
-        note = decrypt_if_needed(note, user)
+        note = decrypt_or_raise!(note, user)
 
         %{
           path: note.path,
@@ -472,7 +472,7 @@ defmodule Engram.Notes do
             )
           end)
 
-        {:ok, decrypt_if_needed(notes, user)}
+        {:ok, decrypt_or_raise!(notes, user)}
 
       {:error, :no_dek} ->
         # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
@@ -511,7 +511,7 @@ defmodule Engram.Notes do
         )
       end)
 
-    decrypted = Enum.map(all_notes, &decrypt_if_needed(&1, user))
+    decrypted = Enum.map(all_notes, &decrypt_or_raise!(&1, user))
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -614,9 +614,15 @@ defmodule Engram.Notes do
   # Private
   # ---------------------------------------------------------------------------
 
-  defp decrypt_if_needed(nil, _user), do: nil
+  # Phase B.3: decryption MUST raise on failure. Returning the un-decrypted
+  # struct (with virtual path/folder/tags = nil) silently serializes
+  # `{"path": null, "tags": []}` over a 200 OK and ships malformed sync events
+  # to every connected device. Decrypt failure on persisted ciphertext means
+  # real data corruption — surface it as a 5xx with a Sentry hit so operators
+  # can intervene, never paper over it.
+  defp decrypt_or_raise!(nil, _user), do: nil
 
-  defp decrypt_if_needed(%Note{} = note, user) do
+  defp decrypt_or_raise!(%Note{} = note, user) do
     case Engram.Crypto.maybe_decrypt_note_fields(note, user) do
       {:ok, decrypted} ->
         decrypted
@@ -626,12 +632,12 @@ defmodule Engram.Notes do
           "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
         )
 
-        note
+        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
     end
   end
 
-  defp decrypt_if_needed(notes, user) when is_list(notes) do
-    Enum.map(notes, &decrypt_if_needed(&1, user))
+  defp decrypt_or_raise!(notes, user) when is_list(notes) do
+    Enum.map(notes, &decrypt_or_raise!(&1, user))
   end
 
   # Decrypts an envelope (ciphertext + nonce) with the user's DEK.
@@ -641,22 +647,6 @@ defmodule Engram.Notes do
     case Engram.Crypto.Envelope.decrypt(ct, nonce, dek) do
       {:ok, plaintext} -> plaintext
       :error -> raise "Phase B envelope decryption failed"
-    end
-  end
-
-  # Like decrypt_if_needed but logs a warning on decrypt failure before returning
-  # the original struct. Used before broadcast so operators know content is empty.
-  defp decrypt_for_broadcast(%Note{} = note, user) do
-    case Engram.Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, decrypted} ->
-        decrypted
-
-      {:error, reason} ->
-        Logger.warning(
-          "broadcast decrypt failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
-        )
-
-        note
     end
   end
 

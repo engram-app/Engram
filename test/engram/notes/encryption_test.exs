@@ -107,7 +107,7 @@ defmodule Engram.Notes.EncryptionTest do
       assert renamed.title == "The Real Title"
     end
 
-    test "decrypt error logs without crashing" do
+    test "decrypt error raises with operator-friendly metadata, never silently nullifies fields" do
       import ExUnit.CaptureLog
 
       user = insert(:user)
@@ -138,27 +138,22 @@ defmodule Engram.Notes.EncryptionTest do
       # Clear DEK cache to force a fresh unwrap (removes a confounding variable)
       Engram.Crypto.DekCache.invalidate(user.id)
 
+      # Phase B.3 contract: decrypt failure on a persisted row is data
+      # corruption — must raise so the API returns 5xx + Sentry hit, never
+      # serialize `{"path": null, "content": null}` over a 200 OK.
       log =
         capture_log(fn ->
-          result = Notes.get_note(user, vault, "broken/note.md")
-
-          case result do
-            {:ok, n} ->
-              # Decrypt failed: returned struct should NOT contain the original plaintext
-              refute n.content == "will be unreadable"
-
-            {:error, _} ->
-              # Also acceptable: error is surfaced instead of silently returning corrupt data
-              :ok
+          assert_raise RuntimeError, ~r/Phase B note decryption failed/, fn ->
+            Notes.get_note(user, vault, "broken/note.md")
           end
         end)
 
-      # The error was logged with user_id and note_id for operator triage
+      # Operator triage metadata in the log line
       assert log =~ "decrypt_failed"
       assert log =~ "user_id=#{user.id}"
       assert log =~ "note_id=#{note.id}"
 
-      # Critical: log must NOT contain the plaintext or any DEK material
+      # Log must NOT contain the plaintext or any DEK material
       refute log =~ "will be unreadable"
     end
 

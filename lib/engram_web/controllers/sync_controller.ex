@@ -5,6 +5,7 @@ defmodule EngramWeb.SyncController do
 
   alias Engram.Repo
   alias Engram.Crypto
+  alias Engram.Crypto.Envelope
   alias Engram.Notes.Note
   alias Engram.Attachments.Attachment
 
@@ -12,12 +13,32 @@ defmodule EngramWeb.SyncController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
+    # Phase B.3: paths live only as ciphertext. Project ONLY the columns we
+    # need (path ciphertext + nonce + content_hash) so a 10k-note vault
+    # doesn't pull megabyte-sized `content_ciphertext` blobs into BEAM.
+    # Decrypt path Elixir-side, then sort. Older `select: n` shape pulled
+    # full rows + sorted in Elixir — measurable OOM risk on the largest
+    # vault under load.
+    # No DEK = brand-new user with zero writes. No notes/attachments are
+    # possible without a DEK (every upsert provisions one), so short-circuit
+    # to an empty manifest instead of crashing on `{:ok, dek}` match.
+    case Crypto.get_dek(user) do
+      {:ok, dek} -> render_manifest(conn, user, vault, dek)
+      {:error, :no_dek} -> render_empty_manifest(conn)
+    end
+  end
+
+  defp render_empty_manifest(conn) do
+    json(conn, %{notes: [], attachments: [], total_notes: 0, total_attachments: 0})
+  end
+
+  defp render_manifest(conn, user, vault, dek) do
     {:ok, note_rows} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
             where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: n
+            select: {n.path_ciphertext, n.path_nonce, n.content_hash}
           )
         )
       end)
@@ -27,27 +48,24 @@ defmodule EngramWeb.SyncController do
         Repo.all(
           from(a in Attachment,
             where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
-            select: a
+            select: {a.path_ciphertext, a.path_nonce, a.content_hash}
           )
         )
       end)
 
-    # Phase B.3: paths live only as ciphertext in Postgres. Decrypt each row's
-    # path Elixir-side, then trim to the manifest's {path, content_hash} shape
-    # and sort by path. Avoids leaking ciphertext into the response.
     notes =
       note_rows
-      |> Enum.map(fn n ->
-        {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(n, user)
-        %{path: decrypted.path, content_hash: n.content_hash}
+      |> Enum.map(fn {path_ct, path_nonce, hash} ->
+        path = decrypt_path!(path_ct, path_nonce, dek)
+        %{path: path, content_hash: hash}
       end)
       |> Enum.sort_by(& &1.path)
 
     attachments =
       attachment_rows
-      |> Enum.map(fn a ->
-        {:ok, decrypted} = Crypto.maybe_decrypt_attachment_fields(a, user)
-        %{path: decrypted.path, content_hash: a.content_hash}
+      |> Enum.map(fn {path_ct, path_nonce, hash} ->
+        path = decrypt_path!(path_ct, path_nonce, dek)
+        %{path: path, content_hash: hash}
       end)
       |> Enum.sort_by(& &1.path)
 
@@ -57,5 +75,12 @@ defmodule EngramWeb.SyncController do
       total_notes: length(notes),
       total_attachments: length(attachments)
     })
+  end
+
+  defp decrypt_path!(ciphertext, nonce, dek) do
+    case Envelope.decrypt(ciphertext, nonce, dek) do
+      {:ok, path} -> path
+      :error -> raise "manifest path decrypt failed — possible data corruption"
+    end
   end
 end

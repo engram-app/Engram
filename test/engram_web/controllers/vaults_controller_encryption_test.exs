@@ -78,48 +78,6 @@ defmodule EngramWeb.VaultsControllerEncryptionTest do
     end
   end
 
-  describe "POST /api/vaults/:id/decrypt" do
-    test "202 and schedules decrypt", %{conn: conn, user: user} do
-      old = DateTime.utc_now() |> DateTime.add(-8, :day)
-
-      vault =
-        insert(:vault,
-          user: user,
-          encrypted: true,
-          encryption_status: "encrypted",
-          last_toggle_at: old
-        )
-
-      resp = post(conn, ~p"/api/vaults/#{vault.id}/decrypt")
-      json = json_response(resp, 202)
-      assert json["vault"]["encryption_status"] == "decrypt_pending"
-      assert json["vault"]["decrypt_requested_at"]
-    end
-  end
-
-  describe "DELETE /api/vaults/:id/decrypt" do
-    test "202 cancels pending decrypt", %{conn: conn, user: user} do
-      vault =
-        insert(:vault,
-          user: user,
-          encrypted: true,
-          encryption_status: "decrypt_pending",
-          decrypt_requested_at: DateTime.utc_now(),
-          last_toggle_at: DateTime.utc_now()
-        )
-
-      resp = delete(conn, ~p"/api/vaults/#{vault.id}/decrypt")
-      json = json_response(resp, 202)
-      assert json["vault"]["encryption_status"] == "encrypted"
-    end
-
-    test "409 when nothing to cancel", %{conn: conn, user: user} do
-      vault = insert(:vault, user: user, encrypted: true, encryption_status: "encrypted")
-      resp = delete(conn, ~p"/api/vaults/#{vault.id}/decrypt")
-      assert json_response(resp, 409)
-    end
-  end
-
   describe "GET /api/vaults/:id/encryption_progress" do
     test "returns processed/total counts", %{conn: conn, user: user} do
       vault = insert(:vault, user: user, encrypted: true, encryption_status: "encrypting")

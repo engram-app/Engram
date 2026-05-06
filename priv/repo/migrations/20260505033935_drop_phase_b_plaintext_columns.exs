@@ -72,6 +72,24 @@ defmodule Engram.Repo.Migrations.DropPhaseBPlaintextColumns do
       modify :name_ciphertext, :binary, null: false
       modify :name_nonce, :binary, null: false
     end
+
+    # Phase B.3 retires whole-vault decryption (worker + endpoints + Crypto
+    # API all deleted). Cancel any in-flight DecryptVault jobs from before
+    # this deploy — Oban would otherwise log "unknown worker" on each
+    # attempt-and-retry-cycle through max_attempts. Flip any stuck
+    # `decrypt_pending` / `decrypting` vault rows back to `encrypted` so
+    # status-poller UIs don't strand waiting on a transition that no longer
+    # exists.
+    execute(
+      "UPDATE oban_jobs SET state = 'cancelled', cancelled_at = NOW() " <>
+        "WHERE worker = 'Engram.Workers.DecryptVault' " <>
+        "AND state IN ('available', 'scheduled', 'retryable', 'executing')"
+    )
+
+    execute(
+      "UPDATE vaults SET encryption_status = 'encrypted', encrypted = true " <>
+        "WHERE encryption_status IN ('decrypt_pending', 'decrypting')"
+    )
   end
 
   def down do

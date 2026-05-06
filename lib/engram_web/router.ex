@@ -81,8 +81,6 @@ defmodule EngramWeb.Router do
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
     post "/vaults/:id/encrypt", VaultsController, :encrypt
-    post "/vaults/:id/decrypt", VaultsController, :request_decrypt
-    delete "/vaults/:id/decrypt", VaultsController, :cancel_decrypt
     get "/vaults/:id/encryption_progress", VaultsController, :encryption_progress
 
     # Billing
