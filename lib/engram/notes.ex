@@ -32,10 +32,8 @@ defmodule Engram.Notes do
          hash = content_hash(content),
          now = DateTime.utc_now(),
          note_attrs = %{
-           path: sanitized_path,
            content: content,
            title: title,
-           folder: folder,
            tags: tags,
            content_hash: hash,
            mtime: mtime,
@@ -47,10 +45,11 @@ defmodule Engram.Notes do
          {:ok, note_attrs} <- Engram.Crypto.maybe_encrypt_note_fields(note_attrs, user, vault),
          note_attrs = inject_phase_b_fields(note_attrs, user, sanitized_path, folder, tags) do
       changeset = Note.changeset(%Note{}, note_attrs)
+      {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
 
       result =
         Repo.with_tenant(user.id, fn ->
-          case Repo.get_by(Note, user_id: user.id, vault_id: vault.id, path: sanitized_path) do
+          case Repo.one(lookup_query) do
             nil ->
               case Repo.insert(changeset) do
                 {:ok, note} -> {:ok, {nil, note}}
@@ -83,7 +82,9 @@ defmodule Engram.Notes do
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
-          {:error, :version_conflict, existing}
+          # Phase B.3: virtual path/folder/tags need to be populated from
+          # ciphertext before the controller serializes the conflict response.
+          {:error, :version_conflict, decrypt_if_needed(existing, user)}
 
         {:ok, {:error, changeset}} ->
           {:error, changeset}
@@ -165,15 +166,15 @@ defmodule Engram.Notes do
             decrypted_note = decrypt_if_needed(note, user)
             new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
-            phase_b_kw = phase_b_keyword_for(user, new_path, new_folder, note.tags || [])
+            # Rename re-keys path/folder but not tags — preserve existing
+            # tags_hmac/tags_ciphertext on the row.
+            phase_b_kw = phase_b_path_folder_for(user, new_path, new_folder)
 
             {count, _} =
               from(n in Note, where: n.id == ^note.id)
               |> Repo.update_all(
                 set:
                   [
-                    path: new_path,
-                    folder: new_folder,
                     title: new_title,
                     embed_hash: nil,
                     updated_at: now
@@ -182,9 +183,9 @@ defmodule Engram.Notes do
 
             if count == 1 do
               # Splice the freshly-encrypted Phase B fields into the in-memory
-              # struct too — without this, decrypt_for_broadcast would decrypt
-              # the OLD path_ciphertext and clobber `path` back to the old
-              # value when path/folder go through maybe_decrypt_note_fields.
+              # struct + populate the virtual path/folder fields so callers
+              # (broadcast, MCP, controllers) read the new plaintext without
+              # re-decrypting through maybe_decrypt_note_fields.
               {:ok,
                note
                |> struct!(phase_b_kw)
@@ -242,7 +243,7 @@ defmodule Engram.Notes do
           note_id: note.id,
           user_id: note.user_id,
           vault_id: note.vault_id,
-          path: note.path
+          path: path
         })
       )
     end
@@ -289,28 +290,42 @@ defmodule Engram.Notes do
 
   @doc """
   Returns unique tags across all non-deleted notes for a user.
+
+  Phase B.3: tags live only in `tags_ciphertext` (envelope-encrypted JSON list).
+  Each note's tags are decrypted Elixir-side and then deduplicated. Filters
+  out notes with no tags via `tags_hmac != []` so we skip the decrypt round.
   """
   @spec list_tags(map(), map()) :: {:ok, [String.t()]}
   def list_tags(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                n.tags != ^[],
-            select: n.tags
-          )
-        )
-      end)
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Engram.Crypto.get_dek(user)
 
-    tags =
-      rows
-      |> List.flatten()
-      |> Enum.uniq()
-      |> Enum.sort()
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+                select: {n.tags_ciphertext, n.tags_nonce}
+              )
+            )
+          end)
 
-    {:ok, tags}
+        tags =
+          rows
+          |> Enum.flat_map(fn {ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek) |> :erlang.binary_to_term([:safe])
+          end)
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        {:ok, tags}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
   end
 
   @doc """
@@ -351,33 +366,43 @@ defmodule Engram.Notes do
 
   @doc """
   Returns tags with counts across all non-deleted notes for a user.
-  Uses Postgres unnest() to explode the tags array and group by tag.
+
+  Phase B.3: tags are envelope-encrypted per note. Decrypts each note's
+  tags Elixir-side, then aggregates counts. The Postgres `unnest()` /
+  `GROUP BY tag` shortcut is gone with the plaintext column.
   """
   @spec list_tags_with_counts(map(), map()) :: {:ok, [%{name: String.t(), count: integer()}]}
   def list_tags_with_counts(user, vault) do
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                n.tags != ^[],
-            select: %{
-              name: fragment("unnest(?)", n.tags),
-              count: fragment("1")
-            }
-          )
-        )
-      end)
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Engram.Crypto.get_dek(user)
 
-    # Group and count in Elixir since unnest in select doesn't allow group_by directly
-    counts =
-      rows
-      |> Enum.group_by(& &1.name)
-      |> Enum.map(fn {name, items} -> %{name: name, count: length(items)} end)
-      |> Enum.sort_by(& &1.name)
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+                select: {n.tags_ciphertext, n.tags_nonce}
+              )
+            )
+          end)
 
-    {:ok, counts}
+        counts =
+          rows
+          |> Enum.flat_map(fn {ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek) |> :erlang.binary_to_term([:safe])
+          end)
+          |> Enum.frequencies()
+          |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
+          |> Enum.sort_by(& &1.name)
+
+        {:ok, counts}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
   end
 
   @doc """
@@ -472,17 +497,25 @@ defmodule Engram.Notes do
   end
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
-    {:ok, notes} =
+    # Phase B.3: plaintext `folder` column is gone — can't `WHERE folder LIKE
+    # 'prefix/%'` in SQL. Load all non-deleted notes, decrypt path+folder,
+    # then filter by prefix in Elixir. Single decrypt per row, then bulk
+    # updates use the already-decrypted plaintext.
+    {:ok, all_notes} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                (n.folder == ^old_folder or
-                   fragment("? LIKE ?", n.folder, ^(old_prefix <> "%"))),
+            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
             select: n
           )
         )
+      end)
+
+    decrypted = Enum.map(all_notes, &decrypt_if_needed(&1, user))
+
+    notes =
+      Enum.filter(decrypted, fn n ->
+        n.folder == old_folder or String.starts_with?(n.folder || "", old_prefix)
       end)
 
     if notes == [] do
@@ -503,22 +536,19 @@ defmodule Engram.Notes do
             end
 
           new_path = new_note_folder <> String.slice(note.path, String.length(note.folder)..-1//1)
-          decrypted_note = decrypt_if_needed(note, user)
-          new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
+          new_title = Helpers.extract_title(note.content || "", new_path)
 
-          {note.id, note.path, new_path, new_note_folder, new_title, note.tags || []}
+          {note.id, note.path, new_path, new_note_folder, new_title}
         end)
 
       Repo.with_tenant(user.id, fn ->
-        Enum.each(updates, fn {id, _old_path, new_path, new_note_folder, new_title, tags} ->
-          phase_b_kw = phase_b_keyword_for(user, new_path, new_note_folder, tags)
+        Enum.each(updates, fn {id, _old_path, new_path, new_note_folder, new_title} ->
+          phase_b_kw = phase_b_path_folder_for(user, new_path, new_note_folder)
 
           from(n in Note, where: n.id == ^id)
           |> Repo.update_all(
             set:
               [
-                path: new_path,
-                folder: new_note_folder,
                 title: new_title,
                 embed_hash: nil,
                 updated_at: now
@@ -529,25 +559,32 @@ defmodule Engram.Notes do
 
       # Insert soft-deleted tombstones for old paths so the HTTP changes feed
       # includes delete signals. Without these, polling clients retain stale
-      # files at old paths after a folder rename.
-      old_paths =
-        Enum.map(updates, fn {_id, old_path, _new, _folder, _title, _tags} -> old_path end)
-
+      # files at old paths after a folder rename. Tombstones are full-row
+      # inserts so each must carry the encrypted path/folder/tags fields too.
       mtime_float = DateTime.to_unix(now) + 0.0
+      {:ok, dek} = Engram.Crypto.get_dek(user)
+
+      {empty_tags_ct, empty_tags_nonce} =
+        Engram.Crypto.Envelope.encrypt(:erlang.term_to_binary([]), dek)
+
+      {empty_title_ct, empty_title_nonce} = Engram.Crypto.Envelope.encrypt("", dek)
+      {empty_content_ct, empty_content_nonce} = Engram.Crypto.Envelope.encrypt("", dek)
 
       tombstones =
-        Enum.map(old_paths, fn old_path ->
+        Enum.map(updates, fn {_id, old_path, _new_path, _new_folder, _title} ->
           old_path_folder = Helpers.extract_folder(old_path)
-          phase_b_kw = phase_b_keyword_for(user, old_path, old_path_folder, [])
+          phase_b_kw = phase_b_path_folder_for(user, old_path, old_path_folder)
 
           base = %{
-            path: old_path,
-            content: "",
-            title: "",
-            folder: old_path_folder,
-            tags: [],
             content_hash: "",
             mtime: mtime_float,
+            title_ciphertext: empty_title_ct,
+            title_nonce: empty_title_nonce,
+            content_ciphertext: empty_content_ct,
+            content_nonce: empty_content_nonce,
+            tags_ciphertext: empty_tags_ct,
+            tags_nonce: empty_tags_nonce,
+            tags_hmac: [],
             user_id: user.id,
             vault_id: vault.id,
             created_at: now,
@@ -563,7 +600,7 @@ defmodule Engram.Notes do
       end)
 
       # Side effects outside the transaction — broadcast + reindex
-      Enum.each(updates, fn {id, old_note_path, new_path, _folder, _title, _tags} ->
+      Enum.each(updates, fn {id, old_note_path, new_path, _folder, _title} ->
         Oban.insert(Engram.Workers.EmbedNote.new_debounced(id, old_path: old_note_path))
         broadcast_change(user.id, vault.id, "delete", old_note_path)
         broadcast_change(user.id, vault.id, "upsert", new_path)
@@ -673,7 +710,29 @@ defmodule Engram.Notes do
   # `Repo.update_all(set: [...])` or `Repo.insert_all` rows. Single source of
   # truth for HMAC + envelope computation across upsert and rename paths.
   # Caller MUST have ensured the user has a DEK.
+  #
+  # Phase B.3: tags are always envelope-encrypted into tags_ciphertext +
+  # tags_nonce regardless of vault.encrypted. Before B.3 the plaintext `tags`
+  # column was the system of record for unencrypted vaults; that column is
+  # now gone, so this helper is the only place tags get persisted.
   defp phase_b_keyword_for(user, path, folder, tags) do
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    tags = tags || []
+    {tags_ct, tags_n} = Engram.Crypto.Envelope.encrypt(:erlang.term_to_binary(tags), dek)
+
+    phase_b_path_folder_for(user, path, folder) ++
+      [
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n,
+        tags_hmac: Enum.map(tags, &Engram.Crypto.hmac_field(filter_key, &1))
+      ]
+  end
+
+  # Same as phase_b_keyword_for/4 but only re-keys path + folder. Used by
+  # rename paths that don't change tags — preserves the existing tags_hmac /
+  # tags_ciphertext on the row.
+  defp phase_b_path_folder_for(user, path, folder) do
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
@@ -685,8 +744,7 @@ defmodule Engram.Notes do
       path_hmac: Engram.Crypto.hmac_field(filter_key, path),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
-      folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
-      tags_hmac: Enum.map(tags || [], &Engram.Crypto.hmac_field(filter_key, &1))
+      folder_hmac: Engram.Crypto.hmac_field(filter_key, folder)
     ]
   end
 end

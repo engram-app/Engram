@@ -12,37 +12,9 @@ defmodule Engram.VaultsTest do
     %{user: user, other_user: other_user}
   end
 
-  describe "B.2.6 — name decrypt on read" do
-    test "list_vaults returns decrypt-sourced name even when plaintext name is tampered",
-         %{user: user} do
-      {:ok, created} = Vaults.create_vault(user, %{name: "My Real Vault"})
-
-      Repo.update_all(
-        from(v in Vault, where: v.id == ^created.id),
-        [set: [name: "TAMPERED"]],
-        skip_tenant_check: true
-      )
-
-      vaults = Vaults.list_vaults(user)
-      assert [vault] = vaults
-      assert vault.id == created.id
-      assert vault.name == "My Real Vault"
-    end
-
-    test "get_vault returns decrypt-sourced name even when plaintext name is tampered",
-         %{user: user} do
-      {:ok, created} = Vaults.create_vault(user, %{name: "Vault Alpha"})
-
-      Repo.update_all(
-        from(v in Vault, where: v.id == ^created.id),
-        [set: [name: "TAMPERED"]],
-        skip_tenant_check: true
-      )
-
-      assert {:ok, vault} = Vaults.get_vault(user, created.id)
-      assert vault.name == "Vault Alpha"
-    end
-  end
+  # B.2.6 tamper-plaintext tests retired with B.3 — the plaintext `name`
+  # column no longer exists, so a tamper is impossible. Decryption is the
+  # only path to a vault name now, exercised throughout the rest of the suite.
 
   # ---------------------------------------------------------------------------
   # create_vault/2
@@ -148,8 +120,12 @@ defmodule Engram.VaultsTest do
     end
 
     test "requires a name", %{user: user} do
+      # Phase B.3: name is virtual; the changeset surfaces the missing
+      # ciphertext/nonce/hmac instead. Empty input therefore lands as a
+      # "can't be blank" error on `name_ciphertext` and friends.
       assert {:error, changeset} = Vaults.create_vault(user, %{})
-      assert "can't be blank" in errors_on(changeset).name
+      errors = errors_on(changeset)
+      assert "can't be blank" in (errors[:name_ciphertext] || [])
     end
   end
 
@@ -524,29 +500,11 @@ defmodule Engram.VaultsTest do
       refute updated.name_hmac == vault.name_hmac
     end
 
-    test "update_vault ensures user DEK before name HMAC injection", _ctx do
-      # Create via raw Repo.insert! (bypasses ensure_user_dek so encrypted_dek starts nil)
-      raw_user =
-        Engram.Repo.insert!(%Engram.Accounts.User{
-          email: "dek-test-#{System.unique_integer()}@test.com",
-          display_name: "DEK Test",
-          external_id: nil
-        })
-
-      raw_vault =
-        Engram.Repo.insert!(%Engram.Vaults.Vault{
-          name: "pre-dek",
-          slug: "pre-dek-#{System.unique_integer()}",
-          user_id: raw_user.id,
-          is_default: true
-        })
-
-      # update_vault must provision the DEK and then write name_hmac
-      assert {:ok, updated} = Vaults.update_vault(raw_user, raw_vault.id, %{name: "newname"})
-      assert updated.name == "newname"
-      assert is_binary(updated.name_hmac)
-      assert byte_size(updated.name_hmac) > 0
-    end
+    # The "update_vault ensures user DEK before name HMAC injection"
+    # legacy-migration test was retired with B.3: vaults can no longer be
+    # inserted without ciphertext (NOT NULL), so a pre-DEK vault row is
+    # impossible. Remaining update_vault tests above already cover the
+    # provisioning path on a clean fixture.
   end
 
   # ---------------------------------------------------------------------------

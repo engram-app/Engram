@@ -354,38 +354,6 @@ def set_user_cooldown_days(user_id: int, days: int | None) -> None:
     )
 
 
-def tamper_note_plaintext_columns(
-    vault_id: int, path: str, *, new_path: str, new_folder: str
-) -> None:
-    """Corrupt a note's plaintext `path` and `folder` columns directly via SQL.
-
-    Used by Phase B.2 invariant tests: after this call the plaintext columns
-    no longer match reality, but path_hmac / path_ciphertext / folder_hmac /
-    folder_ciphertext are untouched. Any controller that still reads from the
-    plaintext columns will fail; controllers that source from ciphertext stay
-    correct.
-
-    The note is located via the plaintext `path` column (still populated in
-    Phase B.2 — additive write, drop comes in B.3). Once B.3 NULLs that
-    column this helper will hit `UPDATE 0` and raise — switch to a
-    note-id-based variant at that point. The defensive AssertionError below
-    surfaces that failure mode loudly."""
-    sql = (
-        f"\\set tamper_path '{new_path}'\n"
-        f"\\set tamper_folder '{new_folder}'\n"
-        f"\\set lookup_path '{path}'\n"
-        f"UPDATE notes SET path = :'tamper_path', folder = :'tamper_folder' "
-        f"WHERE vault_id = {int(vault_id)} AND path = :'lookup_path';"
-    )
-    out = _psql(sql)
-    if "UPDATE 0" in out:
-        raise AssertionError(
-            f"tamper_note_plaintext_columns matched zero rows "
-            f"(vault_id={vault_id}, path={path!r}); plaintext path column may "
-            f"already be NULL — use note_id-based tampering instead"
-        )
-
-
 def get_user_id_for_vault(vault_id: int) -> int:
     """Look up the owning user_id for a vault. Used by tests that need to
     set per-user encryption settings without going through the API."""

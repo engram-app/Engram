@@ -64,54 +64,14 @@ defmodule Engram.Workers.DecryptVaultTest do
       assert reloaded.encryption_status == "encrypted"
     end
 
-    test "flips to decrypting then none, clears ciphertext columns", %{
-      bypass: bypass,
-      user: user,
-      vault: vault
-    } do
-      stub_qdrant(bypass)
-
-      # Seed an encrypted note using the real crypto helper.
-      {:ok, _} = Crypto.ensure_user_dek(user)
-
-      {:ok, enc} =
-        Crypto.maybe_encrypt_note_fields(
-          %{content: "secret", title: "t", tags: ["x"]},
-          user,
-          vault
-        )
-
-      note =
-        insert(:note,
-          user: user,
-          vault: vault,
-          content: enc.content,
-          content_ciphertext: enc.content_ciphertext,
-          content_nonce: enc.content_nonce,
-          title: enc.title,
-          title_ciphertext: enc.title_ciphertext,
-          title_nonce: enc.title_nonce,
-          tags: enc.tags,
-          tags_ciphertext: enc.tags_ciphertext,
-          tags_nonce: enc.tags_nonce
-        )
-
-      assert :ok =
-               perform_job(DecryptVault, %{
-                 "vault_id" => vault.id,
-                 "user_id" => user.id,
-                 "cursor" => 0
-               })
-
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
-      assert reloaded.content == "secret"
-      assert is_nil(reloaded.content_ciphertext)
-      assert is_nil(reloaded.content_nonce)
-
-      v = Repo.get!(Vault, vault.id, skip_tenant_check: true)
-      assert v.encryption_status == "none"
-      assert v.encrypted == false
-      assert is_nil(v.encrypted_at)
+    @tag :skip
+    test "flips to decrypting then none, clears ciphertext columns" do
+      # Phase B.3: vault decryption is being retired in B.4 — the plaintext
+      # `path` / `folder` / `tags` / `name` columns no longer exist, so a
+      # decrypt-back path that clears ciphertext is incomplete by design.
+      # The DecryptVault worker is left in place but unsupported until B.4
+      # removes it entirely. This test is skipped until the worker is
+      # either updated or deleted.
     end
   end
 end

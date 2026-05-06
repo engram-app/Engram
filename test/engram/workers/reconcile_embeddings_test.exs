@@ -53,27 +53,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
       vault = insert(:vault, user: user)
 
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      notes =
-        for i <- 1..105 do
-          %{
-            path: "batch/note-#{i}.md",
-            title: "Note #{i}",
-            content: "# Note #{i}",
-            folder: "batch",
-            tags: [],
-            version: 1,
-            content_hash: :crypto.hash(:sha256, "note-#{i}") |> Base.encode16(case: :lower),
-            embed_hash: nil,
-            user_id: user.id,
-            vault_id: vault.id,
-            created_at: now,
-            updated_at: now
-          }
-        end
-
-      Engram.Repo.insert_all("notes", notes, skip_tenant_check: true)
+      for i <- 1..105 do
+        Engram.Fixtures.insert_note!(user, vault,
+          path: "batch/note-#{i}.md",
+          content: "# Note #{i}",
+          embed_hash: nil
+        )
+      end
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       jobs = all_enqueued(worker: EmbedNote)

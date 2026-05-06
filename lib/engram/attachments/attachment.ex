@@ -5,7 +5,9 @@ defmodule Engram.Attachments.Attachment do
   @max_attachment_bytes 5 * 1024 * 1024
 
   schema "attachments" do
-    field :path, :string
+    # Phase B.3: path is virtual — populated by maybe_decrypt_attachment_fields/2.
+    # Persisted form is path_ciphertext + path_nonce + path_hmac.
+    field :path, :string, virtual: true
     field :path_ciphertext, :binary
     field :path_nonce, :binary
     field :path_hmac, :binary
@@ -31,7 +33,6 @@ defmodule Engram.Attachments.Attachment do
   def changeset(attachment, attrs) do
     attachment
     |> cast(attrs, [
-      :path,
       :path_ciphertext,
       :path_nonce,
       :path_hmac,
@@ -46,12 +47,21 @@ defmodule Engram.Attachments.Attachment do
       :encryption_version,
       :content_nonce
     ])
-    |> validate_required([:path, :user_id, :vault_id, :content_hash, :mime_type, :size_bytes])
+    |> validate_required([
+      :user_id,
+      :vault_id,
+      :content_hash,
+      :mime_type,
+      :size_bytes,
+      :path_ciphertext,
+      :path_nonce,
+      :path_hmac
+    ])
     |> validate_inclusion(:encryption_version, [1])
     |> validate_number(:size_bytes, less_than_or_equal_to: @max_attachment_bytes)
     |> validate_required(:content_nonce)
-    |> unique_constraint([:user_id, :vault_id, :path],
-      name: :attachments_user_vault_path_active_index
+    |> unique_constraint([:user_id, :vault_id, :path_hmac],
+      name: :attachments_user_id_vault_id_path_hmac_index
     )
   end
 

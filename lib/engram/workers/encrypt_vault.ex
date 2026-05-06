@@ -47,7 +47,7 @@ defmodule Engram.Workers.EncryptVault do
         # 2. Prepare each note OUTSIDE any transaction. The slow Voyage AI
         # embedding call must not hold a Postgres connection — see the
         # checkout-timeout incident on 2026-04-30.
-        case prepare_all(notes, vault) do
+        case prepare_all(notes, vault, user) do
           {:error, _} = err ->
             err
 
@@ -91,12 +91,14 @@ defmodule Engram.Workers.EncryptVault do
     |> unwrap_with_tenant()
   end
 
-  defp prepare_all(notes, vault) do
+  defp prepare_all(notes, vault, user) do
     Enum.reduce_while(notes, {:ok, []}, fn note, {:ok, acc} ->
-      case Engram.Indexing.prepare_index(note, vault) do
-        {:ok, prepared_or_marker} ->
-          {:cont, {:ok, [{note, prepared_or_marker} | acc]}}
-
+      # Phase B.3: path/folder/tags live only in ciphertext; decrypt before
+      # passing into Indexing so Markdown parsing can read note.path.
+      with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+           {:ok, prepared_or_marker} <- Engram.Indexing.prepare_index(decrypted, vault) do
+        {:cont, {:ok, [{note, prepared_or_marker} | acc]}}
+      else
         {:error, reason} = err ->
           Logger.error("EncryptVault prepare failed note #{note.id}: #{inspect(reason)}")
           {:halt, err}
@@ -184,10 +186,12 @@ defmodule Engram.Workers.EncryptVault do
   end
 
   defp encrypt_postgres(%Note{} = note, user, vault) do
+    # Phase B.3: tags are already in `tags_ciphertext` for every row (Phase B
+    # contract, written by every upsert). The vault encryption toggle only
+    # needs to seal `content` + `title` for previously-unencrypted vaults.
     attrs = %{
       content: note.content || "",
-      title: note.title,
-      tags: note.tags
+      title: note.title
     }
 
     case Crypto.maybe_encrypt_note_fields(attrs, user, vault) do

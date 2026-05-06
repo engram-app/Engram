@@ -3,7 +3,9 @@ defmodule Engram.Vaults.Vault do
   import Ecto.Changeset
 
   schema "vaults" do
-    field :name, :string
+    # Phase B.3: name is virtual — populated by maybe_decrypt_vault_fields/2.
+    # Persisted form is name_ciphertext + name_nonce + name_hmac.
+    field :name, :string, virtual: true
     field :description, :string
     field :slug, :string
     field :client_id, :string
@@ -19,7 +21,6 @@ defmodule Engram.Vaults.Vault do
     field :name_hmac, :binary
 
     belongs_to :user, Engram.Accounts.User
-    # has_many :notes and :attachments added in Task 6 once vault_id FK is added to those tables
 
     timestamps(type: :utc_datetime, inserted_at: :created_at)
   end
@@ -27,7 +28,6 @@ defmodule Engram.Vaults.Vault do
   def changeset(vault, attrs) do
     vault
     |> cast(attrs, [
-      :name,
       :description,
       :slug,
       :client_id,
@@ -38,7 +38,13 @@ defmodule Engram.Vaults.Vault do
       :name_nonce,
       :name_hmac
     ])
-    |> validate_required([:name, :slug, :user_id])
+    |> validate_required([
+      :slug,
+      :user_id,
+      :name_ciphertext,
+      :name_nonce,
+      :name_hmac
+    ])
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end

@@ -69,7 +69,8 @@ defmodule Engram.CryptoTest do
       refute Map.has_key?(out, :content_ciphertext)
     end
 
-    test "encrypts when vault is encrypted", %{user: user} do
+    test "encrypts content + title when vault is encrypted (tags handled by Phase B)",
+         %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
       vault = %Engram.Vaults.Vault{encrypted: true}
 
@@ -78,10 +79,11 @@ defmodule Engram.CryptoTest do
 
       assert out.content == nil
       assert out.title == nil
-      assert out.tags == nil
+      # Phase B.3: tags are no longer touched here — phase_b_keyword_for/4
+      # is the sole producer of tags_ciphertext / tags_hmac on every write.
+      refute Map.has_key?(out, :tags_ciphertext)
       assert is_binary(out.content_ciphertext)
       assert byte_size(out.content_nonce) == 12
-      assert is_binary(out.tags_ciphertext)
     end
   end
 
@@ -99,10 +101,16 @@ defmodule Engram.CryptoTest do
 
       {:ok, encrypted} =
         Crypto.maybe_encrypt_note_fields(
-          %{content: "secret", title: "T", tags: ["x"]},
+          %{content: "secret", title: "T"},
           user,
           vault
         )
+
+      # Phase B.3: tags ciphertext is built by phase_b_keyword_for/4 on every
+      # write. Reproduce that here so the decrypt path has tags to recover.
+      {:ok, dek} = Crypto.get_dek(user)
+      tags_bin = :erlang.term_to_binary(["x"])
+      {tags_ct, tags_n} = Crypto.Envelope.encrypt(tags_bin, dek)
 
       note = %Engram.Notes.Note{
         content: nil,
@@ -112,8 +120,8 @@ defmodule Engram.CryptoTest do
         content_nonce: encrypted.content_nonce,
         title_ciphertext: encrypted.title_ciphertext,
         title_nonce: encrypted.title_nonce,
-        tags_ciphertext: encrypted.tags_ciphertext,
-        tags_nonce: encrypted.tags_nonce
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n
       }
 
       {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)

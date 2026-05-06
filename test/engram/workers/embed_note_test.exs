@@ -19,10 +19,16 @@ defmodule Engram.Workers.EmbedNoteTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
+    {:ok, user} = Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user)
-    # Use factory directly — avoids triggering EmbedNote inline during setup
+
+    # Phase B.3 requires Phase B ciphertext on every note row, so go through
+    # the public upsert path rather than the raw factory shortcut.
     note =
-      insert(:note, user: user, vault: vault, path: "Test/Hello.md", content: "# Hello\n\nWorld.")
+      Engram.Fixtures.insert_note!(user, vault, %{
+        path: "Test/Hello.md",
+        content: "# Hello\n\nWorld."
+      })
 
     %{bypass: bypass, user: user, vault: vault, note: note}
   end

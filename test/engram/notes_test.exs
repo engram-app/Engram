@@ -233,62 +233,9 @@ defmodule Engram.NotesTest do
       assert {:error, :not_found} = Notes.get_note(user, vault, "Nope/Missing.md")
     end
 
-    test "returns decrypt-sourced path/folder/tags even when plaintext columns are tampered (B.2.6)",
-         %{user: user} do
-      # Phase 4 tags ciphertext is only populated for encrypted vaults — use
-      # one here so this test exercises BOTH Phase B path/folder ciphertext
-      # (always-on after B.1) AND Phase 4 tags ciphertext.
-      vault = insert(:vault, user: user, encrypted: true)
-
-      {:ok, created} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Real/Note.md",
-          "content" => "---\ntags: [t1, t2]\n---\n# Real Note\n\nbody"
-        })
-
-      # Tamper every plaintext column the response reads from. After B.3 these
-      # columns will be DROPPED — this test simulates that future state by
-      # corrupting the plaintext source so any read that leaks back to it
-      # surfaces the wrong value.
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          from(n in Engram.Notes.Note, where: n.id == ^created.id)
-          |> Repo.update_all(
-            set: [
-              path: "TAMPERED-PATH",
-              folder: "TAMPERED-FOLDER",
-              tags: ["TAMPERED-TAG"]
-            ]
-          )
-        end)
-
-      assert {:ok, found} = Notes.get_note(user, vault, "Real/Note.md")
-
-      assert found.path == "Real/Note.md"
-      assert found.folder == "Real"
-      assert Enum.sort(found.tags) == Enum.sort(["t1", "t2"])
-    end
-
-    test "locates note via path_hmac, ignoring plaintext path column",
-         %{user: user, vault: vault} do
-      {:ok, created} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Hmac.md",
-          "content" => "# Hmac",
-          "mtime" => 1_000.0
-        })
-
-      # Tamper plaintext path to a sentinel — if lookup still uses `n.path == ^path`
-      # the row will not be found. If it uses `n.path_hmac`, the row is still found.
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          from(n in Engram.Notes.Note, where: n.id == ^created.id)
-          |> Repo.update_all(set: [path: "TAMPERED-DO-NOT-MATCH"])
-        end)
-
-      assert {:ok, found} = Notes.get_note(user, vault, "Test/Hmac.md")
-      assert found.id == created.id
-    end
+    # B.2.6 tamper-plaintext tests retired with B.3 — plaintext path/folder/
+    # tags columns no longer exist, so a tamper is impossible. Decryption
+    # via path_hmac is the only lookup path now.
   end
 
   # ---------------------------------------------------------------------------
@@ -503,7 +450,7 @@ defmodule Engram.NotesTest do
       refute "Private Folder" in folders
     end
 
-    test "list_notes_in_folder filters by folder_hmac, ignoring plaintext folder column (B.2.6)",
+    test "list_notes_in_folder filters by folder_hmac",
          %{user: user, vault: vault} do
       {:ok, created} =
         Notes.upsert_note(user, vault, %{
@@ -511,21 +458,12 @@ defmodule Engram.NotesTest do
           "content" => "x"
         })
 
-      # Tamper plaintext folder to a non-matching value. If the lookup uses
-      # `n.folder == ^folder` the row will be missed; folder_hmac still matches.
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          from(n in Engram.Notes.Note, where: n.id == ^created.id)
-          |> Repo.update_all(set: [folder: "TAMPERED-FOLDER"])
-        end)
-
       assert {:ok, [note]} = Notes.list_notes_in_folder(user, vault, "Real")
       assert note.id == created.id
-      # Decrypt also fixes the folder display value.
       assert note.folder == "Real"
     end
 
-    test "groups by folder_hmac and decrypts ciphertext (post-B.3 simulation)",
+    test "list_folders groups by folder_hmac and decrypts ciphertext",
          %{user: user, vault: vault} do
       Notes.upsert_note(user, vault, %{
         "path" => "Real/Note.md",
@@ -533,20 +471,8 @@ defmodule Engram.NotesTest do
         "mtime" => 1_000.0
       })
 
-      # Tamper plaintext folder column — must not affect the grouped result.
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.update_all(
-            from(n in Engram.Notes.Note,
-              where: n.user_id == ^user.id and n.vault_id == ^vault.id
-            ),
-            set: [folder: "TAMPERED"]
-          )
-        end)
-
       {:ok, folders} = Notes.list_folders(user, vault)
       assert "Real" in folders
-      refute "TAMPERED" in folders
     end
   end
 
@@ -729,7 +655,7 @@ defmodule Engram.NotesTest do
       assert folders == []
     end
 
-    test "groups by folder_hmac and decrypts ciphertext (post-B.3 simulation)",
+    test "groups by folder_hmac and decrypts ciphertext",
          %{user: user, vault: vault} do
       Notes.upsert_note(user, vault, %{
         "path" => "Health/A.md",
@@ -743,21 +669,10 @@ defmodule Engram.NotesTest do
         "mtime" => 1_000.0
       })
 
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.update_all(
-            from(n in Engram.Notes.Note,
-              where: n.user_id == ^user.id and n.vault_id == ^vault.id
-            ),
-            set: [folder: "TAMPERED"]
-          )
-        end)
-
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       health = Enum.find(folders, &(&1.folder == "Health"))
       assert health
       assert health.count == 2
-      refute Enum.any?(folders, &(&1.folder == "TAMPERED"))
     end
 
     test "excludes soft-deleted notes", %{user: user, vault: vault} do

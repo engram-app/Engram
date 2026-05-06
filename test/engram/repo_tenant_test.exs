@@ -8,20 +8,17 @@ defmodule Engram.RepoTenantTest do
       user_a = insert(:user)
       user_b = insert(:user)
 
-      # Insert a note as User A (vault required after multi-vault migration)
+      # Insert a note as User A through the public upsert path so Phase B
+      # ciphertext + hmac fields populate correctly. Direct `Note.changeset`
+      # writes are unsafe post-B.3 — schema requires ciphertext/hmac/nonce.
       vault_a = insert(:vault, user: user_a)
 
-      {:ok, _note} =
-        Repo.with_tenant(user_a.id, fn ->
-          %Note{}
-          |> Note.changeset(%{
-            path: "secret.md",
-            content: "private",
-            user_id: user_a.id,
-            vault_id: vault_a.id
-          })
-          |> Repo.insert()
-        end)
+      {:ok, _} =
+        Engram.Notes.upsert_note(user_a, vault_a, %{
+          "path" => "secret.md",
+          "content" => "private",
+          "mtime" => 1_000.0
+        })
 
       # User B sees nothing
       {:ok, notes} =
@@ -38,7 +35,10 @@ defmodule Engram.RepoTenantTest do
         end)
 
       assert length(notes) == 1
-      assert hd(notes).path == "secret.md"
+      hd_note = hd(notes)
+      reloaded_user_a = Engram.Repo.get!(Engram.Accounts.User, user_a.id)
+      {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(hd_note, reloaded_user_a)
+      assert decrypted.path == "secret.md"
     end
 
     test "returns the result of the function" do

@@ -30,10 +30,7 @@ defmodule Engram.Notes.EncryptionTest do
       # Raw DB: plaintext content is replaced by empty string (default_content guard),
       # title is nil, ciphertext columns are populated, nonce is 12 bytes,
       # and the ciphertext bytes do NOT equal the plaintext string.
-      {:ok, raw} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.get_by!(Engram.Notes.Note, path: "journal/today.md", user_id: user.id)
-        end)
+      raw = Engram.Fixtures.raw_note_by_path!(user, "journal/today.md")
 
       # content is cleared (coerced to "" by the changeset default_content guard)
       assert raw.content == ""
@@ -126,10 +123,7 @@ defmodule Engram.Notes.EncryptionTest do
         })
 
       # Corrupt the ciphertext in the DB so Envelope.decrypt returns an error
-      {:ok, raw} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.get_by!(Engram.Notes.Note, path: "broken/note.md", user_id: user.id)
-        end)
+      raw = Engram.Fixtures.raw_note_by_path!(user, "broken/note.md")
 
       <<first, rest::binary>> = raw.content_ciphertext
       tampered_ct = <<Bitwise.bxor(first, 1), rest::binary>>
@@ -179,10 +173,7 @@ defmodule Engram.Notes.EncryptionTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, raw} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.get_by!(Engram.Notes.Note, path: "recipes/chicken.md", user_id: user.id)
-        end)
+      raw = Engram.Fixtures.raw_note_by_path!(user, "recipes/chicken.md")
 
       assert raw.content == "400F for 25min"
       assert raw.content_ciphertext == nil

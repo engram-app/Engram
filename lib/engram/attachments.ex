@@ -32,11 +32,15 @@ defmodule Engram.Attachments do
          {:ok, key, changeset_attrs, ciphertext} <-
            prepare_upload(user, vault, path, plaintext, mtime, explicit_mime),
          :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
+      path_hmac = changeset_attrs.path_hmac
+
       Repo.with_tenant(user.id, fn ->
         existing =
           Repo.one(
             from(a in Attachment,
-              where: a.path == ^path and a.user_id == ^user.id and a.vault_id == ^vault.id
+              where:
+                a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+                  a.vault_id == ^vault.id
             )
           )
 
@@ -53,6 +57,13 @@ defmodule Engram.Attachments do
         end
       end)
       |> unwrap_tenant()
+      |> case do
+        # Phase B.3: path is virtual — splice the plaintext we already have
+        # onto the returned struct so callers can read att.path without a
+        # second decrypt round-trip.
+        {:ok, att} -> {:ok, %{att | path: path}}
+        other -> other
+      end
     end
   end
 
@@ -264,7 +275,6 @@ defmodule Engram.Attachments do
       {:ok, filter_key} = Crypto.dek_filter_key(user)
 
       attrs = %{
-        path: path,
         content_hash: hash,
         mime_type: mime,
         size_bytes: byte_size(plaintext),

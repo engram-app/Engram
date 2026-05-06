@@ -114,10 +114,6 @@ defmodule Engram.Vector.Qdrant do
   Patch (overwrite-or-add) the given payload keys on the listed point ids.
   Vectors are untouched — this is the cost-free path for re-shaping payloads
   without re-running the embedder. Empty `point_ids` is a no-op.
-
-  Used by `Engram.Workers.QdrantPayloadPhaseB` to backfill `path_hmac` /
-  `folder_hmac` / `tags_hmac` onto pre-existing Qdrant points after the
-  Phase B.2.4 additive write lands but before the Phase B.2.3 read switch.
   """
   def set_payload(col \\ nil, point_ids, payload)
   def set_payload(_col, [], _payload), do: :ok

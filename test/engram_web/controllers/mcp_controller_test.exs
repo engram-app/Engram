@@ -8,7 +8,9 @@ defmodule EngramWeb.McpControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    vault = insert(:vault, user: user, is_default: true)
+    # Use the public create_vault path so name_ciphertext is real and
+    # decrypts back to "Test Vault" — not random factory bytes.
+    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test Vault"})
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 

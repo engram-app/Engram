@@ -3,11 +3,17 @@ defmodule Engram.Notes.Note do
   import Ecto.Changeset
 
   schema "notes" do
-    field :path, :string
+    # Phase B.3: path/folder/tags are no longer persisted as plaintext columns —
+    # they live as ciphertext (path_ciphertext, folder_ciphertext, tags_ciphertext)
+    # plus HMAC fingerprints for filtering. The virtual fields below are
+    # populated by Engram.Crypto.maybe_decrypt_note_fields/2 so callers can
+    # still read note.path / note.folder / note.tags as plaintext after a read.
+    field :path, :string, virtual: true
+    field :folder, :string, virtual: true
+    field :tags, {:array, :string}, virtual: true, default: []
+
     field :title, :string
     field :content, :string
-    field :folder, :string
-    field :tags, {:array, :string}, default: []
     field :version, :integer, default: 1
     field :content_hash, :string
     field :embed_hash, :string
@@ -55,11 +61,8 @@ defmodule Engram.Notes.Note do
     |> cast(
       attrs,
       [
-        :path,
         :title,
         :content,
-        :folder,
-        :tags,
         :version,
         :content_hash,
         :mtime,
@@ -69,9 +72,20 @@ defmodule Engram.Notes.Note do
       ] ++ @encryption_fields,
       empty_values: []
     )
-    |> validate_required([:path, :user_id, :vault_id])
+    |> validate_required([
+      :user_id,
+      :vault_id,
+      :path_hmac,
+      :path_ciphertext,
+      :path_nonce,
+      :folder_hmac,
+      :folder_ciphertext,
+      :folder_nonce
+    ])
     |> default_content()
-    |> unique_constraint([:user_id, :vault_id, :path], name: :notes_user_vault_path_active_index)
+    |> unique_constraint([:user_id, :vault_id, :path_hmac],
+      name: :notes_user_id_vault_id_path_hmac_index
+    )
   end
 
   defp default_content(changeset) do
@@ -91,7 +105,6 @@ defmodule Engram.Notes.Note do
       :title,
       :title_ciphertext,
       :title_nonce,
-      :tags,
       :tags_ciphertext,
       :tags_nonce
     ])

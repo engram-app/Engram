@@ -26,6 +26,7 @@ defmodule Engram.Workers.EncryptVaultTest do
     end)
 
     user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
     vault =
       insert(:vault,
@@ -65,7 +66,11 @@ defmodule Engram.Workers.EncryptVaultTest do
     } do
       stub_qdrant_set_payload(bypass)
 
-      note = insert(:note, user: user, vault: vault, content: "secret body", title: "Top Secret")
+      note =
+        Engram.Fixtures.insert_note!(user, vault,
+          content: "secret body",
+          title: "Top Secret"
+        )
 
       assert :ok =
                perform_job(EncryptVault, %{
@@ -86,7 +91,7 @@ defmodule Engram.Workers.EncryptVaultTest do
       user: user
     } do
       stub_qdrant_set_payload(bypass)
-      insert(:note, user: user, vault: vault, content: "x")
+      Engram.Fixtures.insert_note!(user, vault, content: "x")
 
       :ok =
         perform_job(EncryptVault, %{
@@ -108,7 +113,7 @@ defmodule Engram.Workers.EncryptVaultTest do
       stub_qdrant_set_payload(bypass)
       # Insert 100 notes — full batch.
       for i <- 1..100 do
-        insert(:note, user: user, vault: vault, content: "note-#{i}", path: "n/#{i}.md")
+        Engram.Fixtures.insert_note!(user, vault, content: "note-#{i}", path: "n/#{i}.md")
       end
 
       :ok =
@@ -132,7 +137,7 @@ defmodule Engram.Workers.EncryptVaultTest do
       user: user
     } do
       stub_qdrant_set_payload(bypass)
-      insert(:note, user: user, vault: vault, content: "x")
+      Engram.Fixtures.insert_note!(user, vault, content: "x")
 
       test_pid = self()
 

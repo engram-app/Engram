@@ -1,6 +1,13 @@
 defmodule Engram.Factory do
   use ExMachina.Ecto, repo: Engram.Repo
 
+  # Phase B.3 dropped the plaintext path/folder/tags/name columns. Every
+  # row now requires _ciphertext + _nonce + _hmac. For tests that don't
+  # exercise decryption, these placeholder bytes satisfy the NOT NULL
+  # constraints — tests that need real round-trip crypto should override
+  # by encrypting through Engram.Crypto.Envelope using a real DEK.
+  defp rand_binary(n \\ 16), do: :crypto.strong_rand_bytes(n)
+
   def user_factory do
     %Engram.Accounts.User{
       email: sequence(:email, &"user#{&1}@test.com"),
@@ -13,16 +20,20 @@ defmodule Engram.Factory do
     user = build(:user)
 
     %Engram.Notes.Note{
-      path: sequence(:path, &"test/note-#{&1}.md"),
       title: sequence(:title, &"Note #{&1}"),
       content: "# Test note content",
-      folder: "test",
-      tags: [],
       version: 1,
       content_hash: :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower),
       embed_hash: nil,
       user: user,
-      vault: build(:vault, user: user)
+      vault: build(:vault, user: user),
+      path_ciphertext: rand_binary(),
+      path_nonce: rand_binary(12),
+      path_hmac: rand_binary(32),
+      folder_ciphertext: rand_binary(),
+      folder_nonce: rand_binary(12),
+      folder_hmac: rand_binary(32),
+      tags_hmac: []
     }
   end
 
@@ -30,13 +41,16 @@ defmodule Engram.Factory do
     user = build(:user)
 
     %Engram.Attachments.Attachment{
-      path: sequence(:attachment_path, &"test/attachment-#{&1}.png"),
       content: <<0, 1, 2, 3>>,
       content_hash: :crypto.hash(:sha256, <<0, 1, 2, 3>>) |> Base.encode16(case: :lower),
       mime_type: "image/png",
       size_bytes: 4,
+      content_nonce: rand_binary(12),
       user: user,
-      vault: build(:vault, user: user)
+      vault: build(:vault, user: user),
+      path_ciphertext: rand_binary(),
+      path_nonce: rand_binary(12),
+      path_hmac: rand_binary(32)
     }
   end
 
@@ -53,9 +67,11 @@ defmodule Engram.Factory do
   def vault_factory do
     %Engram.Vaults.Vault{
       user: build(:user),
-      name: sequence(:vault_name, &"Vault #{&1}"),
       slug: sequence(:vault_slug, &"vault-#{&1}"),
-      is_default: false
+      is_default: false,
+      name_ciphertext: rand_binary(),
+      name_nonce: rand_binary(12),
+      name_hmac: rand_binary(32)
     }
   end
 

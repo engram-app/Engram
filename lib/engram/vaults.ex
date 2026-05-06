@@ -45,6 +45,10 @@ defmodule Engram.Vaults do
             %Vault{}
             |> Vault.changeset(vault_attrs)
             |> Repo.insert()
+            |> case do
+              {:ok, v} -> {:ok, decrypt_vault_if_needed(v, user)}
+              other -> other
+            end
         end
       end)
       |> unwrap_transaction()
@@ -71,7 +75,7 @@ defmodule Engram.Vaults do
 
           case existing do
             %Vault{} = vault ->
-              {:ok, vault, :existing}
+              {:ok, decrypt_vault_if_needed(vault, user), :existing}
 
             nil ->
               current_count = count_vaults(user.id)
@@ -95,7 +99,7 @@ defmodule Engram.Vaults do
                   attrs = inject_name_phase_b(attrs, user)
 
                   case Repo.insert(Vault.changeset(%Vault{}, attrs)) do
-                    {:ok, vault} -> {:ok, vault, :created}
+                    {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user), :created}
                     {:error, cs} -> {:error, cs}
                   end
               end
@@ -237,6 +241,10 @@ defmodule Engram.Vaults do
             vault
             |> Vault.changeset(attrs)
             |> Repo.update()
+            |> case do
+              {:ok, v} -> {:ok, decrypt_vault_if_needed(v, user)}
+              other -> other
+            end
         end
       end)
       |> unwrap_transaction()

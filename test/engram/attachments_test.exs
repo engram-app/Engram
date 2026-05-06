@@ -183,7 +183,7 @@ defmodule Engram.AttachmentsTest do
       assert byte_size(stored) == byte_size(plaintext) + 16
     end
 
-    test "get_attachment locates row via path_hmac and returns decrypt-sourced path (B.2.6)" do
+    test "get_attachment locates row via path_hmac" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
 
@@ -194,34 +194,21 @@ defmodule Engram.AttachmentsTest do
           "mtime" => 0.0
         })
 
-      {:ok, _} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          from(a in Attachment, where: a.id == ^created.id)
-          |> Engram.Repo.update_all(set: [path: "TAMPERED-PATH"])
-        end)
-
       assert {:ok, fetched} = Attachments.get_attachment(user, vault, "Real/file.bin")
       assert fetched.id == created.id
-      # Response path comes from decrypted ciphertext, not the tampered column.
       assert fetched.path == "Real/file.bin"
     end
 
-    test "list_changes returns decrypt-sourced path even when plaintext column is tampered (B.2.6)" do
+    test "list_changes returns decrypt-sourced path" do
       user = insert(:user) |> Engram.Repo.reload!()
       vault = insert(:vault, user: user)
 
-      {:ok, created} =
+      {:ok, _created} =
         Attachments.upsert_attachment(user, vault, %{
           "path" => "Notes/img.png",
           "content_base64" => Base.encode64("img"),
           "mtime" => 0.0
         })
-
-      {:ok, _} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          from(a in Attachment, where: a.id == ^created.id)
-          |> Engram.Repo.update_all(set: [path: "TAMPERED-PATH"])
-        end)
 
       assert {:ok, [change]} =
                Attachments.list_changes(user, vault, ~U[2000-01-01 00:00:00.000000Z])
@@ -259,11 +246,11 @@ defmodule Engram.AttachmentsTest do
           "mtime" => 0.0
         })
 
+      ghost = Engram.Fixtures.raw_attachment_by_path!(user, "ghost.bin")
+
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
-          from(a in Attachment,
-            where: a.user_id == ^user.id and a.vault_id == ^vault.id and a.path == "ghost.bin"
-          )
+          from(a in Attachment, where: a.id == ^ghost.id)
           |> Engram.Repo.update_all(set: [content_nonce: :crypto.strong_rand_bytes(12)])
         end)
 
