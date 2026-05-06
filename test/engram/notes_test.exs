@@ -43,6 +43,56 @@ defmodule Engram.NotesTest do
       assert is_binary(note.content_hash)
     end
 
+    test "content_hash is HMAC-SHA256 (64-char hex), not legacy MD5",
+         %{user: user, vault: vault} do
+      content = "# Hash Format Probe\nbody"
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/HashFormat.md",
+          "content" => content,
+          "mtime" => 1_000.0
+        })
+
+      assert String.length(note.content_hash) == 64
+      assert note.content_hash =~ ~r/^[0-9a-f]{64}$/
+
+      legacy_md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+      refute note.content_hash == legacy_md5
+    end
+
+    test "content_hash differs across users for identical content",
+         %{user: user, vault: vault, other_user: other_user, other_vault: other_vault} do
+      content = "shared content body"
+      attrs = %{"path" => "x.md", "content" => content, "mtime" => 1.0}
+
+      {:ok, n1} = Notes.upsert_note(user, vault, attrs)
+      {:ok, n2} = Notes.upsert_note(other_user, other_vault, attrs)
+
+      refute n1.content_hash == n2.content_hash
+    end
+
+    test "content_hash deterministic for same user + content",
+         %{user: user, vault: vault} do
+      content = "deterministic body"
+
+      {:ok, n1} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => content,
+          "mtime" => 1.0
+        })
+
+      {:ok, n2} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "b.md",
+          "content" => content,
+          "mtime" => 2.0
+        })
+
+      assert n1.content_hash == n2.content_hash
+    end
+
     test "upserts existing note, increments version", %{user: user, vault: vault} do
       {:ok, v1} =
         Notes.upsert_note(user, vault, %{
@@ -85,7 +135,7 @@ defmodule Engram.NotesTest do
       assert note.path == "Test/Why do I resist.md"
     end
 
-    test "computes content_hash", %{user: user, vault: vault} do
+    test "computes content_hash via HMAC-SHA256", %{user: user, vault: vault} do
       content = "# Hello\nWorld"
 
       {:ok, note} =
@@ -95,7 +145,8 @@ defmodule Engram.NotesTest do
           "mtime" => 1_000.0
         })
 
-      expected = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+      {:ok, key} = Engram.Crypto.dek_content_hash_key(user)
+      expected = Engram.Crypto.hmac_content_hash(key, content)
       assert note.content_hash == expected
     end
 
@@ -147,43 +198,6 @@ defmodule Engram.NotesTest do
   # ---------------------------------------------------------------------------
   # Note.changeset/2 defense-in-depth
   # ---------------------------------------------------------------------------
-
-  describe "Note.changeset/2 nil content guard" do
-    test "defaults nil content to empty string" do
-      cs =
-        Engram.Notes.Note.changeset(%Engram.Notes.Note{}, %{
-          path: "test.md",
-          user_id: 1,
-          vault_id: 1,
-          content: nil
-        })
-
-      assert Ecto.Changeset.get_field(cs, :content) == ""
-    end
-
-    test "preserves non-nil content" do
-      cs =
-        Engram.Notes.Note.changeset(%Engram.Notes.Note{}, %{
-          path: "test.md",
-          user_id: 1,
-          vault_id: 1,
-          content: "# Hello"
-        })
-
-      assert Ecto.Changeset.get_field(cs, :content) == "# Hello"
-    end
-
-    test "defaults missing content key to empty string" do
-      cs =
-        Engram.Notes.Note.changeset(%Engram.Notes.Note{}, %{
-          path: "test.md",
-          user_id: 1,
-          vault_id: 1
-        })
-
-      assert Ecto.Changeset.get_field(cs, :content) == ""
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # get_note/3

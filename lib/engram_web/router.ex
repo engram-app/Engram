@@ -80,8 +80,6 @@ defmodule EngramWeb.Router do
     get "/vaults/:id", VaultsController, :show
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
-    post "/vaults/:id/encrypt", VaultsController, :encrypt
-    get "/vaults/:id/encryption_progress", VaultsController, :encryption_progress
 
     # Billing
     get "/billing/status", BillingController, :status

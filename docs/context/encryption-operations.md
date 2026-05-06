@@ -1,8 +1,19 @@
 # Context Doc: Encryption-at-Rest Operations
 
-_Last verified: 2026-05-02_
+_Last verified: 2026-05-05 (post-B.3)_
 
-## Status
+> **⚠ Most of this runbook is historical.** Phase B.3 (PR #71, 0.5.28) retired the vault decrypt path entirely — the `POST/DELETE /api/vaults/:id/decrypt` endpoints, `Engram.Workers.DecryptVault`, and the `Engram.Crypto.request_decrypt_vault/2` / `cancel_decrypt_vault/2` API are all deleted. Encryption is one-way; per-note read decryption happens transparently. The toggle/cooldown sections below describe the pre-B.3 world and are kept for historical context only.
+>
+> **Current operator surface (post-B.3):**
+> - Every saas vault is encrypted at rest. Path/folder/tags/name plaintext columns dropped on saas in B.3.
+> - `POST /api/vaults/:id/encrypt` still exists — it converts a non-encrypted vault to encrypted (one-way). New vaults default to non-encrypted; this is closing in B.4.
+> - `GET /api/vaults/:id/encryption_progress` still works for monitoring an in-flight encrypt job.
+> - Decrypt routes return 404 (route removed in B.3, no replacement).
+> - To check vault state, query Postgres directly or use the engram MCP `list_vaults`.
+>
+> **Forward plan:** see `workspace/docs/encryption-tier-2-plan.md`. B.4 retires the `vault.encrypted` flag, drops `notes.content`/`title` plaintext columns, and removes the encrypt toggle entirely (every vault encrypted by default at create time).
+
+## Status (historical — pre-B.3)
 
 **Two parallel surfaces — different rules:**
 

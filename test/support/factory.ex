@@ -19,14 +19,22 @@ defmodule Engram.Factory do
   def note_factory do
     user = build(:user)
 
+    # Phase B.4: title/content/path/folder/tags are virtual on the schema —
+    # only ciphertext + HMAC + nonce columns are persisted. The bytes below
+    # are random placeholders satisfying NOT NULL; tests that need real
+    # decryptable content should use Engram.Fixtures.insert_note!/3.
     %Engram.Notes.Note{
-      title: sequence(:title, &"Note #{&1}"),
-      content: "# Test note content",
       version: 1,
       content_hash: :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower),
       embed_hash: nil,
       user: user,
       vault: build(:vault, user: user),
+      content_ciphertext: rand_binary(),
+      content_nonce: rand_binary(12),
+      title_ciphertext: rand_binary(),
+      title_nonce: rand_binary(12),
+      tags_ciphertext: rand_binary(),
+      tags_nonce: rand_binary(12),
       path_ciphertext: rand_binary(),
       path_nonce: rand_binary(12),
       path_hmac: rand_binary(32),

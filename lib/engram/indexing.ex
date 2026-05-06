@@ -136,7 +136,7 @@ defmodule Engram.Indexing do
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, vault, chunks, vectors) do
+  defp build_prepared(note, _vault, chunks, vectors) do
     user = Engram.Accounts.get_user!(note.user_id)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -163,7 +163,7 @@ defmodule Engram.Indexing do
           tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1)
         }
 
-        case Engram.Crypto.maybe_encrypt_qdrant_payload(base_payload, user, vault) do
+        case Engram.Crypto.encrypt_qdrant_payload(base_payload, user) do
           {:ok, payload} ->
             row = %{
               note_id: note.id,

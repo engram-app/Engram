@@ -118,7 +118,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       user = insert(:user)
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       # upsert_note encrypts content on the way in
       {:ok, note} =

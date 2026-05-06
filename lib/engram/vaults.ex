@@ -325,53 +325,6 @@ defmodule Engram.Vaults do
     end
   end
 
-  # ── Encryption progress ────────────────────────────────────────────────────
-
-  @doc """
-  Returns processed/total counts for encryption backfill progress.
-
-  - `total`: every note in the vault
-  - `processed`: notes whose `content_ciphertext` is present (encrypting path)
-    or inverse (decrypting path), based on the vault's current
-    `encryption_status`. For terminal states ("none", "encrypted") progress
-    is considered complete (`processed == total`).
-  """
-  @spec encryption_progress(Vault.t()) :: %{
-          processed: non_neg_integer(),
-          total: non_neg_integer()
-        }
-  def encryption_progress(%Vault{} = vault) do
-    {:ok, counts} =
-      Repo.with_tenant(vault.user_id, fn ->
-        total =
-          Repo.one(
-            from(n in Engram.Notes.Note,
-              where: n.vault_id == ^vault.id,
-              select: count(n.id)
-            )
-          )
-
-        encrypted_count =
-          Repo.one(
-            from(n in Engram.Notes.Note,
-              where: n.vault_id == ^vault.id and not is_nil(n.content_ciphertext),
-              select: count(n.id)
-            )
-          )
-
-        %{total: total, encrypted: encrypted_count}
-      end)
-
-    processed =
-      case vault.encryption_status do
-        "encrypting" -> counts.encrypted
-        "decrypting" -> counts.total - counts.encrypted
-        _ -> counts.total
-      end
-
-    %{processed: processed, total: counts.total}
-  end
-
   # ── Private helpers ─────────────────────────────────────────────────────────
 
   # Phase B.1 — inject HMAC + ciphertext for the vault name.

@@ -3,17 +3,16 @@ defmodule Engram.Notes.Note do
   import Ecto.Changeset
 
   schema "notes" do
-    # Phase B.3: path/folder/tags are no longer persisted as plaintext columns —
-    # they live as ciphertext (path_ciphertext, folder_ciphertext, tags_ciphertext)
-    # plus HMAC fingerprints for filtering. The virtual fields below are
-    # populated by Engram.Crypto.maybe_decrypt_note_fields/2 so callers can
-    # still read note.path / note.folder / note.tags as plaintext after a read.
+    # Phase B.3 + B.4: path/folder/tags/content/title are virtual — only
+    # ciphertext + HMAC columns are persisted. Engram.Crypto.maybe_decrypt_note_fields/2
+    # populates these so callers can still read note.path / note.content etc.
+    # after a read.
     field :path, :string, virtual: true
     field :folder, :string, virtual: true
     field :tags, {:array, :string}, virtual: true, default: []
+    field :title, :string, virtual: true
+    field :content, :string, virtual: true
 
-    field :title, :string
-    field :content, :string
     field :version, :integer, default: 1
     field :content_hash, :string
     field :embed_hash, :string
@@ -61,8 +60,6 @@ defmodule Engram.Notes.Note do
     |> cast(
       attrs,
       [
-        :title,
-        :content,
         :version,
         :content_hash,
         :mtime,
@@ -80,29 +77,24 @@ defmodule Engram.Notes.Note do
       :path_nonce,
       :folder_hmac,
       :folder_ciphertext,
-      :folder_nonce
+      :folder_nonce,
+      :content_ciphertext,
+      :content_nonce,
+      :title_ciphertext,
+      :title_nonce,
+      :tags_ciphertext,
+      :tags_nonce
     ])
-    |> default_content()
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
       name: :notes_user_id_vault_id_path_hmac_index
     )
   end
 
-  defp default_content(changeset) do
-    if get_field(changeset, :content) == nil do
-      put_change(changeset, :content, "")
-    else
-      changeset
-    end
-  end
-
   def encryption_changeset(note, attrs) do
     note
     |> cast(attrs, [
-      :content,
       :content_ciphertext,
       :content_nonce,
-      :title,
       :title_ciphertext,
       :title_nonce,
       :tags_ciphertext,

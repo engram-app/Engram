@@ -105,7 +105,7 @@ defmodule Engram.IndexingTest do
     test "encrypts text/title/heading_path in Qdrant payload", %{bypass: bypass, user: user} do
       Engram.Crypto.DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, note} =
         Notes.upsert_note(user, vault, %{
@@ -204,50 +204,12 @@ defmodule Engram.IndexingTest do
       end)
     end
 
-    test "unencrypted vault → plaintext payload unchanged", %{bypass: bypass, user: user} do
-      vault = insert(:vault, user: user, encrypted: false)
-
-      {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "plain/note.md",
-          "content" => "Plain body",
-          "mtime" => 1_000.0
-        })
-
-      Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts ->
-        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
-      end)
-
-      test_pid = self()
-
-      Bypass.expect(bypass, fn conn ->
-        if String.contains?(conn.request_path, "/points") and conn.method == "PUT" do
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(test_pid, {:upsert_body, Jason.decode!(body)})
-          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-        else
-          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-        end
-      end)
-
-      assert {:ok, _} = Indexing.index_note(note, vault)
-      assert_received {:upsert_body, body}
-
-      Enum.each(body["points"], fn p ->
-        refute Map.has_key?(p["payload"], "text_nonce")
-        refute Map.has_key?(p["payload"], "title_nonce")
-        refute Map.has_key?(p["payload"], "heading_path_nonce")
-        assert is_binary(p["payload"]["text"])
-      end)
-    end
-
     @tag capture_log: true
     test "emits encrypt_failed telemetry when DEK missing on encrypted vault", %{bypass: bypass} do
       # User has NO DEK provisioned — encrypted vault → maybe_encrypt_qdrant_payload
       # returns {:error, :no_dek} → reduce_while halts → telemetry fires.
       user = insert(:user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{
@@ -317,7 +279,7 @@ defmodule Engram.IndexingTest do
       # mutation.
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{

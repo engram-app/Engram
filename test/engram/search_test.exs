@@ -335,7 +335,7 @@ defmodule Engram.SearchTest do
       Engram.Crypto.DekCache.invalidate_all()
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      enc_vault = insert(:vault, user: user, encrypted: true, encrypted_at: DateTime.utc_now())
+      enc_vault = insert(:vault, user: user)
 
       {:ok, user: user, enc_vault: enc_vault}
     end
@@ -346,11 +346,12 @@ defmodule Engram.SearchTest do
       enc_vault: vault
     } do
       {:ok, enc} =
-        Engram.Crypto.maybe_encrypt_qdrant_payload(
+        Engram.Crypto.encrypt_qdrant_payload(
           %{text: "alpha body", title: "Alpha", heading_path: "root"},
-          user,
-          vault
+          user
         )
+
+      _ = vault
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
@@ -395,11 +396,12 @@ defmodule Engram.SearchTest do
       enc_vault: vault
     } do
       {:ok, enc} =
-        Engram.Crypto.maybe_encrypt_qdrant_payload(
+        Engram.Crypto.encrypt_qdrant_payload(
           %{text: "beta body", title: "Beta", heading_path: "root"},
-          user,
-          vault
+          user
         )
+
+      _ = vault
 
       # Tamper: flip one bit of the decoded ciphertext.
       <<first, rest::binary>> = Base.decode64!(enc.text)

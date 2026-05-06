@@ -57,65 +57,43 @@ defmodule Engram.CryptoTest do
     assert {:error, :no_dek} = Crypto.get_dek(user)
   end
 
-  describe "maybe_encrypt_note_fields/3" do
-    test "passes through when vault is not encrypted", %{user: user} do
+  describe "encrypt_note_fields/2" do
+    test "encrypts content + title (tags handled by Phase B)", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Engram.Vaults.Vault{encrypted: false}
-
-      attrs = %{content: "hi", title: "t", tags: ["a", "b"]}
-      {:ok, out} = Crypto.maybe_encrypt_note_fields(attrs, user, vault)
-
-      assert out.content == "hi"
-      refute Map.has_key?(out, :content_ciphertext)
-    end
-
-    test "encrypts content + title when vault is encrypted (tags handled by Phase B)",
-         %{user: user} do
-      {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Engram.Vaults.Vault{encrypted: true}
 
       attrs = %{content: "secret", title: "Journal", tags: ["mood"]}
-      {:ok, out} = Crypto.maybe_encrypt_note_fields(attrs, user, vault)
+      {:ok, out} = Crypto.encrypt_note_fields(attrs, user)
 
-      assert out.content == nil
-      assert out.title == nil
-      # Phase B.3: tags are no longer touched here — phase_b_keyword_for/4
-      # is the sole producer of tags_ciphertext / tags_hmac on every write.
+      refute Map.has_key?(out, :content)
+      refute Map.has_key?(out, :title)
+      # Phase B.3+: tags are produced by phase_b_keyword_for/4 only.
       refute Map.has_key?(out, :tags_ciphertext)
       assert is_binary(out.content_ciphertext)
       assert byte_size(out.content_nonce) == 12
+      assert is_binary(out.title_ciphertext)
+      assert byte_size(out.title_nonce) == 12
     end
   end
 
   describe "maybe_decrypt_note_fields/2" do
-    test "passes through unencrypted note", %{user: user} do
+    test "passes through note with no ciphertext", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      note = %Engram.Notes.Note{content: "plain", title: "t", tags: ["a"]}
+      note = %Engram.Notes.Note{content: nil, title: nil, tags: []}
       {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
-      assert out.content == "plain"
+      assert out.content == nil
     end
 
     test "decrypts when ciphertext columns are present", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Engram.Vaults.Vault{encrypted: true}
 
       {:ok, encrypted} =
-        Crypto.maybe_encrypt_note_fields(
-          %{content: "secret", title: "T"},
-          user,
-          vault
-        )
+        Crypto.encrypt_note_fields(%{content: "secret", title: "T"}, user)
 
-      # Phase B.3: tags ciphertext is built by phase_b_keyword_for/4 on every
-      # write. Reproduce that here so the decrypt path has tags to recover.
       {:ok, dek} = Crypto.get_dek(user)
       tags_bin = :erlang.term_to_binary(["x"])
       {tags_ct, tags_n} = Crypto.Envelope.encrypt(tags_bin, dek)
 
       note = %Engram.Notes.Note{
-        content: nil,
-        title: nil,
-        tags: nil,
         content_ciphertext: encrypted.content_ciphertext,
         content_nonce: encrypted.content_nonce,
         title_ciphertext: encrypted.title_ciphertext,
@@ -186,6 +164,101 @@ defmodule Engram.CryptoTest do
       k2 = :crypto.strong_rand_bytes(32)
 
       refute Crypto.hmac_field(k1, "x") == Crypto.hmac_field(k2, "x")
+    end
+  end
+
+  describe "dek_content_hash_key/1" do
+    test "returns deterministic 32-byte key for the same user" do
+      user = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+
+      {:ok, key1} = Crypto.dek_content_hash_key(user)
+      {:ok, key2} = Crypto.dek_content_hash_key(user)
+
+      assert is_binary(key1)
+      assert byte_size(key1) == 32
+      assert key1 == key2
+    end
+
+    test "returns different keys for different users" do
+      a = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+      b = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+
+      {:ok, key_a} = Crypto.dek_content_hash_key(a)
+      {:ok, key_b} = Crypto.dek_content_hash_key(b)
+
+      refute key_a == key_b
+    end
+
+    test "domain-separated from filter_key (different HKDF info strings)" do
+      user = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+      refute content_key == filter_key
+    end
+
+    test "independent of the DEK itself" do
+      user = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+      {:ok, dek} = Crypto.get_dek(user)
+      {:ok, content_key} = Crypto.dek_content_hash_key(user)
+
+      refute content_key == dek
+    end
+
+    test "returns {:error, :no_dek} when user has no DEK" do
+      user = insert(:user)
+
+      assert {:error, :no_dek} = Crypto.dek_content_hash_key(user)
+    end
+  end
+
+  describe "hmac_content_hash/2" do
+    test "returns 64-char lowercase hex string" do
+      key = :crypto.strong_rand_bytes(32)
+
+      hash = Crypto.hmac_content_hash(key, "any content here")
+
+      assert is_binary(hash)
+      assert String.length(hash) == 64
+      assert hash =~ ~r/^[0-9a-f]{64}$/
+    end
+
+    test "deterministic for same key + content" do
+      key = :crypto.strong_rand_bytes(32)
+
+      assert Crypto.hmac_content_hash(key, "abc") ==
+               Crypto.hmac_content_hash(key, "abc")
+    end
+
+    test "different content yields different hashes for same key" do
+      key = :crypto.strong_rand_bytes(32)
+
+      refute Crypto.hmac_content_hash(key, "a") ==
+               Crypto.hmac_content_hash(key, "b")
+    end
+
+    test "different keys yield different hashes for same content" do
+      k1 = :crypto.strong_rand_bytes(32)
+      k2 = :crypto.strong_rand_bytes(32)
+
+      refute Crypto.hmac_content_hash(k1, "x") ==
+               Crypto.hmac_content_hash(k2, "x")
+    end
+
+    test "result is NOT equal to legacy MD5 hex of same content" do
+      key = :crypto.strong_rand_bytes(32)
+      content = "hello"
+      legacy_md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+
+      refute Crypto.hmac_content_hash(key, content) == legacy_md5
+    end
+
+    test "handles empty content" do
+      key = :crypto.strong_rand_bytes(32)
+      hash = Crypto.hmac_content_hash(key, "")
+      assert String.length(hash) == 64
+      assert hash =~ ~r/^[0-9a-f]{64}$/
     end
   end
 end

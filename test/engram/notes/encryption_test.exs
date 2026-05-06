@@ -14,7 +14,7 @@ defmodule Engram.Notes.EncryptionTest do
     test "upsert then read returns plaintext, DB columns hold ciphertext" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, _note} =
         Notes.upsert_note(user, vault, %{
@@ -27,28 +27,23 @@ defmodule Engram.Notes.EncryptionTest do
       {:ok, note} = Notes.get_note(user, vault, "journal/today.md")
       assert note.content == "dear diary, I feel seen"
 
-      # Raw DB: plaintext content is replaced by empty string (default_content guard),
-      # title is nil, ciphertext columns are populated, nonce is 12 bytes,
-      # and the ciphertext bytes do NOT equal the plaintext string.
+      # Raw DB: virtual content/title fields stay nil on the unhydrated
+      # struct (Phase B.4 — only ciphertext columns are persisted). The
+      # ciphertext columns are populated and don't equal the plaintext.
       raw = Engram.Fixtures.raw_note_by_path!(user, "journal/today.md")
 
-      # content is cleared (coerced to "" by the changeset default_content guard)
-      assert raw.content == ""
-      # title is nil (no default coercion)
+      assert raw.content == nil
       assert raw.title == nil
-      # ciphertext columns are populated
       assert is_binary(raw.content_ciphertext)
       assert byte_size(raw.content_ciphertext) > 0
-      # nonce is exactly 12 bytes (AES-256-GCM standard)
       assert byte_size(raw.content_nonce) == 12
-      # ciphertext does not equal the original plaintext bytes
       refute raw.content_ciphertext == "dear diary, I feel seen"
     end
 
     test "upsert returns plaintext struct (not encrypted)" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{
@@ -66,7 +61,7 @@ defmodule Engram.Notes.EncryptionTest do
     test "rename_note returns plaintext struct for encrypted vault" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, _} =
         Engram.Notes.upsert_note(user, vault, %{
@@ -86,7 +81,7 @@ defmodule Engram.Notes.EncryptionTest do
     test "rename on encrypted vault derives title from decrypted heading" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       original_content = "# The Real Title\n\nbody text here"
 
@@ -112,7 +107,7 @@ defmodule Engram.Notes.EncryptionTest do
 
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user, encrypted: true)
+      vault = insert(:vault, user: user)
 
       {:ok, note} =
         Notes.upsert_note(user, vault, %{
@@ -157,21 +152,5 @@ defmodule Engram.Notes.EncryptionTest do
       refute log =~ "will be unreadable"
     end
 
-    test "unencrypted vault stores plaintext unchanged, ciphertext is nil" do
-      user = insert(:user)
-      vault = insert(:vault, user: user, encrypted: false)
-
-      {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "recipes/chicken.md",
-          "content" => "400F for 25min",
-          "mtime" => 1_000.0
-        })
-
-      raw = Engram.Fixtures.raw_note_by_path!(user, "recipes/chicken.md")
-
-      assert raw.content == "400F for 25min"
-      assert raw.content_ciphertext == nil
-    end
   end
 end

@@ -264,24 +264,6 @@ defmodule Engram.Accounts do
     |> Repo.update(skip_tenant_check: true)
   end
 
-  @doc """
-  Set per-user encryption-toggle cooldown.
-
-  `days` may be `nil` (no cooldown — user can re-toggle immediately) or a
-  non-negative integer (days the user must wait between encrypt/decrypt
-  toggles). Negative values raise `FunctionClauseError`. Used by the hosted
-  operator to throttle abusive toggling per user without affecting
-  self-hosted defaults (which leave the column NULL).
-  """
-  @spec set_encryption_toggle_cooldown_days(Engram.Accounts.User.t(), nil | non_neg_integer()) ::
-          {:ok, Engram.Accounts.User.t()} | {:error, Ecto.Changeset.t()}
-  def set_encryption_toggle_cooldown_days(%User{} = user, days)
-      when is_nil(days) or (is_integer(days) and days >= 0) do
-    user
-    |> Ecto.Changeset.change(%{encryption_toggle_cooldown_days: days})
-    |> Repo.update(skip_tenant_check: true)
-  end
-
   # ── JWT ─────────────────────────────────────────────────────────
 
   def generate_jwt(user) do

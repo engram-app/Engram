@@ -23,20 +23,11 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     heading_path: "intro"
   }
 
-  describe "maybe_encrypt_qdrant_payload/3" do
-    test "passes through when vault is not encrypted", %{user: user} do
+  describe "encrypt_qdrant_payload/2" do
+    test "encrypts text/title/heading_path", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Vault{encrypted: false}
 
-      assert {:ok, out} = Crypto.maybe_encrypt_qdrant_payload(@base_payload, user, vault)
-      assert out == @base_payload
-    end
-
-    test "encrypts text/title/heading_path when vault is encrypted", %{user: user} do
-      {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Vault{encrypted: true}
-
-      assert {:ok, out} = Crypto.maybe_encrypt_qdrant_payload(@base_payload, user, vault)
+      assert {:ok, out} = Crypto.encrypt_qdrant_payload(@base_payload, user)
 
       # Plaintext fields untouched
       assert out.user_id == "1"
@@ -63,44 +54,37 @@ defmodule Engram.Crypto.QdrantPayloadTest do
 
     test "produces distinct nonces across calls", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Vault{encrypted: true}
 
-      {:ok, o1} = Crypto.maybe_encrypt_qdrant_payload(@base_payload, user, vault)
-      {:ok, o2} = Crypto.maybe_encrypt_qdrant_payload(@base_payload, user, vault)
+      {:ok, o1} = Crypto.encrypt_qdrant_payload(@base_payload, user)
+      {:ok, o2} = Crypto.encrypt_qdrant_payload(@base_payload, user)
 
       refute o1.text_nonce == o2.text_nonce
       refute o1.text == o2.text
     end
 
-    test "returns {:error, :no_dek} when user lacks a DEK on encrypted vault", %{user: user} do
-      # No ensure_user_dek — user.encrypted_dek stays nil
-      vault = %Vault{encrypted: true}
-      assert {:error, :no_dek} = Crypto.maybe_encrypt_qdrant_payload(@base_payload, user, vault)
+    test "returns {:error, :no_dek} when user lacks a DEK", %{user: user} do
+      assert {:error, :no_dek} = Crypto.encrypt_qdrant_payload(@base_payload, user)
     end
 
     test "encrypts empty strings deterministically-shaped", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      vault = %Vault{encrypted: true}
       payload = %{@base_payload | text: "", title: "", heading_path: ""}
 
-      assert {:ok, out} = Crypto.maybe_encrypt_qdrant_payload(payload, user, vault)
+      assert {:ok, out} = Crypto.encrypt_qdrant_payload(payload, user)
       # Empty plaintext still produces 16-byte GCM tag → non-empty b64 ciphertext
       assert byte_size(Base.decode64!(out.text)) == 16
     end
   end
 
-  describe "maybe_decrypt_qdrant_candidates/3" do
+  describe "decrypt_qdrant_candidates/3" do
     setup %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
-      enc_vault = %Vault{id: 5, encrypted: true}
-      plain_vault = %Vault{id: 7, encrypted: false}
+      vault = %Vault{id: 5}
 
-      # Build one encrypted candidate
       {:ok, enc_payload} =
-        Crypto.maybe_encrypt_qdrant_payload(
+        Crypto.encrypt_qdrant_payload(
           %{text: "secret", title: "T", heading_path: "intro"},
-          user,
-          enc_vault
+          user
         )
 
       enc_candidate = %{
@@ -117,24 +101,9 @@ defmodule Engram.Crypto.QdrantPayloadTest do
         heading_path_nonce: enc_payload.heading_path_nonce
       }
 
-      plain_candidate = %{
-        score: 0.8,
-        qdrant_id: "qid-2",
-        vault_id: "7",
-        source_path: "b.md",
-        tags: [],
-        text: "plain",
-        title: "P",
-        heading_path: "root"
-      }
+      vaults_by_id = %{"5" => vault}
 
-      vaults_by_id = %{"5" => enc_vault, "7" => plain_vault}
-
-      {:ok,
-       user: user,
-       enc_candidate: enc_candidate,
-       plain_candidate: plain_candidate,
-       vaults_by_id: vaults_by_id}
+      {:ok, user: user, enc_candidate: enc_candidate, vaults_by_id: vaults_by_id}
     end
 
     test "round-trips encrypted candidates to plaintext", %{
@@ -142,40 +111,39 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       enc_candidate: enc,
       vaults_by_id: vaults
     } do
-      assert {:ok, [out]} = Crypto.maybe_decrypt_qdrant_candidates([enc], user, vaults)
+      assert {:ok, [out]} = Crypto.decrypt_qdrant_candidates([enc], user, vaults)
       assert out.text == "secret"
       assert out.title == "T"
       assert out.heading_path == "intro"
       refute Map.has_key?(out, :text_nonce)
     end
 
-    test "passes through unencrypted candidates byte-exact", %{
-      user: user,
-      plain_candidate: pc,
-      vaults_by_id: vaults
-    } do
-      assert {:ok, [out]} = Crypto.maybe_decrypt_qdrant_candidates([pc], user, vaults)
-      assert out == pc
-    end
-
-    test "handles mixed list", %{
-      user: user,
-      enc_candidate: enc,
-      plain_candidate: pc,
-      vaults_by_id: vaults
-    } do
-      assert {:ok, [a, b]} = Crypto.maybe_decrypt_qdrant_candidates([enc, pc], user, vaults)
-      assert a.text == "secret"
-      assert b.text == "plain"
-    end
-
     test "drops tampered candidate, keeps others, emits telemetry + error log", %{
       user: user,
       enc_candidate: enc,
-      plain_candidate: pc,
       vaults_by_id: vaults
     } do
-      # Tamper: flip one bit of the base64-decoded ciphertext, re-encode
+      # Build a second clean candidate that survives.
+      {:ok, other_payload} =
+        Crypto.encrypt_qdrant_payload(
+          %{text: "second", title: "S", heading_path: "h"},
+          user
+        )
+
+      survivor = %{
+        score: 0.7,
+        qdrant_id: "qid-2",
+        vault_id: "5",
+        source_path: "b.md",
+        tags: [],
+        text: other_payload.text,
+        title: other_payload.title,
+        heading_path: other_payload.heading_path,
+        text_nonce: other_payload.text_nonce,
+        title_nonce: other_payload.title_nonce,
+        heading_path_nonce: other_payload.heading_path_nonce
+      }
+
       <<first, rest::binary>> = Base.decode64!(enc.text)
       tampered_ct = Base.encode64(<<bxor(first, 1), rest::binary>>)
       tampered = %{enc | text: tampered_ct}
@@ -196,9 +164,8 @@ defmodule Engram.Crypto.QdrantPayloadTest do
         log =
           ExUnit.CaptureLog.capture_log(fn ->
             assert {:ok, [out]} =
-                     Crypto.maybe_decrypt_qdrant_candidates([tampered, pc], user, vaults)
+                     Crypto.decrypt_qdrant_candidates([tampered, survivor], user, vaults)
 
-            # Only the plaintext candidate survives
             assert out.qdrant_id == "qid-2"
           end)
 
@@ -220,11 +187,11 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       tampered = %{enc | text: tampered_ct}
 
       assert {:error, :decrypt_failed} =
-               Crypto.maybe_decrypt_qdrant_candidates([tampered], user, vaults)
+               Crypto.decrypt_qdrant_candidates([tampered], user, vaults)
     end
 
     test "empty input returns {:ok, []}", %{user: user, vaults_by_id: vaults} do
-      assert {:ok, []} = Crypto.maybe_decrypt_qdrant_candidates([], user, vaults)
+      assert {:ok, []} = Crypto.decrypt_qdrant_candidates([], user, vaults)
     end
 
     @tag capture_log: true
@@ -232,7 +199,6 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       user: user,
       enc_candidate: enc
     } do
-      # Vault 5 not in map → shape-mismatch guard
       empty = %{}
 
       handler_id = {__MODULE__, :shape_mismatch_handler, System.unique_integer()}
@@ -247,7 +213,7 @@ defmodule Engram.Crypto.QdrantPayloadTest do
 
       try do
         assert {:error, :decrypt_failed} =
-                 Crypto.maybe_decrypt_qdrant_candidates([enc], user, empty)
+                 Crypto.decrypt_qdrant_candidates([enc], user, empty)
 
         assert_received {:shape_mismatch, _, _}
       after
@@ -257,8 +223,6 @@ defmodule Engram.Crypto.QdrantPayloadTest do
 
     @tag capture_log: true
     test "drops candidate with text_nonce but no vault_id (shape mismatch)", %{user: user} do
-      # Legacy candidate missing vault_id but carrying ciphertext — impossible via
-      # the normal index path (Phase 4 always writes vault_id), but defensive.
       broken = %{
         score: 0.5,
         qdrant_id: "qid-broken",
@@ -283,8 +247,12 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       )
 
       try do
+        # decrypt_qdrant_candidates needs a DEK first; missing vault_id
+        # raises the shape-mismatch path inside decrypt_one.
+        {:ok, user} = Crypto.ensure_user_dek(user)
+
         assert {:error, :decrypt_failed} =
-                 Crypto.maybe_decrypt_qdrant_candidates([broken], user, %{})
+                 Crypto.decrypt_qdrant_candidates([broken], user, %{})
 
         assert_received {:shape_mismatch, %{count: 1}, %{qdrant_id: "qid-broken"}}
       after
@@ -292,10 +260,9 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       end
     end
 
-    test "returns :decrypt_failed and logs when encrypted candidate + user has no DEK" do
-      # User without ensure_user_dek — encrypted_dek stays nil → get_dek returns {:error, :no_dek}
+    test "returns :decrypt_failed and logs when user has no DEK" do
       user = insert(:user)
-      vault = %Vault{id: 5, encrypted: true}
+      vault = %Vault{id: 5}
 
       candidate = %{
         score: 0.9,
@@ -314,7 +281,7 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:error, :decrypt_failed} =
-                   Crypto.maybe_decrypt_qdrant_candidates([candidate], user, %{"5" => vault})
+                   Crypto.decrypt_qdrant_candidates([candidate], user, %{"5" => vault})
         end)
 
       assert log =~ "failed to load DEK"

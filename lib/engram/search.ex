@@ -74,7 +74,7 @@ defmodule Engram.Search do
           with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
                vaults_by_id = load_candidate_vaults(user, vault, candidates),
                {:ok, decrypted} <-
-                 Engram.Crypto.maybe_decrypt_qdrant_candidates(candidates, user, vaults_by_id) do
+                 Engram.Crypto.decrypt_qdrant_candidates(candidates, user, vaults_by_id) do
             reranker().rerank(query, decrypted, limit)
           end
         end

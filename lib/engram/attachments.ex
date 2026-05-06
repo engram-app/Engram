@@ -265,11 +265,12 @@ defmodule Engram.Attachments do
 
   defp prepare_upload(user, vault, path, plaintext, mtime, explicit_mime) do
     mime = explicit_mime || detect_mime(path)
-    hash = :crypto.hash(:md5, plaintext) |> Base.encode16(case: :lower)
     key = Storage.key(user.id, vault.id, path)
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, dek} <- Crypto.get_dek(user) do
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
+      hash = Crypto.hmac_content_hash(content_key, plaintext)
       {ciphertext, nonce} = Envelope.encrypt(plaintext, dek)
       {path_ct, path_n} = Envelope.encrypt(path, dek)
       {:ok, filter_key} = Crypto.dek_filter_key(user)

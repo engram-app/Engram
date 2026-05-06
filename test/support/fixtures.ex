@@ -50,22 +50,27 @@ defmodule Engram.Fixtures do
 
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
     {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
     {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek)
     {tags_ct, tags_n} = Engram.Crypto.Envelope.encrypt(:erlang.term_to_binary(tags), dek)
+    {content_ct, content_n} = Engram.Crypto.Envelope.encrypt(content, dek)
+    {title_ct, title_n} = Engram.Crypto.Envelope.encrypt(title, dek)
 
     base_attrs = %{
-      title: title,
-      content: content,
       content_hash:
         Map.get(
           attrs,
           "content_hash",
-          :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+          Engram.Crypto.hmac_content_hash(content_key, content)
         ),
       mtime: mtime,
       user_id: user.id,
       vault_id: vault.id,
+      content_ciphertext: content_ct,
+      content_nonce: content_n,
+      title_ciphertext: title_ct,
+      title_nonce: title_n,
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Engram.Crypto.hmac_field(filter_key, path),

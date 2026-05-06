@@ -29,7 +29,7 @@ defmodule Engram.Notes do
          title = Helpers.extract_title(content, sanitized_path),
          folder = Helpers.extract_folder(sanitized_path),
          tags = Helpers.extract_tags(content),
-         hash = content_hash(content),
+         {:ok, hash} <- content_hash(user, content),
          now = DateTime.utc_now(),
          note_attrs = %{
            content: content,
@@ -42,7 +42,7 @@ defmodule Engram.Notes do
            created_at: now,
            updated_at: now
          },
-         {:ok, note_attrs} <- Engram.Crypto.maybe_encrypt_note_fields(note_attrs, user, vault),
+         {:ok, note_attrs} <- Engram.Crypto.encrypt_note_fields(note_attrs, user),
          note_attrs = inject_phase_b_fields(note_attrs, user, sanitized_path, folder, tags) do
       changeset = Note.changeset(%Note{}, note_attrs)
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
@@ -170,15 +170,24 @@ defmodule Engram.Notes do
             # tags_hmac/tags_ciphertext on the row.
             phase_b_kw = phase_b_path_folder_for(user, new_path, new_folder)
 
+            # Phase B.4: title is virtual — encrypt the new title and write
+            # title_ciphertext + title_nonce instead of the plaintext column.
+            {:ok, dek} = Engram.Crypto.get_dek(user)
+            {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt(new_title, dek)
+
+            title_kw = [
+              title_ciphertext: title_ct,
+              title_nonce: title_nonce
+            ]
+
             {count, _} =
               from(n in Note, where: n.id == ^note.id)
               |> Repo.update_all(
                 set:
                   [
-                    title: new_title,
                     embed_hash: nil,
                     updated_at: now
-                  ] ++ phase_b_kw
+                  ] ++ title_kw ++ phase_b_kw
               )
 
             if count == 1 do
@@ -189,6 +198,7 @@ defmodule Engram.Notes do
               {:ok,
                note
                |> struct!(phase_b_kw)
+               |> struct!(title_kw)
                |> struct!(
                  path: new_path,
                  folder: new_folder,
@@ -467,12 +477,15 @@ defmodule Engram.Notes do
                 where:
                   n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
                     n.folder_hmac == ^target_hmac,
-                order_by: n.title
+                order_by: [asc: n.id]
               )
             )
           end)
 
-        {:ok, decrypt_or_raise!(notes, user)}
+        # Phase B.4: title is virtual — sort by decrypted title in BEAM
+        # since SQL can't order by encrypted columns deterministically.
+        decrypted = decrypt_or_raise!(notes, user)
+        {:ok, Enum.sort_by(decrypted, & &1.title)}
 
       {:error, :no_dek} ->
         # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
@@ -541,15 +554,19 @@ defmodule Engram.Notes do
           {note.id, note.path, new_path, new_note_folder, new_title}
         end)
 
+      {:ok, rename_dek} = Engram.Crypto.get_dek(user)
+
       Repo.with_tenant(user.id, fn ->
         Enum.each(updates, fn {id, _old_path, new_path, new_note_folder, new_title} ->
           phase_b_kw = phase_b_path_folder_for(user, new_path, new_note_folder)
+          {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt(new_title, rename_dek)
 
           from(n in Note, where: n.id == ^id)
           |> Repo.update_all(
             set:
               [
-                title: new_title,
+                title_ciphertext: title_ct,
+                title_nonce: title_nonce,
                 embed_hash: nil,
                 updated_at: now
               ] ++ phase_b_kw
@@ -660,8 +677,10 @@ defmodule Engram.Notes do
 
   defp validate_path(path), do: {:ok, path}
 
-  defp content_hash(content) do
-    :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+  defp content_hash(user, content) do
+    with {:ok, key} <- Engram.Crypto.dek_content_hash_key(user) do
+      {:ok, Engram.Crypto.hmac_content_hash(key, content)}
+    end
   end
 
   defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do

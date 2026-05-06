@@ -192,35 +192,4 @@ defmodule Engram.AccountsTest do
     end
   end
 
-  describe "set_encryption_toggle_cooldown_days/2" do
-    test "stores integer days" do
-      user = insert(:user)
-      assert {:ok, updated} = Accounts.set_encryption_toggle_cooldown_days(user, 7)
-      assert updated.encryption_toggle_cooldown_days == 7
-    end
-
-    test "stores zero (treated as 'no cooldown' by Crypto)" do
-      user = insert(:user)
-      assert {:ok, updated} = Accounts.set_encryption_toggle_cooldown_days(user, 0)
-      assert updated.encryption_toggle_cooldown_days == 0
-    end
-
-    test "clears column to NULL" do
-      user =
-        insert(:user)
-        |> Ecto.Changeset.change(%{encryption_toggle_cooldown_days: 7})
-        |> Engram.Repo.update!(skip_tenant_check: true)
-
-      assert {:ok, updated} = Accounts.set_encryption_toggle_cooldown_days(user, nil)
-      assert updated.encryption_toggle_cooldown_days == nil
-    end
-
-    test "rejects negative days at the function clause" do
-      user = insert(:user)
-
-      assert_raise FunctionClauseError, fn ->
-        Accounts.set_encryption_toggle_cooldown_days(user, -1)
-      end
-    end
-  end
 end

@@ -10,7 +10,6 @@ defmodule Engram.Accounts.User do
     field :encrypted_dek, :binary
     field :dek_version, :integer, default: 1
     field :key_provider, :string, default: "local"
-    field :encryption_toggle_cooldown_days, :integer
 
     belongs_to :plan, Engram.Billing.Plan
     has_many :notes, Engram.Notes.Note
