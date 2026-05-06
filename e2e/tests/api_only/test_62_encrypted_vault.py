@@ -64,6 +64,12 @@ def reset_vault_encryption(api_sync):
         backdate_last_toggle(vault_id, days=8)
 
 
+@pytest.mark.skip(
+    reason="Phase B.3: vault encrypt/decrypt toggle retires in B.4 — "
+    "DecryptVault writes back to plaintext columns that no longer exist, "
+    "so the toggle teardown can never reach status='none'. Re-enable as "
+    "part of the B.4 mandatory-encryption work or delete with the toggle."
+)
 class TestEncryptedVaultRoundTrip:
     """Write and read a note from an encrypted vault via HTTP, with at-rest probes."""
 

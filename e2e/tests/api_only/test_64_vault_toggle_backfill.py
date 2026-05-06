@@ -14,6 +14,8 @@ import logging
 import os
 import time
 
+import pytest
+
 from helpers.crypto_probe import (
     assert_note_ciphertext_at_rest,
     assert_note_plaintext_at_rest,
@@ -30,6 +32,12 @@ API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.skip(
+    reason="Phase B.3: vault encrypt/decrypt toggle retires in B.4 — "
+    "DecryptVault writes back to plaintext columns that no longer exist, "
+    "so the toggle teardown can never reach status='none'. Re-enable as "
+    "part of the B.4 mandatory-encryption work or delete with the toggle."
+)
 class TestVaultToggleBackfill:
     """Toggle encrypt + backfill + decrypt cycle with pre-existing plaintext notes."""
 

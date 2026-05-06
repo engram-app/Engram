@@ -1,20 +1,22 @@
-"""Test 67: /api/search folder + tag filtering against an encrypted vault.
+"""Test 67: /api/search folder + tag filtering via HMAC fingerprints.
 
-Phase B.2.3 read switch: when an encrypted vault posts `?folder=` or `?tags=`
-on /api/search, the backend must translate the plaintext params into
-HMAC fingerprints (folder_hmac / tags_hmac) and forward them to Qdrant.
-Qdrant points carry only HMACs — never the plaintext folder or tag — yet
-the API caller still gets human-readable results back.
+When /api/search receives `?folder=` or `?tags=`, the backend translates
+the plaintext params into HMAC fingerprints (folder_hmac / tags_hmac) and
+forwards them to Qdrant. Qdrant points carry only HMACs — never the
+plaintext folder or tag — yet the API caller still gets human-readable
+results back.
 
 This test proves end-to-end that:
-  1. Plaintext `folder` filter narrows the result set (papers/quantum).
+  1. Plaintext `folder` filter narrows the result set (papers/research).
   2. Plaintext `tags` filter narrows the result set.
   3. Combined filters compose (must-match-all).
   4. Unfiltered search still returns multiple matches.
 
-API-only (no Obsidian, no Clerk gate). Reuses the encrypted vault pattern
-from test_62: toggles encryption via the real endpoint, writes notes via
-HTTP, lets the embed worker index them, then exercises /api/search.
+API-only (no Obsidian, no Clerk gate). Post-B.3, `phase_b_keyword_for/4`
+always writes folder_hmac / tags_hmac on every upsert regardless of the
+legacy `vault.encrypted` flag, so this test no longer needs to toggle
+encryption — it just writes notes through the HTTP API, lets the embed
+worker land them in Qdrant, and exercises /api/search.
 """
 
 from __future__ import annotations
@@ -23,14 +25,7 @@ import logging
 import os
 import time
 
-import pytest
-
-from helpers.crypto_probe import (
-    backdate_decrypt_requested,
-    backdate_last_toggle,
-    wait_for_encryption_status,
-    wait_for_qdrant_indexed,
-)
+from helpers.crypto_probe import wait_for_qdrant_indexed
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
@@ -48,51 +43,17 @@ def _frontmatter_note(title: str, tags: list[str], body: str) -> str:
     )
 
 
-@pytest.fixture
-def reset_vault_encryption(api_sync):
-    """Roll the shared vault back to 'none' status — same SQL time-travel
-    pattern as test_62. Idempotent if the vault is already 'none'."""
-    yield
-    vaults = api_sync.list_vaults()
-    if not vaults:
-        return
-    vault_id = vaults[0]["id"]
-    resp = api_sync.session.get(
-        f"{API_URL}/vaults/{vault_id}/encryption_progress", timeout=5
-    )
-    if not resp.ok:
-        return
-    status = resp.json().get("status")
-    if status in ("encrypted", "encrypting"):
-        if status == "encrypting":
-            wait_for_encryption_status(api_sync, vault_id, "encrypted", timeout=60)
-        backdate_last_toggle(vault_id, days=8)
-        api_sync.session.post(f"{API_URL}/vaults/{vault_id}/decrypt", timeout=10)
-        backdate_decrypt_requested(vault_id, hours=25)
-        wait_for_encryption_status(api_sync, vault_id, "none", timeout=60)
-        backdate_last_toggle(vault_id, days=8)
-
-
 class TestFilteredSearchOnEncryptedVault:
-    """Folder + tag filters on /api/search against an encrypted vault must
-    translate to HMAC filters in Qdrant and still narrow the result set."""
+    """Folder + tag filters on /api/search must translate to HMAC filters
+    in Qdrant and still narrow the result set."""
 
-    def test_folder_and_tag_filters_compose(self, api_sync, reset_vault_encryption):
+    def test_folder_and_tag_filters_compose(self, api_sync):
         vaults = api_sync.list_vaults()
         assert vaults, "api_sync should have a registered vault"
         vault_id = vaults[0]["id"]
         client = api_sync.with_vault(vault_id)
 
-        # 1. Toggle vault to encrypted (empty vault, near-instant)
-        resp = client.session.post(
-            f"{API_URL}/vaults/{vault_id}/encrypt", timeout=10
-        )
-        assert resp.status_code == 202, (
-            f"encrypt failed: {resp.status_code} {resp.text[:300]}"
-        )
-        wait_for_encryption_status(client, vault_id, "encrypted", timeout=30)
-
-        # 2. Write three notes with distinct folders + tags. The shared
+        # Write three notes with distinct folders + tags. The shared
         #    keyword "fingerprint" lets one query match all three so we
         #    can verify the filter (not the embedding) does the narrowing.
         ts = int(time.time())

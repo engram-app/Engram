@@ -71,6 +71,12 @@ def reset_cooldown(api_sync):
         set_user_cooldown_days(user_id, None)
 
 
+@pytest.mark.skip(
+    reason="Phase B.3: vault encrypt/decrypt toggle retires in B.4 — "
+    "DecryptVault writes back to plaintext columns that no longer exist, "
+    "so the toggle teardown can never reach status='none'. Re-enable as "
+    "part of the B.4 mandatory-encryption work or delete with the toggle."
+)
 class TestEncryptCooldown:
     """Per-user cooldown gate on the /encrypt endpoint."""
 
