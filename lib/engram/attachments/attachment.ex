@@ -47,6 +47,7 @@ defmodule Engram.Attachments.Attachment do
       :storage_key,
       :deleted_at,
       :encryption_version,
+      :dek_version,
       :content_nonce
     ])
     |> validate_required([

@@ -35,14 +35,15 @@ defmodule Engram.Vaults do
             is_default = current_count == 0
             name = attrs[:name] || attrs["name"] || ""
             slug = unique_slug(user.id, slugify(name))
+            vault_id = Engram.Crypto.next_row_id(:vaults)
 
             vault_attrs =
               attrs
               |> atomize_keys()
-              |> inject_name_phase_b(user)
+              |> inject_name_phase_b(user, vault_id)
               |> Map.merge(%{slug: slug, user_id: user.id, is_default: is_default})
 
-            %Vault{}
+            %Vault{id: vault_id}
             |> Vault.changeset(vault_attrs)
             |> Repo.insert()
             |> case do
@@ -87,6 +88,7 @@ defmodule Engram.Vaults do
                 :ok ->
                   is_default = current_count == 0
                   slug = unique_slug(user.id, slugify(name))
+                  vault_id = Engram.Crypto.next_row_id(:vaults)
 
                   attrs = %{
                     name: name,
@@ -96,9 +98,9 @@ defmodule Engram.Vaults do
                     is_default: is_default
                   }
 
-                  attrs = inject_name_phase_b(attrs, user)
+                  attrs = inject_name_phase_b(attrs, user, vault_id)
 
-                  case Repo.insert(Vault.changeset(%Vault{}, attrs)) do
+                  case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs)) do
                     {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user), :created}
                     {:error, cs} -> {:error, cs}
                   end
@@ -232,7 +234,7 @@ defmodule Engram.Vaults do
               attrs
               |> atomize_keys()
               |> then(&maybe_regenerate_slug(user.id, vault, &1))
-              |> inject_name_phase_b(user)
+              |> inject_name_phase_b(user, vault.id)
 
             if Map.get(attrs, :is_default) == true do
               clear_defaults(user.id, vault_id)
@@ -331,18 +333,20 @@ defmodule Engram.Vaults do
   # Callers MUST call ensure_user_dek/1 before invoking this helper.
   # If get_dek still fails after ensure, that is a real bug — raises rather
   # than silently skipping to enforce the "Phase B is mandatory" contract.
-  defp inject_name_phase_b(attrs, user) do
+  defp inject_name_phase_b(attrs, user, vault_id) do
     name = attrs[:name] || attrs["name"]
 
     if is_binary(name) do
       {:ok, dek} = Engram.Crypto.get_dek(user)
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek)
+      aad = Engram.Crypto.aad_for_row(:vaults, :name, vault_id)
+      {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek, aad)
 
       Map.merge(attrs, %{
         name_ciphertext: ct,
         name_nonce: n,
-        name_hmac: Engram.Crypto.hmac_field(filter_key, name)
+        name_hmac: Engram.Crypto.hmac_field(filter_key, name),
+        dek_version: Engram.Crypto.row_version_aad_bound()
       })
     else
       attrs

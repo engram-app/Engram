@@ -57,21 +57,25 @@ defmodule Engram.CryptoTest do
     assert {:error, :no_dek} = Crypto.get_dek(user)
   end
 
-  describe "encrypt_note_fields/2" do
-    test "encrypts content + title (tags handled by Phase B)", %{user: user} do
+  describe "encrypt_note_fields/3" do
+    test "encrypts content + title with row-id-bound AAD (T3.6)", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
       attrs = %{content: "secret", title: "Journal", tags: ["mood"]}
-      {:ok, out} = Crypto.encrypt_note_fields(attrs, user)
+      {:ok, out} = Crypto.encrypt_note_fields(attrs, user, 4242)
 
       refute Map.has_key?(out, :content)
       refute Map.has_key?(out, :title)
-      # Phase B.3+: tags are produced by phase_b_keyword_for/4 only.
+      # Phase B.3+: tags are produced by phase_b_keyword_for only.
       refute Map.has_key?(out, :tags_ciphertext)
       assert is_binary(out.content_ciphertext)
       assert byte_size(out.content_nonce) == 12
       assert is_binary(out.title_ciphertext)
       assert byte_size(out.title_nonce) == 12
+      # T3.6 — encrypt stamps the AAD-bound row version + propagates :id so
+      # the caller can drop the changeset onto the pre-allocated row.
+      assert out.id == 4242
+      assert out.dek_version == Crypto.row_version_aad_bound()
     end
   end
 
@@ -87,13 +91,17 @@ defmodule Engram.CryptoTest do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
       {:ok, encrypted} =
-        Crypto.encrypt_note_fields(%{content: "secret", title: "T"}, user)
+        Crypto.encrypt_note_fields(%{content: "secret", title: "T"}, user, 1234)
 
       {:ok, dek} = Crypto.get_dek(user)
       tags_bin = :erlang.term_to_binary(["x"])
-      {tags_ct, tags_n} = Crypto.Envelope.encrypt(tags_bin, dek)
+
+      {tags_ct, tags_n} =
+        Crypto.Envelope.encrypt(tags_bin, dek, Crypto.aad_for_row(:notes, :tags, 1234))
 
       note = %Engram.Notes.Note{
+        id: 1234,
+        dek_version: Crypto.row_version_aad_bound(),
         content_ciphertext: encrypted.content_ciphertext,
         content_nonce: encrypted.content_nonce,
         title_ciphertext: encrypted.title_ciphertext,

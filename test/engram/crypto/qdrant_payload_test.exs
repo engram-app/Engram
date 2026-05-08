@@ -27,7 +27,7 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     test "encrypts text/title/heading_path", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
-      assert {:ok, out} = Crypto.encrypt_qdrant_payload(@base_payload, user)
+      assert {:ok, out} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
 
       # Plaintext fields untouched
       assert out.user_id == "1"
@@ -55,22 +55,23 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     test "produces distinct nonces across calls", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
-      {:ok, o1} = Crypto.encrypt_qdrant_payload(@base_payload, user)
-      {:ok, o2} = Crypto.encrypt_qdrant_payload(@base_payload, user)
+      {:ok, o1} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
+      {:ok, o2} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
 
       refute o1.text_nonce == o2.text_nonce
       refute o1.text == o2.text
     end
 
     test "returns {:error, :no_dek} when user lacks a DEK", %{user: user} do
-      assert {:error, :no_dek} = Crypto.encrypt_qdrant_payload(@base_payload, user)
+      assert {:error, :no_dek} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
     end
 
     test "encrypts empty strings deterministically-shaped", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
       payload = %{@base_payload | text: "", title: "", heading_path: ""}
 
-      assert {:ok, out} = Crypto.encrypt_qdrant_payload(payload, user)
+      assert {:ok, out} =
+               Crypto.encrypt_qdrant_payload(payload, user, "test_collection", "qid-empty")
       # Empty plaintext still produces 16-byte GCM tag → non-empty b64 ciphertext
       assert byte_size(Base.decode64!(out.text)) == 16
     end
@@ -84,7 +85,9 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       {:ok, enc_payload} =
         Crypto.encrypt_qdrant_payload(
           %{text: "secret", title: "T", heading_path: "intro"},
-          user
+          user,
+          "test_collection",
+          "qid-1"
         )
 
       enc_candidate = %{
@@ -98,7 +101,8 @@ defmodule Engram.Crypto.QdrantPayloadTest do
         heading_path: enc_payload.heading_path,
         text_nonce: enc_payload.text_nonce,
         title_nonce: enc_payload.title_nonce,
-        heading_path_nonce: enc_payload.heading_path_nonce
+        heading_path_nonce: enc_payload.heading_path_nonce,
+        aad_version: enc_payload.aad_version
       }
 
       vaults_by_id = %{"5" => vault}
@@ -111,11 +115,34 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       enc_candidate: enc,
       vaults_by_id: vaults
     } do
-      assert {:ok, [out]} = Crypto.decrypt_qdrant_candidates([enc], user, vaults)
+      assert {:ok, [out]} =
+               Crypto.decrypt_qdrant_candidates([enc], user, vaults, "test_collection")
+
       assert out.text == "secret"
       assert out.title == "T"
       assert out.heading_path == "intro"
       refute Map.has_key?(out, :text_nonce)
+    end
+
+    test "AAD-bound candidate FAILS to decrypt under wrong collection (T3.6)", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      # Encrypted under "test_collection" — handing the same point to the
+      # decryptor under a different collection MUST fail the AAD check.
+      assert {:error, :decrypt_failed} =
+               Crypto.decrypt_qdrant_candidates([enc], user, vaults, "other_collection")
+    end
+
+    test "AAD-bound candidate FAILS to decrypt when qdrant_id is swapped (T3.6)",
+         %{user: user, enc_candidate: enc, vaults_by_id: vaults} do
+      # Lift the ciphertext / nonce of qid-1 into a candidate that claims
+      # qdrant_id "qid-2". Reconstructed AAD differs → decrypt fails.
+      swapped = %{enc | qdrant_id: "qid-2"}
+
+      assert {:error, :decrypt_failed} =
+               Crypto.decrypt_qdrant_candidates([swapped], user, vaults, "test_collection")
     end
 
     test "drops tampered candidate, keeps others, emits telemetry + error log", %{
@@ -127,7 +154,9 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       {:ok, other_payload} =
         Crypto.encrypt_qdrant_payload(
           %{text: "second", title: "S", heading_path: "h"},
-          user
+          user,
+          "test_collection",
+          "qid-2"
         )
 
       survivor = %{
@@ -141,7 +170,8 @@ defmodule Engram.Crypto.QdrantPayloadTest do
         heading_path: other_payload.heading_path,
         text_nonce: other_payload.text_nonce,
         title_nonce: other_payload.title_nonce,
-        heading_path_nonce: other_payload.heading_path_nonce
+        heading_path_nonce: other_payload.heading_path_nonce,
+        aad_version: other_payload.aad_version
       }
 
       <<first, rest::binary>> = Base.decode64!(enc.text)
@@ -164,7 +194,12 @@ defmodule Engram.Crypto.QdrantPayloadTest do
         log =
           ExUnit.CaptureLog.capture_log(fn ->
             assert {:ok, [out]} =
-                     Crypto.decrypt_qdrant_candidates([tampered, survivor], user, vaults)
+                     Crypto.decrypt_qdrant_candidates(
+                       [tampered, survivor],
+                       user,
+                       vaults,
+                       "test_collection"
+                     )
 
             assert out.qdrant_id == "qid-2"
           end)
@@ -187,7 +222,7 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       tampered = %{enc | text: tampered_ct}
 
       assert {:error, :decrypt_failed} =
-               Crypto.decrypt_qdrant_candidates([tampered], user, vaults)
+               Crypto.decrypt_qdrant_candidates([tampered], user, vaults, "test_collection")
     end
 
     test "empty input returns {:ok, []}", %{user: user, vaults_by_id: vaults} do

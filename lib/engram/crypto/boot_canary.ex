@@ -53,7 +53,7 @@ defmodule Engram.Crypto.BootCanary do
         :ok
 
       %{wrapped_dek: blob, dek_sha256: expected_hash} ->
-        case Local.unwrap_dek_current_only(blob) do
+        case Local.unwrap_dek_current_only(blob, user_id: :canary) do
           {:ok, plaintext_dek} ->
             if :crypto.hash(:sha256, plaintext_dek) == expected_hash do
               :telemetry.execute([:engram, :crypto, :boot_canary], %{count: 1}, %{status: :ok})

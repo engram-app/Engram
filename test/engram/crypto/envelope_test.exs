@@ -42,4 +42,43 @@ defmodule Engram.Crypto.EnvelopeTest do
     long_nonce = :crypto.strong_rand_bytes(16)
     assert :error = Envelope.decrypt(ct, long_nonce, @dek)
   end
+
+  # T3.6 / H1 — AAD binding. Each ciphertext is bound to a context string
+  # ("<table>:<column>:<row_id>" for relational rows, "qdrant:<col>:<qid>:
+  # <field>" for vector payload, "dek:v1:<user_id>" for wrapped DEK). A
+  # tampered AAD or an attempted cross-row swap fails the AEAD tag check.
+
+  describe "AAD binding (T3.6)" do
+    test "round-trips with non-empty AAD" do
+      aad = "notes:content:42"
+      {ct, nonce} = Envelope.encrypt("body", @dek, aad)
+      assert {:ok, "body"} = Envelope.decrypt(ct, nonce, @dek, aad)
+    end
+
+    test "wrong AAD fails decrypt" do
+      {ct, nonce} = Envelope.encrypt("body", @dek, "notes:content:42")
+      assert :error = Envelope.decrypt(ct, nonce, @dek, "notes:content:43")
+    end
+
+    test "missing AAD on read of AAD-bound ciphertext fails" do
+      {ct, nonce} = Envelope.encrypt("body", @dek, "notes:content:42")
+      # decrypt/3 (no AAD) treats AAD as <<>> for legacy compat — must
+      # NOT accept AAD-bound ciphertext.
+      assert :error = Envelope.decrypt(ct, nonce, @dek)
+    end
+
+    test "AAD-bound ciphertext from one row cannot be swapped into another" do
+      {ct_a, nonce_a} = Envelope.encrypt("note A body", @dek, "notes:content:1")
+      # Decrypting that ciphertext under row 2's AAD must fail — the
+      # cross-row swap is exactly what AAD is supposed to defend against.
+      assert :error = Envelope.decrypt(ct_a, nonce_a, @dek, "notes:content:2")
+    end
+
+    test "legacy 3-arity decrypt still works for ciphertext written without AAD" do
+      {ct, nonce} = Envelope.encrypt("legacy", @dek)
+      assert {:ok, "legacy"} = Envelope.decrypt(ct, nonce, @dek)
+      # Equivalently, with explicit empty AAD.
+      assert {:ok, "legacy"} = Envelope.decrypt(ct, nonce, @dek, <<>>)
+    end
+  end
 end

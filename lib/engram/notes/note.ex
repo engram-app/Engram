@@ -66,6 +66,7 @@ defmodule Engram.Notes.Note do
       attrs,
       [
         :version,
+        :dek_version,
         :content_hash,
         :mtime,
         :user_id,

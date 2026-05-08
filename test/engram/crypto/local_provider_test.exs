@@ -164,22 +164,35 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
   end
 
   describe "T3.4 / M2 — wrap-format versioning" do
-    test "new wraps carry the version + algorithm header bytes (`<<0x01, 0x01, ...>>`)" do
-      # T3.4 / M2 — wrap-format version byte + algorithm-id byte. Enables
-      # algorithm-agility without scan-and-trial-decrypt across the
-      # encrypted_dek population.
+    test "new wraps carry the v2 + algorithm header bytes (`<<0x02, 0x01, ...>>`) (T3.6 H1)" do
+      # T3.6 / H1 — wrap-format version 0x02 signals AAD-bound encryption.
+      # AAD = "dek:v1:<user_id>" (pulled from ctx). Enables future algorithm-
+      # agility without scan-and-trial-decrypt across the encrypted_dek
+      # population.
       dek = Local.generate_dek()
       {:ok, wrapped} = Local.wrap_dek(dek, %{user_id: 1})
 
-      assert <<0x01, 0x01, _nonce::binary-size(12), _ct::binary>> = wrapped
+      assert <<0x02, 0x01, _nonce::binary-size(12), _ct::binary>> = wrapped
       # 1 (ver) + 1 (alg) + 12 (nonce) + 32 (DEK plaintext) + 16 (GCM tag) = 62
       assert byte_size(wrapped) == 62
     end
 
+    test "unwrap reads v1 (no-AAD) blobs (back-compat for T3.4 rows)" do
+      # T3.4 emitted v1 wraps with no AAD. T3.6 readers MUST still round-trip
+      # them so master-key rotation can convert them lazily.
+      dek = Local.generate_dek()
+      master = Engram.Crypto.Config.local_master_key!()
+      {ct, nonce} = Engram.Crypto.Envelope.encrypt(dek, master)
+      v1_blob = <<0x01, 0x01, nonce::binary-size(12), ct::binary>>
+
+      assert byte_size(v1_blob) == 62
+      assert {:ok, ^dek} = Local.unwrap_dek(v1_blob, %{user_id: 1})
+    end
+
     test "unwrap reads legacy-format blobs (back-compat for pre-T3.4 rows)" do
-      # T3.4 — Local.wrap_dek pre-T3.4 emitted `<<nonce::12, ct::binary>>`
-      # without a header. Existing rows in DB carry that shape; unwrap MUST
-      # round-trip them so the migration does not require a backfill pass.
+      # Pre-T3.4 emitted `<<nonce::12, ct::binary>>` without a header. Existing
+      # rows in DB carry that shape; unwrap MUST round-trip them so the
+      # migration does not require a backfill pass.
       dek = Local.generate_dek()
       master = Engram.Crypto.Config.local_master_key!()
       {ct, nonce} = Engram.Crypto.Envelope.encrypt(dek, master)
@@ -190,9 +203,8 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
     end
 
     test "unwrap rejects unknown wrap-format version bytes" do
-      # Future-proofing: a 62-byte blob whose first byte is not 0x01 is
-      # neither v1 nor any legitimate legacy shape (legacy is 60 bytes).
-      # Must fail loudly rather than fall through to a partial parse.
+      # Future-proofing: a 62-byte blob whose first byte is neither v1 nor
+      # v2 must fail loudly rather than fall through to a partial parse.
       bogus = <<0x99, 0x01, :crypto.strong_rand_bytes(60)::binary>>
       assert byte_size(bogus) == 62
       assert {:error, _} = Local.unwrap_dek(bogus, %{user_id: 1})
