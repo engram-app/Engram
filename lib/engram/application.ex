@@ -7,7 +7,7 @@ defmodule Engram.Application do
 
   @impl true
   def start(_type, _args) do
-    Engram.Crypto.Config.validate!()
+    preflight!()
     install_log_redaction_filter()
     EngramWeb.RequestLogger.attach()
 
@@ -15,7 +15,6 @@ defmodule Engram.Application do
       [
         EngramWeb.Telemetry,
         Engram.Repo,
-        boot_canary_task(),
         {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Engram.PubSub},
         EngramWeb.Presence,
@@ -26,10 +25,29 @@ defmodule Engram.Application do
       ]
       |> Enum.reject(&is_nil/1)
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Engram.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  @doc """
+  Synchronous pre-supervisor boot validation. A raise here propagates out
+  of `Application.start/2` and the VM exits non-zero — true fail-loud.
+
+  T3-audit C2 — the prior wiring put `BootCanary.verify!/0` inside a
+  `Task.start_link` child with `restart: :temporary`. `start_link` returns
+  `{:ok, pid}` synchronously the moment the task is spawned; any later
+  raise inside `verify!/0` lands in the task process where `:temporary`
+  causes the supervisor to log the EXIT and take no further action. Result:
+  app boots with the wrong master key, defeating the whole point of M3.
+  """
+  def preflight! do
+    Engram.Crypto.Config.validate!()
+
+    if Application.get_env(:engram, :boot_canary_enabled, true) do
+      Engram.Crypto.BootCanary.verify!()
+    end
+
+    :ok
   end
 
   defp install_log_redaction_filter do
@@ -42,25 +60,6 @@ defmodule Engram.Application do
         :engram_redact,
         {&Engram.Logger.RedactFilter.filter/2, []}
       )
-  end
-
-  # T3.5.5 / M3 — boot canary verification. Runs immediately after Repo
-  # comes up. A transient task that exits 0 on success and crashes the
-  # supervisor on failure (which crashes the application start, so the
-  # node fails loudly on a wrong master key). Skipped in :test where
-  # the canary table is per-sandbox; tests cover BootCanary directly.
-  # Restart `:temporary` so a verify!/0 raise propagates immediately to
-  # `Application.start/2` rather than triggering the supervisor restart-
-  # storm + 3 stack traces before max_restarts surfaces the failure.
-  defp boot_canary_task do
-    if Application.get_env(:engram, :boot_canary_enabled, true) do
-      %{
-        id: :engram_boot_canary,
-        start: {Task, :start_link, [&Engram.Crypto.BootCanary.verify!/0]},
-        restart: :temporary,
-        type: :worker
-      }
-    end
   end
 
   defp clerk_strategy_child do

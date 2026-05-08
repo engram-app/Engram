@@ -84,7 +84,7 @@ defmodule Engram.Indexing do
              collection(),
              to_string(note.user_id),
              to_string(note.vault_id),
-             note.path
+             encode_hmac(note.path_hmac)
            ) do
       # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
       Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)

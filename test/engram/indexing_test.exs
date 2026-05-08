@@ -339,6 +339,68 @@ defmodule Engram.IndexingTest do
   end
 
   # ---------------------------------------------------------------------------
+  # commit_index/1 — Qdrant delete filter (T3.2 / T3 audit C1)
+  # ---------------------------------------------------------------------------
+
+  describe "commit_index Qdrant delete filter" do
+    @tag capture_log: true
+    test "filters by base64 path_hmac, not plaintext path (T3.2 / T3-audit C1)",
+         %{bypass: bypass, user: user} do
+      # Regression: T3.2 changed Qdrant.delete_by_note/4 to match against the
+      # `path_hmac` payload key, but commit_index/1 was missed in the sweep
+      # and kept passing plaintext `note.path`. Result: zero points deleted on
+      # every re-index → orphaned ghost chunks accumulate per edit.
+      Engram.Crypto.DekCache.invalidate_all()
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault = insert(:vault, user: user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "ghosts/note.md",
+          "content" => "# Ghosts\n\nBody.",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      test_pid = self()
+
+      Bypass.expect(bypass, fn conn ->
+        if String.ends_with?(conn.request_path, "/points/delete") do
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(test_pid, {:delete_filter, Jason.decode!(body)})
+          Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "ok"}}))
+        else
+          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+        end
+      end)
+
+      assert {:ok, _} = Indexing.index_note(decrypted, vault)
+
+      assert_received {:delete_filter, body}
+      must = body["filter"]["must"]
+
+      path_hmac_clause = Enum.find(must, fn c -> c["key"] == "path_hmac" end)
+      assert path_hmac_clause, "expected delete filter to key on path_hmac, got: #{inspect(must)}"
+      assert path_hmac_clause["match"]["value"] == Base.encode64(note.path_hmac)
+
+      refute Enum.any?(must, fn c -> c["key"] == "source_path" end),
+             "delete filter must not key on plaintext source_path post-T3.2"
+
+      refute Enum.any?(must, fn c ->
+               v = get_in(c, ["match", "value"])
+               is_binary(v) and v == note.path
+             end),
+             "delete filter must not contain plaintext path #{inspect(note.path)}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # delete_note_index/1
   # ---------------------------------------------------------------------------
 
