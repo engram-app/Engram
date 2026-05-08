@@ -91,7 +91,10 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
                    master_key_version: 2
                  })
 
-        assert_received {:fallback, %{outcome: :gated_by_dek_version}}
+        # T3-audit M1 — metadata key is `:status` (consistent with
+        # rotate.user + aad_rebind.user), not `:outcome`.
+        assert_received {:fallback, %{status: :gated_by_dek_version} = meta}
+        refute Map.has_key?(meta, :outcome), "drop legacy :outcome key"
       after
         :telemetry.detach("fallback-gated")
       end
@@ -123,7 +126,7 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
                    master_key_version: 2
                  })
 
-        assert_received {:fallback, %{outcome: :rescued}}
+        assert_received {:fallback, %{status: :rescued}}
       after
         :telemetry.detach("fallback-rescue")
       end
