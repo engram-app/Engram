@@ -122,8 +122,14 @@ defmodule Engram.Crypto do
     end
   end
 
-  defp needs_note_decrypt?(%Engram.Notes.Note{} = note),
-    do: not is_nil(note.content_ciphertext) or not is_nil(note.path_ciphertext)
+  defp needs_note_decrypt?(%Engram.Notes.Note{} = note) do
+    # T3.0.4 — include tags_ciphertext. Sub-helpers short-circuit on each
+    # field's own nil, but the outer gate must trigger if *any* ciphertext
+    # is present, otherwise tags-only rows skip decrypt silently.
+    not is_nil(note.content_ciphertext) or
+      not is_nil(note.path_ciphertext) or
+      not is_nil(note.tags_ciphertext)
+  end
 
   defp decrypt_phase_4_note_fields(%Engram.Notes.Note{content_ciphertext: nil} = note, _dek),
     do: {:ok, note}

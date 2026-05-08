@@ -107,6 +107,26 @@ defmodule Engram.CryptoTest do
       assert out.title == "T"
       assert out.tags == ["x"]
     end
+
+    test "decrypts tags-only row (regression: T3.0.4 / M7 gate fix)", %{user: user} do
+      # T3.0.4 — gate previously skipped decrypt when only tags_ciphertext
+      # was set (content_ciphertext + path_ciphertext both nil). Latent
+      # post-B.4, but a single ordering change in upsert could expose it.
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      {:ok, dek} = Crypto.get_dek(user)
+      tags_bin = :erlang.term_to_binary(["alpha", "beta"])
+      {tags_ct, tags_n} = Crypto.Envelope.encrypt(tags_bin, dek)
+
+      note = %Engram.Notes.Note{
+        content_ciphertext: nil,
+        path_ciphertext: nil,
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n
+      }
+
+      {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
+      assert out.tags == ["alpha", "beta"]
+    end
   end
 
   describe "dek_filter_key/1" do
