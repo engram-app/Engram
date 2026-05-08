@@ -210,4 +210,37 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
       assert {:error, _} = Local.unwrap_dek(bogus, %{user_id: 1})
     end
   end
+
+  describe "Logger on dual-fallback failure (T3-audit M5)" do
+    test "logs error when neither current nor _PREVIOUS unwraps the DEK" do
+      # T3-audit M5 — a user whose DEK cannot be unwrapped by EITHER the
+      # current master key OR the configured `_PREVIOUS` is in catastrophic
+      # state: their data is unrecoverable. Telemetry-only signaling is
+      # not enough — this should page operators. Logger.error with
+      # user_id + outcome=failed makes the failure surface in any standard
+      # log pipeline regardless of telemetry handler registration.
+      key_a = :crypto.strong_rand_bytes(32)
+      Application.put_env(:engram, :encryption_master_key, Base.encode64(key_a))
+      dek = Local.generate_dek()
+      {:ok, wrapped_with_a} = Local.wrap_dek(dek, %{user_id: 9999})
+
+      # Now point env at TWO different wrong keys — neither can unwrap.
+      key_b = :crypto.strong_rand_bytes(32)
+      key_c = :crypto.strong_rand_bytes(32)
+      Application.put_env(:engram, :encryption_master_key, Base.encode64(key_b))
+      Application.put_env(:engram, :encryption_master_key_previous, Base.encode64(key_c))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :invalid_wrapping} =
+                   Local.unwrap_dek(wrapped_with_a, %{user_id: 9999})
+        end)
+
+      assert log =~ "dek unwrap failed under both current and _PREVIOUS",
+             "expected error log on dual-key failure, got: #{log}"
+
+      assert log =~ "user_id=9999",
+             "log must carry user_id for triage, got: #{log}"
+    end
+  end
 end

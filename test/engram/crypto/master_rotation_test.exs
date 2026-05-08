@@ -176,6 +176,31 @@ defmodule Engram.Crypto.MasterRotationTest do
     end
   end
 
+  describe "Logger on failure (T3-audit H4)" do
+    test "rotate_user logs error with user_id + reason_label when txn fails" do
+      # T3-audit H4 — failed per-user rotations were emitting telemetry only.
+      # Combined with H2 (no registered telemetry handlers), per-user
+      # failures during a master-key cutover were operationally invisible:
+      # operator sees `%{failed: 20}` aggregate with no user_ids, no
+      # reasons. Failed users brick when `_PREVIOUS` is later removed.
+      bogus_id = -42
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:not_found, ^bogus_id}} = MasterRotation.rotate_user(bogus_id, 2)
+        end)
+
+      assert log =~ "master rotation failed",
+             "expected `master rotation failed` log line, got: #{log}"
+
+      assert log =~ "user_id=#{bogus_id}",
+             "log must carry user_id for triage, got: #{log}"
+
+      assert log =~ "reason_label=not_found",
+             "log must carry reason_label so operators can group failures, got: #{log}"
+    end
+  end
+
   defp refute_in_counts(_counts, _id), do: :ok
 
   import Ecto.Query

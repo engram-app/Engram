@@ -79,7 +79,51 @@ defmodule EngramWeb.Telemetry do
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),
-      summary("vm.total_run_queue_lengths.io")
+      summary("vm.total_run_queue_lengths.io"),
+
+      # Crypto / Encryption Metrics — T3-audit H2.
+      #
+      # Every Tier-3 encryption phase emitted telemetry for operationally-
+      # critical signals. Until they are registered here as Telemetry.Metrics
+      # counters, no PromEx/Sentry pipeline can see them. Pinned by
+      # `test/engram_web/telemetry_test.exs` so future drift breaks the build.
+      counter("engram.crypto.rotate.user.count",
+        tags: [:status, :reason_label],
+        description: "MasterRotation per-user outcome (T3.5 master-key cutover)"
+      ),
+      summary("engram.crypto.rotate.user.duration_us",
+        unit: {:native, :microsecond},
+        tags: [:status],
+        description: "MasterRotation per-user duration"
+      ),
+      counter("engram.crypto.aad_rebind.user.count",
+        tags: [:status, :reason_label],
+        description: "AadRebind per-user outcome (T3.6 backfill)"
+      ),
+      summary("engram.crypto.aad_rebind.user.duration_us",
+        unit: {:native, :microsecond},
+        tags: [:status],
+        description: "AadRebind per-user duration"
+      ),
+      counter("engram.crypto.previous_fallback_hit.count",
+        tags: [:outcome],
+        description:
+          "Previous-master fallback hits — should drop to 0 post-rotation; non-zero `:failed` outcome is catastrophic"
+      ),
+      counter("engram.crypto.boot_canary.count",
+        tags: [:status, :reason_label],
+        description: "Boot canary outcomes — `:failed` halts boot via BootCanaryGuard"
+      ),
+      counter("engram.search.decrypt_failed.count",
+        description:
+          "Search candidate decrypt failures — non-zero rate is an alarm signal (key drift, tampering)"
+      ),
+      counter("engram.search.payload_shape_mismatch.count",
+        description: "Qdrant payload shape mismatches — drift between writer and reader"
+      ),
+      counter("engram.indexing.encrypt_failed.count",
+        description: "Indexing-time encrypt failures (e.g. missing DEK at re-embed)"
+      )
     ]
   end
 

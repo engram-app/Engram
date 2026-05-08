@@ -32,6 +32,8 @@ defmodule Engram.Crypto.KeyProvider.Local do
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.Config
 
+  require Logger
+
   # T3.4 / M2 + T3.6 / H1 — wrap-format constants.
   @wrap_version_v1 0x01
   @wrap_version_v2 0x02
@@ -145,6 +147,22 @@ defmodule Engram.Crypto.KeyProvider.Local do
   end
 
   defp emit_fallback_telemetry(ctx, outcome) do
+    classified = classify_outcome(outcome)
+
+    # T3-audit M5 — a user whose DEK cannot be unwrapped by EITHER the
+    # current master key OR the configured `_PREVIOUS` is in catastrophic
+    # state: their data is unrecoverable. Telemetry-only signaling (which
+    # depends on H2's metric registration AND a scrape pipeline) is not
+    # enough — Logger.error guarantees visibility in any standard log
+    # pipeline so operators page on the failure.
+    if classified == :failed do
+      Logger.error(
+        "dek unwrap failed under both current and _PREVIOUS master keys: " <>
+          "user_id=#{inspect(Map.get(ctx, :user_id))}",
+        category: :crypto_unwrap
+      )
+    end
+
     :telemetry.execute(
       [:engram, :crypto, :previous_fallback_hit],
       %{count: 1},
@@ -153,7 +171,7 @@ defmodule Engram.Crypto.KeyProvider.Local do
         dek_version: Map.get(ctx, :dek_version),
         master_key_version:
           Map.get(ctx, :master_key_version) || Config.master_key_version(),
-        outcome: classify_outcome(outcome)
+        outcome: classified
       }
     )
   end

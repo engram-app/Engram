@@ -258,10 +258,22 @@ defmodule Engram.Crypto.MasterRotation do
   end
 
   defp emit_telemetry(user_id, {:error, reason}, duration_us) do
+    label = classify_reason(reason)
+
+    # T3-audit H4 — telemetry alone is invisible during a master-key
+    # cutover (until H2's metrics are scraped, and even then operators
+    # need user-level triage). Logger.error guarantees the failed user
+    # appears in any standard log pipeline so a stuck rotation is
+    # diagnosable, not just countable.
+    Logger.error(
+      "master rotation failed user_id=#{user_id} reason_label=#{label}",
+      category: :crypto_rotation
+    )
+
     :telemetry.execute(
       [:engram, :crypto, :rotate, :user],
       %{duration_us: duration_us, count: 1},
-      %{user_id: user_id, status: :failed, reason_label: classify_reason(reason)}
+      %{user_id: user_id, status: :failed, reason_label: label}
     )
   end
 

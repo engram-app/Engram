@@ -150,4 +150,28 @@ defmodule Engram.Crypto.AadRebindTest do
     end
   end
 
+  describe "Logger on failure (T3-audit H4)" do
+    test "rebind_user logs error with user_id + reason_label when txn fails" do
+      # T3-audit H4 — failed per-user rebinds were emitting telemetry only.
+      # Combined with H2 (no registered telemetry handlers), per-user
+      # failures during a backfill drain were operationally invisible:
+      # operator sees `%{failed: 7}` aggregate with no user_ids and no
+      # reasons, no way to triage stuck users.
+      bogus_id = -42
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:not_found, ^bogus_id}} = AadRebind.rebind_user(bogus_id)
+        end)
+
+      assert log =~ "aad rebind failed",
+             "expected `aad rebind failed` log line, got: #{log}"
+
+      assert log =~ "user_id=#{bogus_id}",
+             "log must carry user_id for triage, got: #{log}"
+
+      assert log =~ "reason_label=not_found",
+             "log must carry reason_label so operators can group failures, got: #{log}"
+    end
+  end
 end

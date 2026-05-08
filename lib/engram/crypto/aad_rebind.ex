@@ -351,10 +351,21 @@ defmodule Engram.Crypto.AadRebind do
   end
 
   defp emit_telemetry(user_id, {:error, reason}, duration_us) do
+    label = reason_label(reason)
+
+    # T3-audit H4 — telemetry alone leaves operators without per-user
+    # triage during a backfill drain. Logger.error surfaces the user_id +
+    # reason_label in any standard log pipeline so a stuck rebind is
+    # diagnosable, not just countable.
+    Logger.error(
+      "aad rebind failed user_id=#{user_id} reason_label=#{label}",
+      category: :crypto_rebind
+    )
+
     :telemetry.execute(
       [:engram, :crypto, :aad_rebind, :user],
       %{duration_us: duration_us, count: 1},
-      %{user_id: user_id, status: :failed, reason_label: reason_label(reason)}
+      %{user_id: user_id, status: :failed, reason_label: label}
     )
   end
 
