@@ -30,8 +30,14 @@ defmodule EngramWeb.NotesController do
 
         {:error, reason} ->
           require Logger
-          Logger.error("upsert_note returned unexpected error: #{inspect(reason)}")
-          conn |> put_status(500) |> json(%{error: "internal", reason: inspect(reason)})
+
+          Logger.error("upsert_note returned unexpected error",
+            reason: inspect(reason),
+            user_id: user.id,
+            vault_id: vault.id
+          )
+
+          conn |> put_status(500) |> json(%{error: "internal"})
       end
     end
   end
