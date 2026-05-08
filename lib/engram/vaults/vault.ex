@@ -14,6 +14,8 @@ defmodule Engram.Vaults.Vault do
     field :name_ciphertext, :binary
     field :name_nonce, :binary
     field :name_hmac, :binary
+    # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
+    field :dek_version, :integer, default: 1
 
     belongs_to :user, Engram.Accounts.User
 

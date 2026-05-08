@@ -88,18 +88,6 @@ defmodule Engram.Crypto do
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}
   def get_dek(%User{encrypted_dek: nil}), do: {:error, :no_dek}
 
-  # T3.3 / M9 — mark every caller process that touches a plaintext DEK as
-  # `:sensitive`, so its heap is excluded from any future BEAM crash dump.
-  # Set-once-per-process: process_flag/2 is sticky for the process lifetime.
-  # Cost is negligible — Phoenix request handlers and Oban workers process
-  # encryption-bearing requests on essentially every job, so the flag would
-  # be set on first call regardless.
-  @compile {:inline, mark_sensitive: 0}
-  defp mark_sensitive do
-    :erlang.process_flag(:sensitive, true)
-    :ok
-  end
-
   def get_dek(%User{id: user_id, encrypted_dek: blob}) do
     mark_sensitive()
 
@@ -119,6 +107,17 @@ defmodule Engram.Crypto do
             err
         end
     end
+  end
+
+  # T3.3 / M9 — mark every caller process that touches a plaintext DEK as
+  # `:sensitive`, so its heap is excluded from any future BEAM crash dump.
+  # Set-once-per-process: process_flag/2 is sticky for the process lifetime.
+  # Cost is negligible — Phoenix request handlers and Oban workers process
+  # encryption-bearing requests on essentially every job.
+  @compile {:inline, mark_sensitive: 0}
+  defp mark_sensitive do
+    :erlang.process_flag(:sensitive, true)
+    :ok
   end
 
   @doc """

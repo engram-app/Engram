@@ -108,6 +108,20 @@ defmodule Engram.CryptoTest do
       assert out.tags == ["x"]
     end
 
+    test "newly-inserted note rows carry dek_version=1 (T3.4 / H5)", %{user: user} do
+      # T3.4 / H5 — the per-row column was added with default 1. New rows
+      # inserted via the factory satisfy that default. This test locks the
+      # contract so the column doesn't get accidentally dropped or
+      # repurposed before the rotation flywheel uses it.
+      vault = insert(:vault, user: user)
+      note = insert(:note, user: user, vault: vault)
+
+      reloaded =
+        Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+
+      assert reloaded.dek_version == 1
+    end
+
     test "decrypts tags-only row (regression: T3.0.4 / M7 gate fix)", %{user: user} do
       # T3.0.4 — gate previously skipped decrypt when only tags_ciphertext
       # was set (content_ciphertext + path_ciphertext both nil). Latent

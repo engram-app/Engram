@@ -22,6 +22,8 @@ defmodule Engram.Attachments.Attachment do
     field :storage_key, :string
     field :deleted_at, :utc_datetime
     field :encryption_version, :integer, default: 1
+    # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
+    field :dek_version, :integer, default: 1
     field :content_nonce, :binary
 
     belongs_to :user, Engram.Accounts.User

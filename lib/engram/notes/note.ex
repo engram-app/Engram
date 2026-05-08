@@ -14,6 +14,11 @@ defmodule Engram.Notes.Note do
     field :content, :string, virtual: true
 
     field :version, :integer, default: 1
+    # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
+    # Default 1 today; future rotation campaigns stamp the new version on
+    # rewritten rows. Read path consumers key off this column once T3.5 /
+    # T3.7 introduce a `users.dek_version > 1` cohort.
+    field :dek_version, :integer, default: 1
     field :content_hash, :string
     field :embed_hash, :string
     field :mtime, :float
