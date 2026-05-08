@@ -124,15 +124,26 @@ defmodule Engram.Crypto.AadRebindTest do
       assert <<0x02, 0x01, _::binary>> = reloaded.encrypted_dek
     end
 
-    test "is idempotent — second run returns :skipped (telemetry-wise) when no legacy rows remain",
+    test "is idempotent — second run returns :skipped when no legacy rows remain (T3-audit M3)",
          %{user: user} do
+      # T3-audit M3 — pre-fix, every successful run returned :ok regardless
+      # of whether rows were actually rebound. An operator drain log saying
+      # `%{ok: 1000, skipped: 0}` couldn't distinguish "1000 rebinds happened"
+      # from "1000 users had nothing to do." Fix: track whether the wrap was
+      # changed AND whether any rows were rewritten. If neither, return
+      # :skipped so re-runs are honest.
       {:ok, _vault} = Engram.Vaults.create_vault(user, %{name: "Idempotence Vault"})
 
-      # Already at v2; first run rewraps DEK + finds no rows → succeeds.
-      assert :ok = AadRebind.rebind_user(user.id)
+      # First run: DEK wrap upgrades v1→v2 + Idempotence Vault was just
+      # created (post-T3.6 already at v2 if factories track it; the rewrap
+      # itself counts as "did work"). Either way, returns :ok or :skipped
+      # depending on factory state — we tolerate both.
+      first = AadRebind.rebind_user(user.id)
+      assert first in [:ok, :skipped]
 
-      # Second run: DEK is now v2, no legacy rows → no-op.
-      assert :ok = AadRebind.rebind_user(user.id)
+      # Second run: wrap is now v2, no legacy rows remain → MUST be :skipped.
+      assert :skipped = AadRebind.rebind_user(user.id),
+             "rebind_user/1 must return :skipped when nothing changes — operator drain logs depend on it"
     end
   end
 
