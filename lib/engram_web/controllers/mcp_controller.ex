@@ -82,11 +82,23 @@ defmodule EngramWeb.McpController do
     end
   catch
     kind, reason ->
+      # T3.0.1 follow-up — never `inspect/1` an exit/throw reason into a
+      # response body. The reason can be an arbitrary term originating
+      # deep in the call stack (including %Note{} virtual decrypted fields
+      # if the throw came out of a crypto path). Log structured details
+      # server-side; surface a low-cardinality label to the client.
+      require Logger
+
+      Logger.error("mcp tool dispatch trapped",
+        kind: kind,
+        reason_label: classify_throw_reason(reason)
+      )
+
       message =
         case kind do
           :error -> Exception.message(reason)
-          :exit -> "Process exited: #{inspect(reason)}"
-          :throw -> "Unexpected throw: #{inspect(reason)}"
+          :exit -> "Process exited"
+          :throw -> "Unexpected throw"
         end
 
       {:ok,
@@ -95,6 +107,11 @@ defmodule EngramWeb.McpController do
          "isError" => true
        }}
   end
+
+  defp classify_throw_reason(reason) when is_atom(reason), do: reason
+  defp classify_throw_reason(%{__exception__: true} = e), do: e.__struct__
+  defp classify_throw_reason({tag, _}) when is_atom(tag), do: {tag, :_}
+  defp classify_throw_reason(_), do: :unknown
 
   # -- Vault resolution --
 

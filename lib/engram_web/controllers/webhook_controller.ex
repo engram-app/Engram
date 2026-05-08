@@ -96,10 +96,11 @@ defmodule EngramWeb.WebhookController do
   # those values come from Stripe (potentially echoing emails or customer
   # input). Reduce to the error tuple list, which carries only field names
   # and validator messages.
+  # Logger metadata helper only — sole call site is Logger.warning/2 above.
   defp format_reason(%Ecto.Changeset{} = cs) do
-    Ecto.Changeset.traverse_errors(cs, fn {msg, _opts} -> msg end) |> inspect()
+    Ecto.Changeset.traverse_errors(cs, fn {msg, _opts} -> msg end) |> inspect() # noqa: T3.0.6 — Logger metadata only
   end
 
   defp format_reason(reason) when is_atom(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: inspect(reason) # noqa: T3.0.6 — Logger metadata only
 end

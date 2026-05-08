@@ -31,8 +31,14 @@ defmodule EngramWeb.NotesController do
         {:error, reason} ->
           require Logger
 
+          # T3.0.1 follow-up — log a low-cardinality label, not the raw
+          # struct. The catch-all branch can be reached with %Ecto.Changeset{},
+          # %Postgrex.Error{}, plain atoms, or future variants. Any of those
+          # could carry virtual decrypted note fields if a future regression
+          # surfaces a %Note{} inside a reason tuple. Label keeps the metric
+          # signal without the leak surface.
           Logger.error("upsert_note returned unexpected error",
-            reason: inspect(reason),
+            reason_label: classify_reason(reason),
             user_id: user.id,
             vault_id: vault.id
           )
@@ -168,4 +174,9 @@ defmodule EngramWeb.NotesController do
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
+
+  defp classify_reason(reason) when is_atom(reason), do: reason
+  defp classify_reason(%Ecto.Changeset{}), do: :changeset
+  defp classify_reason(%{__exception__: true} = e), do: e.__struct__
+  defp classify_reason(_), do: :unknown
 end

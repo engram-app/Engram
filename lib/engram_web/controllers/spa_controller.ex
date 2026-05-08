@@ -54,7 +54,9 @@ defmodule EngramWeb.SpaController do
       case Application.get_env(:engram, :auth_provider, :local) do
         :local -> "local"
         :clerk -> "clerk"
-        other -> raise "Invalid :auth_provider config: #{inspect(other)}"
+        other ->
+          # noqa: T3.0.6 — boot-time raise; value is an app config atom, never user input.
+          raise "Invalid :auth_provider config: #{inspect(other)}" # noqa: T3.0.6
       end
 
     config = %{

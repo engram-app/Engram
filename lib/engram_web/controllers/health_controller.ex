@@ -20,10 +20,15 @@ defmodule EngramWeb.HealthController do
     |> json(%{status: status, checks: checks})
   end
 
+  # T3.0.1 follow-up — never `inspect/1` an error reason into a JSON
+  # response body. Postgrex / Mint structs interpolated via inspect can
+  # carry connection strings, hostnames, or dependency-internal shapes.
+  # `format_error/1` keeps the message low-cardinality and predictable.
+
   defp check_postgres do
     case Ecto.Adapters.SQL.query(Engram.Repo, "SELECT 1", []) do
       {:ok, _} -> "ok"
-      {:error, reason} -> "error: #{inspect(reason)}"
+      {:error, reason} -> "error: #{format_error(reason)}"
     end
   rescue
     e -> "error: #{Exception.message(e)}"
@@ -35,9 +40,13 @@ defmodule EngramWeb.HealthController do
     case Req.get("#{qdrant_url}/healthz", receive_timeout: 5_000, retry: false) do
       {:ok, %{status: status}} when status in 200..299 -> "ok"
       {:ok, %{status: status}} -> "error: status #{status}"
-      {:error, reason} -> "error: #{inspect(reason)}"
+      {:error, reason} -> "error: #{format_error(reason)}"
     end
   rescue
     e -> "error: #{Exception.message(e)}"
   end
+
+  defp format_error(%{__exception__: true} = e), do: Exception.message(e)
+  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_error(_), do: "internal"
 end

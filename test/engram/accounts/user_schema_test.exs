@@ -30,11 +30,12 @@ defmodule Engram.Accounts.UserSchemaTest do
       refute out =~ "encrypted_dek:"
     end
 
-    test "drops the field entirely from inspect output (Ecto redact behavior)" do
-      out = inspect(user_with_secrets())
-      # Ecto redact: true causes inspect/1 to omit the field and emit `...` truncation marker.
-      assert out =~ "..."
-    end
+    # The contract this protects is "no sensitive bytes appear in inspect/1
+    # output." That contract is fully covered by the refute-based tests
+    # above (no `deadbeef`, no `secrethashvalue`, no `encrypted_dek:` key).
+    # Asserting the truncation marker `...` would pass for the wrong reason
+    # — Ecto's redact-derived Inspect impl varies across versions (literal
+    # `**redacted**` in some, dropped+truncated in others).
 
     test "masks password_hash" do
       out = inspect(user_with_secrets())
@@ -65,6 +66,30 @@ defmodule Engram.Accounts.UserSchemaTest do
       refute json =~ "key_provider"
       refute json =~ "deadbeef"
       refute json =~ "secrethashvalue"
+    end
+
+    test "allowlist matches the schema's actual timestamp field name" do
+      # Regression guard: the schema overrides `inserted_at: :created_at`
+      # via `timestamps/1`. If anyone reverts to the Ecto default, the
+      # allowlist's `:created_at` entry would reference a field absent
+      # from the struct. Jason raises Protocol.UndefinedError at runtime
+      # in that case. This test exercises the full encode path with a
+      # populated timestamp so the schema/allowlist pair stays in sync.
+      now = ~U[2026-05-07 12:00:00Z]
+
+      user = %User{
+        id: 42,
+        email: "ts@example.com",
+        role: "member",
+        display_name: "TS",
+        created_at: now,
+        updated_at: now
+      }
+
+      decoded = Jason.encode!(user) |> Jason.decode!()
+
+      assert decoded["created_at"] == "2026-05-07T12:00:00Z"
+      assert decoded["updated_at"] == "2026-05-07T12:00:00Z"
     end
   end
 end

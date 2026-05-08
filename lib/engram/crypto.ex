@@ -123,9 +123,10 @@ defmodule Engram.Crypto do
   end
 
   defp needs_note_decrypt?(%Engram.Notes.Note{} = note) do
-    # T3.0.4 — include tags_ciphertext. Sub-helpers short-circuit on each
-    # field's own nil, but the outer gate must trigger if *any* ciphertext
-    # is present, otherwise tags-only rows skip decrypt silently.
+    # T3.0.4 — gate on the three independent ciphertext "groups." Sub-helpers
+    # short-circuit on each field's own nil, so we only need to check one
+    # representative per group: content (with title), path (with folder),
+    # and tags (standalone). Any group present → load DEK + run decrypt.
     not is_nil(note.content_ciphertext) or
       not is_nil(note.path_ciphertext) or
       not is_nil(note.tags_ciphertext)
