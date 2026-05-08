@@ -34,7 +34,7 @@ defmodule Engram.Crypto.BootCanary do
   import Ecto.Query, only: [from: 2]
   require Logger
 
-  alias Engram.Crypto.{Envelope, KeyProvider.Local}
+  alias Engram.Crypto.KeyProvider.Local
   alias Engram.Repo
 
   @canary_dek_size 32
@@ -131,7 +131,4 @@ defmodule Engram.Crypto.BootCanary do
   defp reason_label(:malformed_wrapped_blob), do: "malformed_wrapped_blob"
   defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_label(_), do: "other"
-
-  # Suppress compiler warning on Envelope alias used elsewhere in module future-proof.
-  _ = Envelope
 end
