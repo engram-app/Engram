@@ -29,13 +29,14 @@ defmodule Engram.Attachments do
 
     with {:ok, plaintext} <- decode_base64(content_b64),
          :ok <- validate_size(plaintext),
-         {:ok, key, changeset_attrs, ciphertext} <-
-           prepare_upload(user, vault, path, plaintext, mtime, explicit_mime),
-         :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
-      path_hmac = changeset_attrs.path_hmac
+         {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      path_hmac = Crypto.hmac_field(filter_key, path)
 
-      Repo.with_tenant(user.id, fn ->
-        existing =
+      # Find existing FIRST so we can reuse its id for AAD; otherwise
+      # pre-allocate a fresh attachment id from the bigserial sequence.
+      existing =
+        Repo.with_tenant(user.id, fn ->
           Repo.one(
             from(a in Attachment,
               where:
@@ -43,26 +44,43 @@ defmodule Engram.Attachments do
                   a.vault_id == ^vault.id
             )
           )
-
-        case existing do
-          nil ->
-            %Attachment{}
-            |> Attachment.changeset(changeset_attrs)
-            |> Repo.insert()
-
-          att ->
-            att
-            |> Attachment.changeset(changeset_attrs)
-            |> Repo.update()
+        end)
+        |> unwrap_tenant()
+        |> case do
+          {:ok, att} -> att
+          {:error, _} -> nil
         end
-      end)
-      |> unwrap_tenant()
-      |> case do
-        # Phase B.3: path is virtual — splice the plaintext we already have
-        # onto the returned struct so callers can read att.path without a
-        # second decrypt round-trip.
-        {:ok, att} -> {:ok, %{att | path: path}}
-        other -> other
+
+      att_id =
+        case existing do
+          nil -> Crypto.next_row_id(:attachments)
+          %Attachment{id: id} -> id
+        end
+
+      with {:ok, key, changeset_attrs, ciphertext} <-
+             prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime),
+           :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
+        Repo.with_tenant(user.id, fn ->
+          case existing do
+            nil ->
+              %Attachment{id: att_id}
+              |> Attachment.changeset(changeset_attrs)
+              |> Repo.insert()
+
+            att ->
+              att
+              |> Attachment.changeset(changeset_attrs)
+              |> Repo.update()
+          end
+        end)
+        |> unwrap_tenant()
+        |> case do
+          # Phase B.3: path is virtual — splice the plaintext we already
+          # have onto the returned struct so callers can read att.path
+          # without a second decrypt round-trip.
+          {:ok, att} -> {:ok, %{att | path: path}}
+          other -> other
+        end
       end
     end
   end
@@ -263,17 +281,17 @@ defmodule Engram.Attachments do
       else: :ok
   end
 
-  defp prepare_upload(user, vault, path, plaintext, mtime, explicit_mime) do
+  defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do
     mime = explicit_mime || detect_mime(path)
     key = Storage.key(user.id, vault.id, path)
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, dek} <- Crypto.get_dek(user),
+    with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
       hash = Crypto.hmac_content_hash(content_key, plaintext)
-      {ciphertext, nonce} = Envelope.encrypt(plaintext, dek)
-      {path_ct, path_n} = Envelope.encrypt(path, dek)
-      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      content_aad = Crypto.aad_for_row(:attachments, :content, att_id)
+      path_aad = Crypto.aad_for_row(:attachments, :path, att_id)
+      {ciphertext, nonce} = Envelope.encrypt(plaintext, dek, content_aad)
+      {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
 
       attrs = %{
         content_hash: hash,
@@ -285,10 +303,11 @@ defmodule Engram.Attachments do
         storage_key: key,
         deleted_at: nil,
         encryption_version: 1,
+        dek_version: Crypto.row_version_aad_bound(),
         content_nonce: nonce,
         path_ciphertext: path_ct,
         path_nonce: path_n,
-        path_hmac: Crypto.hmac_field(filter_key, path)
+        path_hmac: path_hmac
       }
 
       {:ok, key, attrs, ciphertext}
@@ -309,8 +328,13 @@ defmodule Engram.Attachments do
   defp fresh_user(%Engram.Accounts.User{} = user), do: user
 
   defp decrypt(%Attachment{content_nonce: nonce} = att, ciphertext, user) do
+    aad =
+      if is_integer(att.dek_version) and att.dek_version >= 2,
+        do: Crypto.aad_for_row(:attachments, :content, att.id),
+        else: <<>>
+
     with {:ok, dek} <- Crypto.get_dek(fresh_user(user)),
-         {:ok, plaintext} <- Envelope.decrypt(ciphertext, nonce, dek) do
+         {:ok, plaintext} <- Envelope.decrypt(ciphertext, nonce, dek, aad) do
       {:ok, %{att | content: plaintext}}
     else
       :error -> {:error, :decrypt_failed}

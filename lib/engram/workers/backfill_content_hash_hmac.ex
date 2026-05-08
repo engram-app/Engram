@@ -161,9 +161,14 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   end
 
   defp rehash_attachment(att, user, content_key) do
+    aad =
+      if is_integer(att.dek_version) and att.dek_version >= 2,
+        do: Crypto.aad_for_row(:attachments, :content, att.id),
+        else: <<>>
+
     with {:ok, ciphertext} <- Storage.adapter().get(att.storage_key),
          {:ok, dek} <- Crypto.get_dek(user),
-         {:ok, plaintext} <- Envelope.decrypt(ciphertext, att.content_nonce, dek) do
+         {:ok, plaintext} <- Envelope.decrypt(ciphertext, att.content_nonce, dek, aad) do
       new_hash = Crypto.hmac_content_hash(content_key, plaintext)
 
       from(a in Attachment, where: a.id == ^att.id)

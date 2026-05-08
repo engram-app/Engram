@@ -247,7 +247,10 @@ defmodule Engram.Vector.Qdrant do
               # Nonce keys are only present on encrypted-vault chunks; nil otherwise.
               text_nonce: Map.get(payload, "text_nonce"),
               title_nonce: Map.get(payload, "title_nonce"),
-              heading_path_nonce: Map.get(payload, "heading_path_nonce")
+              heading_path_nonce: Map.get(payload, "heading_path_nonce"),
+              # T3.6 — present on AAD-bound payloads (>= v2). Drives the
+              # bind-vs-empty AAD decision in `Engram.Crypto.qdrant_aad/3`.
+              aad_version: Map.get(payload, "aad_version")
             }
             |> Enum.reject(fn {_k, v} -> is_nil(v) end)
             |> Map.new()

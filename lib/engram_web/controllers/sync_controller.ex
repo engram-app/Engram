@@ -33,12 +33,15 @@ defmodule EngramWeb.SyncController do
   end
 
   defp render_manifest(conn, user, vault, dek) do
+    # T3.6 — project `id` and `dek_version` so AAD-bound rows (v ≥ 2) can
+    # reconstruct the bind string ("notes:path:<id>" / "attachments:path:<id>")
+    # at decrypt time. Legacy rows (v = 1) decrypt with empty AAD.
     {:ok, note_rows} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
             where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: {n.path_ciphertext, n.path_nonce, n.content_hash}
+            select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.content_hash}
           )
         )
       end)
@@ -48,23 +51,25 @@ defmodule EngramWeb.SyncController do
         Repo.all(
           from(a in Attachment,
             where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
-            select: {a.path_ciphertext, a.path_nonce, a.content_hash}
+            select: {a.id, a.dek_version, a.path_ciphertext, a.path_nonce, a.content_hash}
           )
         )
       end)
 
     notes =
       note_rows
-      |> Enum.map(fn {path_ct, path_nonce, hash} ->
-        path = decrypt_path!(path_ct, path_nonce, dek)
+      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
+        aad = path_aad(:notes, id, dek_version)
+        path = decrypt_path!(path_ct, path_nonce, dek, aad)
         %{path: path, content_hash: hash}
       end)
       |> Enum.sort_by(& &1.path)
 
     attachments =
       attachment_rows
-      |> Enum.map(fn {path_ct, path_nonce, hash} ->
-        path = decrypt_path!(path_ct, path_nonce, dek)
+      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
+        aad = path_aad(:attachments, id, dek_version)
+        path = decrypt_path!(path_ct, path_nonce, dek, aad)
         %{path: path, content_hash: hash}
       end)
       |> Enum.sort_by(& &1.path)
@@ -77,8 +82,13 @@ defmodule EngramWeb.SyncController do
     })
   end
 
-  defp decrypt_path!(ciphertext, nonce, dek) do
-    case Envelope.decrypt(ciphertext, nonce, dek) do
+  defp path_aad(table, id, dek_version) when is_integer(dek_version) and dek_version >= 2,
+    do: Crypto.aad_for_row(table, :path, id)
+
+  defp path_aad(_table, _id, _v), do: <<>>
+
+  defp decrypt_path!(ciphertext, nonce, dek, aad) do
+    case Envelope.decrypt(ciphertext, nonce, dek, aad) do
       {:ok, path} -> path
       :error -> raise "manifest path decrypt failed — possible data corruption"
     end

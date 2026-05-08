@@ -4,24 +4,27 @@ defmodule Engram.Crypto.KeyProvider.Local do
   Wraps DEKs with AES-256-GCM using ENCRYPTION_MASTER_KEY.
   Supports one-key-back fallback for rotation via ENCRYPTION_MASTER_KEY_PREVIOUS.
 
-  ## Wrap format (T3.4 / M2)
+  ## Wrap format (T3.4 / M2 + T3.6 / H1)
 
-  New writes use a 2-byte header before nonce + ciphertext:
+  Three coexisting shapes:
 
-      <<0x01, 0x01, nonce::binary-size(12), ct::binary>>
-      # ^^^   ^^^   ^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^
-      #  |     |    |                       AES-GCM ct + 16-byte tag
-      #  |     |    fresh per-encrypt nonce
-      #  |     algorithm id (0x01 = AES-256-GCM)
-      #  wrap-format version (0x01 = first header-bearing version)
+      v2 (T3.6, AAD-bound):
+        <<0x02, 0x01, nonce::binary-size(12), ct::binary>>
+        AAD on encrypt = "dek:v1:<user_id>" (pulled from ctx.user_id).
 
-  Pre-T3.4 rows in DB carry the legacy raw shape `<<nonce::12, ct::binary>>`
-  (no header). `unwrap_dek/2` reads both shapes — the version-byte form
-  matches first, and a 60-byte raw shape falls through to the legacy
-  clause. Disambiguation is by total `byte_size/1`:
+      v1 (T3.4, no AAD):
+        <<0x01, 0x01, nonce::binary-size(12), ct::binary>>
+        AAD = <<>>.
 
-      legacy: 12 (nonce) + 32 (DEK) + 16 (GCM tag) = 60 bytes
-      v1:      2 (header) + 60                     = 62 bytes
+      legacy (pre-T3.4, no AAD, no header):
+        <<nonce::binary-size(12), ct::binary>>
+
+  `wrap_dek/2` always emits v2. `unwrap_dek/2` reads all three based on the
+  leading byte and total `byte_size/1`:
+
+      legacy: 12 (nonce) + 32 (DEK) + 16 (GCM tag) = 60 bytes, no header
+      v1:      2 (header) + 60                     = 62 bytes, header 0x01
+      v2:      2 (header) + 60                     = 62 bytes, header 0x02
   """
 
   @behaviour Engram.Crypto.KeyProvider
@@ -29,8 +32,9 @@ defmodule Engram.Crypto.KeyProvider.Local do
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.Config
 
-  # T3.4 / M2 — wrap-format constants.
+  # T3.4 / M2 + T3.6 / H1 — wrap-format constants.
   @wrap_version_v1 0x01
+  @wrap_version_v2 0x02
   @alg_aes_256_gcm 0x01
 
   @impl true
@@ -40,25 +44,33 @@ defmodule Engram.Crypto.KeyProvider.Local do
   def generate_dek, do: Engram.Crypto.KeyProvider.default_generate_dek()
 
   @impl true
-  def wrap_dek(<<_::256>> = dek, _ctx) do
+  def wrap_dek(<<_::256>> = dek, ctx) do
+    user_id = require_user_id!(ctx)
+    aad = Engram.Crypto.aad_for_wrapped_dek(user_id)
     master = Config.local_master_key!()
-    {ct, nonce} = Envelope.encrypt(dek, master)
+    {ct, nonce} = Envelope.encrypt(dek, master, aad)
 
     {:ok,
-     <<@wrap_version_v1, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>}
+     <<@wrap_version_v2, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>}
   end
 
   @impl true
   def unwrap_dek(blob, ctx) when is_binary(blob) do
     case blob do
+      <<@wrap_version_v2, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>
+      when byte_size(blob) == 62 ->
+        # T3.6 — AAD-bound wrap. AAD = "dek:v1:<user_id>" pulled from ctx.
+        user_id = require_user_id!(ctx)
+        do_unwrap(ct, nonce, ctx, Engram.Crypto.aad_for_wrapped_dek(user_id))
+
       <<@wrap_version_v1, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>
       when byte_size(blob) == 62 ->
-        do_unwrap(ct, nonce, ctx)
+        # T3.4 v1 — header present, no AAD.
+        do_unwrap(ct, nonce, ctx, <<>>)
 
       <<nonce::binary-size(12), ct::binary>> when byte_size(blob) == 60 ->
-        # T3.4 — legacy pre-header shape. Kept for backward read so the
-        # wrap-version rollout does not require a backfill pass.
-        do_unwrap(ct, nonce, ctx)
+        # Pre-T3.4 raw shape. No AAD.
+        do_unwrap(ct, nonce, ctx, <<>>)
 
       _ ->
         {:error, :malformed_wrapped_blob}
@@ -66,6 +78,13 @@ defmodule Engram.Crypto.KeyProvider.Local do
   end
 
   def unwrap_dek(_other, _ctx), do: {:error, :malformed_wrapped_blob}
+
+  defp require_user_id!(ctx) do
+    case Map.get(ctx, :user_id) do
+      nil -> raise ArgumentError, "Local KeyProvider requires ctx.user_id for AAD binding"
+      user_id -> user_id
+    end
+  end
 
   # T3.5 / M4 — `_PREVIOUS` fallback is gated on the user's `dek_version`
   # vs the configured `master_key_version`. A user whose dek_version is
@@ -77,19 +96,19 @@ defmodule Engram.Crypto.KeyProvider.Local do
   # Telemetry `[:engram, :crypto, :previous_fallback_hit]` fires
   # whenever the fallback is consulted (whether it rescues or not), so
   # operators can watch the count drop to zero post-rotation.
-  defp do_unwrap(ct, nonce, ctx) do
+  defp do_unwrap(ct, nonce, ctx, aad) do
     current = Config.local_master_key!()
 
-    case Envelope.decrypt(ct, nonce, current) do
+    case Envelope.decrypt(ct, nonce, current, aad) do
       {:ok, <<_::256>> = dek} ->
         {:ok, dek}
 
       :error ->
-        try_previous_fallback(ct, nonce, ctx)
+        try_previous_fallback(ct, nonce, ctx, aad)
     end
   end
 
-  defp try_previous_fallback(ct, nonce, ctx) do
+  defp try_previous_fallback(ct, nonce, ctx, aad) do
     if previous_fallback_allowed?(ctx) do
       case Config.local_master_key_previous() do
         nil ->
@@ -98,7 +117,7 @@ defmodule Engram.Crypto.KeyProvider.Local do
 
         prev ->
           result =
-            case Envelope.decrypt(ct, nonce, prev) do
+            case Envelope.decrypt(ct, nonce, prev, aad) do
               {:ok, <<_::256>> = dek} -> {:ok, dek}
               :error -> {:error, :invalid_wrapping}
             end
@@ -161,25 +180,42 @@ defmodule Engram.Crypto.KeyProvider.Local do
   from `unwrap_dek/2` so production callers cannot accidentally adopt
   this mode and break legitimate rotation reads.
   """
-  @spec unwrap_dek_current_only(binary()) :: {:ok, <<_::256>>} | {:error, term()}
-  def unwrap_dek_current_only(blob) when is_binary(blob) do
+  @spec unwrap_dek_current_only(binary(), keyword()) ::
+          {:ok, <<_::256>>} | {:error, term()}
+  def unwrap_dek_current_only(blob, opts \\ []) when is_binary(blob) do
     current = Config.local_master_key!()
+    user_id = Keyword.get(opts, :user_id)
 
     case blob do
+      <<@wrap_version_v2, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>
+      when byte_size(blob) == 62 ->
+        case user_id do
+          nil ->
+            {:error, :missing_user_id_for_aad}
+
+          uid ->
+            decrypt_or_invalid(
+              ct,
+              nonce,
+              current,
+              Engram.Crypto.aad_for_wrapped_dek(uid)
+            )
+        end
+
       <<@wrap_version_v1, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>
       when byte_size(blob) == 62 ->
-        decrypt_or_invalid(ct, nonce, current)
+        decrypt_or_invalid(ct, nonce, current, <<>>)
 
       <<nonce::binary-size(12), ct::binary>> when byte_size(blob) == 60 ->
-        decrypt_or_invalid(ct, nonce, current)
+        decrypt_or_invalid(ct, nonce, current, <<>>)
 
       _ ->
         {:error, :malformed_wrapped_blob}
     end
   end
 
-  defp decrypt_or_invalid(ct, nonce, key) do
-    case Envelope.decrypt(ct, nonce, key) do
+  defp decrypt_or_invalid(ct, nonce, key, aad) do
+    case Envelope.decrypt(ct, nonce, key, aad) do
       {:ok, <<_::256>> = dek} -> {:ok, dek}
       :error -> {:error, :invalid_wrapping}
     end

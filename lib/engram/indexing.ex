@@ -173,7 +173,7 @@ defmodule Engram.Indexing do
           tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1)
         }
 
-        case Engram.Crypto.encrypt_qdrant_payload(base_payload, user) do
+        case Engram.Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id) do
           {:ok, payload} ->
             row = %{
               note_id: note.id,

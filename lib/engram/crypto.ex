@@ -14,6 +14,90 @@ defmodule Engram.Crypto do
   alias Engram.Crypto.{DekCache, Envelope, KeyProvider.Resolver}
   alias Engram.Repo
 
+  # T3.6 / H1 — per-row encryption format version.
+  #   1 = legacy: ciphertext was written with empty AAD (`<<>>`).
+  #   2 = AAD-bound: ciphertext is bound to "<table>:<column>:<row_id>"
+  #       (or "qdrant:<collection>:<qdrant_id>:<field>" for Qdrant payloads).
+  # Writers stamp `:aad_bound` (= 2) on every new row. Reads dispatch on the
+  # row's stored value: legacy rows decrypt with empty AAD, AAD-bound rows
+  # reconstruct the bind string from the row's identity.
+  #
+  # Distinct from `users.dek_version` (master-key generation, T3.5) and from
+  # the wrap-format byte on `users.encrypted_dek` (0x01 = no AAD,
+  # 0x02 = AAD-bound, T3.6). The three version concepts are intentionally
+  # orthogonal — a user can hold an AAD-bound wrapped DEK (0x02) while still
+  # carrying legacy `dek_version=1` rows pending the rebind backfill, or vice
+  # versa during the migration window.
+  @row_version_legacy 1
+  @row_version_aad_bound 2
+
+  @doc "Per-row encryption format version stamped on AAD-bound writes."
+  def row_version_aad_bound, do: @row_version_aad_bound
+
+  @doc "Per-row legacy version (no AAD)."
+  def row_version_legacy, do: @row_version_legacy
+
+  @doc """
+  Pre-allocates a primary-key id from a table's bigserial sequence. Used
+  before AAD-bound INSERT so the row's AAD can include its eventual `row_id`.
+  Caller passes the allocated `id` into the changeset; Ecto inserts with
+  the explicit id and the sequence already advanced.
+  """
+  @spec next_row_id(atom() | String.t()) :: pos_integer()
+  def next_row_id(table) when is_atom(table), do: next_row_id(Atom.to_string(table))
+
+  def next_row_id(table) when is_binary(table) do
+    # Postgrex's typed parameter encoder cannot encode `regclass` from a
+    # text bind, so we interpolate the sequence name as a literal. The
+    # `table` argument is a fixed atom-list (callers in this codebase
+    # pass `:notes`, `:attachments`, `:vaults`) — there is no user input
+    # path that reaches this string. The strict whitelist guards the
+    # boundary in case a future caller passes something dynamic.
+    unless table in ["notes", "attachments", "vaults"] do
+      raise ArgumentError,
+            "next_row_id: unsupported table #{inspect(table)}. " <>
+              "Add to the allowlist in Engram.Crypto."
+    end
+
+    seq = table <> "_id_seq"
+
+    %Postgrex.Result{rows: [[id]]} =
+      Repo.query!("SELECT nextval('#{seq}')", [])
+
+    id
+  end
+
+  @doc "AAD string for a relational row's column. T3.6 / H1."
+  @spec aad_for_row(atom() | String.t(), atom() | String.t(), term()) :: binary()
+  def aad_for_row(table, column, row_id) when is_binary(table) and is_binary(column),
+    do: table <> ":" <> column <> ":" <> to_string(row_id)
+
+  def aad_for_row(table, column, row_id) when is_atom(table),
+    do: aad_for_row(Atom.to_string(table), column, row_id)
+
+  def aad_for_row(table, column, row_id) when is_atom(column),
+    do: aad_for_row(table, Atom.to_string(column), row_id)
+
+  @doc "AAD string for a Qdrant payload field. Bound to point UUID, not chunk_index."
+  @spec aad_for_qdrant(String.t(), String.t(), atom() | String.t()) :: binary()
+  def aad_for_qdrant(collection, qdrant_id, field) when is_atom(field),
+    do: aad_for_qdrant(collection, qdrant_id, Atom.to_string(field))
+
+  def aad_for_qdrant(collection, qdrant_id, field)
+      when is_binary(collection) and is_binary(qdrant_id) and is_binary(field),
+      do: "qdrant:" <> collection <> ":" <> qdrant_id <> ":" <> field
+
+  @doc "AAD string for a wrapped DEK. Binds the wrap to the user it belongs to."
+  @spec aad_for_wrapped_dek(term()) :: binary()
+  def aad_for_wrapped_dek(user_id), do: "dek:v1:" <> to_string(user_id)
+
+  # Returns the AAD to pass at decrypt time for a given row column. Legacy
+  # rows return `<<>>`; AAD-bound rows return the constructed bind string.
+  defp decrypt_aad(%_{dek_version: v} = row, table, column) when v >= @row_version_aad_bound,
+    do: aad_for_row(table, column, row.id)
+
+  defp decrypt_aad(_row, _table, _column), do: <<>>
+
   @doc """
   Ensures the user has a wrapped DEK stored. Idempotent — returns the user
   untouched if `encrypted_dek` is already present.
@@ -136,19 +220,23 @@ defmodule Engram.Crypto do
   `Engram.Notes.phase_b_keyword_for/4`. This helper does not touch tags —
   that's a Phase B contract.
   """
-  @spec encrypt_note_fields(map(), User.t()) :: {:ok, map()} | {:error, term()}
-  def encrypt_note_fields(attrs, %User{} = user) do
+  @spec encrypt_note_fields(map(), User.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
+  def encrypt_note_fields(attrs, %User{} = user, note_id) when is_integer(note_id) do
     with {:ok, user} <- ensure_user_dek(user),
          {:ok, dek} <- get_dek(user) do
       content = Map.get(attrs, :content) || Map.get(attrs, "content") || ""
       title = Map.get(attrs, :title) || Map.get(attrs, "title") || ""
 
-      {content_ct, content_nonce} = Envelope.encrypt(content, dek)
-      {title_ct, title_nonce} = Envelope.encrypt(title, dek)
+      content_aad = aad_for_row(:notes, :content, note_id)
+      title_aad = aad_for_row(:notes, :title, note_id)
+      {content_ct, content_nonce} = Envelope.encrypt(content, dek, content_aad)
+      {title_ct, title_nonce} = Envelope.encrypt(title, dek, title_aad)
 
       {:ok,
        attrs
        |> Map.drop([:content, :title, "content", "title"])
+       |> Map.put(:id, note_id)
+       |> Map.put(:dek_version, @row_version_aad_bound)
        |> Map.put(:content_ciphertext, content_ct)
        |> Map.put(:content_nonce, content_nonce)
        |> Map.put(:title_ciphertext, title_ct)
@@ -194,8 +282,13 @@ defmodule Engram.Crypto do
     do: {:ok, note}
 
   defp decrypt_phase_4_note_fields(%Engram.Notes.Note{} = note, dek) do
-    with {:ok, content} <- Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek),
-         {:ok, title} <- Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek) do
+    content_aad = decrypt_aad(note, :notes, :content)
+    title_aad = decrypt_aad(note, :notes, :title)
+
+    with {:ok, content} <-
+           Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek, content_aad),
+         {:ok, title} <-
+           Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek, title_aad) do
       {:ok, %{note | content: content, title: title}}
     else
       :error -> {:error, :decrypt_failed}
@@ -207,8 +300,12 @@ defmodule Engram.Crypto do
     do: {:ok, note}
 
   defp decrypt_phase_b_note_fields(%Engram.Notes.Note{} = note, dek) do
-    with {:ok, path} <- Envelope.decrypt(note.path_ciphertext, note.path_nonce, dek),
-         {:ok, folder} <- Envelope.decrypt(note.folder_ciphertext, note.folder_nonce, dek) do
+    path_aad = decrypt_aad(note, :notes, :path)
+    folder_aad = decrypt_aad(note, :notes, :folder)
+
+    with {:ok, path} <- Envelope.decrypt(note.path_ciphertext, note.path_nonce, dek, path_aad),
+         {:ok, folder} <-
+           Envelope.decrypt(note.folder_ciphertext, note.folder_nonce, dek, folder_aad) do
       {:ok, %{note | path: path, folder: folder}}
     else
       :error -> {:error, :decrypt_failed}
@@ -222,7 +319,9 @@ defmodule Engram.Crypto do
     do: {:ok, note}
 
   defp decrypt_phase_b_tags(%Engram.Notes.Note{} = note, dek) do
-    case Envelope.decrypt(note.tags_ciphertext, note.tags_nonce, dek) do
+    tags_aad = decrypt_aad(note, :notes, :tags)
+
+    case Envelope.decrypt(note.tags_ciphertext, note.tags_nonce, dek, tags_aad) do
       {:ok, tags_bin} ->
         {:ok, %{note | tags: :erlang.binary_to_term(tags_bin, [:safe])}}
 
@@ -247,8 +346,10 @@ defmodule Engram.Crypto do
         %Engram.Attachments.Attachment{} = att,
         %User{} = user
       ) do
+    path_aad = decrypt_aad(att, :attachments, :path)
+
     with {:ok, dek} <- get_dek(user),
-         {:ok, path} <- Envelope.decrypt(att.path_ciphertext, att.path_nonce, dek) do
+         {:ok, path} <- Envelope.decrypt(att.path_ciphertext, att.path_nonce, dek, path_aad) do
       {:ok, %{att | path: path}}
     else
       :error -> {:error, :decrypt_failed}
@@ -266,8 +367,10 @@ defmodule Engram.Crypto do
     do: {:ok, vault}
 
   def maybe_decrypt_vault_fields(%Engram.Vaults.Vault{} = vault, %User{} = user) do
+    name_aad = decrypt_aad(vault, :vaults, :name)
+
     with {:ok, dek} <- get_dek(user),
-         {:ok, name} <- Envelope.decrypt(vault.name_ciphertext, vault.name_nonce, dek) do
+         {:ok, name} <- Envelope.decrypt(vault.name_ciphertext, vault.name_nonce, dek, name_aad) do
       {:ok, %{vault | name: name}}
     else
       :error -> {:error, :decrypt_failed}
@@ -287,6 +390,14 @@ defmodule Engram.Crypto do
   `Notes.upsert_note/3`, which provisions the DEK. A missing DEK here
   signals a config bug; fail-loud via Oban retry + telemetry is preferable
   to silent lazy-provisioning.
+
+  ## 2-arity vs 4-arity (T3.6)
+
+  The 2-arity form emits non-AAD-bound payloads — kept for tests that mock
+  Qdrant search responses without threading through a stable point id.
+  Production code must use the 4-arity AAD-bound variant; every real point
+  flows through `Engram.Indexing.prepare_index/2` which generates the
+  point UUID before calling `encrypt_qdrant_payload/4`.
   """
   @spec encrypt_qdrant_payload(map(), User.t()) :: {:ok, map()} | {:error, term()}
   def encrypt_qdrant_payload(payload, %User{} = user) do
@@ -306,6 +417,31 @@ defmodule Engram.Crypto do
     end
   end
 
+  @spec encrypt_qdrant_payload(map(), User.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def encrypt_qdrant_payload(payload, %User{} = user, collection, qdrant_id)
+      when is_binary(collection) and is_binary(qdrant_id) do
+    with {:ok, dek} <- get_dek(user) do
+      text_aad = aad_for_qdrant(collection, qdrant_id, :text)
+      title_aad = aad_for_qdrant(collection, qdrant_id, :title)
+      hp_aad = aad_for_qdrant(collection, qdrant_id, :heading_path)
+
+      {text_ct, text_nonce} = Envelope.encrypt(Map.get(payload, :text) || "", dek, text_aad)
+      {title_ct, title_nonce} = Envelope.encrypt(Map.get(payload, :title) || "", dek, title_aad)
+      {hp_ct, hp_nonce} = Envelope.encrypt(Map.get(payload, :heading_path) || "", dek, hp_aad)
+
+      {:ok,
+       payload
+       |> Map.put(:text, Base.encode64(text_ct))
+       |> Map.put(:text_nonce, Base.encode64(text_nonce))
+       |> Map.put(:title, Base.encode64(title_ct))
+       |> Map.put(:title_nonce, Base.encode64(title_nonce))
+       |> Map.put(:heading_path, Base.encode64(hp_ct))
+       |> Map.put(:heading_path_nonce, Base.encode64(hp_nonce))
+       |> Map.put(:aad_version, @row_version_aad_bound)}
+    end
+  end
+
   @doc """
   Decrypts a list of Qdrant search candidates in-place. Phase B.4:
   encryption is mandatory, so every candidate with a known vault is
@@ -322,9 +458,11 @@ defmodule Engram.Crypto do
           String.t() => Engram.Vaults.Vault.t()
         }) ::
           {:ok, [map()]} | {:error, :decrypt_failed}
-  def decrypt_qdrant_candidates([], _user, _vaults_by_id), do: {:ok, []}
+  def decrypt_qdrant_candidates(candidates, user, vaults_by_id, collection \\ nil)
 
-  def decrypt_qdrant_candidates(candidates, %User{} = user, vaults_by_id)
+  def decrypt_qdrant_candidates([], _user, _vaults_by_id, _collection), do: {:ok, []}
+
+  def decrypt_qdrant_candidates(candidates, %User{} = user, vaults_by_id, collection)
       when is_list(candidates) and is_map(vaults_by_id) do
     # Lazy DEK load — only fetch if at least one candidate carries
     # ciphertext. Mocked test traffic that returns plaintext-only
@@ -333,7 +471,7 @@ defmodule Engram.Crypto do
       {:ok, dek_or_nil} ->
         decrypted =
           candidates
-          |> Enum.flat_map(&decrypt_one(&1, vaults_by_id, dek_or_nil))
+          |> Enum.flat_map(&decrypt_one(&1, vaults_by_id, dek_or_nil, collection))
 
         if decrypted == [] and candidates != [] do
           {:error, :decrypt_failed}
@@ -371,7 +509,7 @@ defmodule Engram.Crypto do
   # Phase B.4: every production payload MUST carry vault_id + text_nonce.
   # Anything else is a shape mismatch — dropped + telemetry, no plaintext
   # passthrough that could leak ciphertext-as-plaintext on a malformed point.
-  defp decrypt_one(candidate, vaults_by_id, dek) do
+  defp decrypt_one(candidate, vaults_by_id, dek, collection) do
     vault_id_key = candidate_vault_id(candidate)
 
     cond do
@@ -384,7 +522,7 @@ defmodule Engram.Crypto do
         []
 
       true ->
-        lookup_and_decrypt(candidate, vault_id_key, vaults_by_id, dek)
+        lookup_and_decrypt(candidate, vault_id_key, vaults_by_id, dek, collection)
     end
   end
 
@@ -402,27 +540,47 @@ defmodule Engram.Crypto do
     )
   end
 
-  defp lookup_and_decrypt(candidate, vault_id_key, vaults_by_id, dek) do
+  defp lookup_and_decrypt(candidate, vault_id_key, vaults_by_id, dek, collection) do
     case Map.get(vaults_by_id, vault_id_key) do
       nil ->
         emit_shape_mismatch(vault_id_key, candidate, "vault not in lookup map")
         []
 
       %Engram.Vaults.Vault{} ->
-        do_decrypt_candidate(candidate, dek)
+        do_decrypt_candidate(candidate, dek, collection)
     end
   end
 
-  defp do_decrypt_candidate(candidate, dek) do
+  # T3.6 — AAD-bound payloads carry `aad_version >= 2`. Older points written
+  # before this PR have neither key — fall back to empty AAD. `collection`
+  # may be nil when callers haven't been threaded through yet (legacy reads
+  # only); empty AAD applies in that case too.
+  defp qdrant_aad(candidate, collection, field) do
+    aad_version = Map.get(candidate, :aad_version)
+    qdrant_id = Map.get(candidate, :qdrant_id)
+
+    if is_binary(collection) and is_binary(qdrant_id) and aad_version_aad_bound?(aad_version),
+      do: aad_for_qdrant(collection, qdrant_id, field),
+      else: <<>>
+  end
+
+  defp aad_version_aad_bound?(v) when is_integer(v) and v >= @row_version_aad_bound, do: true
+  defp aad_version_aad_bound?(_), do: false
+
+  defp do_decrypt_candidate(candidate, dek, collection) do
+    text_aad = qdrant_aad(candidate, collection, :text)
+    title_aad = qdrant_aad(candidate, collection, :title)
+    hp_aad = qdrant_aad(candidate, collection, :heading_path)
+
     with {:ok, text_ct} <- safe_decode64(Map.get(candidate, :text)),
          {:ok, text_nonce} <- safe_decode64(Map.get(candidate, :text_nonce)),
          {:ok, title_ct} <- safe_decode64(Map.get(candidate, :title)),
          {:ok, title_nonce} <- safe_decode64(Map.get(candidate, :title_nonce)),
          {:ok, hp_ct} <- safe_decode64(Map.get(candidate, :heading_path)),
          {:ok, hp_nonce} <- safe_decode64(Map.get(candidate, :heading_path_nonce)),
-         {:ok, text} <- Envelope.decrypt(text_ct, text_nonce, dek),
-         {:ok, title} <- Envelope.decrypt(title_ct, title_nonce, dek),
-         {:ok, heading_path} <- Envelope.decrypt(hp_ct, hp_nonce, dek) do
+         {:ok, text} <- Envelope.decrypt(text_ct, text_nonce, dek, text_aad),
+         {:ok, title} <- Envelope.decrypt(title_ct, title_nonce, dek, title_aad),
+         {:ok, heading_path} <- Envelope.decrypt(hp_ct, hp_nonce, dek, hp_aad) do
       decrypted =
         candidate
         |> Map.put(:text, text)

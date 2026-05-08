@@ -33,7 +33,8 @@ defmodule Engram.Vaults.Vault do
       :deleted_at,
       :name_ciphertext,
       :name_nonce,
-      :name_hmac
+      :name_hmac,
+      :dek_version
     ])
     |> validate_required([
       :slug,
