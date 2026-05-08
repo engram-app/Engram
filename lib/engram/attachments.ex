@@ -33,56 +33,91 @@ defmodule Engram.Attachments do
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       path_hmac = Crypto.hmac_field(filter_key, path)
 
-      # Find existing FIRST so we can reuse its id for AAD; otherwise
-      # pre-allocate a fresh attachment id from the bigserial sequence.
-      existing =
-        Repo.with_tenant(user.id, fn ->
-          Repo.one(
-            from(a in Attachment,
-              where:
-                a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-                  a.vault_id == ^vault.id
+      # T3-audit H1 — concurrent upserts to the same path can race: each
+      # reads "no existing row," allocates its own att_id, encrypts the
+      # blob with AAD bound to that id, then PUTs to the same S3 key (last
+      # writer wins on the blob). The unique path_hmac constraint then
+      # picks a winning row whose id may not match the AAD baked into the
+      # surviving blob → reads decrypt-fail. Serialize per (user, path) via
+      # a transaction-scoped advisory lock so the second upsert blocks
+      # until the first commits, then sees the existing row + reuses its
+      # id. The lock auto-releases on commit/rollback.
+      Repo.transaction(fn ->
+        :ok = acquire_path_lock(user.id, path_hmac)
+
+        existing =
+          Repo.with_tenant(user.id, fn ->
+            Repo.one(
+              from(a in Attachment,
+                where:
+                  a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+                    a.vault_id == ^vault.id
+              )
             )
-          )
-        end)
-        |> unwrap_tenant()
+          end)
+          |> unwrap_tenant()
+          |> case do
+            {:ok, att} -> att
+            {:error, _} -> nil
+          end
+
+        att_id =
+          case existing do
+            nil -> Crypto.next_row_id(:attachments)
+            %Attachment{id: id} -> id
+          end
+
+        with {:ok, key, changeset_attrs, ciphertext} <-
+               prepare_upload(
+                 user,
+                 vault,
+                 att_id,
+                 path,
+                 path_hmac,
+                 plaintext,
+                 mtime,
+                 explicit_mime
+               ),
+             :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
+          Repo.with_tenant(user.id, fn ->
+            case existing do
+              nil ->
+                %Attachment{id: att_id}
+                |> Attachment.changeset(changeset_attrs)
+                |> Repo.insert()
+
+              att ->
+                att
+                |> Attachment.changeset(changeset_attrs)
+                |> Repo.update()
+            end
+          end)
+          |> unwrap_tenant()
+          |> case do
+            # Phase B.3: path is virtual — splice the plaintext we already
+            # have onto the returned struct so callers can read att.path
+            # without a second decrypt round-trip.
+            {:ok, att} -> {:ok, %{att | path: path}}
+            other -> other
+          end
+        end
         |> case do
           {:ok, att} -> att
-          {:error, _} -> nil
+          {:error, reason} -> Repo.rollback(reason)
         end
-
-      att_id =
-        case existing do
-          nil -> Crypto.next_row_id(:attachments)
-          %Attachment{id: id} -> id
-        end
-
-      with {:ok, key, changeset_attrs, ciphertext} <-
-             prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime),
-           :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
-        Repo.with_tenant(user.id, fn ->
-          case existing do
-            nil ->
-              %Attachment{id: att_id}
-              |> Attachment.changeset(changeset_attrs)
-              |> Repo.insert()
-
-            att ->
-              att
-              |> Attachment.changeset(changeset_attrs)
-              |> Repo.update()
-          end
-        end)
-        |> unwrap_tenant()
-        |> case do
-          # Phase B.3: path is virtual — splice the plaintext we already
-          # have onto the returned struct so callers can read att.path
-          # without a second decrypt round-trip.
-          {:ok, att} -> {:ok, %{att | path: path}}
-          other -> other
-        end
-      end
+      end)
     end
+  end
+
+  # T3-audit H1 — txn-scoped advisory lock keyed on (user_id, path_hmac).
+  # Postgres `pg_advisory_xact_lock(bigint)` takes a single 64-bit key; we
+  # derive it from `:erlang.phash2/2` over the (user_id, path_hmac) tuple.
+  # Collisions are tolerable: a hash collision causes an unrelated upload
+  # to wait, which is at most a latency cost, not a correctness issue.
+  defp acquire_path_lock(user_id, path_hmac) do
+    key = :erlang.phash2({user_id, path_hmac}, 2_147_483_647)
+    Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+    :ok
   end
 
   @doc """
