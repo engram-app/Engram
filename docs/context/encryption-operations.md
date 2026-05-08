@@ -195,6 +195,8 @@ The master key (`ENCRYPTION_MASTER_KEY`) wraps every user's per-user DEK. Rotati
 
    M4 gate behavior: with VERSION bumped to N, every user at `dek_version < N` is rotation-eligible; `_PREVIOUS` rescues their reads while rotation is in-flight.
 
+   > **Footgun:** if you set `MASTER_KEY` + `MASTER_KEY_PREVIOUS` but forget to bump `MASTER_KEY_VERSION`, every existing user read will fail with `{:error, :invalid_wrapping}` and telemetry `[:engram, :crypto, :previous_fallback_hit]` will report `outcome: :gated_by_dek_version`. That is the M4 gate working correctly — it refuses to silently fall back for "rotated" users. Bump VERSION and reads recover immediately.
+
 2. **Run rotation**:
 
    - Dev / staging: `mix engram.rotate_master_key --target-version <TARGET>`.

@@ -118,10 +118,15 @@ defmodule Engram.Crypto.BootCanary do
     :ok
   end
 
+  # Order by `id` (BIGSERIAL) instead of `inserted_at` — id is monotonic
+  # regardless of clock skew or NTP step-back, so a fresh canary is
+  # always the highest id. Avoids the failure mode where a backwards
+  # clock jump makes a NEW row's `inserted_at` < OLD row's, masking
+  # the new row from boot verification.
   defp fetch_latest do
     Repo.one(
       from c in "system_canaries",
-        order_by: [desc: c.inserted_at, desc: c.id],
+        order_by: [desc: c.id],
         limit: 1,
         select: %{wrapped_dek: c.wrapped_dek, dek_sha256: c.dek_sha256}
     )

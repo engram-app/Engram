@@ -37,6 +37,9 @@ defmodule Engram.Workers.RotateUserMasterKey do
       :skipped -> :ok
       {:error, {:not_found, _}} -> {:discard, :user_deleted}
       {:error, :no_dek} -> {:discard, :no_dek}
+      # Validation errors are deterministic — retrying 5 times wastes
+      # Oban capacity. Discard with the changeset's error map for triage.
+      {:error, %Ecto.Changeset{errors: errors}} -> {:discard, {:changeset_invalid, errors}}
       {:error, reason} -> {:error, reason}
     end
   end

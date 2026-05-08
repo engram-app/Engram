@@ -49,12 +49,15 @@ defmodule Engram.Application do
   # supervisor on failure (which crashes the application start, so the
   # node fails loudly on a wrong master key). Skipped in :test where
   # the canary table is per-sandbox; tests cover BootCanary directly.
+  # Restart `:temporary` so a verify!/0 raise propagates immediately to
+  # `Application.start/2` rather than triggering the supervisor restart-
+  # storm + 3 stack traces before max_restarts surfaces the failure.
   defp boot_canary_task do
     if Application.get_env(:engram, :boot_canary_enabled, true) do
       %{
         id: :engram_boot_canary,
         start: {Task, :start_link, [&Engram.Crypto.BootCanary.verify!/0]},
-        restart: :transient,
+        restart: :temporary,
         type: :worker
       }
     end
