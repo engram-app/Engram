@@ -9,7 +9,7 @@ defmodule Engram.Notes do
   import Ecto.Query
 
   alias Engram.Repo
-  alias Engram.Notes.{Note, Helpers, PathSanitizer}
+  alias Engram.Notes.{Note, Helpers, PathSanitizer, Enqueue}
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
 
   @doc """
@@ -87,7 +87,7 @@ defmodule Engram.Notes do
       case result do
         {:ok, {:ok, {prev_hash, note}}} ->
           if prev_hash != note.content_hash do
-            Oban.insert(EmbedNote.new_debounced(note.id))
+            Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
           end
 
           note = decrypt_or_raise!(note, user)
@@ -234,7 +234,10 @@ defmodule Engram.Notes do
     case result do
       {:ok, {:ok, note}} ->
         # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-        Oban.insert(EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)))
+        Enqueue.enqueue(
+          EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
+          "embed_note"
+        )
         broadcast_change(user.id, vault.id, "delete", old_path)
         decrypted = decrypt_or_raise!(note, user)
         broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
@@ -270,13 +273,14 @@ defmodule Engram.Notes do
 
       # T3.2 — pass path_hmac (base64), never plaintext path. The note row
       # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
-      Oban.insert(
+      Enqueue.enqueue(
         DeleteNoteIndex.new(%{
           note_id: note.id,
           user_id: note.user_id,
           vault_id: note.vault_id,
           path_hmac: Base.encode64(note.path_hmac)
-        })
+        }),
+        "delete_note_index"
       )
     end
 
@@ -651,10 +655,11 @@ defmodule Engram.Notes do
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       Enum.each(updates, fn {note, old_note_path, new_path, _folder, _title} ->
-        Oban.insert(
+        Enqueue.enqueue(
           Engram.Workers.EmbedNote.new_debounced(note.id,
             old_path_hmac: old_path_hmac_b64!(user, old_note_path)
-          )
+          ),
+          "embed_note"
         )
 
         broadcast_change(user.id, vault.id, "delete", old_note_path)

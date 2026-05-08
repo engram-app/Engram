@@ -28,7 +28,7 @@ defmodule Engram.Crypto.AadRebind do
   safety net).
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query
   require Logger
 
   alias Engram.Accounts.User
@@ -104,21 +104,37 @@ defmodule Engram.Crypto.AadRebind do
   end
 
   defp rebind_locked_user(%User{} = user) do
-    with :ok <- rewrap_user_dek_if_needed(user),
-         :ok <- rebind_user_notes(user),
-         :ok <- rebind_user_attachments(user),
-         :ok <- rebind_user_vaults(user) do
-      {:rebound, user}
+    # T3-audit M3 — track whether anything was actually changed so re-runs
+    # of an already-rebound user return :skipped (not :ok). Operator drain
+    # logs can then distinguish real work from no-ops.
+    #
+    # T3-audit H5 — `rebind_user_attachments/1` is intentionally a no-op
+    # (S3 blobs converge on next upload). We invoke it separately so the
+    # `with` chain only depends on rebinds that touch ciphertext, and
+    # surface the legacy attachment count via telemetry so an operator
+    # drain log isn't silently misleading.
+    with {:ok, dek_changed?} <- rewrap_user_dek_if_needed(user),
+         {:ok, notes_count} <- rebind_user_notes(user),
+         {:ok, vaults_count} <- rebind_user_vaults(user) do
+      _ = rebind_user_attachments(user)
+
+      if dek_changed? or notes_count > 0 or vaults_count > 0 do
+        {:rebound, user}
+      else
+        :skipped
+      end
     else
       {:error, reason} -> Repo.rollback(reason)
     end
   end
 
   # 0x01 (or pre-T3.4 60-byte legacy) → 0x02 with AAD = "dek:v1:<user_id>".
+  # Returns {:ok, true} if the wrap was upgraded, {:ok, false} if it was
+  # already v2 (no-op), or {:error, _} on failure.
   defp rewrap_user_dek_if_needed(%User{encrypted_dek: blob} = user) do
     case classify_wrap(blob) do
       :v2 ->
-        :ok
+        {:ok, false}
 
       :legacy_or_v1 ->
         provider = Resolver.provider_for(user.id)
@@ -135,7 +151,7 @@ defmodule Engram.Crypto.AadRebind do
               # plaintext DEK material is unchanged; only the wrap envelope
               # changed.
               Crypto.DekCache.invalidate(user.id)
-              :ok
+              {:ok, true}
 
             {:error, changeset} ->
               {:error, changeset}
@@ -147,6 +163,8 @@ defmodule Engram.Crypto.AadRebind do
   defp classify_wrap(<<0x02, 0x01, _rest::binary>>), do: :v2
   defp classify_wrap(_blob), do: :legacy_or_v1
 
+  # Returns {:ok, count_rebound} or {:error, reason}. Count drives M3
+  # idempotency — zero rebinds + no DEK rewrap = :skipped.
   defp rebind_user_notes(%User{id: user_id} = user) do
     {:ok, dek} = Crypto.get_dek(user)
     legacy_version = Crypto.row_version_legacy()
@@ -158,9 +176,9 @@ defmodule Engram.Crypto.AadRebind do
       )
       |> Repo.all(skip_tenant_check: true)
 
-    Enum.reduce_while(rows, :ok, fn note, _acc ->
+    Enum.reduce_while(rows, {:ok, 0}, fn note, {:ok, n} ->
       case rebind_note(note, dek) do
-        :ok -> {:cont, :ok}
+        :ok -> {:cont, {:ok, n + 1}}
         {:error, reason} -> {:halt, {:error, {:note, note.id, reason}}}
       end
     end)
@@ -212,42 +230,58 @@ defmodule Engram.Crypto.AadRebind do
     end
   end
 
-  defp rebind_user_attachments(%User{id: user_id} = user) do
-    {:ok, dek} = Crypto.get_dek(user)
+  # T3-audit H5 — attachment rebind is intentional no-op (see comment on
+  # rebind_attachment/2). Counts legacy attachments and emits per-user
+  # telemetry + Logger so the operator drain log is honest about what was
+  # NOT rebound. Returns {:skipped, :not_supported, count}.
+  defp rebind_user_attachments(%User{id: user_id} = _user) do
     legacy_version = Crypto.row_version_legacy()
 
-    rows =
+    legacy_count =
       from(a in Attachment,
         where: a.user_id == ^user_id and a.dek_version == ^legacy_version,
-        select: a
+        select: count(a.id)
       )
-      |> Repo.all(skip_tenant_check: true)
+      |> Repo.one(skip_tenant_check: true)
+      |> case do
+        nil -> 0
+        n when is_integer(n) -> n
+      end
 
-    Enum.reduce_while(rows, :ok, fn att, _acc ->
-      :ok = rebind_attachment(att, dek)
-      {:cont, :ok}
-    end)
+    :telemetry.execute(
+      [:engram, :crypto, :aad_rebind, :attachment_skipped],
+      %{count: legacy_count},
+      %{user_id: user_id}
+    )
+
+    if legacy_count > 0 do
+      Logger.info(
+        "aad rebind attachment skipped (intentional) user_id=#{user_id} legacy_count=#{legacy_count} note=converges on next upload",
+        category: :crypto_rebind
+      )
+    end
+
+    {:skipped, :not_supported, legacy_count}
   end
 
   # NOTE: attachments hold their content blob in S3, not in Postgres.
-  # T3.6 only re-encrypts the row-resident `path_ciphertext`. The S3
-  # object's content_ciphertext keeps its old AAD (=<<>>) until that
-  # blob is also rotated through `Storage.adapter`. The read path uses
-  # `att.dek_version` to gate the AAD on `path_ciphertext` decrypt;
-  # content decrypt also gates on the same field. After this rebind,
-  # attempting to read the S3 blob would fail because we stamped
-  # dek_version=2 on the row but the blob was written with empty AAD.
+  # The S3 object's content_ciphertext keeps its old AAD (=<<>>) until
+  # the blob is rotated through `Storage.adapter`. The read path uses
+  # `att.dek_version` to gate the AAD on path + content decrypt. Rebinding
+  # only the row-resident `path_ciphertext` would mismatch the S3 blob's
+  # AAD on next read, so we deliberately skip the rebind. Attachments
+  # converge naturally on their next write — every `upsert_attachment`
+  # re-encrypts content + path with v2 AAD. Old blobs that are never
+  # re-uploaded stay legacy forever, which is fine because their content
+  # was always written with empty AAD and the read path honors that via
+  # `att.dek_version`.
   #
-  # To avoid breaking attachment reads on legacy rows, we DO NOT rebind
-  # attachments in this backfill — only `path_ciphertext` would change
-  # and the dek_version stamp would mismatch the S3 blob's AAD.
-  # Attachments converge naturally on their next write (every
-  # `upsert_attachment` re-encrypts content + path with v2 AAD). Old
-  # blobs that are never re-uploaded stay legacy forever, which is fine
-  # because their content was always written with empty AAD and the
-  # read path honors that via `att.dek_version`.
-  defp rebind_attachment(_att, _dek), do: :ok
+  # T3-audit H5 — `rebind_user_attachments/1` surfaces the count of
+  # unconverged attachments per user via
+  # `[:engram, :crypto, :aad_rebind, :attachment_skipped]` telemetry so
+  # operator drain logs are honest about what was NOT rebound.
 
+  # Returns {:ok, count_rebound} or {:error, reason}.
   defp rebind_user_vaults(%User{id: user_id} = user) do
     {:ok, dek} = Crypto.get_dek(user)
     legacy_version = Crypto.row_version_legacy()
@@ -259,9 +293,9 @@ defmodule Engram.Crypto.AadRebind do
       )
       |> Repo.all(skip_tenant_check: true)
 
-    Enum.reduce_while(rows, :ok, fn vault, _acc ->
+    Enum.reduce_while(rows, {:ok, 0}, fn vault, {:ok, n} ->
       case rebind_vault(vault, dek) do
-        :ok -> {:cont, :ok}
+        :ok -> {:cont, {:ok, n + 1}}
         {:error, reason} -> {:halt, {:error, {:vault, vault.id, reason}}}
       end
     end)

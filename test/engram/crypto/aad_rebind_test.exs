@@ -124,15 +124,66 @@ defmodule Engram.Crypto.AadRebindTest do
       assert <<0x02, 0x01, _::binary>> = reloaded.encrypted_dek
     end
 
-    test "is idempotent — second run returns :skipped (telemetry-wise) when no legacy rows remain",
+    test "is idempotent — second run returns :skipped when no legacy rows remain (T3-audit M3)",
          %{user: user} do
+      # T3-audit M3 — pre-fix, every successful run returned :ok regardless
+      # of whether rows were actually rebound. An operator drain log saying
+      # `%{ok: 1000, skipped: 0}` couldn't distinguish "1000 rebinds happened"
+      # from "1000 users had nothing to do." Fix: track whether the wrap was
+      # changed AND whether any rows were rewritten. If neither, return
+      # :skipped so re-runs are honest.
       {:ok, _vault} = Engram.Vaults.create_vault(user, %{name: "Idempotence Vault"})
 
-      # Already at v2; first run rewraps DEK + finds no rows → succeeds.
-      assert :ok = AadRebind.rebind_user(user.id)
+      # First run: DEK wrap upgrades v1→v2 + Idempotence Vault was just
+      # created (post-T3.6 already at v2 if factories track it; the rewrap
+      # itself counts as "did work"). Either way, returns :ok or :skipped
+      # depending on factory state — we tolerate both.
+      first = AadRebind.rebind_user(user.id)
+      assert first in [:ok, :skipped]
 
-      # Second run: DEK is now v2, no legacy rows → no-op.
-      assert :ok = AadRebind.rebind_user(user.id)
+      # Second run: wrap is now v2, no legacy rows remain → MUST be :skipped.
+      assert :skipped = AadRebind.rebind_user(user.id),
+             "rebind_user/1 must return :skipped when nothing changes — operator drain logs depend on it"
+    end
+  end
+
+  describe "attachment rebind honesty (T3-audit H5)" do
+    test "emits :attachment_skipped telemetry per user with legacy count", %{user: user} do
+      # T3-audit H5 — attachment rebind is intentionally a no-op (S3 blob's
+      # AAD doesn't get touched here; converges on next upload). Pre-fix,
+      # rebind_user_attachments/1 returned :ok with no signal, so an
+      # operator drain log told them attachments were rebound when they
+      # weren't. Fix: emit per-user telemetry with the count of legacy
+      # attachments that still need natural convergence.
+      legacy_version = Crypto.row_version_legacy()
+
+      # Use the real Vaults context so the vault is born AAD-bound; we want
+      # to isolate this test to the attachment rebind signal, not vault
+      # legacy decrypt.
+      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Attachment Vault"})
+
+      _att1 = insert(:attachment, user: user, vault: vault, dek_version: legacy_version)
+      _att2 = insert(:attachment, user: user, vault: vault, dek_version: legacy_version)
+
+      :telemetry.attach(
+        "att-skipped-test",
+        [:engram, :crypto, :aad_rebind, :attachment_skipped],
+        fn _name, measurements, metadata, _ ->
+          send(self(), {:attachment_skipped, measurements, metadata})
+        end,
+        nil
+      )
+
+      try do
+        AadRebind.rebind_user(user.id)
+
+        assert_received {:attachment_skipped, %{count: count}, %{user_id: uid}}
+        assert uid == user.id
+        assert count >= 2,
+               "telemetry must report legacy attachment count so operators can plan natural convergence; got #{count}"
+      after
+        :telemetry.detach("att-skipped-test")
+      end
     end
   end
 

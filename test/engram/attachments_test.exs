@@ -23,6 +23,27 @@ defmodule Engram.AttachmentsTest do
     %{user: user, vault: vault}
   end
 
+  describe "concurrent upsert race (T3-audit H1)" do
+    # T3-audit H1 — pre-fix, two concurrent upserts to the same path could
+    # race: each reads "no existing row," allocates a fresh att_id, encrypts
+    # blob with AAD bound to its own id, and PUTs to the same S3 key (last
+    # writer wins). The DB row that survives the unique-path_hmac constraint
+    # may have an id that doesn't match the AAD baked into the blob → next
+    # GET decrypt fails with `:decrypt_failed`. Fix: serialize same-path
+    # upserts via `pg_advisory_xact_lock` keyed on (user_id, path_hmac).
+    test "upsert_attachment/3 wraps allocation + write in Repo.transaction with advisory lock" do
+      src = File.read!("lib/engram/attachments.ex")
+
+      assert src =~ ~r/pg_advisory_xact_lock/,
+             "upsert_attachment must take a per-(user, path_hmac) advisory lock " <>
+               "to serialize concurrent same-path uploads (T3-audit H1)"
+
+      assert src =~ ~r/Repo\.transaction/,
+             "upsert_attachment must wrap the allocation + insert in a transaction so " <>
+               "the advisory lock auto-releases on commit/rollback (T3-audit H1)"
+    end
+  end
+
   describe "upsert_attachment/3" do
     test "creates attachment with vault_id scoped correctly", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)

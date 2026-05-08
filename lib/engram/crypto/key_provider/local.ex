@@ -171,7 +171,9 @@ defmodule Engram.Crypto.KeyProvider.Local do
         dek_version: Map.get(ctx, :dek_version),
         master_key_version:
           Map.get(ctx, :master_key_version) || Config.master_key_version(),
-        outcome: classified
+        # T3-audit M1 — `:status` matches rotate.user / aad_rebind.user
+        # metadata. Single, consistent dispatch tag across crypto events.
+        status: classified
       }
     )
   end

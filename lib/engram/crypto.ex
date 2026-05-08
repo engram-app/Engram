@@ -391,32 +391,10 @@ defmodule Engram.Crypto do
   signals a config bug; fail-loud via Oban retry + telemetry is preferable
   to silent lazy-provisioning.
 
-  ## 2-arity vs 4-arity (T3.6)
-
-  The 2-arity form emits non-AAD-bound payloads — kept for tests that mock
-  Qdrant search responses without threading through a stable point id.
-  Production code must use the 4-arity AAD-bound variant; every real point
-  flows through `Engram.Indexing.prepare_index/2` which generates the
-  point UUID before calling `encrypt_qdrant_payload/4`.
+  T3-audit M4 — the legacy 2-arity form (no AAD) was privatized. All
+  production + test callers thread `(collection, qdrant_id)` through this
+  4-arity form, ensuring every emitted point is AAD-bound.
   """
-  @spec encrypt_qdrant_payload(map(), User.t()) :: {:ok, map()} | {:error, term()}
-  def encrypt_qdrant_payload(payload, %User{} = user) do
-    with {:ok, dek} <- get_dek(user) do
-      {text_ct, text_nonce} = Envelope.encrypt(Map.get(payload, :text) || "", dek)
-      {title_ct, title_nonce} = Envelope.encrypt(Map.get(payload, :title) || "", dek)
-      {hp_ct, hp_nonce} = Envelope.encrypt(Map.get(payload, :heading_path) || "", dek)
-
-      {:ok,
-       payload
-       |> Map.put(:text, Base.encode64(text_ct))
-       |> Map.put(:text_nonce, Base.encode64(text_nonce))
-       |> Map.put(:title, Base.encode64(title_ct))
-       |> Map.put(:title_nonce, Base.encode64(title_nonce))
-       |> Map.put(:heading_path, Base.encode64(hp_ct))
-       |> Map.put(:heading_path_nonce, Base.encode64(hp_nonce))}
-    end
-  end
-
   @spec encrypt_qdrant_payload(map(), User.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, term()}
   def encrypt_qdrant_payload(payload, %User{} = user, collection, qdrant_id)

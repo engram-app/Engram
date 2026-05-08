@@ -35,6 +35,13 @@ defmodule EngramWeb.TelemetryTest do
              "AadRebind per-user outcome must be counted (status, reason_label)"
     end
 
+    test "registers engram.crypto.aad_rebind.attachment_skipped counter (T3-audit H5)", %{
+      names: names
+    } do
+      assert "engram.crypto.aad_rebind.attachment_skipped.count" in names,
+             "Per-user count of unconverged attachments — operator drain log honesty"
+    end
+
     test "registers engram.crypto.previous_fallback_hit counter (T3.5 / M4)", %{names: names} do
       assert "engram.crypto.previous_fallback_hit.count" in names,
              "Previous-master fallback hits must be counted — should drop to 0 post-rotation"

@@ -105,10 +105,14 @@ defmodule EngramWeb.Telemetry do
         tags: [:status],
         description: "AadRebind per-user duration"
       ),
-      counter("engram.crypto.previous_fallback_hit.count",
-        tags: [:outcome],
+      counter("engram.crypto.aad_rebind.attachment_skipped.count",
         description:
-          "Previous-master fallback hits — should drop to 0 post-rotation; non-zero `:failed` outcome is catastrophic"
+          "Attachments NOT rebound by AadRebind (intentional — converge on next upload). Non-zero count means the user has unconverged S3 blobs that still read as legacy AAD."
+      ),
+      counter("engram.crypto.previous_fallback_hit.count",
+        tags: [:status],
+        description:
+          "Previous-master fallback hits — should drop to 0 post-rotation; non-zero `:failed` status is catastrophic"
       ),
       counter("engram.crypto.boot_canary.count",
         tags: [:status, :reason_label],
