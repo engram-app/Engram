@@ -19,9 +19,13 @@ defmodule Engram.Crypto do
   untouched if `encrypted_dek` is already present.
   """
   @spec ensure_user_dek(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def ensure_user_dek(%User{encrypted_dek: blob} = user) when is_binary(blob), do: {:ok, user}
+  def ensure_user_dek(%User{encrypted_dek: blob} = user) when is_binary(blob) do
+    mark_sensitive()
+    {:ok, user}
+  end
 
   def ensure_user_dek(%User{} = user) do
+    mark_sensitive()
     # T3.1 / C1 — first-write provisioning runs inside a single transaction
     # with `SELECT ... FOR UPDATE` on the user row. This serializes
     # concurrent first-writes for the same user: the second writer's
@@ -84,7 +88,21 @@ defmodule Engram.Crypto do
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}
   def get_dek(%User{encrypted_dek: nil}), do: {:error, :no_dek}
 
+  # T3.3 / M9 — mark every caller process that touches a plaintext DEK as
+  # `:sensitive`, so its heap is excluded from any future BEAM crash dump.
+  # Set-once-per-process: process_flag/2 is sticky for the process lifetime.
+  # Cost is negligible — Phoenix request handlers and Oban workers process
+  # encryption-bearing requests on essentially every job, so the flag would
+  # be set on first call regardless.
+  @compile {:inline, mark_sensitive: 0}
+  defp mark_sensitive do
+    :erlang.process_flag(:sensitive, true)
+    :ok
+  end
+
   def get_dek(%User{id: user_id, encrypted_dek: blob}) do
+    mark_sensitive()
+
     case DekCache.get(user_id) do
       {:ok, dek} ->
         {:ok, dek}
