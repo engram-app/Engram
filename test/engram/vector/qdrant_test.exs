@@ -177,21 +177,27 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "delete_by_note/4" do
-    test "posts filter delete for user+vault+path", %{bypass: bypass} do
+    test "posts filter delete keyed on path_hmac (T3.2)", %{bypass: bypass} do
+      # T3.2 — Qdrant filter keys off `path_hmac` (HMAC base64) instead of
+      # plaintext `source_path`. Plaintext path in `oban_jobs.args` would
+      # have defeated Phase B at-rest encryption for the rename / delete
+      # window; HMAC bytes are safe to JSON-encode.
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
         conditions = decoded["filter"]["must"]
         keys = Enum.map(conditions, & &1["key"])
         assert "user_id" in keys
-        assert "source_path" in keys
+        assert "vault_id" in keys
+        assert "path_hmac" in keys
+        refute "source_path" in keys
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, ~s({"result": {"status": "ok"}}))
       end)
 
-      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "Test/Note.md")
+      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
     end
   end
 

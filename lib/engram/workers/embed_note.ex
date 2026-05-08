@@ -36,7 +36,8 @@ defmodule Engram.Workers.EmbedNote do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     note_id = args["note_id"]
-    old_path = args["old_path"]
+    # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
+    old_path_hmac_b64 = args["old_path_hmac"]
 
     # skip_tenant_check: trusted internal worker — queries already scoped to note_id/user_id
     case Repo.get(Note, note_id, skip_tenant_check: true) do
@@ -46,7 +47,8 @@ defmodule Engram.Workers.EmbedNote do
       %Note{deleted_at: deleted_at} when not is_nil(deleted_at) ->
         {:discard, "note #{note_id} is soft-deleted"}
 
-      %Note{content_hash: hash, embed_hash: hash} when not is_nil(hash) and is_nil(old_path) ->
+      %Note{content_hash: hash, embed_hash: hash}
+      when not is_nil(hash) and is_nil(old_path_hmac_b64) ->
         # Already embedded this exact content and no rename pending — skip
         :ok
 
@@ -64,8 +66,8 @@ defmodule Engram.Workers.EmbedNote do
             case Crypto.maybe_decrypt_note_fields(note, user) do
               {:ok, decrypted_note} ->
                 # If renamed, clean up old path's Qdrant points before re-indexing
-                if old_path do
-                  Indexing.delete_points_by_path(decrypted_note, old_path)
+                if old_path_hmac_b64 do
+                  Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
                 end
 
                 case Indexing.index_note(decrypted_note, vault) do
@@ -111,13 +113,18 @@ defmodule Engram.Workers.EmbedNote do
   Build an Oban job with 5-second debounce.
   `replace: [:scheduled_at]` resets the timer on rapid edits (dedup by note_id).
 
-  Pass `old_path:` when the note was renamed — the worker will delete old Qdrant
-  points before re-indexing under the new path.
+  Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
+  delete old-path Qdrant points before re-indexing under the new path. T3.2:
+  HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
   """
   def new_debounced(note_id, opts \\ []) do
     scheduled_at = DateTime.add(DateTime.utc_now(), 5, :second)
     args = %{note_id: note_id}
-    args = if opts[:old_path], do: Map.put(args, :old_path, opts[:old_path]), else: args
+
+    args =
+      if opts[:old_path_hmac],
+        do: Map.put(args, :old_path_hmac, opts[:old_path_hmac]),
+        else: args
 
     new(
       args,

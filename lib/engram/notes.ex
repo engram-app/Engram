@@ -214,7 +214,8 @@ defmodule Engram.Notes do
 
     case result do
       {:ok, {:ok, note}} ->
-        Oban.insert(EmbedNote.new_debounced(note.id, old_path: old_path))
+        # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
+        Oban.insert(EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)))
         broadcast_change(user.id, vault.id, "delete", old_path)
         decrypted = decrypt_or_raise!(note, user)
         broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
@@ -248,12 +249,14 @@ defmodule Engram.Notes do
         |> Repo.update_all(set: [deleted_at: now, updated_at: now])
       end)
 
+      # T3.2 — pass path_hmac (base64), never plaintext path. The note row
+      # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
       Oban.insert(
         DeleteNoteIndex.new(%{
           note_id: note.id,
           user_id: note.user_id,
           vault_id: note.vault_id,
-          path: path
+          path_hmac: Base.encode64(note.path_hmac)
         })
       )
     end
@@ -615,9 +618,15 @@ defmodule Engram.Notes do
         Repo.insert_all(Note, tombstones, on_conflict: :nothing)
       end)
 
-      # Side effects outside the transaction — broadcast + reindex
+      # Side effects outside the transaction — broadcast + reindex.
+      # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       Enum.each(updates, fn {id, old_note_path, new_path, _folder, _title} ->
-        Oban.insert(Engram.Workers.EmbedNote.new_debounced(id, old_path: old_note_path))
+        Oban.insert(
+          Engram.Workers.EmbedNote.new_debounced(id,
+            old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+          )
+        )
+
         broadcast_change(user.id, vault.id, "delete", old_note_path)
         broadcast_change(user.id, vault.id, "upsert", new_path)
       end)
@@ -629,6 +638,15 @@ defmodule Engram.Notes do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # T3.2 helper — base64-encoded HMAC of a plaintext path under the user's
+  # filter key. Used at Oban-enqueue boundaries so plaintext path / old_path
+  # never enters `oban_jobs.args` JSONB. Raises on filter-key load failure
+  # (Phase B.4 invariant: every authenticated request has a usable DEK).
+  defp old_path_hmac_b64!(user, path) do
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
+  end
 
   # Phase B.3: decryption MUST raise on failure. Returning the un-decrypted
   # struct (with virtual path/folder/tags = nil) silently serializes

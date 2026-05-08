@@ -98,14 +98,24 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Delete Qdrant points for a specific path (used after rename to clean up old path).
+  Delete Qdrant points for a specific path-hmac (used after rename to clean
+  up old path's points). T3.2 — `path_hmac` is the base64-encoded HMAC of
+  the note path; carrying plaintext path through Oban args defeats Phase B
+  encryption for the rename window.
   """
-  def delete_points_by_path(note, path) do
-    Qdrant.delete_by_note(collection(), to_string(note.user_id), to_string(note.vault_id), path)
+  def delete_points_by_path_hmac(note, path_hmac) do
+    Qdrant.delete_by_note(
+      collection(),
+      to_string(note.user_id),
+      to_string(note.vault_id),
+      path_hmac
+    )
   end
 
   @doc """
-  Remove all indexed data for a note (Qdrant points first, then Postgres chunks).
+  Remove all indexed data for a note (Qdrant points first, then Postgres
+  chunks). T3.2 — Qdrant filter keys off `path_hmac` (base64), not plaintext
+  `source_path`. The note row's `path_hmac` is the source of truth.
   """
   def delete_note_index(note) do
     with :ok <-
@@ -113,7 +123,7 @@ defmodule Engram.Indexing do
              collection(),
              to_string(note.user_id),
              to_string(note.vault_id),
-             note.path
+             encode_hmac(note.path_hmac)
            ) do
       Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
       :ok

@@ -130,16 +130,20 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Delete all points for a given user+vault+path combination.
+  Delete all points for a given user+vault+path-hmac combination.
+
+  T3.2 — `path_hmac` is the base64-encoded HMAC of the note path under the
+  user's filter key. Qdrant payloads carry `path_hmac` as a plaintext-safe
+  filter key alongside the encrypted `source_path` (Phase B.2.4).
   """
-  def delete_by_note(col \\ nil, user_id, vault_id, path) do
+  def delete_by_note(col \\ nil, user_id, vault_id, path_hmac) do
     col = col || collection()
 
     filter = %{
       must: [
         %{key: "user_id", match: %{value: user_id}},
         %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "source_path", match: %{value: path}}
+        %{key: "path_hmac", match: %{value: path_hmac}}
       ]
     }
 
