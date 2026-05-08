@@ -219,7 +219,11 @@ if config_env() == :prod do
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
-    socket_options: maybe_ipv6
+    socket_options: maybe_ipv6,
+    # T3.0.2 — defense-in-depth. Prevents Ecto SQL params (path, folder,
+    # tags, wrapped DEK on UPDATE) from hitting :debug logs if anyone
+    # bumps prod log level. Audit-only; prod log level today is :info.
+    log: false
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
