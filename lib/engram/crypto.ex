@@ -7,9 +7,12 @@ defmodule Engram.Crypto do
 
   require Logger
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Crypto.{DekCache, Envelope, KeyProvider.Resolver}
+  alias Engram.Repo
 
   @doc """
   Ensures the user has a wrapped DEK stored. Idempotent — returns the user
@@ -19,28 +22,59 @@ defmodule Engram.Crypto do
   def ensure_user_dek(%User{encrypted_dek: blob} = user) when is_binary(blob), do: {:ok, user}
 
   def ensure_user_dek(%User{} = user) do
-    # The in-memory struct has no DEK, but the DB might already have one from
-    # an earlier write that the caller's struct didn't pick up. Reload before
-    # generating — without this, every caller holding a stale user struct
-    # silently rotates the DEK and corrupts every existing ciphertext.
-    case Accounts.get_user(user.id) do
-      %User{encrypted_dek: blob} = reloaded when is_binary(blob) ->
-        {:ok, reloaded}
+    # T3.1 / C1 — first-write provisioning runs inside a single transaction
+    # with `SELECT ... FOR UPDATE` on the user row. This serializes
+    # concurrent first-writes for the same user: the second writer's
+    # SELECT blocks until the first commits, then sees the populated
+    # `encrypted_dek` and short-circuits to the existing wrapped blob.
+    # Without this lock, two parallel callers both observe `encrypted_dek:
+    # nil`, both generate a fresh DEK, and last-write-wins permanently
+    # corrupts any ciphertext written under the loser's DEK.
+    #
+    # The `DekCache.put/2` side-effect is deferred until AFTER the
+    # transaction commits — a rolled-back transaction must NOT leave a
+    # cached plaintext DEK that no longer matches anything in DB.
+    txn_result =
+      Repo.transaction(fn ->
+        locked =
+          from(u in User, where: u.id == ^user.id, lock: "FOR UPDATE")
+          |> Repo.one!(skip_tenant_check: true)
 
-      _ ->
-        provider = Resolver.provider_for(user.id)
-        dek = provider.generate_dek()
+        case locked do
+          %User{encrypted_dek: blob} = u when is_binary(blob) ->
+            {:existing, u}
 
-        with {:ok, wrapped} <- provider.wrap_dek(dek, %{user_id: user.id}),
-             {:ok, user} <-
-               Accounts.update_user_encryption(user, %{
-                 encrypted_dek: wrapped,
-                 dek_version: 1,
-                 key_provider: Atom.to_string(provider.name())
-               }) do
-          DekCache.put(user.id, dek)
-          {:ok, user}
+          _ ->
+            provider = Resolver.provider_for(user.id)
+            dek = provider.generate_dek()
+
+            case provider.wrap_dek(dek, %{user_id: user.id}) do
+              {:ok, wrapped} ->
+                case Accounts.update_user_encryption(locked, %{
+                       encrypted_dek: wrapped,
+                       dek_version: 1,
+                       key_provider: Atom.to_string(provider.name())
+                     }) do
+                  {:ok, updated} -> {:provisioned, updated, dek}
+                  {:error, changeset} -> Repo.rollback(changeset)
+                end
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
         end
+      end)
+
+    case txn_result do
+      {:ok, {:existing, u}} ->
+        {:ok, u}
+
+      {:ok, {:provisioned, u, dek}} ->
+        :ok = DekCache.put(u.id, dek)
+        {:ok, u}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
