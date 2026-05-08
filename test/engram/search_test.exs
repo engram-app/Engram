@@ -28,7 +28,9 @@ defmodule Engram.SearchTest do
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
-          user
+          user,
+          "engram_notes",
+          "uuid-1"
         )
 
       qdrant_result = %{
@@ -43,6 +45,7 @@ defmodule Engram.SearchTest do
               "text_nonce" => enc.text_nonce,
               "title_nonce" => enc.title_nonce,
               "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
               "source_path" => "Health/Iron Panel.md",
               "tags" => ["health"],
               "user_id" => to_string(user.id),
@@ -192,14 +195,18 @@ defmodule Engram.SearchTest do
 
         results =
           for i <- 0..3 do
+            qid = "uuid-#{i}"
+
             {:ok, enc} =
               Engram.Crypto.encrypt_qdrant_payload(
                 %{text: "Result #{i}", title: "Note #{i}", heading_path: "Section"},
-                user
+                user,
+                "engram_notes",
+                qid
               )
 
             %{
-              "id" => "uuid-#{i}",
+              "id" => qid,
               "score" => 0.9 - i * 0.1,
               "payload" => %{
                 "text" => enc.text,
@@ -208,6 +215,7 @@ defmodule Engram.SearchTest do
                 "text_nonce" => enc.text_nonce,
                 "title_nonce" => enc.title_nonce,
                 "heading_path_nonce" => enc.heading_path_nonce,
+                "aad_version" => enc.aad_version,
                 "source_path" => "test/note#{i}.md",
                 "tags" => [],
                 "user_id" => to_string(user.id),
@@ -367,7 +375,9 @@ defmodule Engram.SearchTest do
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "alpha body", title: "Alpha", heading_path: "root"},
-          user
+          user,
+          "engram_notes",
+          "qid-a"
         )
 
       _ = vault
@@ -387,6 +397,7 @@ defmodule Engram.SearchTest do
               "text_nonce" => enc.text_nonce,
               "title_nonce" => enc.title_nonce,
               "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
               "source_path" => "a.md",
               "tags" => [],
               "user_id" => to_string(user.id),
@@ -417,7 +428,9 @@ defmodule Engram.SearchTest do
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "beta body", title: "Beta", heading_path: "root"},
-          user
+          user,
+          "engram_notes",
+          "qid-b"
         )
 
       _ = vault
@@ -441,6 +454,7 @@ defmodule Engram.SearchTest do
               "text_nonce" => enc.text_nonce,
               "title_nonce" => enc.title_nonce,
               "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
               "source_path" => "b.md",
               "tags" => [],
               "user_id" => to_string(user.id),

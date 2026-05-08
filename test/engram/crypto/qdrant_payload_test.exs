@@ -23,7 +23,28 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     heading_path: "intro"
   }
 
-  describe "encrypt_qdrant_payload/2" do
+  describe "API surface (T3-audit M4)" do
+    test "2-arity encrypt_qdrant_payload is NOT exported — AAD foot-gun privatized" do
+      # T3-audit M4 — the legacy 2-arity form omits AAD binding. Leaving it
+      # public makes it easy for a future caller to inadvertently produce
+      # a non-AAD-bound point, defeating T3.6's per-row binding. Force the
+      # only public surface to be the 4-arity AAD form.
+      Code.ensure_loaded!(Engram.Crypto)
+
+      arities =
+        Engram.Crypto.__info__(:functions)
+        |> Enum.filter(fn {name, _arity} -> name == :encrypt_qdrant_payload end)
+        |> Enum.map(fn {_name, arity} -> arity end)
+        |> Enum.sort()
+
+      refute 2 in arities,
+             "encrypt_qdrant_payload/2 must not be public — use the 4-arity AAD-bound form. Found: #{inspect(arities)}"
+
+      assert 4 in arities, "encrypt_qdrant_payload/4 must remain public"
+    end
+  end
+
+  describe "encrypt_qdrant_payload/4" do
     test "encrypts text/title/heading_path", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 

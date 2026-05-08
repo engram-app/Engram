@@ -28,7 +28,9 @@ defmodule EngramWeb.SearchControllerTest do
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
-          user
+          user,
+          "engram_notes",
+          "uuid-1"
         )
 
       qdrant_result = %{
@@ -43,6 +45,7 @@ defmodule EngramWeb.SearchControllerTest do
               "text_nonce" => enc.text_nonce,
               "title_nonce" => enc.title_nonce,
               "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
               "source_path" => "Health/Iron Panel.md",
               "tags" => ["health"],
               "user_id" => to_string(user.id),
@@ -244,7 +247,9 @@ defmodule EngramWeb.SearchControllerTest do
     {:ok, enc} =
       Engram.Crypto.encrypt_qdrant_payload(
         %{text: text, title: title, heading_path: title},
-        user
+        user,
+        "engram_notes",
+        id
       )
 
     %{
@@ -257,6 +262,7 @@ defmodule EngramWeb.SearchControllerTest do
         "text_nonce" => enc.text_nonce,
         "title_nonce" => enc.title_nonce,
         "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
         "source_path" => source_path,
         "tags" => [],
         "user_id" => to_string(user.id),
