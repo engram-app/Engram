@@ -73,4 +73,53 @@ defmodule Engram.Crypto.RotationLockTest do
       end
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Phase D — stale-takeover safety: refuse takeover if dek_version_pending set
+  # ---------------------------------------------------------------------------
+
+  describe "Phase D — stale-takeover safety" do
+    test "acquire/2 refuses stale-takeover when user has attachments.dek_version_pending non-null",
+         %{user: user} do
+      stale = DateTime.add(DateTime.utc_now(), -11 * 60, :second)
+
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: stale]],
+        skip_tenant_check: true
+      )
+
+      vault = Engram.Fixtures.insert_vault!(user, "v")
+
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "leaked.bin"})
+
+      Repo.update_all(
+        from(a in Engram.Attachments.Attachment, where: a.id == ^att.id),
+        [set: [dek_version_pending: 99]],
+        skip_tenant_check: true
+      )
+
+      assert {:error, :half_state_pending} = RotationLock.acquire(user.id)
+
+      refreshed = Repo.get!(User, user.id, skip_tenant_check: true)
+      assert DateTime.compare(refreshed.dek_rotation_locked_at, stale) == :eq
+    end
+
+    test "acquire/2 still takes over stale lock if no attachments are half-rotated",
+         %{user: user} do
+      stale = DateTime.add(DateTime.utc_now(), -11 * 60, :second)
+
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: stale]],
+        skip_tenant_check: true
+      )
+
+      vault = Engram.Fixtures.insert_vault!(user, "v")
+      _att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "clean.bin"})
+
+      assert {:ok, new_at} = RotationLock.acquire(user.id)
+      assert DateTime.compare(new_at, stale) == :gt
+    end
+  end
 end

@@ -38,6 +38,7 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
   - `2` — lock held by another rotation; retry or wait 10 min for stale-takeover
   - `3` — user not found
   - `4` — FATAL: user deleted during rotation; data state may be inconsistent — investigate before retry
+  - `5` — FATAL: prior rotation crashed mid-attachment with non-null `dek_version_pending`; restore S3 blobs from versioning + clear pending state + clear lock manually before retry
   """
 
   use Mix.Task
@@ -77,6 +78,15 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
         )
 
         exit({:shutdown, 4})
+
+      {:error, :half_state_pending} ->
+        IO.puts(
+          :stderr,
+          "FATAL: prior rotation crashed mid-attachment with non-null dek_version_pending; " <>
+            "restore S3 blobs from versioning + clear pending state + clear lock manually before retry"
+        )
+
+        exit({:shutdown, 5})
 
       {:error, reason} ->
         IO.puts(:stderr, "ERROR: rotation FAILED — investigate before retry reason=#{inspect(reason)}")

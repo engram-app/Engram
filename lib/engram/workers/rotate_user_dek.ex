@@ -17,6 +17,10 @@ defmodule Engram.Workers.RotateUserDek do
   Return-value semantics:
   - `:ok` — rotation succeeded
   - `{:discard, :user_deleted}` — user does not exist; no retry
+  - `{:discard, :half_state_pending}` — prior rotation crashed mid-attachment;
+    operator must clear `attachments.dek_version_pending` + lock manually
+    before retry. Retrying via Oban would generate a fresh DEK and
+    irreversibly corrupt the half-rotated S3 blobs.
   - `{:snooze, 60}` — another rotation is in progress; retry in 60 s
   - `{:error, reason}` — transient failure; Oban retries up to max_attempts
   - `{:discard, {:invalid_args, keys}}` — malformed job args; no retry
@@ -40,6 +44,9 @@ defmodule Engram.Workers.RotateUserDek do
 
       {:error, :not_found} ->
         {:discard, :user_deleted}
+
+      {:error, :half_state_pending} ->
+        {:discard, :half_state_pending}
 
       {:error, :rotation_in_progress} ->
         :telemetry.execute(
