@@ -10,7 +10,19 @@ defmodule Engram.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: [
+        ignore_warnings: ".dialyzer_ignore.exs",
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        plt_add_apps: [:mix, :ex_unit],
+        flags: [
+          :unmatched_returns,
+          :error_handling,
+          :underspecs,
+          :missing_return,
+          :extra_return
+        ]
+      ]
     ]
   end
 
