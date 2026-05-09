@@ -6,6 +6,30 @@ defmodule Engram.Fixtures do
   alias Engram.Repo
 
   @doc """
+  Inserts a user with a provisioned DEK. Accepts optional `dek_version` to
+  stamp an explicit version on the row (useful for rotation tests that need
+  a specific starting version).
+  """
+  def user_with_dek_fixture(opts \\ []) do
+    user = Engram.Factory.insert(:user)
+    {:ok, user_with_dek} = Engram.Crypto.ensure_user_dek(user)
+
+    case Keyword.get(opts, :dek_version) do
+      nil ->
+        {:ok, user_with_dek}
+
+      v when is_integer(v) ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user_with_dek.id),
+          [set: [dek_version: v]],
+          skip_tenant_check: true
+        )
+
+        {:ok, %{user_with_dek | dek_version: v}}
+    end
+  end
+
+  @doc """
   Inserts a Note row directly with valid Phase B ciphertext + HMAC fields,
   skipping the side effects of `Notes.upsert_note/3` (Oban enqueue,
   broadcast, embed worker). Use this in test setups that previously relied
