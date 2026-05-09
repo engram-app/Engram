@@ -611,7 +611,6 @@ jobs:
 
       - name: Sobelow
         run: mix sobelow --exit low --skip
-        continue-on-error: true
 
       - name: Dialyzer
         run: |

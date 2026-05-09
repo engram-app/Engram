@@ -70,4 +70,4 @@ run_check() {
 run_check "mix format"                       fatal         mix format --check-formatted
 run_check "mix compile --warnings-as-errors" fatal         mix compile --warnings-as-errors --force
 run_check "credo"                            informational mix credo --mute-exit-status
-run_check "sobelow"                          informational mix sobelow --exit low --skip
+run_check "sobelow"                          fatal         mix sobelow --exit low --skip
