@@ -44,3 +44,30 @@ EOF
 fi
 
 echo "✓ pre-push: mix.exs version differs from main (main=$main_version, branch=$branch_version)"
+
+# ── Quality gates (informational in Phase 1; promoted to fatal in later phases) ──
+# Phase 2 → format + warnings-as-errors fatal
+# Phase 3 → sobelow fatal
+# Phase 5 → credo fatal
+# Dialyzer skipped from pre-push (too slow). Runs in CI only.
+#
+# Bypass any check with: git push --no-verify
+
+run_check() {
+  local name="$1"; shift
+  local fatal="$1"; shift
+  echo "▸ $name..."
+  if "$@"; then
+    echo "  ✓ $name"
+  elif [ "$fatal" = "fatal" ]; then
+    echo "  ✖ $name failed; bypass with: git push --no-verify" >&2
+    exit 1
+  else
+    echo "  ⚠ $name has findings (informational; not blocking yet)" >&2
+  fi
+}
+
+run_check "mix format"                       informational mix format --check-formatted
+run_check "mix compile --warnings-as-errors" informational mix compile --warnings-as-errors --force
+run_check "credo"                            informational mix credo --mute-exit-status
+run_check "sobelow"                          informational mix sobelow --exit low --skip
