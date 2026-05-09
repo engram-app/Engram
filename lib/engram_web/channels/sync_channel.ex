@@ -12,6 +12,7 @@ defmodule EngramWeb.SyncChannel do
   use Phoenix.Channel
 
   alias Engram.{Notes, Vaults}
+  alias Engram.Crypto.RotationGate
   alias EngramWeb.Presence
 
   # ---------------------------------------------------------------------------
@@ -76,20 +77,39 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_in("push_note", params, socket) do
-    user = socket.assigns.current_user
-    vault = socket.assigns.vault
+    # T3.7 — re-read the lock state; socket.assigns.current_user is a stale
+    # snapshot from connect/3 and will not reflect a lock acquired after join.
+    case RotationGate.check(socket.assigns.current_user.id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :channel, op: :push_note}
+        )
 
-    case Notes.upsert_note(user, vault, params) do
-      {:ok, note} ->
-        reply = %{
-          "note" => serialize_note(note),
-          "indexing" => "queued"
-        }
+        {:reply,
+         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
+         socket}
 
-        {:reply, {:ok, reply}, socket}
+      {:error, :user_not_found} ->
+        {:reply, {:error, %{reason: "user_not_found"}}, socket}
 
-      {:error, changeset} ->
-        {:reply, {:error, %{"reason" => format_errors(changeset)}}, socket}
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+
+        case Notes.upsert_note(user, vault, params) do
+          {:ok, note} ->
+            reply = %{
+              "note" => serialize_note(note),
+              "indexing" => "queued"
+            }
+
+            {:reply, {:ok, reply}, socket}
+
+          {:error, changeset} ->
+            {:reply, {:error, %{"reason" => format_errors(changeset)}}, socket}
+        end
     end
   end
 
@@ -99,11 +119,29 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_in("delete_note", %{"path" => path}, socket) do
-    user = socket.assigns.current_user
-    vault = socket.assigns.vault
+    # T3.7 — re-read the lock state; stale snapshot from connect/3.
+    case RotationGate.check(socket.assigns.current_user.id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :channel, op: :delete_note}
+        )
 
-    :ok = Notes.delete_note(user, vault, path)
-    {:reply, {:ok, %{"deleted" => true}}, socket}
+        {:reply,
+         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
+         socket}
+
+      {:error, :user_not_found} ->
+        {:reply, {:error, %{reason: "user_not_found"}}, socket}
+
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+
+        :ok = Notes.delete_note(user, vault, path)
+        {:reply, {:ok, %{"deleted" => true}}, socket}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -112,15 +150,33 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_in("rename_note", %{"old_path" => old_path, "new_path" => new_path}, socket) do
-    user = socket.assigns.current_user
-    vault = socket.assigns.vault
+    # T3.7 — re-read the lock state; stale snapshot from connect/3.
+    case RotationGate.check(socket.assigns.current_user.id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :channel, op: :rename_note}
+        )
 
-    case Notes.rename_note(user, vault, old_path, new_path) do
-      {:ok, note} ->
-        {:reply, {:ok, %{"note" => serialize_note(note)}}, socket}
+        {:reply,
+         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
+         socket}
 
-      {:error, :not_found} ->
-        {:reply, {:error, %{"reason" => "note not found"}}, socket}
+      {:error, :user_not_found} ->
+        {:reply, {:error, %{reason: "user_not_found"}}, socket}
+
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+
+        case Notes.rename_note(user, vault, old_path, new_path) do
+          {:ok, note} ->
+            {:reply, {:ok, %{"note" => serialize_note(note)}}, socket}
+
+          {:error, :not_found} ->
+            {:reply, {:error, %{"reason" => "note not found"}}, socket}
+        end
     end
   end
 
@@ -130,41 +186,64 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_in("pull_changes", %{"since" => since_str}, socket) do
-    user = socket.assigns.current_user
-    vault = socket.assigns.vault
+    # T3.7 — re-read the lock state; stale snapshot from connect/3. Reads are
+    # also blocked: between a sweep batch writing dek_version=new and final_flip
+    # invalidating the DekCache, the old DEK in cache cannot decrypt the new
+    # ciphertext — reads during this window fail with :decrypt_failed.
+    case RotationGate.check(socket.assigns.current_user.id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :channel, op: :pull_changes}
+        )
 
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _} ->
-        {:ok, changes} = Notes.list_changes(user, vault, since)
+        {:reply,
+         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
+         socket}
 
-        serialized =
-          Enum.map(changes, fn c ->
-            %{
-              "path" => c.path,
-              "title" => c.title,
-              "folder" => c.folder,
-              "tags" => c.tags,
-              "version" => c.version,
-              "mtime" => c.mtime,
-              "deleted" => c.deleted,
-              "updated_at" => DateTime.to_iso8601(c.updated_at)
+      {:error, :user_not_found} ->
+        {:reply, {:error, %{reason: "user_not_found"}}, socket}
+
+      :ok ->
+        user = socket.assigns.current_user
+        vault = socket.assigns.vault
+
+        case DateTime.from_iso8601(since_str) do
+          {:ok, since, _} ->
+            {:ok, changes} = Notes.list_changes(user, vault, since)
+
+            serialized =
+              Enum.map(changes, fn c ->
+                %{
+                  "path" => c.path,
+                  "title" => c.title,
+                  "folder" => c.folder,
+                  "tags" => c.tags,
+                  "version" => c.version,
+                  "mtime" => c.mtime,
+                  "deleted" => c.deleted,
+                  "updated_at" => DateTime.to_iso8601(c.updated_at)
+                }
+              end)
+
+            reply = %{
+              "changes" => serialized,
+              "server_time" =>
+                DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
             }
-          end)
 
-        reply = %{
-          "changes" => serialized,
-          "server_time" =>
-            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-        }
+            {:reply, {:ok, reply}, socket}
 
-        {:reply, {:ok, reply}, socket}
-
-      {:error, _} ->
-        {:reply, {:error, %{"reason" => "invalid since timestamp"}}, socket}
+          {:error, _} ->
+            {:reply, {:error, %{"reason" => "invalid since timestamp"}}, socket}
+        end
     end
   end
 
   def handle_in("pull_changes", _params, socket) do
+    # T3.7 — missing `since` key; no need to gate (no DEK access before param parse).
+    # The since-required check is purely structural validation — not a DEK write path.
     {:reply, {:error, %{"reason" => "since is required"}}, socket}
   end
 

@@ -95,5 +95,11 @@ defmodule EngramWeb.TelemetryTest do
       assert "engram.crypto.rotate.dek.snoozed.count" in names,
              "T3.7 snooze events (lock held by another rotation) must be counted"
     end
+
+    test "registers engram.crypto.rotate.dek.gate_blocked counter (T3.7 channel/worker bypass)",
+         %{names: names} do
+      assert "engram.crypto.rotate.dek.gate_blocked.count" in names,
+             "T3.7 writes/reads blocked at channel/worker bypass path must be counted"
+    end
   end
 end

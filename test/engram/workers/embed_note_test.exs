@@ -2,8 +2,10 @@ defmodule Engram.Workers.EmbedNoteTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query, only: [from: 2]
   import Mox
 
+  alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -112,6 +114,30 @@ defmodule Engram.Workers.EmbedNoteTest do
       note = insert(:note, user: user, deleted_at: DateTime.utc_now())
       assert {:discard, _} = perform_job(EmbedNote, %{note_id: note.id})
     end
+
+    # T3.7 — RotationGate
+    test "snoozes for 60 seconds when user's DEK rotation is in progress", %{
+      note: note,
+      user: user
+    } do
+      # Set lock directly — do NOT use RotationLock.acquire/2 (advisory lock
+      # does not survive across a Sandbox checkout in non-async tests).
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      # No mock expectations — if it reached the embedder, Mox would fail
+      assert {:snooze, 60} = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    # Note: the {:discard, :user_deleted} arm is triggered when RotationGate.check/1
+    # returns {:error, :user_not_found}. Because notes carry a FK to users, it is
+    # not possible to have a valid note_id for a hard-deleted user within the DB
+    # constraints. The user_not_found path is covered by rotation_gate_test.exs
+    # (check/1 with id 0). The worker arm exists as a safety net for any future
+    # scenario where notes outlive users (e.g., deferred FK, cascade delay).
 
     test "decrypts content before indexing for encrypted vault", %{bypass: bypass} do
       DekCache.invalidate_all()

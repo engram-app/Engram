@@ -30,6 +30,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   require Logger
 
+  # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
+  # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
+  # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
     vaults =

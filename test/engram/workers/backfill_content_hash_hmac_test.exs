@@ -2,8 +2,10 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query, only: [from: 2]
   import Engram.Fixtures
 
+  alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -121,6 +123,43 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
       assert :ok =
                perform_job(BackfillContentHashHmac, %{
                  "user_id" => user.id,
+                 "vault_id" => vault.id,
+                 "cursor" => 0,
+                 "scope" => "notes"
+               })
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # T3.7 — RotationGate
+  # ---------------------------------------------------------------------------
+
+  describe "perform/1 — T3.7 rotation gate" do
+    test "snoozes for 60 seconds when user's DEK rotation is in progress", %{
+      user: user,
+      vault: vault
+    } do
+      # Set lock directly — do NOT use RotationLock.acquire/2 (advisory lock
+      # does not survive across a Sandbox checkout in non-async tests).
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert {:snooze, 60} =
+               perform_job(BackfillContentHashHmac, %{
+                 "user_id" => user.id,
+                 "vault_id" => vault.id,
+                 "cursor" => 0,
+                 "scope" => "notes"
+               })
+    end
+
+    test "discards job when user does not exist", %{vault: vault} do
+      assert {:discard, :user_deleted} =
+               perform_job(BackfillContentHashHmac, %{
+                 "user_id" => 0,
                  "vault_id" => vault.id,
                  "cursor" => 0,
                  "scope" => "notes"

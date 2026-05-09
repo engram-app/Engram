@@ -12,6 +12,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
 
   alias Engram.Indexing
 
+  # T3.7 — NO rotation gate needed here. `Indexing.delete_note_index/1` only
+  # uses `path_hmac` as a filter key to delete Qdrant points and DB chunk rows;
+  # it does NOT decrypt or re-encrypt any payload. DEK access is never triggered.
   @impl Oban.Worker
   def perform(%Oban.Job{
         args: %{

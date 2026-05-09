@@ -30,6 +30,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.RotationGate
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
@@ -43,6 +44,28 @@ defmodule Engram.Workers.BackfillContentHashHmac do
     cursor = args["cursor"] || 0
     scope = args["scope"] || "notes"
 
+    # T3.7 — gate DEK-accessing work during per-user rotation. The user_id
+    # is available directly in args so we can check before acquiring a
+    # tenant connection.
+    case RotationGate.check(user_id) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :worker, op: :backfill_content_hash_hmac}
+        )
+
+        {:snooze, 60}
+
+      {:error, :user_not_found} ->
+        {:discard, :user_deleted}
+
+      :ok ->
+        run_backfill(user_id, vault_id, cursor, scope)
+    end
+  end
+
+  defp run_backfill(user_id, vault_id, cursor, scope) do
     Repo.with_tenant(user_id, fn ->
       with {:ok, user} <- load_user(user_id),
            {:ok, content_key} <- Crypto.dek_content_hash_key(user) do

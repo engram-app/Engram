@@ -28,6 +28,7 @@ defmodule Engram.Workers.EmbedNote do
 
   alias Engram.Accounts
   alias Engram.Crypto
+  alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -53,39 +54,60 @@ defmodule Engram.Workers.EmbedNote do
         :ok
 
       note ->
-        user = Accounts.get_user!(note.user_id)
+        # T3.7 — gate writes during DEK rotation. The worker may have been
+        # enqueued before the lock was acquired; re-check the live row.
+        case RotationGate.check(note.user_id) do
+          {:error, :rotation_in_progress} ->
+            :telemetry.execute(
+              [:engram, :crypto, :rotate, :dek, :gate_blocked],
+              %{count: 1},
+              %{gate_path: :worker, op: :embed_note}
+            )
 
-        # Load vault up front so we can drive both the decrypt path (future) and
-        # the index call. skip_tenant_check: trusted internal worker.
-        # Missing vault means the note is orphaned — nothing to index, discard.
-        case Repo.get(Vault, note.vault_id, skip_tenant_check: true) do
-          nil ->
-            {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+            {:snooze, 60}
 
-          %Vault{} = vault ->
-            case Crypto.maybe_decrypt_note_fields(note, user) do
-              {:ok, decrypted_note} ->
-                # If renamed, clean up old path's Qdrant points before re-indexing
-                if old_path_hmac_b64 do
-                  Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
-                end
+          {:error, :user_not_found} ->
+            {:discard, :user_deleted}
 
-                case Indexing.index_note(decrypted_note, vault) do
-                  {:ok, _count} ->
-                    stamp_embed_hash(note)
-                    :ok
+          :ok ->
+            run_embed(note, old_path_hmac_b64)
+        end
+    end
+  end
 
-                  {:error, reason} ->
-                    {:error, reason}
-                end
+  defp run_embed(note, old_path_hmac_b64) do
+    user = Accounts.get_user!(note.user_id)
+
+    # Load vault up front so we can drive both the decrypt path (future) and
+    # the index call. skip_tenant_check: trusted internal worker.
+    # Missing vault means the note is orphaned — nothing to index, discard.
+    case Repo.get(Vault, note.vault_id, skip_tenant_check: true) do
+      nil ->
+        {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+
+      %Vault{} = vault ->
+        case Crypto.maybe_decrypt_note_fields(note, user) do
+          {:ok, decrypted_note} ->
+            # If renamed, clean up old path's Qdrant points before re-indexing
+            if old_path_hmac_b64 do
+              Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
+            end
+
+            case Indexing.index_note(decrypted_note, vault) do
+              {:ok, _count} ->
+                stamp_embed_hash(note)
+                :ok
 
               {:error, reason} ->
-                Logger.error(
-                  "EmbedNote decrypt failed: user_id=#{note.user_id} note_id=#{note.id} reason=#{inspect(reason)}"
-                )
-
                 {:error, reason}
             end
+
+          {:error, reason} ->
+            Logger.error(
+              "EmbedNote decrypt failed: user_id=#{note.user_id} note_id=#{note.id} reason=#{inspect(reason)}"
+            )
+
+            {:error, reason}
         end
     end
   end

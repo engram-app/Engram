@@ -1,7 +1,11 @@
 defmodule EngramWeb.SyncChannelTest do
   use EngramWeb.ChannelCase, async: true
 
+  import Ecto.Query, only: [from: 2]
+
+  alias Engram.Accounts.User
   alias Engram.Notes
+  alias Engram.Repo
 
   setup do
     user = insert(:user)
@@ -348,6 +352,55 @@ defmodule EngramWeb.SyncChannelTest do
     test "returns error when since is missing", %{socket: socket} do
       ref = push(socket, "pull_changes", %{})
       assert_reply ref, :error, %{"reason" => _}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # T3.7 — RotationGate: all 4 handlers blocked while rotation is in progress
+  # ---------------------------------------------------------------------------
+
+  describe "rotation lock (T3.7)" do
+    setup %{user: user} do
+      # Set lock directly on the DB row — do NOT use RotationLock.acquire/2 because
+      # the advisory lock does not survive across a Sandbox checkout in non-async tests.
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      :ok
+    end
+
+    test "push_note replies rotation_in_progress when user is locked", %{socket: socket} do
+      ref =
+        push(socket, "push_note", %{
+          "path" => "Lock/Test.md",
+          "content" => "# Locked",
+          "mtime" => 1_000.0
+        })
+
+      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
+    end
+
+    test "delete_note replies rotation_in_progress when user is locked", %{socket: socket} do
+      ref = push(socket, "delete_note", %{"path" => "Lock/Test.md"})
+      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
+    end
+
+    test "rename_note replies rotation_in_progress when user is locked", %{socket: socket} do
+      ref =
+        push(socket, "rename_note", %{
+          "old_path" => "Lock/Old.md",
+          "new_path" => "Lock/New.md"
+        })
+
+      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
+    end
+
+    test "pull_changes replies rotation_in_progress when user is locked", %{socket: socket} do
+      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
+      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
     end
   end
 end
