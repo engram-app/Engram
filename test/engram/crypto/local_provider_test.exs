@@ -214,6 +214,36 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
     end
   end
 
+  describe "rotate_dek/2" do
+    setup do
+      ctx = %{user_id: 12345}
+      {:ok, dek_old} = {:ok, :crypto.strong_rand_bytes(32)}
+      {:ok, wrapped_old} = Local.wrap_dek(dek_old, ctx)
+      {:ok, ctx: ctx, dek_old: dek_old, wrapped_old: wrapped_old}
+    end
+
+    test "returns new wrapped + new plaintext DEK", %{ctx: ctx, wrapped_old: wrapped_old} do
+      assert {:ok, wrapped_new, dek_new} = Local.rotate_dek(wrapped_old, ctx)
+      assert is_binary(wrapped_new)
+      assert byte_size(dek_new) == 32
+    end
+
+    test "produces a different DEK from the input", %{ctx: ctx, wrapped_old: wrapped_old, dek_old: dek_old} do
+      assert {:ok, _wrapped_new, dek_new} = Local.rotate_dek(wrapped_old, ctx)
+      refute dek_new == dek_old
+    end
+
+    test "new wrapped blob unwraps to the new DEK", %{ctx: ctx, wrapped_old: wrapped_old} do
+      assert {:ok, wrapped_new, dek_new} = Local.rotate_dek(wrapped_old, ctx)
+      assert {:ok, ^dek_new} = Local.unwrap_dek(wrapped_new, ctx)
+    end
+
+    test "new wrapped blob is in v2 (AAD-bound) format", %{ctx: ctx, wrapped_old: wrapped_old} do
+      assert {:ok, <<0x02, 0x01, _nonce::binary-size(12), _ct::binary>>, _dek_new} =
+               Local.rotate_dek(wrapped_old, ctx)
+    end
+  end
+
   describe "Logger on dual-fallback failure (T3-audit M5)" do
     test "logs error when neither current nor _PREVIOUS unwraps the DEK" do
       # T3-audit M5 — a user whose DEK cannot be unwrapped by EITHER the

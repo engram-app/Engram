@@ -193,6 +193,22 @@ defmodule Engram.Crypto.KeyProvider.Local do
     end
   end
 
+  @impl true
+  def rotate_dek(_old_wrapped, ctx) do
+    # T3.7 — generate a brand-new DEK (entropy from the same source as
+    # `generate_dek/0`) and wrap it under the user's AAD-bound v2 format.
+    # The `_old_wrapped` argument is unused for Local: the orchestrator
+    # already holds the unwrapped old DEK in process heap when it calls
+    # this. The argument is reserved for AwsKms-class providers that
+    # want to do the rotate atomically server-side.
+    new_dek = generate_dek()
+
+    case wrap_dek(new_dek, ctx) do
+      {:ok, new_wrapped} -> {:ok, new_wrapped, new_dek}
+      {:error, _} = err -> err
+    end
+  end
+
   @doc """
   T3.5.5 / M3 — current-master-key-only unwrap, for `BootCanary`. Bypasses
   `_PREVIOUS` fallback so a misconfigured `ENCRYPTION_MASTER_KEY` cannot
