@@ -54,7 +54,7 @@ defmodule EngramWeb.Router do
 
   # User-scoped authenticated endpoints (no vault context needed)
   scope "/api", EngramWeb do
-    pipe_through [:api, EngramWeb.Plugs.Auth]
+    pipe_through [:api, EngramWeb.Plugs.Auth, EngramWeb.Plugs.RotationLockCheck]
 
     # User info
     get "/user/storage", StorageController, :index
@@ -90,7 +90,7 @@ defmodule EngramWeb.Router do
   # Vault-scoped authenticated endpoints (VaultPlug resolves current_vault)
   scope "/api", EngramWeb do
     # TODO: add EngramWeb.Plugs.RequireActiveSubscription when billing goes live
-    pipe_through [:api, EngramWeb.Plugs.Auth, EngramWeb.Plugs.VaultPlug]
+    pipe_through [:api, EngramWeb.Plugs.Auth, EngramWeb.Plugs.RotationLockCheck, EngramWeb.Plugs.VaultPlug]
 
     # Notes CRUD
     post "/notes/rename", NotesController, :rename
