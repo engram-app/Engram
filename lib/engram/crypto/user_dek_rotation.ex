@@ -15,7 +15,9 @@ defmodule Engram.Crypto.UserDekRotation do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts.User
-  alias Engram.Crypto.RotationLock
+  alias Engram.Crypto
+  alias Engram.Crypto.{DekCache, RotationLock}
+  alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Repo
 
   require Logger
@@ -71,12 +73,42 @@ defmodule Engram.Crypto.UserDekRotation do
   defp short_circuit_if_at_target(%User{dek_version: v}, target) when v >= target, do: :skipped
   defp short_circuit_if_at_target(_user, _target), do: :continue
 
-  defp run_phases(_user, _target_dek_version) do
-    # Phases land in subsequent tasks (4.2 - 4.7). For now, just return :ok
-    # so the skeleton tests pass without dangling state.
-    # NOTE: Lock is NOT released here — Task 4.2 releases it as part of
-    # the atomic `users.encrypted_dek` flip transaction.
-    :ok
+  defp run_phases(%User{} = user, target_dek_version) do
+    user_id = user.id
+
+    with {:ok, _old_dek} <- Crypto.get_dek(user),
+         provider = Resolver.provider_for(user_id),
+         {:ok, new_wrapped, _new_dek} <-
+           provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
+         :ok <- final_flip(user, target_dek_version, new_wrapped) do
+      :ok
+    else
+      {:error, _} = err -> err
+    end
+  end
+
+  defp final_flip(%User{} = user, target_dek_version, new_wrapped) do
+    Repo.transaction(fn ->
+      {1, _} =
+        from(u in User, where: u.id == ^user.id)
+        |> Repo.update_all(
+          [
+            set: [
+              encrypted_dek: new_wrapped,
+              dek_version: target_dek_version,
+              dek_rotation_locked_at: nil
+            ]
+          ],
+          skip_tenant_check: true
+        )
+
+      DekCache.invalidate(user.id)
+      :ok
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp duration_us_since(started_at) do

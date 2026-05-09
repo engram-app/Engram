@@ -3,7 +3,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Engram.Crypto.UserDekRotation
+  alias Engram.Crypto.{DekCache, UserDekRotation}
   alias Engram.Repo
 
   setup do
@@ -34,6 +34,27 @@ defmodule Engram.Crypto.UserDekRotationTest do
       )
 
       assert :skipped = UserDekRotation.rotate_user(user.id, 2)
+    end
+  end
+
+  describe "rotate_user/2 — happy path with no ciphertext rows" do
+    test "user with no notes/atts/vaults rotates cleanly", %{user: user} do
+      old_wrapped = user.encrypted_dek
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      refreshed = Repo.reload!(user)
+      assert refreshed.dek_version == 2
+      refute refreshed.encrypted_dek == old_wrapped
+      assert is_nil(refreshed.dek_rotation_locked_at)
+    end
+
+    test "DekCache invalidated after flip", %{user: user} do
+      DekCache.put(user.id, :crypto.strong_rand_bytes(32))
+      assert {:ok, _stale_dek} = DekCache.get(user.id)
+
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      assert :miss = DekCache.get(user.id)
     end
   end
 end
