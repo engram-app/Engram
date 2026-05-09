@@ -132,4 +132,85 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert decrypted.name == "Personal"
     end
   end
+
+  describe "rotate_user/2 — HMAC re-derivation" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "Personal")
+
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "alpha.md",
+          content: "alpha",
+          folder: "subfolder",
+          tags: ["red", "blue"]
+        })
+
+      {:ok, vault: vault, note: note}
+    end
+
+    test "note path_hmac matches new filter_key after rotation", %{user: user, note: note} do
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_note =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected_path_hmac = Crypto.hmac_field(new_filter_key, "alpha.md")
+
+      assert reloaded_note.path_hmac == expected_path_hmac
+    end
+
+    test "note folder_hmac matches new filter_key after rotation", %{user: user, note: note} do
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_note =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected_folder_hmac = Crypto.hmac_field(new_filter_key, "subfolder")
+
+      assert reloaded_note.folder_hmac == expected_folder_hmac
+    end
+
+    test "note tags_hmac matches new filter_key after rotation", %{user: user, note: note} do
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_note =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected_red = Crypto.hmac_field(new_filter_key, "red")
+      expected_blue = Crypto.hmac_field(new_filter_key, "blue")
+
+      assert reloaded_note.tags_hmac == [expected_red, expected_blue]
+    end
+
+    test "vault name_hmac matches new filter_key after rotation", %{user: user, vault: vault} do
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_vault =
+        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected_name_hmac = Crypto.hmac_field(new_filter_key, "Personal")
+
+      assert reloaded_vault.name_hmac == expected_name_hmac
+    end
+  end
 end

@@ -82,8 +82,9 @@ defmodule Engram.Crypto.UserDekRotation do
          provider = Resolver.provider_for(user_id),
          {:ok, new_wrapped, new_dek} <-
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
-         :ok <- sweep_notes(user, old_dek, new_dek, target_dek_version),
-         :ok <- sweep_vaults(user, old_dek, new_dek, target_dek_version),
+         new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
+         :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, target_dek_version),
+         :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, target_dek_version),
          :ok <- final_flip(user, target_dek_version, new_wrapped) do
       :ok
     else
@@ -95,7 +96,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # Notes sweep
   # ---------------------------------------------------------------------------
 
-  defp sweep_notes(%User{id: user_id}, old_dek, new_dek, target_dek_version) do
+  defp sweep_notes(%User{id: user_id}, old_dek, new_dek, new_filter_key, target_dek_version) do
     sweep_table_loop(
       user_id,
       Engram.Notes.Note,
@@ -111,7 +112,7 @@ defmodule Engram.Crypto.UserDekRotation do
             |> Repo.all(skip_tenant_check: true)
 
           Enum.each(notes, fn note ->
-            updates = rewrap_note_columns(note, old_dek, new_dek)
+            updates = rewrap_note_columns(note, old_dek, new_dek, new_filter_key)
 
             {1, _} =
               from(n in Engram.Notes.Note, where: n.id == ^note.id)
@@ -133,7 +134,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # Vaults sweep
   # ---------------------------------------------------------------------------
 
-  defp sweep_vaults(%User{id: user_id}, old_dek, new_dek, target_dek_version) do
+  defp sweep_vaults(%User{id: user_id}, old_dek, new_dek, new_filter_key, target_dek_version) do
     sweep_table_loop(
       user_id,
       Engram.Vaults.Vault,
@@ -149,7 +150,7 @@ defmodule Engram.Crypto.UserDekRotation do
             |> Repo.all(skip_tenant_check: true)
 
           Enum.each(vaults, fn vault ->
-            updates = rewrap_vault_columns(vault, old_dek, new_dek)
+            updates = rewrap_vault_columns(vault, old_dek, new_dek, new_filter_key)
 
             {1, _} =
               from(v in Engram.Vaults.Vault, where: v.id == ^vault.id)
@@ -164,29 +165,29 @@ defmodule Engram.Crypto.UserDekRotation do
     )
   end
 
-  defp rewrap_vault_columns(%Engram.Vaults.Vault{} = vault, old_dek, new_dek) do
+  defp rewrap_vault_columns(%Engram.Vaults.Vault{} = vault, old_dek, new_dek, new_filter_key) do
     [
-      {:name, :name_ciphertext, :name_nonce}
+      {:name, :name_ciphertext, :name_nonce, :name_hmac}
     ]
-    |> Enum.flat_map(fn {column, ct_field, nonce_field} ->
+    |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key} ->
       ct = Map.get(vault, ct_field)
       nonce = Map.get(vault, nonce_field)
 
       if is_nil(ct) or is_nil(nonce) do
         []
       else
-        old_aad =
-          if vault.dek_version >= Crypto.row_version_aad_bound() do
-            Crypto.aad_for_row(:vaults, column, vault.id)
-          else
-            <<>>
-          end
+        old_aad = old_aad_for(:vaults, column, vault)
 
         case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
           {:ok, plaintext} ->
             new_aad = Crypto.aad_for_row(:vaults, column, vault.id)
             {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
-            [{ct_field, new_ct}, {nonce_field, new_nonce}]
+
+            [
+              {ct_field, new_ct},
+              {nonce_field, new_nonce},
+              {hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}
+            ]
 
           :error ->
             raise "T3.7 sweep_vaults: decrypt failed for vault id=#{vault.id} column=#{column}"
@@ -238,42 +239,100 @@ defmodule Engram.Crypto.UserDekRotation do
     |> Repo.all(skip_tenant_check: true)
   end
 
-  # Re-encrypt all 5 ciphertext column pairs under the new DEK.
+  # Re-encrypt all ciphertext column pairs under the new DEK and recompute
+  # HMAC-indexed fields from the decrypted plaintext using the new filter key.
   # AAD is `<<>>` for legacy rows (dek_version < 2), row-id-bound for v2+.
-  defp rewrap_note_columns(%Engram.Notes.Note{} = note, old_dek, new_dek) do
-    [
-      {:content, :content_ciphertext, :content_nonce},
-      {:title, :title_ciphertext, :title_nonce},
-      {:path, :path_ciphertext, :path_nonce},
-      {:folder, :folder_ciphertext, :folder_nonce},
-      {:tags, :tags_ciphertext, :tags_nonce}
+  defp rewrap_note_columns(%Engram.Notes.Note{} = note, old_dek, new_dek, new_filter_key) do
+    base_columns = [
+      {:content, :content_ciphertext, :content_nonce, nil},
+      {:title, :title_ciphertext, :title_nonce, nil},
+      {:path, :path_ciphertext, :path_nonce, :path_hmac},
+      {:folder, :folder_ciphertext, :folder_nonce, :folder_hmac}
     ]
-    |> Enum.flat_map(fn {column, ct_field, nonce_field} ->
-      ct = Map.get(note, ct_field)
-      nonce = Map.get(note, nonce_field)
 
-      if is_nil(ct) or is_nil(nonce) do
-        []
-      else
-        old_aad =
-          if note.dek_version >= Crypto.row_version_aad_bound() do
-            Crypto.aad_for_row(:notes, column, note.id)
-          else
-            <<>>
+    base_updates =
+      base_columns
+      |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key} ->
+        ct = Map.get(note, ct_field)
+        nonce = Map.get(note, nonce_field)
+
+        if is_nil(ct) or is_nil(nonce) do
+          []
+        else
+          old_aad = old_aad_for(:notes, column, note)
+
+          case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+            {:ok, plaintext} ->
+              new_aad = Crypto.aad_for_row(:notes, column, note.id)
+              {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+              ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
+
+              hmac_updates =
+                if hmac_key && is_binary(plaintext) && plaintext != "" do
+                  [{hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}]
+                else
+                  []
+                end
+
+              ct_updates ++ hmac_updates
+
+            :error ->
+              raise "T3.7 sweep_notes: decrypt failed for note id=#{note.id} column=#{column}"
           end
-
-        case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
-          {:ok, plaintext} ->
-            new_aad = Crypto.aad_for_row(:notes, column, note.id)
-            {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
-            [{ct_field, new_ct}, {nonce_field, new_nonce}]
-
-          :error ->
-            raise "T3.7 sweep_notes: decrypt failed for note id=#{note.id} column=#{column}"
         end
-      end
-    end)
+      end)
+
+    base_updates ++ rewrap_tags(note, old_dek, new_dek, new_filter_key)
   end
+
+  defp rewrap_tags(%Engram.Notes.Note{tags_ciphertext: nil}, _old_dek, _new_dek, _new_filter_key),
+    do: []
+
+  defp rewrap_tags(%Engram.Notes.Note{} = note, old_dek, new_dek, new_filter_key) do
+    ct = note.tags_ciphertext
+    nonce = note.tags_nonce
+
+    if is_nil(ct) or is_nil(nonce) do
+      []
+    else
+      old_aad = old_aad_for(:notes, :tags, note)
+
+      case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+        {:ok, etf_bin} ->
+          tags = :erlang.binary_to_term(etf_bin, [:safe])
+          new_etf = :erlang.term_to_binary(tags)
+          new_aad = Crypto.aad_for_row(:notes, :tags, note.id)
+          {new_ct, new_nonce} = Envelope.encrypt(new_etf, new_dek, new_aad)
+
+          tags_hmac =
+            case tags do
+              ts when is_list(ts) -> Enum.map(ts, &Crypto.hmac_field(new_filter_key, &1))
+              _ -> []
+            end
+
+          [
+            {:tags_ciphertext, new_ct},
+            {:tags_nonce, new_nonce},
+            {:tags_hmac, tags_hmac}
+          ]
+
+        :error ->
+          raise "T3.7 sweep_notes: decrypt failed for note id=#{note.id} column=tags"
+      end
+    end
+  end
+
+  # Derive the correct AAD for an existing encrypted row based on its dek_version.
+  # Rows with dek_version < 2 were written with empty AAD (pre-T3.6).
+  # The bound 2 mirrors Crypto.@row_version_aad_bound — cannot use a remote
+  # function call in a guard, so the value is inlined here.
+  @aad_version_bound 2
+
+  defp old_aad_for(table, column, %{dek_version: v} = row) when v >= @aad_version_bound,
+    do: Crypto.aad_for_row(table, column, row.id)
+
+  defp old_aad_for(_table, _column, _row), do: <<>>
 
   defp final_flip(%User{} = user, target_dek_version, new_wrapped) do
     Repo.transaction(fn ->

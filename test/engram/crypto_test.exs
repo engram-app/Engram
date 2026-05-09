@@ -183,6 +183,34 @@ defmodule Engram.CryptoTest do
     end
   end
 
+  describe "dek_filter_key_from_bytes/1" do
+    test "derives the same key as dek_filter_key/1 for the same DEK" do
+      user = insert(:user) |> Crypto.ensure_user_dek() |> elem(1)
+      {:ok, dek} = Crypto.get_dek(user)
+
+      fk_via_cache = Crypto.dek_filter_key(user) |> elem(1)
+      fk_from_bytes = Crypto.dek_filter_key_from_bytes(dek)
+
+      assert byte_size(fk_from_bytes) == 32
+      assert fk_from_bytes == fk_via_cache
+    end
+
+    test "returns a 32-byte binary from raw DEK bytes" do
+      dek = :crypto.strong_rand_bytes(32)
+      fk = Crypto.dek_filter_key_from_bytes(dek)
+
+      assert is_binary(fk)
+      assert byte_size(fk) == 32
+    end
+
+    test "different DEK bytes yield different filter keys" do
+      dek_a = :crypto.strong_rand_bytes(32)
+      dek_b = :crypto.strong_rand_bytes(32)
+
+      refute Crypto.dek_filter_key_from_bytes(dek_a) == Crypto.dek_filter_key_from_bytes(dek_b)
+    end
+  end
+
   describe "hmac_field/2" do
     test "returns deterministic 32-byte binary" do
       key = :crypto.strong_rand_bytes(32)

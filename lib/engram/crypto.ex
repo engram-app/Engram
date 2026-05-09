@@ -622,6 +622,17 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  T3.7 — derives filter_key from raw DEK bytes without going through the
+  cache. Used by the rotation orchestrator which already holds the new
+  plaintext DEK in process heap and must NOT round-trip through `get_dek/1`
+  (which returns the old cached DEK during rotation).
+  """
+  @spec dek_filter_key_from_bytes(<<_::256>>) :: binary()
+  def dek_filter_key_from_bytes(<<_::256>> = dek) do
+    :crypto.mac(:hmac, :sha256, dek, @filter_key_info)
+  end
+
+  @doc """
   Computes an HMAC-SHA256 fingerprint of `value` using `filter_key`.
 
   Used to produce indexed equality predicates on encrypted-at-rest fields:
