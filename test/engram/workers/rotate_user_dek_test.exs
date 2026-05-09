@@ -48,6 +48,34 @@ defmodule Engram.Workers.RotateUserDekTest do
       assert {:discard, {:invalid_args, _}} =
                perform_job(RotateUserDek, %{"unrelated_key" => "value"})
     end
+
+    test "snoozes with 60s and emits telemetry when rotation_in_progress", %{user: user} do
+      # Hold the lock so rotate_user returns {:error, :rotation_in_progress}.
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      handler_id = "snooze-telemetry-#{:erlang.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :crypto, :rotate, :dek, :snoozed],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:snooze_telemetry, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:snooze, 60} = perform_job(RotateUserDek, %{"user_id" => user.id})
+
+      user_id = user.id
+      assert_receive {:snooze_telemetry, %{count: 1, attempt: _}, %{user_id: ^user_id}}, 500
+    end
   end
 
   describe "uniqueness" do

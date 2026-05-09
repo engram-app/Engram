@@ -2,6 +2,11 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
   @moduledoc """
   T3.7 — operator entry point for per-user DEK rotation.
 
+  > **WARNING: Local / staging only** — `Mix.Task` is unavailable in production
+  > release containers. For production rotation use the Oban worker
+  > (`Engram.Workers.RotateUserDek.new/1`) or release rpc
+  > (`bin/engram rpc 'Engram.Crypto.UserDekRotation.rotate_user(<ID>)'`).
+
   ## Usage
 
       mix engram.rotate_user_dek --user-id 42
@@ -25,6 +30,14 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
 
   3. Run the command. Watch telemetry
      `engram.crypto.rotate.dek.count` (`status=ok`/`failed`).
+
+  ## Exit codes
+
+  - `0` — rotation complete
+  - `1` — rotation FAILED — investigate before retry
+  - `2` — lock held by another rotation; retry or wait 10 min for stale-takeover
+  - `3` — user not found
+  - `4` — FATAL: user deleted during rotation; data state may be inconsistent — investigate before retry
   """
 
   use Mix.Task
@@ -49,8 +62,24 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
         IO.puts("rotation complete: user_id=#{user_id}")
         :ok
 
+      {:error, :rotation_in_progress} ->
+        IO.puts(:stderr, "ERROR: lock held by another rotation; retry or wait 10 min for stale-takeover")
+        exit({:shutdown, 2})
+
+      {:error, :not_found} ->
+        IO.puts(:stderr, "ERROR: user not found user_id=#{user_id}")
+        exit({:shutdown, 3})
+
+      {:error, {:user_vanished_mid_rotation, _}} ->
+        IO.puts(
+          :stderr,
+          "FATAL: user deleted during rotation; data state may be inconsistent — investigate before retry"
+        )
+
+        exit({:shutdown, 4})
+
       {:error, reason} ->
-        IO.puts(:stderr, "ERROR: rotation failed user_id=#{user_id} reason=#{inspect(reason)}")
+        IO.puts(:stderr, "ERROR: rotation FAILED — investigate before retry reason=#{inspect(reason)}")
         exit({:shutdown, 1})
     end
   end

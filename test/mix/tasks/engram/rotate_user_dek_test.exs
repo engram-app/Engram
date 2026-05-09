@@ -47,7 +47,17 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
   end
 
   describe "run/1 — missing user" do
-    test "exits with shutdown 1 when user does not exist" do
+    test "exits with {:shutdown, 3} for missing user" do
+      exit_result =
+        catch_exit do
+          Mix.Tasks.Engram.RotateUserDek.run(["--user-id", "999999999"])
+        end
+
+      assert exit_result == {:shutdown, 3},
+             "Expected {:shutdown, 3} for not_found, got #{inspect(exit_result)}"
+    end
+
+    test "prints user not found message to stderr for missing user" do
       output =
         capture_io(:stderr, fn ->
           catch_exit do
@@ -56,7 +66,26 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
         end)
 
       assert output =~ "ERROR"
-      assert output =~ "not_found"
+      assert output =~ "user not found"
+    end
+  end
+
+  describe "run/1 — rotation_in_progress" do
+    test "exits with shutdown 2 when lock is held", %{user: user} do
+      # Hold the rotation lock so rotate_user returns :rotation_in_progress.
+      Engram.Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      exit_result =
+        catch_exit do
+          Mix.Tasks.Engram.RotateUserDek.run(["--user-id", to_string(user.id)])
+        end
+
+      assert exit_result == {:shutdown, 2},
+             "Expected {:shutdown, 2} for rotation_in_progress, got #{inspect(exit_result)}"
     end
   end
 end

@@ -277,6 +277,23 @@ defmodule Engram.Crypto.UserDekRotation do
                 []
 
               :error ->
+                Logger.error(
+                  "T3.7 sweep_vaults: decrypt failed under both old and new DEK",
+                  category: :crypto_rotation,
+                  user_id: vault.user_id,
+                  table: :vaults,
+                  row_id: vault.id,
+                  column: column,
+                  phase: :sweep_vaults,
+                  status: :both_deks_failed
+                )
+
+                :telemetry.execute(
+                  [:engram, :crypto, :rotate, :dek, :row_failed],
+                  %{count: 1},
+                  %{table: :vaults, phase: :sweep_vaults, status: :both_deks_failed}
+                )
+
                 raise "T3.7 sweep_vaults: decrypt failed under both old and new DEK " <>
                         "for vault id=#{vault.id} column=#{column} new_dek_version=#{new_dek_version}"
             end
@@ -445,6 +462,23 @@ defmodule Engram.Crypto.UserDekRotation do
             {:ok, attachment, :already_rotated}
 
           :error ->
+            Logger.error(
+              "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK",
+              category: :crypto_rotation,
+              user_id: attachment.user_id,
+              table: :attachments,
+              row_id: att_id,
+              column: :content,
+              phase: :sweep_attachments_blob,
+              status: :both_deks_failed
+            )
+
+            :telemetry.execute(
+              [:engram, :crypto, :rotate, :dek, :row_failed],
+              %{count: 1},
+              %{table: :attachments, phase: :sweep_attachments_blob, status: :both_deks_failed}
+            )
+
             raise "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK " <>
                     "for att id=#{att_id} new_dek_version=#{new_dek_version}"
         end
@@ -545,6 +579,23 @@ defmodule Engram.Crypto.UserDekRotation do
                 []
 
               :error ->
+                Logger.error(
+                  "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK",
+                  category: :crypto_rotation,
+                  user_id: att.user_id,
+                  table: :attachments,
+                  row_id: att.id,
+                  column: column,
+                  phase: :sweep_attachments_metadata,
+                  status: :both_deks_failed
+                )
+
+                :telemetry.execute(
+                  [:engram, :crypto, :rotate, :dek, :row_failed],
+                  %{count: 1},
+                  %{table: :attachments, phase: :sweep_attachments_metadata, status: :both_deks_failed}
+                )
+
                 raise "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK " <>
                         "for att id=#{att.id} column=#{column} new_dek_version=#{new_dek_version}"
             end
@@ -571,10 +622,10 @@ defmodule Engram.Crypto.UserDekRotation do
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
     collection = Engram.Vector.Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    sweep_qdrant_loop(collection, filter, old_dek, new_dek, nil)
+    sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, nil)
   end
 
-  defp sweep_qdrant_loop(collection, filter, old_dek, new_dek, offset) do
+  defp sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, offset) do
     case Engram.Vector.Qdrant.scroll(collection,
            filter: filter,
            with_payload: true,
@@ -586,26 +637,54 @@ defmodule Engram.Crypto.UserDekRotation do
         :ok
 
       {:ok, %{points: points, next_page_offset: next}} ->
-        case rewrap_qdrant_points(collection, points, old_dek, new_dek) do
+        case rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
           :ok ->
             if is_nil(next) or next == false do
               :ok
             else
-              sweep_qdrant_loop(collection, filter, old_dek, new_dek, next)
+              sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, next)
             end
 
           {:error, _} = err ->
             err
         end
 
-      {:error, _} = err ->
-        err
+      {:error, reason} ->
+        Logger.error(
+          "T3.7 sweep_qdrant: scroll failed",
+          category: :crypto_rotation,
+          user_id: user_id,
+          phase: :sweep_qdrant,
+          status: :scroll_failed,
+          reason_label: inspect(reason)
+        )
+
+        {:error, reason}
     end
   end
 
-  defp rewrap_qdrant_points(collection, points, old_dek, new_dek) do
+  defp rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
     Enum.reduce_while(points, :ok, fn point, :ok ->
-      qdrant_id = point["id"] || raise "T3.7 sweep_qdrant: point missing id"
+      qdrant_id =
+        point["id"] ||
+          (
+            Logger.error(
+              "T3.7 sweep_qdrant: point missing id",
+              category: :crypto_rotation,
+              user_id: user_id,
+              phase: :sweep_qdrant,
+              status: :missing_id
+            )
+
+            :telemetry.execute(
+              [:engram, :crypto, :rotate, :dek, :row_failed],
+              %{count: 1},
+              %{table: :qdrant, phase: :sweep_qdrant, status: :missing_id}
+            )
+
+            raise "T3.7 sweep_qdrant: point missing id"
+          )
+
       payload = point["payload"] || %{}
 
       case rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
@@ -614,8 +693,21 @@ defmodule Engram.Crypto.UserDekRotation do
 
         {:ok, new_payload} ->
           case Engram.Vector.Qdrant.set_payload(collection, [qdrant_id], new_payload) do
-            :ok -> {:cont, :ok}
-            {:error, _} = err -> {:halt, err}
+            :ok ->
+              {:cont, :ok}
+
+            {:error, reason} ->
+              Logger.error(
+                "T3.7 sweep_qdrant: set_payload failed",
+                category: :crypto_rotation,
+                user_id: user_id,
+                qdrant_id: qdrant_id,
+                phase: :sweep_qdrant,
+                status: :set_payload_failed,
+                reason_label: inspect(reason)
+              )
+
+              {:halt, {:error, {:qdrant_set_payload_failed, reason}}}
           end
 
         {:error, _} = err ->
@@ -673,6 +765,22 @@ defmodule Engram.Crypto.UserDekRotation do
                   {:cont, {:ok, acc, any_changed?}}
 
                 :error ->
+                  Logger.error(
+                    "T3.7 sweep_qdrant: decrypt failed under both old and new DEK",
+                    category: :crypto_rotation,
+                    table: :qdrant,
+                    qdrant_id: qdrant_id,
+                    field: field,
+                    phase: :sweep_qdrant,
+                    status: :both_deks_failed
+                  )
+
+                  :telemetry.execute(
+                    [:engram, :crypto, :rotate, :dek, :row_failed],
+                    %{count: 1},
+                    %{table: :qdrant, phase: :sweep_qdrant, status: :both_deks_failed}
+                  )
+
                   {:halt, {:error, {:qdrant_decrypt_failed, qdrant_id, field}}}
               end
           end
@@ -777,6 +885,23 @@ defmodule Engram.Crypto.UserDekRotation do
                   []
 
                 :error ->
+                  Logger.error(
+                    "T3.7 sweep_notes: decrypt failed under both old and new DEK",
+                    category: :crypto_rotation,
+                    user_id: note.user_id,
+                    table: :notes,
+                    row_id: note.id,
+                    column: column,
+                    phase: :sweep_notes,
+                    status: :both_deks_failed
+                  )
+
+                  :telemetry.execute(
+                    [:engram, :crypto, :rotate, :dek, :row_failed],
+                    %{count: 1},
+                    %{table: :notes, phase: :sweep_notes, status: :both_deks_failed}
+                  )
+
                   raise "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
                           "for note id=#{note.id} column=#{column} new_dek_version=#{new_dek_version}"
               end
@@ -830,6 +955,23 @@ defmodule Engram.Crypto.UserDekRotation do
               []
 
             :error ->
+              Logger.error(
+                "T3.7 sweep_notes: decrypt failed under both old and new DEK",
+                category: :crypto_rotation,
+                user_id: note.user_id,
+                table: :notes,
+                row_id: note.id,
+                column: :tags,
+                phase: :sweep_notes,
+                status: :both_deks_failed
+              )
+
+              :telemetry.execute(
+                [:engram, :crypto, :rotate, :dek, :row_failed],
+                %{count: 1},
+                %{table: :notes, phase: :sweep_notes, status: :both_deks_failed}
+              )
+
               raise "T3.7 sweep_notes: decrypt failed under both old and new DEK " <>
                       "for note id=#{note.id} column=tags new_dek_version=#{new_dek_version}"
           end
@@ -939,6 +1081,12 @@ defmodule Engram.Crypto.UserDekRotation do
   defp classify_reason(:crashed), do: "crashed"
   defp classify_reason({:user_vanished_mid_rotation, _uid}), do: "user_vanished_mid_rotation"
   defp classify_reason({:row_vanished, table, _id, phase}), do: "row_vanished_#{table}_#{phase}"
+  defp classify_reason({:qdrant_scroll, _status, _body}), do: "qdrant_scroll_failed"
+  defp classify_reason({:qdrant_set_payload_failed, _reason}), do: "qdrant_set_payload_failed"
+  defp classify_reason({:qdrant_decrypt_failed, _id, _field}), do: "qdrant_decrypt_failed"
+  defp classify_reason(%Postgrex.Error{postgres: %{code: code}}), do: "postgres_" <> to_string(code)
+  defp classify_reason(%Postgrex.Error{}), do: "postgres_unknown"
+  defp classify_reason({status, _body}) when is_integer(status), do: "http_#{status}"
   defp classify_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp classify_reason(%Ecto.Changeset{}), do: "changeset_invalid"
 

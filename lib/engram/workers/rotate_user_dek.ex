@@ -33,12 +33,25 @@ defmodule Engram.Workers.RotateUserDek do
   alias Engram.Crypto.UserDekRotation
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id}}) when is_integer(user_id) do
+  def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt}) when is_integer(user_id) do
     case UserDekRotation.rotate_user(user_id) do
-      :ok -> :ok
-      {:error, :not_found} -> {:discard, :user_deleted}
-      {:error, :rotation_in_progress} -> {:snooze, 60}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        {:discard, :user_deleted}
+
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :snoozed],
+          %{count: 1, attempt: attempt},
+          %{user_id: user_id}
+        )
+
+        {:snooze, 60}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

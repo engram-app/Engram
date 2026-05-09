@@ -81,5 +81,19 @@ defmodule EngramWeb.TelemetryTest do
       assert "engram.crypto.rotate.dek.duration_us" in names,
              "UserDekRotation per-DEK duration must be measured"
     end
+
+    test "registers engram.crypto.rotate.dek.row_failed counter (T3.7 per-row failures)", %{
+      names: names
+    } do
+      assert "engram.crypto.rotate.dek.row_failed.count" in names,
+             "Per-row T3.7 rotation failures (decrypt-both-failed, missing-id) must be counted"
+    end
+
+    test "registers engram.crypto.rotate.dek.snoozed counter (T3.7 lock contention)", %{
+      names: names
+    } do
+      assert "engram.crypto.rotate.dek.snoozed.count" in names,
+             "T3.7 snooze events (lock held by another rotation) must be counted"
+    end
   end
 end

@@ -114,6 +114,20 @@ defmodule EngramWeb.Telemetry do
         tags: [:status],
         description: "UserDekRotation per-DEK duration"
       ),
+      counter("engram.crypto.rotate.dek.row_failed.count",
+        event_name: [:engram, :crypto, :rotate, :dek, :row_failed],
+        measurement: :count,
+        tags: [:table, :phase, :status],
+        description:
+          "T3.7 per-row failure during user DEK rotation (decrypt-both-failed, missing-id, etc.)"
+      ),
+      counter("engram.crypto.rotate.dek.snoozed.count",
+        event_name: [:engram, :crypto, :rotate, :dek, :snoozed],
+        measurement: :count,
+        tags: [:user_id],
+        description:
+          "T3.7 per-user DEK rotation snoozed because lock held by another rotation"
+      ),
       counter("engram.crypto.aad_rebind.attachment_skipped.count",
         description:
           "Attachments NOT rebound by AadRebind (intentional — converge on next upload). Non-zero count means the user has unconverged S3 blobs that still read as legacy AAD."
