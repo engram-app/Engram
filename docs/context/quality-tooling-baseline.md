@@ -11,7 +11,7 @@ Plan: `../../../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooli
 | `mix format` | 0 | informational (Phase 2 → fatal) | 0 (already clean) |
 | `mix compile --warnings-as-errors` | 0 | informational (Phase 2 → fatal) | 0 (already clean) |
 | Sobelow (threshold low, exit low, --skip) | 0 | informational (Phase 3 → fatal) | 0 (already clean) |
-| Dialyzer (with `:unmatched_returns`, `:error_handling`, `:underspecs`, `:missing_return`, `:extra_return`) | TBD (PLT still building) | informational (Phase 4 → fatal) | 0 |
+| Dialyzer (with `:unmatched_returns`, `:error_handling`, `:underspecs`, `:missing_return`, `:extra_return`) | 81 | informational (Phase 4 → fatal) | 0 |
 | Credo (`--strict`) | 676 | informational (Phase 5 → fatal) | 0 |
 
 ## Format
@@ -28,7 +28,22 @@ Plan: `../../../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooli
 
 ## Dialyzer
 
-PLT was being built at the time of this commit; first-run finding count will land in the Phase 4 PR. Expectation: ~10-30 findings — most likely `:unmatched_returns` from `Logger.warning/0` calls in test helpers and `:underspecs` in modules that omit `@spec`. Real bugs (like the dead `{:error, _}` clause in `Local.rotate_dek/2` removed in PR #84) get fixed; everything else either gets a `@spec` or a justified entry in `.dialyzer_ignore.exs`.
+`mix dialyzer --quiet` → 81 findings (PLT 7.5 MB, first build ~6 min on dev box). Breakdown:
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| `:unknown_type` | 32 | Ecto schema `t/0` types referenced before they're declared on the schema modules. Add `@type t :: %__MODULE__{...}` to each schema. |
+| `:unmatched_return` | 28 | Raw `Ecto.Adapters.SQL.query/4` results not bound. Bind to `_` or pattern-match the `%{:rows => _}` map. |
+| `:pattern_match_cov` | 6 | A clause is covered by an earlier one — dead code. |
+| `:contract_supertype` | 4 | `@spec` claims a wider type than the function actually returns. Tighten the spec. |
+| `:pattern_match` | 3 | Pattern can never match (real bug indicator). |
+| `:missing_range` | 3 | `@spec` covers fewer return types than the body produces. |
+| `:guard_fail` | 2 | Guard always evaluates false. |
+| `:unused_fun` | 1 | Dead function. Delete or pin. |
+| `:no_return` | 1 | `Engram.Billing.create_checkout_session/2` — likely a Stripe contract mismatch, see `:call` below. |
+| `:call` | 1 | `Stripe.Checkout.Session.create/1` call shape mismatch — same site as the `:no_return` above. Probably the actual bug. |
+
+Phase 4 burns this list to zero. The `:no_return` + `:call` pair on `Engram.Billing` is the highest-value finding — that's the kind of latent bug the rest of this rollout exists to surface. The 32 `:unknown_type` fixes are mechanical (one `@type t` per schema). Anything that genuinely is OK lands in `.dialyzer_ignore.exs` with a justification comment.
 
 ## Credo (strict)
 
