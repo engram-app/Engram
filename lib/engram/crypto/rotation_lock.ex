@@ -52,11 +52,25 @@ defmodule Engram.Crypto.RotationLock do
 
   @spec release(integer()) :: :ok
   def release(user_id) when is_integer(user_id) do
-    {1, _} =
-      from(u in User, where: u.id == ^user_id)
-      |> Repo.update_all([set: [dek_rotation_locked_at: nil]], skip_tenant_check: true)
+    case from(u in User, where: u.id == ^user_id)
+         |> Repo.update_all([set: [dek_rotation_locked_at: nil]], skip_tenant_check: true) do
+      {1, _} ->
+        :ok
 
-    :ok
+      {0, _} ->
+        require Logger
+
+        Logger.error(
+          "T3.7 RotationLock.release: user row vanished",
+          category: :crypto_rotation,
+          user_id: user_id,
+          table: :users,
+          row_id: user_id,
+          phase: :release
+        )
+
+        raise "T3.7 RotationLock.release: row vanished mid-rotation user_id=#{user_id}"
+    end
   end
 
   @spec locked?(integer()) :: boolean()
@@ -72,11 +86,16 @@ defmodule Engram.Crypto.RotationLock do
   defp set_locked(%User{} = user) do
     now = DateTime.truncate(DateTime.utc_now(), :microsecond)
 
-    {1, _} =
-      from(u in User, where: u.id == ^user.id)
-      |> Repo.update_all([set: [dek_rotation_locked_at: now]], skip_tenant_check: true)
+    case from(u in User, where: u.id == ^user.id)
+         |> Repo.update_all([set: [dek_rotation_locked_at: now]], skip_tenant_check: true) do
+      {1, _} ->
+        now
 
-    now
+      {0, _} ->
+        # User was deleted between the SELECT and the UPDATE inside the advisory lock.
+        # Roll back so acquire/2 returns {:error, :not_found} to the caller.
+        Repo.rollback(:not_found)
+    end
   end
 
   defp stale?(%DateTime{} = at) do

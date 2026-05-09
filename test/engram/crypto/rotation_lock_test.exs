@@ -52,4 +52,25 @@ defmodule Engram.Crypto.RotationLockTest do
     :ok = RotationLock.release(user.id)
     refute RotationLock.locked?(user.id)
   end
+
+  # ---------------------------------------------------------------------------
+  # Phase A — B4: RotationLock.release/1 row-vanish
+  # ---------------------------------------------------------------------------
+
+  describe "Phase A — B4: release/1 row vanish" do
+    test "release/1 raises RuntimeError with structured log when user row no longer exists",
+         %{user: user} do
+      {:ok, _at} = RotationLock.acquire(user.id, target_dek_version: 2)
+
+      # Hard-delete the user row to simulate concurrent account deletion.
+      Repo.delete_all(
+        from(u in User, where: u.id == ^user.id),
+        skip_tenant_check: true
+      )
+
+      assert_raise RuntimeError, ~r/T3\.7 RotationLock\.release: row vanished/, fn ->
+        RotationLock.release(user.id)
+      end
+    end
+  end
 end

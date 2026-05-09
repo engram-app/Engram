@@ -51,11 +51,23 @@ defmodule Engram.Crypto.UserDekRotation do
         id when is_integer(id) -> id
       end
 
+    # B5: started_at captured inside the wrapper so the telemetry emission
+    # below is ALWAYS reached — even when do_rotate raises or exits.
     started_at = System.monotonic_time()
-    result = do_rotate(user_id)
-    duration_us = duration_us_since(started_at)
-    emit_telemetry(user_id, result, duration_us)
-    result
+
+    try do
+      result = do_rotate(user_id)
+      emit_telemetry(user_id, result, duration_us_since(started_at))
+      result
+    rescue
+      e ->
+        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        reraise e, __STACKTRACE__
+    catch
+      kind, reason ->
+        emit_telemetry(user_id, {:error, :crashed}, duration_us_since(started_at))
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
   end
 
   defp do_rotate(user_id) do
@@ -63,19 +75,37 @@ defmodule Engram.Crypto.UserDekRotation do
          {:ok, _locked_at} <- RotationLock.acquire(user_id) do
       new_dek_version = (user.dek_version || 1) + 1
 
+      # B5: full try/rescue/catch so that :exit (pool exhaustion, SIGTERM) and
+      # :throw bypass neither the structured log nor the lock-retention comment.
       try do
         run_phases(user, new_dek_version)
       rescue
         e ->
           Logger.error(
-            "T3.7 rotate_user crashed user_id=#{user_id} new_dek_version=#{new_dek_version} " <>
-              "kind=#{inspect(e.__struct__)} message=#{Exception.message(e)}",
-            category: :crypto_rotation
+            "T3.7 rotate_user crashed",
+            category: :crypto_rotation,
+            user_id: user_id,
+            new_dek_version: new_dek_version,
+            kind: :error,
+            exception_struct: e.__struct__,
+            message: Exception.message(e)
           )
 
           # Lock intentionally NOT released — operator must investigate
           # before retry. Re-raise so caller sees the failure.
           reraise e, __STACKTRACE__
+      catch
+        kind, reason when kind in [:exit, :throw] ->
+          Logger.error(
+            "T3.7 rotate_user terminated",
+            category: :crypto_rotation,
+            user_id: user_id,
+            new_dek_version: new_dek_version,
+            kind: kind,
+            reason: inspect(reason)
+          )
+
+          :erlang.raise(kind, reason, __STACKTRACE__)
       end
     else
       {:error, _} = err -> err
@@ -130,12 +160,26 @@ defmodule Engram.Crypto.UserDekRotation do
             updates = rewrap_note_columns(note, old_dek, new_dek, new_filter_key, new_dek_version)
 
             if updates != [] do
-              {1, _} =
-                from(n in Engram.Notes.Note, where: n.id == ^note.id)
-                |> Repo.update_all(
-                  [set: updates ++ [dek_version: new_dek_version]],
-                  skip_tenant_check: true
-                )
+              case from(n in Engram.Notes.Note, where: n.id == ^note.id)
+                   |> Repo.update_all(
+                     [set: updates ++ [dek_version: new_dek_version]],
+                     skip_tenant_check: true
+                   ) do
+                {1, _} ->
+                  :ok
+
+                {0, _} ->
+                  Logger.error(
+                    "T3.7 sweep_notes: row vanished during rotation",
+                    category: :crypto_rotation,
+                    user_id: user_id,
+                    table: :notes,
+                    row_id: note.id,
+                    phase: :sweep_notes
+                  )
+
+                  raise "T3.7 sweep_notes: row vanished mid-rotation table=notes row_id=#{note.id}"
+              end
             end
           end)
         end)
@@ -169,12 +213,26 @@ defmodule Engram.Crypto.UserDekRotation do
             updates = rewrap_vault_columns(vault, old_dek, new_dek, new_filter_key, new_dek_version)
 
             if updates != [] do
-              {1, _} =
-                from(v in Engram.Vaults.Vault, where: v.id == ^vault.id)
-                |> Repo.update_all(
-                  [set: updates ++ [dek_version: new_dek_version]],
-                  skip_tenant_check: true
-                )
+              case from(v in Engram.Vaults.Vault, where: v.id == ^vault.id)
+                   |> Repo.update_all(
+                     [set: updates ++ [dek_version: new_dek_version]],
+                     skip_tenant_check: true
+                   ) do
+                {1, _} ->
+                  :ok
+
+                {0, _} ->
+                  Logger.error(
+                    "T3.7 sweep_vaults: row vanished during rotation",
+                    category: :crypto_rotation,
+                    user_id: user_id,
+                    table: :vaults,
+                    row_id: vault.id,
+                    phase: :sweep_vaults
+                  )
+
+                  raise "T3.7 sweep_vaults: row vanished mid-rotation table=vaults row_id=#{vault.id}"
+              end
             end
           end)
         end)
@@ -299,11 +357,22 @@ defmodule Engram.Crypto.UserDekRotation do
 
   defp mark_pending(att_id, new_dek_version) do
     Repo.transaction(fn ->
-      {1, _} =
-        from(a in Engram.Attachments.Attachment, where: a.id == ^att_id)
-        |> Repo.update_all([set: [dek_version_pending: new_dek_version]], skip_tenant_check: true)
+      case from(a in Engram.Attachments.Attachment, where: a.id == ^att_id)
+           |> Repo.update_all([set: [dek_version_pending: new_dek_version]], skip_tenant_check: true) do
+        {1, _} ->
+          :ok
 
-      :ok
+        {0, _} ->
+          Logger.error(
+            "T3.7 mark_pending: row vanished during rotation",
+            category: :crypto_rotation,
+            table: :attachments,
+            row_id: att_id,
+            phase: :mark_pending
+          )
+
+          Repo.rollback({:row_vanished, :attachments, att_id, :mark_pending})
+      end
     end)
     |> case do
       {:ok, :ok} -> {:ok, :ok}
@@ -314,13 +383,44 @@ defmodule Engram.Crypto.UserDekRotation do
   # Returns {:ok, attachment, {:rotated, new_nonce}} when S3 PUT succeeded (blob now under new DEK)
   # Returns {:ok, attachment, :already_rotated} when blob is already under new DEK (prior crashed run)
   defp recrypt_blob(att_id, old_dek, new_dek, new_dek_version) do
+    # Storage MatchError fix: use Repo.one/2 + nil case for concurrent hard-delete safety
     attachment =
-      Repo.one!(
-        from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
-        skip_tenant_check: true
-      )
+      case Repo.one(
+             from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
+             skip_tenant_check: true
+           ) do
+        nil ->
+          Logger.error(
+            "T3.7 recrypt_blob: attachment row vanished",
+            category: :crypto_rotation,
+            table: :attachments,
+            row_id: att_id,
+            phase: :recrypt_blob
+          )
 
-    {:ok, ct} = Engram.Storage.adapter().get(attachment.storage_key)
+          raise "T3.7 sweep_attachments: attachment row vanished att_id=#{att_id}"
+
+        %Engram.Attachments.Attachment{} = a ->
+          a
+      end
+
+    ct =
+      case Engram.Storage.adapter().get(attachment.storage_key) do
+        {:ok, blob} ->
+          blob
+
+        {:error, reason} ->
+          Logger.error(
+            "T3.7 recrypt_blob: storage get failed",
+            category: :crypto_rotation,
+            table: :attachments,
+            row_id: att_id,
+            storage_key: attachment.storage_key,
+            reason_label: inspect(reason)
+          )
+
+          raise "T3.7 sweep_attachments: storage get failed att_id=#{att_id} reason=#{inspect(reason)}"
+      end
 
     old_aad = old_aad_for(:attachments, :content, attachment)
     new_aad = Crypto.aad_for_row(:attachments, :content, attachment.id)
@@ -375,22 +475,33 @@ defmodule Engram.Crypto.UserDekRotation do
           :already_rotated -> []
         end
 
-      {1, _} =
-        from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id)
-        |> Repo.update_all(
-          [
-            set:
-              meta_updates ++
-                nonce_update ++
-                [
-                  dek_version: new_dek_version,
-                  dek_version_pending: nil
-                ]
-          ],
-          skip_tenant_check: true
-        )
+      case from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id)
+           |> Repo.update_all(
+             [
+               set:
+                 meta_updates ++
+                   nonce_update ++
+                   [
+                     dek_version: new_dek_version,
+                     dek_version_pending: nil
+                   ]
+             ],
+             skip_tenant_check: true
+           ) do
+        {1, _} ->
+          :ok
 
-      :ok
+        {0, _} ->
+          Logger.error(
+            "T3.7 finalize_attachment: row vanished during rotation",
+            category: :crypto_rotation,
+            table: :attachments,
+            row_id: attachment.id,
+            phase: :finalize_attachment
+          )
+
+          Repo.rollback({:row_vanished, :attachments, attachment.id, :finalize_attachment})
+      end
     end)
     |> case do
       {:ok, :ok} -> :ok
@@ -738,26 +849,55 @@ defmodule Engram.Crypto.UserDekRotation do
   defp old_aad_for(_table, _column, _row), do: <<>>
 
   defp final_flip(%User{} = user, new_dek_version, new_wrapped) do
-    Repo.transaction(fn ->
-      {1, _} =
-        from(u in User, where: u.id == ^user.id)
-        |> Repo.update_all(
-          [
-            set: [
-              encrypted_dek: new_wrapped,
-              dek_version: new_dek_version,
-              dek_rotation_locked_at: nil
-            ]
-          ],
-          skip_tenant_check: true
-        )
+    # B4: user-vanish treated as structured {:error, ...} — NOT a raise — so it
+    # propagates up through the with-chain in run_phases and rotate_user emits
+    # telemetry (status=failed) rather than a bare MatchError.
+    #
+    # I1: DekCache.invalidate is deferred OUTSIDE the Repo.transaction block.
+    # If the transaction rolls back (deadlock, advisory-lock contention, etc.),
+    # the cache must not be cleared while encrypted_dek is still the old value.
+    # Pattern mirrors Crypto.ensure_user_dek/1 (T3.1 race fix, PR #74).
+    txn_result =
+      Repo.transaction(fn ->
+        case from(u in User, where: u.id == ^user.id)
+             |> Repo.update_all(
+               [
+                 set: [
+                   encrypted_dek: new_wrapped,
+                   dek_version: new_dek_version,
+                   dek_rotation_locked_at: nil
+                 ]
+               ],
+               skip_tenant_check: true
+             ) do
+          {1, _} ->
+            :ok
 
-      DekCache.invalidate(user.id)
-      :ok
-    end)
-    |> case do
-      {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, reason}
+          {0, _} ->
+            Logger.error(
+              "T3.7 final_flip: user row vanished mid-rotation",
+              category: :crypto_rotation,
+              user_id: user.id,
+              table: :users,
+              row_id: user.id,
+              phase: :final_flip
+            )
+
+            Repo.rollback({:user_vanished_mid_rotation, user.id})
+        end
+      end)
+
+    case txn_result do
+      {:ok, :ok} ->
+        # Only invalidate cache after the txn commits successfully.
+        DekCache.invalidate(user.id)
+        :ok
+
+      {:error, {:user_vanished_mid_rotation, _uid}} = err ->
+        err
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -796,6 +936,9 @@ defmodule Engram.Crypto.UserDekRotation do
   defp classify_reason(:rotation_in_progress), do: "rotation_in_progress"
   defp classify_reason(:invalid_wrapping), do: "invalid_wrapping"
   defp classify_reason(:malformed_wrapped_blob), do: "malformed_wrapped_blob"
+  defp classify_reason(:crashed), do: "crashed"
+  defp classify_reason({:user_vanished_mid_rotation, _uid}), do: "user_vanished_mid_rotation"
+  defp classify_reason({:row_vanished, table, _id, phase}), do: "row_vanished_#{table}_#{phase}"
   defp classify_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp classify_reason(%Ecto.Changeset{}), do: "changeset_invalid"
 
