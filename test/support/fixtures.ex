@@ -215,6 +215,72 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Inserts an Attachment row with legacy v1 encryption (empty AAD), mirroring
+  what `insert_note!/3` does for notes. Content is written to the S3 adapter
+  so rotation tests can round-trip the blob.
+
+  Accepts `path`, `content` (plaintext binary), `mime_type`, `mtime`.
+  Returns the inserted struct with `dek_version: 1`.
+  """
+  def insert_attachment!(user, vault, attrs \\ %{}) do
+    user =
+      case user.encrypted_dek do
+        nil ->
+          {:ok, u} = Engram.Crypto.ensure_user_dek(user)
+          u
+
+        _ ->
+          user
+      end
+
+    attrs = Enum.into(attrs, %{}, fn {k, v} -> {to_string(k), v} end)
+    path = Map.get(attrs, "path", "test/att-#{System.unique_integer([:positive, :monotonic])}.bin")
+    content = Map.get(attrs, "content", <<0, 1, 2, 3>>)
+    mime_type = Map.get(attrs, "mime_type", "application/octet-stream")
+    mtime = Map.get(attrs, "mtime", 0.0)
+
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
+
+    att_id = Engram.Crypto.next_row_id(:attachments)
+    storage_key = Engram.Storage.key(user.id, vault.id, path)
+
+    # Legacy v1 encrypt: empty AAD
+    {content_ct, content_nonce} = Engram.Crypto.Envelope.encrypt(content, dek, <<>>)
+    {path_ct, path_nonce} = Engram.Crypto.Envelope.encrypt(path, dek, <<>>)
+
+    # Write ciphertext blob to storage
+    :ok = Engram.Storage.adapter().put(storage_key, content_ct, content_type: mime_type)
+
+    attrs = %{
+      id: att_id,
+      user_id: user.id,
+      vault_id: vault.id,
+      path_ciphertext: path_ct,
+      path_nonce: path_nonce,
+      path_hmac: Engram.Crypto.hmac_field(filter_key, path),
+      content_hash: Engram.Crypto.hmac_content_hash(content_key, content),
+      content_nonce: content_nonce,
+      storage_key: storage_key,
+      mime_type: mime_type,
+      size_bytes: byte_size(content),
+      mtime: mtime,
+      encryption_version: 1,
+      dek_version: 1
+    }
+
+    inserted =
+      Repo.insert!(
+        struct(Engram.Attachments.Attachment, attrs),
+        skip_tenant_check: true
+      )
+
+    # Splice virtual path so callers can read att.path
+    %{inserted | path: path}
+  end
+
+  @doc """
   Inserts an active subscription for a user.
 
   Accepts optional attribute overrides (status, tier, etc.).

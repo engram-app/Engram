@@ -85,6 +85,7 @@ defmodule Engram.Crypto.UserDekRotation do
          new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, target_dek_version),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, target_dek_version),
+         :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, target_dek_version),
          :ok <- final_flip(user, target_dek_version, new_wrapped) do
       :ok
     else
@@ -197,6 +198,186 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   # ---------------------------------------------------------------------------
+  # Attachments sweep (two-phase commit per blob)
+  # ---------------------------------------------------------------------------
+  #
+  # Content ciphertext lives in S3, not in the DB — so we cannot do a simple
+  # batch UPDATE like notes/vaults. Each attachment requires:
+  #   Txn 1: mark dek_version_pending = target  (crash-resume marker)
+  #   S3 op: GET old ciphertext → decrypt(old_dek) → encrypt(new_dek) → PUT
+  #   Txn 2: dek_version = target, dek_version_pending = nil,
+  #           rewrap path_ciphertext/path_nonce + recompute path_hmac
+  #
+  # The cursor query picks up rows where either dek_version < target OR
+  # dek_version_pending == target so a crash after Txn 1 is re-tried.
+
+  defp sweep_attachments(%User{id: user_id}, old_dek, new_dek, new_filter_key, target_dek_version) do
+    sweep_attachment_loop(user_id, target_dek_version, old_dek, new_dek, new_filter_key, 0)
+  end
+
+  defp sweep_attachment_loop(user_id, target_dek_version, old_dek, new_dek, new_filter_key, last_id) do
+    ids =
+      from(a in Engram.Attachments.Attachment,
+        where: a.user_id == ^user_id and a.id > ^last_id,
+        where:
+          a.dek_version < ^target_dek_version or a.dek_version_pending == ^target_dek_version,
+        where: is_nil(a.deleted_at),
+        order_by: a.id,
+        limit: ^@batch_size,
+        select: a.id
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    case ids do
+      [] ->
+        :ok
+
+      _ ->
+        result =
+          Enum.reduce_while(ids, :ok, fn id, :ok ->
+            case rotate_one_attachment(id, target_dek_version, old_dek, new_dek, new_filter_key) do
+              :ok -> {:cont, :ok}
+              {:error, _} = err -> {:halt, err}
+            end
+          end)
+
+        case result do
+          :ok ->
+            sweep_attachment_loop(
+              user_id,
+              target_dek_version,
+              old_dek,
+              new_dek,
+              new_filter_key,
+              List.last(ids)
+            )
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp rotate_one_attachment(att_id, target_dek_version, old_dek, new_dek, new_filter_key) do
+    with {:ok, _} <- mark_pending(att_id, target_dek_version),
+         {:ok, attachment, new_content_nonce} <- recrypt_blob(att_id, old_dek, new_dek),
+         :ok <- finalize_attachment(attachment, target_dek_version, old_dek, new_dek, new_filter_key, new_content_nonce) do
+      :ok
+    end
+  end
+
+  defp mark_pending(att_id, target_dek_version) do
+    Repo.transaction(fn ->
+      {1, _} =
+        from(a in Engram.Attachments.Attachment, where: a.id == ^att_id)
+        |> Repo.update_all([set: [dek_version_pending: target_dek_version]], skip_tenant_check: true)
+
+      :ok
+    end)
+    |> case do
+      {:ok, :ok} -> {:ok, :ok}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp recrypt_blob(att_id, old_dek, new_dek) do
+    attachment =
+      Repo.one!(
+        from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
+        skip_tenant_check: true
+      )
+
+    with {:ok, ct} <- Engram.Storage.adapter().get(attachment.storage_key),
+         old_aad = old_aad_for(:attachments, :content, attachment),
+         {:ok, plaintext} <- decrypt_blob_or_err(ct, attachment.content_nonce, old_dek, old_aad, att_id) do
+      new_aad = Crypto.aad_for_row(:attachments, :content, attachment.id)
+      {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+      case Engram.Storage.adapter().put(attachment.storage_key, new_ct,
+             content_type: attachment.mime_type
+           ) do
+        :ok -> {:ok, attachment, new_nonce}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp decrypt_blob_or_err(ct, nonce, dek, aad, att_id) do
+    case Envelope.decrypt(ct, nonce, dek, aad) do
+      {:ok, _pt} = ok -> ok
+      :error -> {:error, {:decrypt_failed, att_id}}
+    end
+  end
+
+  defp finalize_attachment(
+         %Engram.Attachments.Attachment{} = attachment,
+         target_dek_version,
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_content_nonce
+       ) do
+    Repo.transaction(fn ->
+      meta_updates = rewrap_attachment_metadata_columns(attachment, old_dek, new_dek, new_filter_key)
+
+      {1, _} =
+        from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id)
+        |> Repo.update_all(
+          [
+            set:
+              meta_updates ++
+                [
+                  content_nonce: new_content_nonce,
+                  dek_version: target_dek_version,
+                  dek_version_pending: nil
+                ]
+          ],
+          skip_tenant_check: true
+        )
+
+      :ok
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp rewrap_attachment_metadata_columns(
+         %Engram.Attachments.Attachment{} = att,
+         old_dek,
+         new_dek,
+         new_filter_key
+       ) do
+    [{:path, :path_ciphertext, :path_nonce, :path_hmac}]
+    |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_field_key} ->
+      ct = Map.get(att, ct_field)
+      nonce = Map.get(att, nonce_field)
+
+      if is_nil(ct) or is_nil(nonce) do
+        []
+      else
+        old_aad = old_aad_for(:attachments, column, att)
+        new_aad = Crypto.aad_for_row(:attachments, column, att.id)
+
+        case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+          {:ok, plaintext} ->
+            {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+
+            [
+              {ct_field, new_ct},
+              {nonce_field, new_nonce},
+              {hmac_field_key, Crypto.hmac_field(new_filter_key, plaintext)}
+            ]
+
+          :error ->
+            raise "T3.7 sweep_attachments: metadata decrypt failed for att id=#{att.id} column=#{column}"
+        end
+      end
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
   # Generic cursor-based sweep loop (reused by vaults + attachments in 4.4/4.5)
   # ---------------------------------------------------------------------------
 
@@ -269,7 +450,7 @@ defmodule Engram.Crypto.UserDekRotation do
               ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
 
               hmac_updates =
-                if hmac_key && is_binary(plaintext) && plaintext != "" do
+                if hmac_key && is_binary(plaintext) do
                   [{hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}]
                 else
                   []

@@ -212,5 +212,115 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       assert reloaded_vault.name_hmac == expected_name_hmac
     end
+
+    test "note folder_hmac for empty folder is recomputed correctly", %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "rootlevel.md",
+          content: "x",
+          folder: ""
+        })
+
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_note =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected = Crypto.hmac_field(new_filter_key, "")
+
+      assert reloaded_note.folder_hmac == expected
+    end
+  end
+
+  describe "rotate_user/2 — attachments sweep" do
+    test "happy path: attachment blob re-encrypted under new DEK", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "AttTest")
+
+      # Use insert_attachment! to get a genuinely v1-encrypted (empty-AAD) row,
+      # matching how insert_note! creates legacy fixtures for notes sweep tests.
+      attachment =
+        Engram.Fixtures.insert_attachment!(user, vault, %{
+          path: "img.png",
+          content: <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 1>>,
+          mime_type: "image/png"
+        })
+
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_att =
+        Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+          skip_tenant_check: true
+        )
+
+      assert reloaded_att.dek_version == 2
+      assert is_nil(reloaded_att.dek_version_pending)
+
+      # Round-trip the blob through the storage layer using the new DEK.
+      {:ok, fetched} = Engram.Attachments.get_attachment(reloaded_user, vault, "img.png")
+      assert fetched.content == <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 1>>
+    end
+
+    test "resume: attachment with dek_version_pending set is re-PUT and finalized", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "ResumeTest")
+
+      attachment =
+        Engram.Fixtures.insert_attachment!(user, vault, %{
+          path: "doc.txt",
+          content: "abcdef",
+          mime_type: "text/plain"
+        })
+
+      # Simulate crash mid-rotation: pending set, dek_version still 1, S3 blob still under old DEK.
+      Repo.update_all(
+        from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+        [set: [dek_version_pending: 2]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded =
+        Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+          skip_tenant_check: true
+        )
+
+      assert reloaded.dek_version == 2
+      assert is_nil(reloaded.dek_version_pending)
+    end
+
+    test "attachment path_hmac matches new filter_key after rotation", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "HmacTest")
+
+      attachment =
+        Engram.Fixtures.insert_attachment!(user, vault, %{
+          path: "report.pdf",
+          content: "hi",
+          mime_type: "application/pdf"
+        })
+
+      assert :ok = UserDekRotation.rotate_user(user.id, 2)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      reloaded_att =
+        Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+      expected = Crypto.hmac_field(new_filter_key, "report.pdf")
+
+      assert reloaded_att.path_hmac == expected
+    end
   end
 end
