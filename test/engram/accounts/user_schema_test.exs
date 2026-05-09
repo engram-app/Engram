@@ -49,6 +49,14 @@ defmodule Engram.Accounts.UserSchemaTest do
     end
   end
 
+  describe "dek_rotation_locked_at field" do
+    test "schema declares :dek_rotation_locked_at field as utc_datetime_usec" do
+      fields = User.__schema__(:fields)
+      assert :dek_rotation_locked_at in fields
+      assert User.__schema__(:type, :dek_rotation_locked_at) == :utc_datetime_usec
+    end
+  end
+
   describe "Jason.Encoder" do
     test "encodes only allowlisted fields" do
       json = Jason.encode!(user_with_secrets())

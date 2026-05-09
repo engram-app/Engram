@@ -14,6 +14,7 @@ defmodule Engram.Accounts.User do
     field :encrypted_dek, :binary, redact: true
     field :dek_version, :integer, default: 1, redact: true
     field :key_provider, :string, default: "local", redact: true
+    field :dek_rotation_locked_at, :utc_datetime_usec
 
     belongs_to :plan, Engram.Billing.Plan
     has_many :notes, Engram.Notes.Note
