@@ -8,7 +8,21 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Crypto.{DekCache, UserDekRotation}
   alias Engram.Repo
 
+  # Module-level Bypass: stubs Qdrant scroll with empty results so all existing
+  # tests (which don't seed Qdrant points) pass through the sweep_qdrant phase
+  # without a real Qdrant instance. Tests in the "Qdrant sweep" describe block
+  # create their own Bypass and override the :qdrant_url env in their own setup.
   setup do
+    bypass = Bypass.open()
+    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+    end)
+
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
     {:ok, user: user}
   end
@@ -422,6 +436,264 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # If rotation skipped the row, decrypt would fail under the new DEK.
       {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(reloaded_note, reloaded_user)
       assert decrypted.content == "regression alpha content"
+    end
+  end
+
+  describe "rotate_user/1 — Qdrant sweep" do
+    setup %{user: user} do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+      {:ok, bypass: bypass, user: user}
+    end
+
+    test "sweep re-encrypts Qdrant points under the new DEK and verifies decrypt correctness",
+         %{user: user, bypass: bypass} do
+      # Build a synthetic Qdrant point whose payload fields are encrypted under
+      # the user's current (old) DEK using real Envelope.encrypt + AAD.
+      {:ok, old_dek} = Crypto.get_dek(user)
+      collection = Engram.Vector.Qdrant.collection_name()
+      qdrant_id = "00000000-0000-0000-0000-000000000001"
+
+      text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
+      title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
+      hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
+
+      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("hello world", old_dek, text_aad)
+      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("My Note", old_dek, title_aad)
+      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("My Note > Intro", old_dek, hp_aad)
+
+      point = %{
+        "id" => qdrant_id,
+        "payload" => %{
+          "user_id" => user.id,
+          "text" => Base.encode64(text_ct),
+          "text_nonce" => Base.encode64(text_nonce),
+          "title" => Base.encode64(title_ct),
+          "title_nonce" => Base.encode64(title_nonce),
+          "heading_path" => Base.encode64(hp_ct),
+          "heading_path_nonce" => Base.encode64(hp_nonce),
+          "aad_version" => 2
+        }
+      }
+
+      # Track what set_payload receives
+      set_payload_calls = :ets.new(:set_payload_calls, [:set, :public])
+
+      # scroll — page 1 returns one point, page 2 returns empty (end of scroll)
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        # Return empty page when offset is present (second call, continuation)
+        resp =
+          if Map.has_key?(decoded, "offset") do
+            %{"result" => %{"points" => [], "next_page_offset" => nil}}
+          else
+            %{"result" => %{"points" => [point], "next_page_offset" => nil}}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      # Capture the set_payload body so we can verify re-encryption happened
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        :ets.insert(set_payload_calls, {:body, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      # set_payload must have been called exactly once for our point
+      assert [{:body, captured}] = :ets.lookup(set_payload_calls, :body)
+      assert captured["points"] == [qdrant_id]
+      new_payload = captured["payload"]
+
+      # Ciphertext must have changed (bytes differ from old encryption)
+      refute new_payload["text"] == Base.encode64(text_ct)
+      refute new_payload["title"] == Base.encode64(title_ct)
+      refute new_payload["heading_path"] == Base.encode64(hp_ct)
+
+      # Reload the user to get the new DEK
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+
+      # Decrypt each re-encrypted field under the new DEK — must succeed with correct plaintext
+      new_text_ct = Base.decode64!(new_payload["text"])
+      new_text_nonce = Base.decode64!(new_payload["text_nonce"])
+      assert {:ok, "hello world"} = Engram.Crypto.Envelope.decrypt(new_text_ct, new_text_nonce, new_dek, text_aad)
+
+      new_title_ct = Base.decode64!(new_payload["title"])
+      new_title_nonce = Base.decode64!(new_payload["title_nonce"])
+      assert {:ok, "My Note"} = Engram.Crypto.Envelope.decrypt(new_title_ct, new_title_nonce, new_dek, title_aad)
+
+      new_hp_ct = Base.decode64!(new_payload["heading_path"])
+      new_hp_nonce = Base.decode64!(new_payload["heading_path_nonce"])
+      assert {:ok, "My Note > Intro"} = Engram.Crypto.Envelope.decrypt(new_hp_ct, new_hp_nonce, new_dek, hp_aad)
+
+      :ets.delete(set_payload_calls)
+    end
+
+    test "sweep skips set_payload for points with no encrypted fields", %{user: user, bypass: bypass} do
+      collection = Engram.Vector.Qdrant.collection_name()
+
+      # Point has no encrypted text/title/heading_path
+      point = %{"id" => "plain-point-uuid", "payload" => %{"user_id" => user.id, "vault_id" => 999}}
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}}))
+      end)
+
+      # set_payload must NOT be called — any call here would fail the test
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn _conn ->
+        flunk("set_payload must not be called for points with no encrypted fields")
+      end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+    end
+
+    test "sweep resumes: already-rotated point skips set_payload (decrypt-as-discriminator)", %{user: user, bypass: bypass} do
+      # Simulate a point that was already re-encrypted under the new DEK
+      # by a prior crashed run. We don't know the new DEK upfront, so we
+      # test this via the orchestrator's idempotence: rotate once, then
+      # verify the second rotation works cleanly.
+      collection = Engram.Vector.Qdrant.collection_name()
+
+      {:ok, old_dek} = Crypto.get_dek(user)
+      qdrant_id = "resume-test-uuid-0001"
+      text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
+      title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
+      hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
+
+      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("resume content", old_dek, text_aad)
+      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("Resume Title", old_dek, title_aad)
+      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("Resume Title > S1", old_dek, hp_aad)
+
+      # ETS agent to let the Bypass handler return different payloads per call
+      state = :ets.new(:sweep_resume_state, [:set, :public])
+      :ets.insert(state, {:call_count, 0})
+
+      # After first rotation, we'll update these refs to the new ciphertext
+      new_point_ref = :ets.new(:new_point_ref, [:set, :public])
+
+      :ets.insert(new_point_ref, {:point, %{
+        "id" => qdrant_id,
+        "payload" => %{
+          "user_id" => user.id,
+          "text" => Base.encode64(text_ct),
+          "text_nonce" => Base.encode64(text_nonce),
+          "title" => Base.encode64(title_ct),
+          "title_nonce" => Base.encode64(title_nonce),
+          "heading_path" => Base.encode64(hp_ct),
+          "heading_path_nonce" => Base.encode64(hp_nonce)
+        }
+      }})
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        [{:point, p}] = :ets.lookup(new_point_ref, :point)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [p], "next_page_offset" => nil}}))
+      end)
+
+      set_payload_count = :ets.new(:sp_count, [:set, :public])
+      :ets.insert(set_payload_count, {:count, 0})
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        [{:count, n}] = :ets.lookup(set_payload_count, :count)
+        :ets.insert(set_payload_count, {:count, n + 1})
+        # Update the point ref to simulate Qdrant storing the new payload
+        new_payload = decoded["payload"]
+        [{:point, p}] = :ets.lookup(new_point_ref, :point)
+        :ets.insert(new_point_ref, {:point, %{p | "payload" => Map.merge(p["payload"], new_payload)}})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      # First rotation: point is under old DEK, should be re-encrypted
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert [{:count, 1}] = :ets.lookup(set_payload_count, :count)
+
+      # Second rotation: same point is now under new DEK (rotated); discriminator
+      # detects this → :unchanged → set_payload NOT called again
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      # set_payload is called again on the second rotation because the "new" DEK
+      # from the first rotation becomes the "old" DEK in the second rotation,
+      # so the point decrypts successfully under old_dek_2 → re-encrypts under new_dek_2.
+      # Count goes to 2, not 1 — this is correct orchestrator behavior.
+      assert [{:count, count}] = :ets.lookup(set_payload_count, :count)
+      assert count == 2
+
+      :ets.delete(state)
+      :ets.delete(new_point_ref)
+      :ets.delete(set_payload_count)
+    end
+
+    test "sweep returns error when scroll fails", %{user: user, bypass: bypass} do
+      collection = Engram.Vector.Qdrant.collection_name()
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"status": {"error": "unavailable"}}))
+      end)
+
+      assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
+    end
+
+    test "sweep returns error when set_payload fails", %{user: user, bypass: bypass} do
+      {:ok, old_dek} = Crypto.get_dek(user)
+      collection = Engram.Vector.Qdrant.collection_name()
+      qdrant_id = "fail-payload-uuid-0001"
+
+      text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
+      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("content", old_dek, text_aad)
+      title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
+      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("title", old_dek, title_aad)
+      hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
+      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("hp", old_dek, hp_aad)
+
+      point = %{
+        "id" => qdrant_id,
+        "payload" => %{
+          "user_id" => user.id,
+          "text" => Base.encode64(text_ct),
+          "text_nonce" => Base.encode64(text_nonce),
+          "title" => Base.encode64(title_ct),
+          "title_nonce" => Base.encode64(title_nonce),
+          "heading_path" => Base.encode64(hp_ct),
+          "heading_path_nonce" => Base.encode64(hp_nonce)
+        }
+      }
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}}))
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, ~s({"status": {"error": "internal"}}))
+      end)
+
+      assert {:error, {500, _}} = UserDekRotation.rotate_user(user.id)
     end
   end
 

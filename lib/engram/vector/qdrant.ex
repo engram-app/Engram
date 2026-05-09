@@ -14,6 +14,9 @@ defmodule Engram.Vector.Qdrant do
   defp base_url, do: Application.get_env(:engram, :qdrant_url, @default_url)
   defp collection, do: Application.get_env(:engram, :qdrant_collection, @default_collection)
 
+  @doc "Returns the configured Qdrant collection name (env-var-driven)."
+  def collection_name, do: collection()
+
   defp binary_quantization_enabled?,
     do: Application.get_env(:engram, :qdrant_binary_quantization, true)
 
@@ -175,6 +178,49 @@ defmodule Engram.Vector.Qdrant do
       {:ok, %{status: 200}} -> :ok
       {:ok, %{status: status, body: body}} -> {:error, {status, body}}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  T3.7 — scrolls all points matching a filter, paginated. Used by the
+  DEK-rotation orchestrator to re-encrypt every point in a user's tenant
+  without touching vectors.
+
+  Options:
+    * `:filter` — a Qdrant filter map, e.g. `%{must: [%{key: "user_id", match: %{value: 42}}]}`
+    * `:limit` — page size (default 200)
+    * `:offset` — opaque page-token returned from a prior call's `next_page_offset` (nil on first call)
+    * `:with_payload` — defaults to `true`
+    * `:with_vector` — defaults to `false`
+
+  Returns `{:ok, %{points: [...], next_page_offset: term() | nil}} | {:error, term()}`.
+  """
+  def scroll(col \\ nil, opts) when is_list(opts) do
+    collection_name = col || collection()
+    url = "#{base_url()}/collections/#{collection_name}/points/scroll"
+
+    body = %{
+      filter: Keyword.fetch!(opts, :filter),
+      with_payload: Keyword.get(opts, :with_payload, true),
+      with_vector: Keyword.get(opts, :with_vector, false),
+      limit: Keyword.get(opts, :limit, 200)
+    }
+
+    body =
+      case Keyword.get(opts, :offset) do
+        nil -> body
+        offset -> Map.put(body, :offset, offset)
+      end
+
+    case Req.post(url, [json: body] ++ req_opts()) do
+      {:ok, %Req.Response{status: 200, body: %{"result" => %{"points" => points, "next_page_offset" => next}}}} ->
+        {:ok, %{points: points, next_page_offset: next}}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        {:error, {:qdrant_scroll, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

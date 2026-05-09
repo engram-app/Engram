@@ -416,6 +416,117 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "collection_name/0" do
+    test "returns the configured collection name" do
+      assert is_binary(Qdrant.collection_name())
+    end
+
+    test "is a public function with arity 0" do
+      assert function_exported?(Engram.Vector.Qdrant, :collection_name, 0)
+    end
+  end
+
+  describe "scroll/2" do
+    test "is a public function with arity 2" do
+      assert function_exported?(Engram.Vector.Qdrant, :scroll, 2)
+    end
+
+    test "posts to points/scroll with filter, returns points and next_page_offset", %{bypass: bypass} do
+      points = [
+        %{"id" => "uuid-1", "payload" => %{"user_id" => 42, "text" => "hello"}}
+      ]
+
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["with_payload"] == true
+        assert decoded["with_vector"] == false
+        assert decoded["limit"] == 200
+
+        filter = decoded["filter"]["must"]
+        assert length(filter) == 1
+        assert hd(filter)["key"] == "user_id"
+        assert hd(filter)["match"]["value"] == 42
+
+        resp = %{"result" => %{"points" => points, "next_page_offset" => nil}}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      filter = %{must: [%{key: "user_id", match: %{value: 42}}]}
+      assert {:ok, result} = Qdrant.scroll("test_col", filter: filter)
+      assert result.points == points
+      assert is_nil(result.next_page_offset)
+    end
+
+    test "sends offset when provided", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        assert decoded["offset"] == "uuid-cursor"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+      end)
+
+      filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
+      assert {:ok, _} = Qdrant.scroll("test_col", filter: filter, offset: "uuid-cursor")
+    end
+
+    test "omits offset key when nil (first page)", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        refute Map.has_key?(decoded, "offset")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+      end)
+
+      filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
+      assert {:ok, _} = Qdrant.scroll("test_col", filter: filter)
+    end
+
+    test "returns next_page_offset when more pages exist", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+        resp = %{"result" => %{"points" => [%{"id" => "uuid-1", "payload" => %{}}], "next_page_offset" => "uuid-1"}}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
+      assert {:ok, result} = Qdrant.scroll("test_col", filter: filter)
+      assert result.next_page_offset == "uuid-1"
+    end
+
+    test "returns error on non-200 response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"status": {"error": "bad filter"}}))
+      end)
+
+      filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
+      assert {:error, {:qdrant_scroll, 400, _}} = Qdrant.scroll("test_col", filter: filter)
+    end
+
+    test "returns error on connection failure", %{bypass: bypass} do
+      Bypass.down(bypass)
+
+      capture_log(fn ->
+        filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
+        assert {:error, _} = Qdrant.scroll("test_col", filter: filter)
+      end)
+    end
+  end
+
   describe "authentication" do
     test "sends api-key header when qdrant_api_key is configured", %{bypass: bypass} do
       Application.put_env(:engram, :qdrant_api_key, "test-qdrant-key")

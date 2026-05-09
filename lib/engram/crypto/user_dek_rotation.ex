@@ -100,6 +100,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       :ok
     else
@@ -439,6 +440,139 @@ defmodule Engram.Crypto.UserDekRotation do
         end
       end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Qdrant sweep — re-encrypt payload fields under the new DEK
+  # ---------------------------------------------------------------------------
+  #
+  # Qdrant points carry three encrypted payload fields: `text`, `title`,
+  # `heading_path` (each with a `*_nonce` sibling). We scroll all points for
+  # the user (filter: user_id == X), re-encrypt each field with the new DEK,
+  # then call set_payload to overwrite the payload keys in place. Vectors are
+  # NOT touched (`with_vector: false`).
+  #
+  # Decrypt-as-discriminator: try old DEK first; fall through to new DEK for
+  # resume (a prior crashed run already rotated this point); if both fail,
+  # raise. If every field in a point is already under the new DEK, return
+  # :unchanged and skip the set_payload call entirely.
+
+  defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
+    collection = Engram.Vector.Qdrant.collection_name()
+    filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
+    sweep_qdrant_loop(collection, filter, old_dek, new_dek, nil)
+  end
+
+  defp sweep_qdrant_loop(collection, filter, old_dek, new_dek, offset) do
+    case Engram.Vector.Qdrant.scroll(collection,
+           filter: filter,
+           with_payload: true,
+           with_vector: false,
+           limit: 200,
+           offset: offset
+         ) do
+      {:ok, %{points: [], next_page_offset: _}} ->
+        :ok
+
+      {:ok, %{points: points, next_page_offset: next}} ->
+        case rewrap_qdrant_points(collection, points, old_dek, new_dek) do
+          :ok ->
+            if is_nil(next) or next == false do
+              :ok
+            else
+              sweep_qdrant_loop(collection, filter, old_dek, new_dek, next)
+            end
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp rewrap_qdrant_points(collection, points, old_dek, new_dek) do
+    Enum.reduce_while(points, :ok, fn point, :ok ->
+      qdrant_id = point["id"] || raise "T3.7 sweep_qdrant: point missing id"
+      payload = point["payload"] || %{}
+
+      case rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
+        {:ok, :unchanged} ->
+          {:cont, :ok}
+
+        {:ok, new_payload} ->
+          case Engram.Vector.Qdrant.set_payload(collection, [qdrant_id], new_payload) do
+            :ok -> {:cont, :ok}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  @qdrant_encrypted_fields [:text, :title, :heading_path]
+
+  defp rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
+    encrypted_fields_present? =
+      Enum.any?(@qdrant_encrypted_fields, fn f ->
+        Map.has_key?(payload, Atom.to_string(f))
+      end)
+
+    if not encrypted_fields_present? do
+      {:ok, :unchanged}
+    else
+      rewrap_qdrant_payload_fields(collection, qdrant_id, payload, old_dek, new_dek)
+    end
+  end
+
+  defp rewrap_qdrant_payload_fields(collection, qdrant_id, payload, old_dek, new_dek) do
+    result =
+      Enum.reduce_while(@qdrant_encrypted_fields, {:ok, payload, false}, fn field, {:ok, acc, any_changed?} ->
+        ct_key = Atom.to_string(field)
+        nonce_key = ct_key <> "_nonce"
+
+        ct_b64 = Map.get(acc, ct_key)
+        nonce_b64 = Map.get(acc, nonce_key)
+
+        if is_nil(ct_b64) or is_nil(nonce_b64) do
+          {:cont, {:ok, acc, any_changed?}}
+        else
+          ct_bin = Base.decode64!(ct_b64)
+          nonce_bin = Base.decode64!(nonce_b64)
+          aad = Crypto.aad_for_qdrant(collection, to_string(qdrant_id), field)
+
+          case Envelope.decrypt(ct_bin, nonce_bin, old_dek, aad) do
+            {:ok, plaintext} ->
+              {new_ct_bin, new_nonce_bin} = Envelope.encrypt(plaintext, new_dek, aad)
+
+              new_acc =
+                acc
+                |> Map.put(ct_key, Base.encode64(new_ct_bin))
+                |> Map.put(nonce_key, Base.encode64(new_nonce_bin))
+
+              {:cont, {:ok, new_acc, true}}
+
+            :error ->
+              case Envelope.decrypt(ct_bin, nonce_bin, new_dek, aad) do
+                {:ok, _plaintext} ->
+                  # Already under new DEK from a prior crashed run — leave as-is
+                  {:cont, {:ok, acc, any_changed?}}
+
+                :error ->
+                  {:halt, {:error, {:qdrant_decrypt_failed, qdrant_id, field}}}
+              end
+          end
+        end
+      end)
+
+    case result do
+      {:ok, _final_payload, false} -> {:ok, :unchanged}
+      {:ok, final_payload, true} -> {:ok, final_payload}
+      {:error, _} = err -> err
+    end
   end
 
   # ---------------------------------------------------------------------------
