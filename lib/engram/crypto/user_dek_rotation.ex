@@ -16,11 +16,13 @@ defmodule Engram.Crypto.UserDekRotation do
 
   alias Engram.Accounts.User
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, RotationLock}
+  alias Engram.Crypto.{DekCache, Envelope, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Repo
 
   require Logger
+
+  @batch_size 200
 
   @type rotate_result :: :ok | :skipped | {:error, term()}
 
@@ -76,15 +78,134 @@ defmodule Engram.Crypto.UserDekRotation do
   defp run_phases(%User{} = user, target_dek_version) do
     user_id = user.id
 
-    with {:ok, _old_dek} <- Crypto.get_dek(user),
+    with {:ok, old_dek} <- Crypto.get_dek(user),
          provider = Resolver.provider_for(user_id),
-         {:ok, new_wrapped, _new_dek} <-
+         {:ok, new_wrapped, new_dek} <-
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
+         :ok <- sweep_notes(user, old_dek, new_dek, target_dek_version),
          :ok <- final_flip(user, target_dek_version, new_wrapped) do
       :ok
     else
       {:error, _} = err -> err
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Notes sweep
+  # ---------------------------------------------------------------------------
+
+  defp sweep_notes(%User{id: user_id}, old_dek, new_dek, target_dek_version) do
+    sweep_table_loop(
+      user_id,
+      Engram.Notes.Note,
+      target_dek_version,
+      0,
+      fn batch_ids ->
+        Repo.transaction(fn ->
+          notes =
+            from(n in Engram.Notes.Note,
+              where: n.id in ^batch_ids and n.dek_version < ^target_dek_version,
+              lock: "FOR UPDATE"
+            )
+            |> Repo.all(skip_tenant_check: true)
+
+          Enum.each(notes, fn note ->
+            updates = rewrap_note_columns(note, old_dek, new_dek)
+
+            {1, _} =
+              from(n in Engram.Notes.Note, where: n.id == ^note.id)
+              |> Repo.update_all(
+                [set: updates ++ [dek_version: target_dek_version]],
+                skip_tenant_check: true
+              )
+          end)
+        end)
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  # ---------------------------------------------------------------------------
+  # Generic cursor-based sweep loop (reused by vaults + attachments in 4.4/4.5)
+  # ---------------------------------------------------------------------------
+
+  defp sweep_table_loop(user_id, schema, target_dek_version, last_id, fun) do
+    ids = fetch_batch_ids(user_id, schema, target_dek_version, last_id)
+
+    case ids do
+      [] ->
+        :ok
+
+      _ ->
+        case fun.(ids) do
+          :ok -> sweep_table_loop(user_id, schema, target_dek_version, List.last(ids), fun)
+          {:error, _} = err -> err
+        end
+    end
+  end
+
+  # Notes are scoped via vault.user_id AND directly via user_id; use user_id directly.
+  defp fetch_batch_ids(user_id, Engram.Notes.Note, target_dek_version, last_id) do
+    from(n in Engram.Notes.Note,
+      where: n.user_id == ^user_id and n.dek_version < ^target_dek_version,
+      where: n.id > ^last_id,
+      order_by: n.id,
+      limit: ^@batch_size,
+      select: n.id
+    )
+    |> Repo.all(skip_tenant_check: true)
+  end
+
+  # Default fallback for schemas with a direct user_id column.
+  defp fetch_batch_ids(user_id, schema, target_dek_version, last_id) do
+    from(r in schema,
+      where: r.user_id == ^user_id and r.dek_version < ^target_dek_version,
+      where: r.id > ^last_id,
+      order_by: r.id,
+      limit: ^@batch_size,
+      select: r.id
+    )
+    |> Repo.all(skip_tenant_check: true)
+  end
+
+  # Re-encrypt all 5 ciphertext column pairs under the new DEK.
+  # AAD is `<<>>` for legacy rows (dek_version < 2), row-id-bound for v2+.
+  defp rewrap_note_columns(%Engram.Notes.Note{} = note, old_dek, new_dek) do
+    [
+      {:content, :content_ciphertext, :content_nonce},
+      {:title, :title_ciphertext, :title_nonce},
+      {:path, :path_ciphertext, :path_nonce},
+      {:folder, :folder_ciphertext, :folder_nonce},
+      {:tags, :tags_ciphertext, :tags_nonce}
+    ]
+    |> Enum.flat_map(fn {column, ct_field, nonce_field} ->
+      ct = Map.get(note, ct_field)
+      nonce = Map.get(note, nonce_field)
+
+      if is_nil(ct) or is_nil(nonce) do
+        []
+      else
+        old_aad =
+          if note.dek_version >= Crypto.row_version_aad_bound() do
+            Crypto.aad_for_row(:notes, column, note.id)
+          else
+            <<>>
+          end
+
+        case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+          {:ok, plaintext} ->
+            new_aad = Crypto.aad_for_row(:notes, column, note.id)
+            {new_ct, new_nonce} = Envelope.encrypt(plaintext, new_dek, new_aad)
+            [{ct_field, new_ct}, {nonce_field, new_nonce}]
+
+          :error ->
+            raise "T3.7 sweep_notes: decrypt failed for note id=#{note.id} column=#{column}"
+        end
+      end
+    end)
   end
 
   defp final_flip(%User{} = user, target_dek_version, new_wrapped) do
