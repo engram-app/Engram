@@ -24,6 +24,8 @@ defmodule Engram.Attachments.Attachment do
     field :encryption_version, :integer, default: 1
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     field :dek_version, :integer, default: 1
+    # T3.7 — target DEK version for in-progress rotation; nil when idle.
+    field :dek_version_pending, :integer
     field :content_nonce, :binary
 
     belongs_to :user, Engram.Accounts.User
@@ -48,6 +50,7 @@ defmodule Engram.Attachments.Attachment do
       :deleted_at,
       :encryption_version,
       :dek_version,
+      :dek_version_pending,
       :content_nonce
     ])
     |> validate_required([
