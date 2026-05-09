@@ -32,7 +32,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
     case Base.decode64(path_hmac_b64) do
       {:ok, path_hmac} ->
         note = %{id: note_id, user_id: user_id, vault_id: vault_id, path_hmac: path_hmac}
-        Indexing.delete_note_index(note)
+        _ = Indexing.delete_note_index(note)
         :ok
 
       :error ->

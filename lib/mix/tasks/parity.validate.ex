@@ -87,7 +87,7 @@ defmodule Mix.Tasks.Parity.Validate do
     alias Engram.Vector.Qdrant
 
     check("create test collection (1024d)", fn ->
-      Qdrant.delete_collection(@test_collection)
+      _ = Qdrant.delete_collection(@test_collection)
       # Use a plain collection without binary quantization for the test —
       # binary quant + rescore crashes Qdrant on tiny collections (< ~10 points).
       # The production collection (engram_notes_v2) uses binary quant correctly.
@@ -221,7 +221,7 @@ defmodule Mix.Tasks.Parity.Validate do
 
       # Use a dedicated plain collection (no binary quant) for the pipeline test
       qdrant_url = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
-      Qdrant.delete_collection(@pipeline_collection)
+      _ = Qdrant.delete_collection(@pipeline_collection)
 
       {:ok, %{status: s}} =
         Req.put("#{qdrant_url}/collections/#{@pipeline_collection}",
@@ -308,7 +308,7 @@ defmodule Mix.Tasks.Parity.Validate do
 
     qdrant_url = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
     embed_collection = "parity_embed_hash"
-    Qdrant.delete_collection(embed_collection)
+    _ = Qdrant.delete_collection(embed_collection)
 
     {:ok, %{status: s}} =
       Req.put("#{qdrant_url}/collections/#{embed_collection}",

@@ -176,7 +176,4 @@ defmodule EngramWeb.NotesController do
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
   defp classify_reason(reason) when is_atom(reason), do: reason
-  defp classify_reason(%Ecto.Changeset{}), do: :changeset
-  defp classify_reason(%{__exception__: true} = e), do: e.__struct__
-  defp classify_reason(_), do: :unknown
 end

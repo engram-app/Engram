@@ -87,8 +87,10 @@ defmodule Engram.Indexing do
              encode_hmac(note.path_hmac)
            ) do
       # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
-      Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-      Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+      _ =
+        Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
+
+      _ = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
 
       case Qdrant.upsert_points(collection(), qdrant_points) do
         :ok -> {:ok, length(chunk_rows)}

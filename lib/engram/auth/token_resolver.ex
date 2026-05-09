@@ -15,7 +15,7 @@ defmodule Engram.Auth.TokenResolver do
   @spec resolve(any()) ::
           {:ok, Accounts.User.t()}
           | {:ok, Accounts.User.t(), Accounts.ApiKey.t()}
-          | {:error, atom()}
+          | {:error, atom() | keyword()}
 
   def resolve("engram_" <> _ = raw_key) do
     case Accounts.validate_api_key(raw_key) do

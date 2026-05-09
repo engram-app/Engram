@@ -51,20 +51,34 @@ defmodule EngramWeb.NoInspectInJsonResponseTest do
   end
 
   defp scan_file(path) do
-    path
-    |> File.read!()
-    |> String.split("\n")
-    |> Enum.with_index(1)
-    |> Enum.filter(fn {line, _i} ->
+    lines =
+      path
+      |> File.read!()
+      |> String.split("\n")
+      |> Enum.with_index(1)
+
+    # `mix format` may legitimately break long lines so the `# noqa` marker
+    # ends up on the line *above* the `inspect(` call. Accept the marker on
+    # either the offending line or the immediately preceding line.
+    prev_line_map =
+      lines
+      |> Enum.reduce(%{prev: "", acc: %{}}, fn {line, i}, %{prev: prev, acc: acc} ->
+        %{prev: line, acc: Map.put(acc, i, prev)}
+      end)
+      |> Map.fetch!(:acc)
+
+    lines
+    |> Enum.filter(fn {line, i} ->
       Regex.match?(~r/\binspect\(/, line) and
         not SourceLint.commented?(line) and
-        not allowed_context?(line)
+        not allowed_context?(line, Map.get(prev_line_map, i, ""))
     end)
     |> Enum.map(fn {line, i} -> {path, i, String.trim(line)} end)
   end
 
-  defp allowed_context?(line) do
+  defp allowed_context?(line, prev_line) do
     String.contains?(line, @allow_marker) or
+      String.contains?(prev_line, @allow_marker) or
       Enum.any?(@allowed_call_prefixes, fn prefix ->
         String.contains?(line, prefix)
       end)

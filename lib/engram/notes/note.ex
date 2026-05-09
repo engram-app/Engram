@@ -2,6 +2,8 @@ defmodule Engram.Notes.Note do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
+
   schema "notes" do
     # Phase B.3 + B.4: path/folder/tags/content/title are virtual — only
     # ciphertext + HMAC columns are persisted. Engram.Crypto.maybe_decrypt_note_fields/2

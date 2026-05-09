@@ -38,13 +38,13 @@ defmodule Mix.Tasks.Engram.ContentHashHmac do
 
     note_count =
       Enum.reduce(note_pairs, 0, fn {user_id, vault_id}, acc ->
-        enqueue!(user_id, vault_id, "notes")
+        _ = enqueue!(user_id, vault_id, "notes")
         acc + 1
       end)
 
     att_count =
       Enum.reduce(att_pairs, 0, fn {user_id, vault_id}, acc ->
-        enqueue!(user_id, vault_id, "attachments")
+        _ = enqueue!(user_id, vault_id, "attachments")
         acc + 1
       end)
 

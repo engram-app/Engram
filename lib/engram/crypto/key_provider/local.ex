@@ -212,7 +212,8 @@ defmodule Engram.Crypto.KeyProvider.Local do
   this mode and break legitimate rotation reads.
   """
   @spec unwrap_dek_current_only(binary(), keyword()) ::
-          {:ok, <<_::256>>} | {:error, term()}
+          {:ok, <<_::256>>}
+          | {:error, :invalid_wrapping | :malformed_wrapped_blob | :missing_user_id_for_aad}
   def unwrap_dek_current_only(blob, opts \\ []) when is_binary(blob) do
     current = Config.local_master_key!()
     user_id = Keyword.get(opts, :user_id)

@@ -162,13 +162,13 @@ defmodule Engram.Billing do
     price_id = price_id_for(tier)
 
     params = %{
-      mode: "subscription",
+      mode: :subscription,
       line_items: [%{price: price_id, quantity: 1}],
       customer_email: user.email,
       client_reference_id: to_string(user.id),
       metadata: %{"tier" => tier},
       subscription_data: %{trial_period_days: @trial_days},
-      payment_method_collection: "always",
+      payment_method_collection: :always,
       success_url: success_url(),
       cancel_url: cancel_url()
     }

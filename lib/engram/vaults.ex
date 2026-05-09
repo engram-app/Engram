@@ -288,7 +288,7 @@ defmodule Engram.Vaults do
 
           case result do
             {:ok, deleted} ->
-              Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
+              _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
               result
 
             _ ->

@@ -116,7 +116,7 @@ defmodule Engram.Attachments do
   # to wait, which is at most a latency cost, not a correctness issue.
   defp acquire_path_lock(user_id, path_hmac) do
     key = :erlang.phash2({user_id, path_hmac}, 2_147_483_647)
-    Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+    _ = Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
     :ok
   end
 

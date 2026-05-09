@@ -97,9 +97,9 @@ Four lints run on every push: `mix format`, `mix compile --warnings-as-errors`, 
 |-------|------|--------|
 | 1 | All four installed, informational | shipped |
 | 2 | `mix format` + `--warnings-as-errors` fatal | shipped |
-| 3 | Sobelow ratchet → zero | **active** |
-| 4 | Dialyzer ratchet → zero | next |
-| 5 | Credo ratchet → zero | pending |
+| 3 | Sobelow ratchet → zero | shipped |
+| 4 | Dialyzer ratchet → zero | **active** |
+| 5 | Credo ratchet → zero | next |
 | 6 | Strict-mode tightening | future |
 
 **Run locally:**

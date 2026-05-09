@@ -89,9 +89,10 @@ defmodule Engram.Workers.EmbedNote do
         case Crypto.maybe_decrypt_note_fields(note, user) do
           {:ok, decrypted_note} ->
             # If renamed, clean up old path's Qdrant points before re-indexing
-            if old_path_hmac_b64 do
-              Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
-            end
+            _ =
+              if old_path_hmac_b64 do
+                Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
+              end
 
             case Indexing.index_note(decrypted_note, vault) do
               {:ok, _count} ->

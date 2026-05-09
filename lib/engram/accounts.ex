@@ -85,7 +85,10 @@ defmodule Engram.Accounts do
     Repo.transaction(
       fn ->
         # Serialize bootstrap admin check so only one concurrent signup can win
-        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [@admin_bootstrap_lock])
+        _ =
+          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+            @admin_bootstrap_lock
+          ])
 
         role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
 

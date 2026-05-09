@@ -16,7 +16,11 @@ defmodule Engram.Notes do
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
-  @spec upsert_note(map(), map(), map()) :: {:ok, Note.t()} | {:error, Ecto.Changeset.t()}
+  @spec upsert_note(map(), map(), map()) ::
+          {:ok, Note.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :version_conflict, Note.t()}
+          | {:error, atom()}
   def upsert_note(user, vault, attrs) do
     path = attrs["path"] || attrs[:path]
     content = attrs["content"] || attrs[:content] || ""
@@ -96,12 +100,13 @@ defmodule Engram.Notes do
 
       case result do
         {:ok, {:ok, {prev_hash, note}}} ->
-          if prev_hash != note.content_hash do
-            Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
-          end
+          _ =
+            if prev_hash != note.content_hash do
+              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+            end
 
           note = decrypt_or_raise!(note, user)
-          broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -244,14 +249,15 @@ defmodule Engram.Notes do
     case result do
       {:ok, {:ok, note}} ->
         # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-        Enqueue.enqueue(
-          EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
-          "embed_note"
-        )
+        _ =
+          Enqueue.enqueue(
+            EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
+            "embed_note"
+          )
 
-        broadcast_change(user.id, vault.id, "delete", old_path)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path)
         decrypted = decrypt_or_raise!(note, user)
-        broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
+        :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
         {:ok, decrypted}
 
       {:ok, :not_found} ->
@@ -276,27 +282,28 @@ defmodule Engram.Notes do
         _ -> nil
       end
 
-    if note do
-      Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(set: [deleted_at: now, updated_at: now])
-      end)
+    _ =
+      if note do
+        _ =
+          Repo.with_tenant(user.id, fn ->
+            from(n in Note, where: n.id == ^note.id)
+            |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+          end)
 
-      # T3.2 — pass path_hmac (base64), never plaintext path. The note row
-      # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
-      Enqueue.enqueue(
-        DeleteNoteIndex.new(%{
-          note_id: note.id,
-          user_id: note.user_id,
-          vault_id: note.vault_id,
-          path_hmac: Base.encode64(note.path_hmac)
-        }),
-        "delete_note_index"
-      )
-    end
+        # T3.2 — pass path_hmac (base64), never plaintext path. The note row
+        # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
+        Enqueue.enqueue(
+          DeleteNoteIndex.new(%{
+            note_id: note.id,
+            user_id: note.user_id,
+            vault_id: note.vault_id,
+            path_hmac: Base.encode64(note.path_hmac)
+          }),
+          "delete_note_index"
+        )
+      end
 
     broadcast_change(user.id, vault.id, "delete", path)
-    :ok
   end
 
   @doc """
@@ -545,7 +552,8 @@ defmodule Engram.Notes do
   Rewrites path, folder, and title for each affected note.
   Returns {:ok, count} with the number of notes affected.
   """
-  @spec rename_folder(map(), map(), String.t(), String.t()) :: {:ok, integer()}
+  @spec rename_folder(map(), map(), String.t(), String.t()) ::
+          {:ok, integer()} | {:error, term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
@@ -666,15 +674,16 @@ defmodule Engram.Notes do
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       Enum.each(updates, fn {note, old_note_path, new_path, _folder, _title} ->
-        Enqueue.enqueue(
-          Engram.Workers.EmbedNote.new_debounced(note.id,
-            old_path_hmac: old_path_hmac_b64!(user, old_note_path)
-          ),
-          "embed_note"
-        )
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.EmbedNote.new_debounced(note.id,
+              old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+            ),
+            "embed_note"
+          )
 
-        broadcast_change(user.id, vault.id, "delete", old_note_path)
-        broadcast_change(user.id, vault.id, "upsert", new_path)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path)
+        :ok = broadcast_change(user.id, vault.id, "upsert", new_path)
       end)
 
       {:ok, length(notes)}
@@ -756,27 +765,35 @@ defmodule Engram.Notes do
     end
   end
 
+  @spec broadcast_change(integer(), integer(), String.t(), String.t(), Note.t()) :: :ok
   defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do
-    EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-      "event_type" => "upsert",
-      "path" => path,
-      "vault_id" => vault_id,
-      "content" => note.content || "",
-      "title" => note.title || "",
-      "folder" => note.folder || "",
-      "tags" => note.tags || [],
-      "mtime" => note.mtime,
-      "updated_at" => note.updated_at,
-      "version" => note.version
-    })
+    _ =
+      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+        "event_type" => "upsert",
+        "path" => path,
+        "vault_id" => vault_id,
+        "content" => note.content || "",
+        "title" => note.title || "",
+        "folder" => note.folder || "",
+        "tags" => note.tags || [],
+        "mtime" => note.mtime,
+        "updated_at" => note.updated_at,
+        "version" => note.version
+      })
+
+    :ok
   end
 
+  @spec broadcast_change(integer(), integer(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
-    EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-      "event_type" => event_type,
-      "path" => path,
-      "vault_id" => vault_id
-    })
+    _ =
+      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+        "event_type" => event_type,
+        "path" => path,
+        "vault_id" => vault_id
+      })
+
+    :ok
   end
 
   # Phase B.1 dual-write — computes HMAC + envelope-encrypts each filterable field.
@@ -799,10 +816,9 @@ defmodule Engram.Notes do
   # tags_nonce regardless of vault.encrypted. Before B.3 the plaintext `tags`
   # column was the system of record for unencrypted vaults; that column is
   # now gone, so this helper is the only place tags get persisted.
-  defp phase_b_keyword_for(user, note_id, path, folder, tags) do
+  defp phase_b_keyword_for(user, note_id, path, folder, tags) when is_list(tags) do
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-    tags = tags || []
     tags_aad = Engram.Crypto.aad_for_row(:notes, :tags, note_id)
 
     {tags_ct, tags_n} =

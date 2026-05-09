@@ -615,8 +615,7 @@ jobs:
       - name: Dialyzer
         run: |
           mkdir -p priv/plts
-          mix dialyzer --quiet || true
-        continue-on-error: true
+          mix dialyzer --quiet
 
   e2e-local:
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,

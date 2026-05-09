@@ -18,17 +18,17 @@ defmodule Engram.Repo do
       transaction(fn ->
         # SET LOCAL doesn't support $1 parameter binding — it's a utility statement.
         # Guard clause ensures tenant_id is always a positive integer.
-        query!("SET LOCAL app.current_tenant = '#{tenant_id}'")
+        _ = query!("SET LOCAL app.current_tenant = '#{tenant_id}'")
         # Drop to engram_app role so RLS policies are enforced.
         # Superusers bypass RLS even with FORCE — SET LOCAL ROLE scopes to this transaction.
-        query!("SET LOCAL ROLE engram_app")
+        _ = query!("SET LOCAL ROLE engram_app")
         result = fun.()
         # In Ecto Sandbox (tests), this transaction runs as a savepoint. PostgreSQL's
         # SET LOCAL is scoped to the full outer transaction, so RELEASE SAVEPOINT
         # would leak `engram_app` into the sandbox transaction. Resetting the role
         # INSIDE the transaction ensures the last SET LOCAL that persists is DEFAULT.
         # In production this runs inside a real transaction and is harmless.
-        query!("RESET ROLE")
+        _ = query!("RESET ROLE")
         result
       end)
     after

@@ -11,7 +11,7 @@ Plan: `../../../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooli
 | `mix format` | 0 | **gated** (Phase 2) | 0 (held) |
 | `mix compile --warnings-as-errors` | 0 | **gated** (Phase 2) | 0 (held) |
 | Sobelow (threshold low, exit low, --skip) | 0 | **gated** (Phase 3) | 0 (held) |
-| Dialyzer (with `:unmatched_returns`, `:error_handling`, `:underspecs`, `:missing_return`, `:extra_return`) | 81 | informational (Phase 4 → fatal) | 0 |
+| Dialyzer (with `:unmatched_returns`, `:error_handling`, `:underspecs`, `:missing_return`, `:extra_return`) | 0 (4 ignored) | **gated** (Phase 4) | 0 (held) |
 | Credo (`--strict`) | 676 | informational (Phase 5 → fatal) | 0 |
 
 ## Format
@@ -28,22 +28,25 @@ Plan: `../../../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooli
 
 ## Dialyzer
 
-`mix dialyzer --quiet` → 81 findings (PLT 7.5 MB, first build ~6 min on dev box). Breakdown:
+Phase 4 (this PR) burned the 81-finding baseline to **0 effective findings, 4 skipped** in `.dialyzer_ignore.exs`:
 
-| Category | Count | Notes |
-|----------|-------|-------|
-| `:unknown_type` | 32 | Ecto schema `t/0` types referenced before they're declared on the schema modules. Add `@type t :: %__MODULE__{...}` to each schema. |
-| `:unmatched_return` | 28 | Raw `Ecto.Adapters.SQL.query/4` results not bound. Bind to `_` or pattern-match the `%{:rows => _}` map. |
-| `:pattern_match_cov` | 6 | A clause is covered by an earlier one — dead code. |
-| `:contract_supertype` | 4 | `@spec` claims a wider type than the function actually returns. Tighten the spec. |
-| `:pattern_match` | 3 | Pattern can never match (real bug indicator). |
-| `:missing_range` | 3 | `@spec` covers fewer return types than the body produces. |
-| `:guard_fail` | 2 | Guard always evaluates false. |
-| `:unused_fun` | 1 | Dead function. Delete or pin. |
-| `:no_return` | 1 | `Engram.Billing.create_checkout_session/2` — likely a Stripe contract mismatch, see `:call` below. |
-| `:call` | 1 | `Stripe.Checkout.Session.create/1` call shape mismatch — same site as the `:no_return` above. Probably the actual bug. |
+- 3× `Engram.Crypto.aad_for_row/3`, `aad_for_qdrant/3`, `aad_for_wrapped_dek/1` — `:contract_supertype`. Specs are intentionally `binary()` so callers don't depend on the exact byte layout. Dialyzer's success typing (with `:underspecs` flag) infers tighter `<<_::N, _::_*8>>` shapes from the literal-string concatenation, but narrowing the spec would leak implementation details.
+- 1× `Engram.Notes.Helpers.extract_title/2` — `:missing_range`. Dialyzer reports a phantom `{integer(), integer()}` return shape that no real call path produces (every internal helper is guarded with `is_binary/1`). Likely a `Path.rootname/1` / `Regex.run/3` success-typing quirk.
 
-Phase 4 burns this list to zero. The `:no_return` + `:call` pair on `Engram.Billing` is the highest-value finding — that's the kind of latent bug the rest of this rollout exists to surface. The 32 `:unknown_type` fixes are mechanical (one `@type t` per schema). Anything that genuinely is OK lands in `.dialyzer_ignore.exs` with a justification comment.
+Real bugs found and fixed:
+
+- **`Engram.Billing.create_checkout_session/2` `:no_return` + `:call`** — passed `mode: "subscription"` (string) and `payment_method_collection: "always"` (string) to Stripe's Checkout Session SDK, whose v3 type contract requires atoms (`:subscription`, `:always`). The Stripe wire form converts atoms to strings internally, so this likely worked at runtime but matched the SDK contract incorrectly — and any future Stripe SDK bump that tightened the validation would have broken it.
+- **`Engram.Auth.TokenResolver.resolve/1` `@spec` underspec → `EngramWeb.Plugs.Auth.format_reason/1` `:guard_fail`** — spec said `{:error, atom()}` but Joken returns claim-validation failures as keyword lists. Widened to `atom() | keyword()`. The downstream `format_reason/1` clauses are now correctly typed.
+- **`Engram.Notes.upsert_note/3` `@spec` missing `:version_conflict` shape** — caused `:pattern_match` warnings in `EngramWeb.NotesController.upsert/2` for the version-conflict branch. Spec widened to include `{:error, :version_conflict, Note.t()}`.
+
+Mechanical cleanups:
+
+- 32× `:unknown_type` — added `@type t :: %__MODULE__{}` to `Accounts.User`, `Accounts.ApiKey`, `Notes.Note`, `Vaults.Vault`, `Attachments.Attachment`.
+- 28× `:unmatched_return` — bound `Ecto.Adapters.SQL.query!/4`, `Repo.update_all/2`, `Repo.delete_all/2`, `Phoenix.Endpoint.broadcast/3`, etc. results to `_` at fire-and-forget call sites; added `@spec ... :: :ok` to `broadcast_change/4-5` so call sites can pattern-match.
+- 6× `:pattern_match_cov` — removed dead clauses now reachable as Dialyzer's success typing improved (e.g. `Crypto.decrypt_phase_b_*`'s impossible `{:error, _}` arm; `health_controller`'s atom fallback after spec narrow).
+- 1× `:unused_fun` — `EngramWeb.NotesController.classify_reason/1`'s changeset/exception/unknown clauses were dead after the upsert spec widen; collapsed to the single `is_atom` arm.
+
+Test surgery: `EngramWeb.NoInspectInJsonResponseTest` was failing on `main` after the Phase 1 `mix format` autofix moved `# noqa: T3.0.6` markers onto the line *above* their `inspect(...)` calls (long lines got broken). Updated `scan_file/1` to accept the marker on the immediately preceding line as well.
 
 ## Credo (strict)
 

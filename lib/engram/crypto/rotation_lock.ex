@@ -43,7 +43,7 @@ defmodule Engram.Crypto.RotationLock do
       # acquire/1 callers without holding a row-level lock that would
       # also block the rotation worker's per-batch FOR UPDATE on the same row.
       key = :erlang.phash2({user_id, :dek_rotation}, 2_147_483_647)
-      Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+      _ = Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
 
       case Repo.one(from(u in User, where: u.id == ^user_id), skip_tenant_check: true) do
         nil ->

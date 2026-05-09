@@ -4,6 +4,8 @@ defmodule Engram.Attachments.Attachment do
 
   @max_attachment_bytes 5 * 1024 * 1024
 
+  @type t :: %__MODULE__{}
+
   schema "attachments" do
     # Phase B.3: path is virtual — populated by maybe_decrypt_attachment_fields/2.
     # Persisted form is path_ciphertext + path_nonce + path_hmac.
