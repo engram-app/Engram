@@ -697,6 +697,118 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Stale lock takeover (orchestrator-level)
+  # ---------------------------------------------------------------------------
+
+  describe "rotate_user/1 — stale lock takeover" do
+    test "rotates successfully when lock is stale (>10 min old)", %{user: user} do
+      # Simulate a prior rotation that crashed and left the lock set 11 min ago.
+      stale_at = DateTime.add(DateTime.utc_now(), -11 * 60, :second)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [set: [dek_rotation_locked_at: stale_at]],
+          skip_tenant_check: true
+        )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      # Lock must be cleared after successful rotation.
+      assert is_nil(reloaded.dek_rotation_locked_at)
+      # DEK version must have advanced.
+      assert reloaded.dek_version == user.dek_version + 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Concurrent operators
+  # ---------------------------------------------------------------------------
+
+  describe "rotate_user/1 — concurrent operators" do
+    test "two concurrent calls: exactly one succeeds, other gets :rotation_in_progress",
+         %{user: user} do
+      # Share the sandbox connection with the spawned tasks so they can hit the
+      # same DB. This matches the pattern used in ensure_user_dek_race_test.exs.
+      # Under ExUnit sandbox semantics both tasks serialize through one DB
+      # connection, which means the advisory lock in RotationLock.acquire/1
+      # serializes them: the first task acquires, the second sees a fresh
+      # (non-stale) locked_at and returns :rotation_in_progress.
+      parent = self()
+
+      results =
+        1..2
+        |> Task.async_stream(
+          fn _ ->
+            Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, parent, self())
+            UserDekRotation.rotate_user(user.id)
+          end,
+          max_concurrency: 2,
+          timeout: 30_000,
+          on_timeout: :kill_task
+        )
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      assert :ok in results,
+             "Expected at least one call to succeed, got: #{inspect(results)}"
+
+      assert {:error, :rotation_in_progress} in results,
+             "Expected exactly one call to be blocked, got: #{inspect(results)}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Failure modes
+  # ---------------------------------------------------------------------------
+
+  describe "rotate_user/1 — failure modes" do
+    test "decrypt failure mid-sweep raises and leaves lock set", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "FailSweepVault")
+
+      _note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "corrupt.md",
+          content: "original content"
+        })
+
+      # Look up the note so we can corrupt its ciphertext.
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      path_hmac = Crypto.hmac_field(filter_key, "corrupt.md")
+
+      note =
+        Repo.one!(
+          from(n in Engram.Notes.Note,
+            where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
+          ),
+          skip_tenant_check: true
+        )
+
+      # Overwrite content_ciphertext with 16 bytes of zeroes. AES-GCM auth-tag
+      # verification will fail under both old and new DEK — this triggers the
+      # "both fail → raise" path in rewrap_note_columns/5.
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [content_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      assert_raise RuntimeError, ~r/T3\.7 sweep_notes: decrypt failed under both old and new DEK/, fn ->
+        UserDekRotation.rotate_user(user.id)
+      end
+
+      # The lock must remain set — operator must investigate before retrying.
+      reloaded =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+
+      refute is_nil(reloaded.dek_rotation_locked_at),
+             "Expected lock to remain set after decrypt failure, but it was cleared"
+    end
+  end
+
   describe "rotate_user/1 — fresh DEK on every call" do
     test "each call generates a distinct new DEK (no idempotence by design)", %{user: user} do
       assert :ok = UserDekRotation.rotate_user(user.id)
