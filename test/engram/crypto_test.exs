@@ -209,6 +209,17 @@ defmodule Engram.CryptoTest do
 
       refute Crypto.dek_filter_key_from_bytes(dek_a) == Crypto.dek_filter_key_from_bytes(dek_b)
     end
+
+    test "dek_filter_key_from_bytes/1 equals dek_filter_key/1 for any user" do
+      for _ <- 1..5 do
+        user = insert(:user)
+        {:ok, user} = Crypto.ensure_user_dek(user)
+        {:ok, dek_bytes} = Crypto.get_dek(user)
+        {:ok, key_via_user} = Crypto.dek_filter_key(user)
+        key_via_bytes = Crypto.dek_filter_key_from_bytes(dek_bytes)
+        assert key_via_user == key_via_bytes
+      end
+    end
   end
 
   describe "hmac_field/2" do

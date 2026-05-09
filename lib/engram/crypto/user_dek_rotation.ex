@@ -639,7 +639,7 @@ defmodule Engram.Crypto.UserDekRotation do
       {:ok, %{points: points, next_page_offset: next}} ->
         case rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
           :ok ->
-            if is_nil(next) or next == false do
+            if is_nil(next) do
               :ok
             else
               sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, next)
@@ -984,6 +984,16 @@ defmodule Engram.Crypto.UserDekRotation do
   # The bound 2 mirrors Crypto.@row_version_aad_bound — cannot use a remote
   # function call in a guard, so the value is inlined here.
   @aad_version_bound 2
+
+  # Compile-time guard: crash the build if @aad_version_bound drifts from
+  # Engram.Crypto.row_version_aad_bound/0 (the canonical source of truth).
+  unless @aad_version_bound == Engram.Crypto.row_version_aad_bound() do
+    raise CompileError,
+      description:
+        "Engram.Crypto.UserDekRotation @aad_version_bound (#{@aad_version_bound}) " <>
+          "drifted from Engram.Crypto.row_version_aad_bound() " <>
+          "(#{Engram.Crypto.row_version_aad_bound()})"
+  end
 
   defp old_aad_for(table, column, %{dek_version: v} = row) when v >= @aad_version_bound,
     do: Crypto.aad_for_row(table, column, row.id)

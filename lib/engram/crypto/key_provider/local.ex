@@ -202,11 +202,8 @@ defmodule Engram.Crypto.KeyProvider.Local do
     # this. The argument is reserved for AwsKms-class providers that
     # want to do the rotate atomically server-side.
     new_dek = generate_dek()
-
-    case wrap_dek(new_dek, ctx) do
-      {:ok, new_wrapped} -> {:ok, new_wrapped, new_dek}
-      {:error, _} = err -> err
-    end
+    {:ok, new_wrapped} = wrap_dek(new_dek, ctx)
+    {:ok, new_wrapped, new_dek}
   end
 
   @doc """

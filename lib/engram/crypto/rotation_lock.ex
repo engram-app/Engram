@@ -6,9 +6,9 @@ defmodule Engram.Crypto.RotationLock do
 
   Lifecycle:
 
-      acquire(user_id, target_dek_version: 2)  # sets locked_at = now()
+      acquire(user_id)    # sets locked_at = now()
       ... rotation work ...
-      release(user_id)                          # clears locked_at
+      release(user_id)    # clears locked_at
 
   Stale-lock takeover: if `locked_at` is older than `@stale_after_seconds`,
   a new `acquire/2` overwrites the timestamp (assumes prior attempt crashed).
@@ -34,10 +34,10 @@ defmodule Engram.Crypto.RotationLock do
 
   @stale_after_seconds 10 * 60
 
-  @spec acquire(integer(), keyword()) ::
+  @spec acquire(integer()) ::
           {:ok, DateTime.t()}
           | {:error, :rotation_in_progress | :not_found | :half_state_pending}
-  def acquire(user_id, _opts \\ []) when is_integer(user_id) do
+  def acquire(user_id) when is_integer(user_id) do
     Repo.transaction(fn ->
       # Postgres advisory lock keyed on the user — serializes concurrent
       # acquire/2 callers without holding a row-level lock that would

@@ -373,4 +373,35 @@ If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotat
 
 DEK rotation has NO clean rollback once `users.encrypted_dek` is flipped (final phase of the orchestrator). Pre-flip rollback: re-acquire the lock, manually clear `attachments.dek_version_pending` and revert any partially-rotated rows from a backup. Post-flip rollback: not supported. Restore from a database snapshot taken before the rotation if absolutely required.
 
-This is an irreversible operation. The lock-during-rotation contract guarantees zero in-flight writes touched the wrong DEK; the only post-flip risk is operator error in the rotation command itself. The pre-flight checks above (capturing `dek_version`, double-checking `user_id`) are the primary defense.
+The lock-during-rotation contract — `RotationLockCheck` plug for REST routes plus `RotationGate` checks in Phoenix channels (`SyncChannel`) and Oban writers (`EmbedNote`, `BackfillContentHashHmac`) — blocks all per-user write paths during the rotation window. Reads are also gated to avoid the brief sweep-progress window where rotated rows would decrypt-fail under the still-cached old DEK. The post-flip risks are operator error in the rotation command itself (catastrophic but defended by pre-flight checks above) and any new writer that accesses the user's DEK without going through the gate.
+
+### Half-state recovery (after a mid-attachment crash)
+
+If the rotation crashed mid-attachment (BEAM died between the S3 PUT and the second DB transaction in `sweep_attachments`), the user is left with:
+
+- `users.dek_rotation_locked_at` non-null (intentional — operator must investigate).
+- One or more `attachments.dek_version_pending` non-null (the half-rotated rows).
+- S3 blobs for those attachments encrypted under a DEK that is permanently lost (the in-flight DEK_new from the dead BEAM's heap).
+
+Stale-lock takeover (after 10 min) is REFUSED in this state — `acquire/1` returns `{:error, :half_state_pending}`, the worker discards `:half_state_pending`, the Mix task exits with code 5. This is intentional: a fresh rotation would generate a different DEK and corrupt the half-rotated S3 blobs irreversibly.
+
+Recovery steps:
+
+1. Identify the half-rotated attachments:
+
+       SELECT id, vault_id, storage_key, dek_version, dek_version_pending FROM attachments
+        WHERE user_id = :user_id AND dek_version_pending IS NOT NULL;
+
+2. For each `storage_key`, restore the previous version from S3 versioning (the version BEFORE the failed PUT). The Tigris/S3 admin UI exposes the version history.
+
+3. Once all S3 blobs are restored, clear the pending column and the user lock in one transaction:
+
+       BEGIN;
+       UPDATE attachments SET dek_version_pending = NULL
+         WHERE user_id = :user_id AND dek_version_pending IS NOT NULL;
+       UPDATE users SET dek_rotation_locked_at = NULL WHERE id = :user_id;
+       COMMIT;
+
+4. Re-run the rotation. Since the S3 blobs are now back at the pre-rotation state and `dek_version` was never bumped on those rows, the sweep proceeds normally under a fresh DEK.
+
+If S3 versioning is not available or the restore fails, the data is lost — the only recourse is to delete the affected attachment rows and notify the user. There is no way to recover the in-flight DEK from a dead BEAM heap.

@@ -12,20 +12,20 @@ defmodule Engram.Crypto.RotationLockTest do
     {:ok, user: user}
   end
 
-  test "acquire/2 sets dek_rotation_locked_at when null", %{user: user} do
-    assert {:ok, locked_at} = RotationLock.acquire(user.id, target_dek_version: 2)
+  test "acquire/1 sets dek_rotation_locked_at when null", %{user: user} do
+    assert {:ok, locked_at} = RotationLock.acquire(user.id)
     refreshed = Repo.get!(User, user.id, skip_tenant_check: true)
     assert DateTime.compare(refreshed.dek_rotation_locked_at, locked_at) == :eq
   end
 
-  test "acquire/2 returns :rotation_in_progress when already locked < 10 min ago", %{user: user} do
-    assert {:ok, _at} = RotationLock.acquire(user.id, target_dek_version: 2)
+  test "acquire/1 returns :rotation_in_progress when already locked < 10 min ago", %{user: user} do
+    assert {:ok, _at} = RotationLock.acquire(user.id)
 
     assert {:error, :rotation_in_progress} =
-             RotationLock.acquire(user.id, target_dek_version: 2)
+             RotationLock.acquire(user.id)
   end
 
-  test "acquire/2 takes over a stale lock (>10 min)", %{user: user} do
+  test "acquire/1 takes over a stale lock (>10 min)", %{user: user} do
     stale = DateTime.add(DateTime.utc_now(), -11 * 60, :second)
 
     Repo.update_all(
@@ -34,12 +34,12 @@ defmodule Engram.Crypto.RotationLockTest do
       skip_tenant_check: true
     )
 
-    assert {:ok, new_at} = RotationLock.acquire(user.id, target_dek_version: 2)
+    assert {:ok, new_at} = RotationLock.acquire(user.id)
     assert DateTime.compare(new_at, stale) == :gt
   end
 
   test "release/1 clears dek_rotation_locked_at", %{user: user} do
-    {:ok, _at} = RotationLock.acquire(user.id, target_dek_version: 2)
+    {:ok, _at} = RotationLock.acquire(user.id)
     assert :ok = RotationLock.release(user.id)
     refreshed = Repo.get!(User, user.id, skip_tenant_check: true)
     assert is_nil(refreshed.dek_rotation_locked_at)
@@ -47,7 +47,7 @@ defmodule Engram.Crypto.RotationLockTest do
 
   test "locked?/1 reflects current state", %{user: user} do
     refute RotationLock.locked?(user.id)
-    {:ok, _at} = RotationLock.acquire(user.id, target_dek_version: 2)
+    {:ok, _at} = RotationLock.acquire(user.id)
     assert RotationLock.locked?(user.id)
     :ok = RotationLock.release(user.id)
     refute RotationLock.locked?(user.id)
@@ -60,7 +60,7 @@ defmodule Engram.Crypto.RotationLockTest do
   describe "Phase A — B4: release/1 row vanish" do
     test "release/1 raises RuntimeError with structured log when user row no longer exists",
          %{user: user} do
-      {:ok, _at} = RotationLock.acquire(user.id, target_dek_version: 2)
+      {:ok, _at} = RotationLock.acquire(user.id)
 
       # Hard-delete the user row to simulate concurrent account deletion.
       Repo.delete_all(
