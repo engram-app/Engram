@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.RebindAad do
+  @shortdoc "Rebind every user's notes/vaults to row-id-bound AAD (T3.6)"
+
   @moduledoc """
   T3.6.3 — AAD-rebind backfill (Mix entrypoint).
 
@@ -37,8 +39,6 @@ defmodule Mix.Tasks.Engram.RebindAad do
 
   alias Engram.Crypto.AadRebind
 
-  @shortdoc "Rebind every user's notes/vaults to row-id-bound AAD (T3.6)"
-
   @switches [batch_size: :integer]
 
   @impl Mix.Task
@@ -52,9 +52,7 @@ defmodule Mix.Tasks.Engram.RebindAad do
 
     counts = AadRebind.rebind_all(batch_size: batch_size)
 
-    IO.puts(
-      "rebind complete: ok=#{counts.ok} skipped=#{counts.skipped} failed=#{counts.failed}"
-    )
+    IO.puts("rebind complete: ok=#{counts.ok} skipped=#{counts.skipped} failed=#{counts.failed}")
 
     if counts.failed > 0 do
       IO.puts(:stderr, "ERROR: #{counts.failed} users failed rebind — inspect telemetry")

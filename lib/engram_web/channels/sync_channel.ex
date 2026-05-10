@@ -11,8 +11,8 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
-  alias Engram.{Notes, Vaults}
   alias Engram.Crypto.RotationGate
+  alias Engram.{Notes, Vaults}
   alias EngramWeb.Presence
 
   # ---------------------------------------------------------------------------
@@ -87,9 +87,7 @@ defmodule EngramWeb.SyncChannel do
           %{gate_path: :channel, op: :push_note}
         )
 
-        {:reply,
-         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
-         socket}
+        {:reply, {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}}, socket}
 
       {:error, :user_not_found} ->
         {:reply, {:error, %{reason: "user_not_found"}}, socket}
@@ -128,9 +126,7 @@ defmodule EngramWeb.SyncChannel do
           %{gate_path: :channel, op: :delete_note}
         )
 
-        {:reply,
-         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
-         socket}
+        {:reply, {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}}, socket}
 
       {:error, :user_not_found} ->
         {:reply, {:error, %{reason: "user_not_found"}}, socket}
@@ -159,9 +155,7 @@ defmodule EngramWeb.SyncChannel do
           %{gate_path: :channel, op: :rename_note}
         )
 
-        {:reply,
-         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
-         socket}
+        {:reply, {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}}, socket}
 
       {:error, :user_not_found} ->
         {:reply, {:error, %{reason: "user_not_found"}}, socket}
@@ -198,9 +192,7 @@ defmodule EngramWeb.SyncChannel do
           %{gate_path: :channel, op: :pull_changes}
         )
 
-        {:reply,
-         {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}},
-         socket}
+        {:reply, {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}}, socket}
 
       {:error, :user_not_found} ->
         {:reply, {:error, %{reason: "user_not_found"}}, socket}
@@ -229,8 +221,7 @@ defmodule EngramWeb.SyncChannel do
 
             reply = %{
               "changes" => serialized,
-              "server_time" =>
-                DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+              "server_time" => DateTime.utc_now(:second) |> DateTime.to_iso8601()
             }
 
             {:reply, {:ok, reply}, socket}

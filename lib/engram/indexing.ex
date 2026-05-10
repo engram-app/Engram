@@ -61,9 +61,8 @@ defmodule Engram.Indexing do
       dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
       with :ok <- Qdrant.ensure_collection(collection(), dims),
-           {:ok, vectors} <- embed_for_indexing(context_texts),
-           {:ok, prepared} <- build_prepared(note, vault, chunks, vectors) do
-        {:ok, prepared}
+           {:ok, vectors} <- embed_for_indexing(context_texts) do
+        build_prepared(note, vault, chunks, vectors)
       end
     end
   end
@@ -87,8 +86,10 @@ defmodule Engram.Indexing do
              encode_hmac(note.path_hmac)
            ) do
       # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
-      Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-      Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+      _ =
+        Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
+
+      _ = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
 
       case Qdrant.upsert_points(collection(), qdrant_points) do
         :ok -> {:ok, length(chunk_rows)}
@@ -148,7 +149,7 @@ defmodule Engram.Indexing do
   # and prior state survives for the next Oban retry.
   defp build_prepared(note, _vault, chunks, vectors) do
     user = Engram.Accounts.get_user!(note.user_id)
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now(:second)
 
     prepared =
       Enum.zip(chunks, vectors)
@@ -206,8 +207,8 @@ defmodule Engram.Indexing do
         end
       end)
 
-    with {:ok, prepared_pairs} <- prepared,
-         {chunk_rows, qdrant_points} = prepared_pairs |> Enum.reverse() |> Enum.unzip() do
+    with {:ok, prepared_pairs} <- prepared do
+      {chunk_rows, qdrant_points} = prepared_pairs |> Enum.reverse() |> Enum.unzip()
       {:ok, %{note: note, chunk_rows: chunk_rows, qdrant_points: qdrant_points}}
     end
   end

@@ -47,6 +47,4 @@ defmodule EngramWeb.HealthController do
   end
 
   defp format_error(%{__exception__: true} = e), do: Exception.message(e)
-  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_error(_), do: "internal"
 end

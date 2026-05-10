@@ -4,10 +4,10 @@ defmodule Engram.Accounts do
   """
 
   import Ecto.Query
-  alias Engram.Repo
-  alias Engram.Accounts.{User, ApiKey}
-  alias Engram.Auth.RefreshToken
   alias Bcrypt
+  alias Engram.Accounts.{ApiKey, User}
+  alias Engram.Auth.RefreshToken
+  alias Engram.Repo
 
   @api_key_prefix "engram_"
 
@@ -85,7 +85,10 @@ defmodule Engram.Accounts do
     Repo.transaction(
       fn ->
         # Serialize bootstrap admin check so only one concurrent signup can win
-        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [@admin_bootstrap_lock])
+        _ =
+          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+            @admin_bootstrap_lock
+          ])
 
         role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
 
@@ -160,7 +163,7 @@ defmodule Engram.Accounts do
 
   def consume_refresh_token(raw_token) do
     token_hash = hash_refresh_token(raw_token)
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now(:second)
 
     tx_result =
       Repo.transaction(
@@ -196,7 +199,7 @@ defmodule Engram.Accounts do
                 nil ->
                   Repo.rollback(:invalid_token)
 
-                %RefreshToken{revoked_at: revoked} when not is_nil(revoked) ->
+                %RefreshToken{revoked_at: revoked} when revoked != nil ->
                   # Signal reuse — revocation happens AFTER the transaction commits
                   Repo.rollback({:token_reused, token_hash})
 
@@ -235,7 +238,7 @@ defmodule Engram.Accounts do
         fid -> fid
       end
 
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now(:second)
 
     from(rt in RefreshToken,
       where: rt.family_id == ^family_id and is_nil(rt.revoked_at)

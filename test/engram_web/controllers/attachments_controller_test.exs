@@ -248,7 +248,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       body = json_response(conn2, 200)
 
       assert is_list(body["changes"])
-      assert length(body["changes"]) >= 1
+      assert body["changes"] != []
       assert is_binary(body["server_time"])
 
       change = hd(body["changes"])

@@ -14,14 +14,14 @@ defmodule Engram.Workers.CleanupVault do
 
   use Oban.Worker, queue: :cleanup, max_attempts: 3
 
-  require Logger
-
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
   alias Engram.Vaults.Vault
+
+  require Logger
 
   @retention_days 30
 

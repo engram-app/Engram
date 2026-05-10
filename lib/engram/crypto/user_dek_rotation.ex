@@ -36,6 +36,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto.{DekCache, Envelope, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Repo
+  alias Engram.Vector.Qdrant
 
   require Logger
 
@@ -210,7 +211,8 @@ defmodule Engram.Crypto.UserDekRotation do
             |> Repo.all(skip_tenant_check: true)
 
           Enum.each(vaults, fn vault ->
-            updates = rewrap_vault_columns(vault, old_dek, new_dek, new_filter_key, new_dek_version)
+            updates =
+              rewrap_vault_columns(vault, old_dek, new_dek, new_filter_key, new_dek_version)
 
             if updates != [] do
               case from(v in Engram.Vaults.Vault, where: v.id == ^vault.id)
@@ -244,7 +246,13 @@ defmodule Engram.Crypto.UserDekRotation do
     )
   end
 
-  defp rewrap_vault_columns(%Engram.Vaults.Vault{} = vault, old_dek, new_dek, new_filter_key, new_dek_version) do
+  defp rewrap_vault_columns(
+         %Engram.Vaults.Vault{} = vault,
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
     [
       {:name, :name_ciphertext, :name_nonce, :name_hmac}
     ]
@@ -366,16 +374,25 @@ defmodule Engram.Crypto.UserDekRotation do
 
   defp rotate_one_attachment(att_id, new_dek_version, old_dek, new_dek, new_filter_key) do
     with {:ok, _} <- mark_pending(att_id, new_dek_version),
-         {:ok, attachment, recrypt_result} <- recrypt_blob(att_id, old_dek, new_dek, new_dek_version),
-         :ok <- finalize_attachment(attachment, new_dek_version, old_dek, new_dek, new_filter_key, recrypt_result) do
-      :ok
+         {:ok, attachment, recrypt_result} <-
+           recrypt_blob(att_id, old_dek, new_dek, new_dek_version) do
+      finalize_attachment(
+        attachment,
+        new_dek_version,
+        old_dek,
+        new_dek,
+        new_filter_key,
+        recrypt_result
+      )
     end
   end
 
   defp mark_pending(att_id, new_dek_version) do
     Repo.transaction(fn ->
       case from(a in Engram.Attachments.Attachment, where: a.id == ^att_id)
-           |> Repo.update_all([set: [dek_version_pending: new_dek_version]], skip_tenant_check: true) do
+           |> Repo.update_all([set: [dek_version_pending: new_dek_version]],
+             skip_tenant_check: true
+           ) do
         {1, _} ->
           :ok
 
@@ -593,7 +610,11 @@ defmodule Engram.Crypto.UserDekRotation do
                 :telemetry.execute(
                   [:engram, :crypto, :rotate, :dek, :row_failed],
                   %{count: 1},
-                  %{table: :attachments, phase: :sweep_attachments_metadata, status: :both_deks_failed}
+                  %{
+                    table: :attachments,
+                    phase: :sweep_attachments_metadata,
+                    status: :both_deks_failed
+                  }
                 )
 
                 raise "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK " <>
@@ -620,13 +641,13 @@ defmodule Engram.Crypto.UserDekRotation do
   # :unchanged and skip the set_payload call entirely.
 
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
-    collection = Engram.Vector.Qdrant.collection_name()
+    collection = Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
     sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, nil)
   end
 
   defp sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, offset) do
-    case Engram.Vector.Qdrant.scroll(collection,
+    case Qdrant.scroll(collection,
            filter: filter,
            with_payload: true,
            with_vector: false,
@@ -692,7 +713,7 @@ defmodule Engram.Crypto.UserDekRotation do
           {:cont, :ok}
 
         {:ok, new_payload} ->
-          case Engram.Vector.Qdrant.set_payload(collection, [qdrant_id], new_payload) do
+          case Qdrant.set_payload(collection, [qdrant_id], new_payload) do
             :ok ->
               {:cont, :ok}
 
@@ -724,16 +745,18 @@ defmodule Engram.Crypto.UserDekRotation do
         Map.has_key?(payload, Atom.to_string(f))
       end)
 
-    if not encrypted_fields_present? do
-      {:ok, :unchanged}
-    else
+    if encrypted_fields_present? do
       rewrap_qdrant_payload_fields(collection, qdrant_id, payload, old_dek, new_dek)
+    else
+      {:ok, :unchanged}
     end
   end
 
   defp rewrap_qdrant_payload_fields(collection, qdrant_id, payload, old_dek, new_dek) do
     result =
-      Enum.reduce_while(@qdrant_encrypted_fields, {:ok, payload, false}, fn field, {:ok, acc, any_changed?} ->
+      Enum.reduce_while(@qdrant_encrypted_fields, {:ok, payload, false}, fn field,
+                                                                            {:ok, acc,
+                                                                             any_changed?} ->
         ct_key = Atom.to_string(field)
         nonce_key = ct_key <> "_nonce"
 
@@ -841,7 +864,13 @@ defmodule Engram.Crypto.UserDekRotation do
   # HMAC-indexed fields from the decrypted plaintext using the new filter key.
   # Uses decrypt-as-discriminator: try old DEK first; if that fails, try new DEK
   # (handles rows already rotated by a prior crashed run); if both fail, raise.
-  defp rewrap_note_columns(%Engram.Notes.Note{} = note, old_dek, new_dek, new_filter_key, new_dek_version) do
+  defp rewrap_note_columns(
+         %Engram.Notes.Note{} = note,
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
     base_columns = [
       {:content, :content_ciphertext, :content_nonce, nil},
       {:title, :title_ciphertext, :title_nonce, nil},
@@ -916,8 +945,14 @@ defmodule Engram.Crypto.UserDekRotation do
     base_updates ++ tag_updates
   end
 
-  defp rewrap_tags(%Engram.Notes.Note{tags_ciphertext: nil}, _old_dek, _new_dek, _new_filter_key, _new_dek_version),
-    do: []
+  defp rewrap_tags(
+         %Engram.Notes.Note{tags_ciphertext: nil},
+         _old_dek,
+         _new_dek,
+         _new_filter_key,
+         _new_dek_version
+       ),
+       do: []
 
   defp rewrap_tags(%Engram.Notes.Note{} = note, old_dek, new_dek, new_filter_key, new_dek_version) do
     ct = note.tags_ciphertext
@@ -1094,7 +1129,10 @@ defmodule Engram.Crypto.UserDekRotation do
   defp classify_reason({:qdrant_scroll, _status, _body}), do: "qdrant_scroll_failed"
   defp classify_reason({:qdrant_set_payload_failed, _reason}), do: "qdrant_set_payload_failed"
   defp classify_reason({:qdrant_decrypt_failed, _id, _field}), do: "qdrant_decrypt_failed"
-  defp classify_reason(%Postgrex.Error{postgres: %{code: code}}), do: "postgres_" <> to_string(code)
+
+  defp classify_reason(%Postgrex.Error{postgres: %{code: code}}),
+    do: "postgres_" <> to_string(code)
+
   defp classify_reason(%Postgrex.Error{}), do: "postgres_unknown"
   defp classify_reason({status, _body}) when is_integer(status), do: "http_#{status}"
   defp classify_reason(reason) when is_atom(reason), do: Atom.to_string(reason)

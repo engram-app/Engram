@@ -10,8 +10,8 @@ defmodule Engram.Workers.EmbedNoteTest do
   alias Engram.Crypto.DekCache
   alias Engram.Notes
   alias Engram.Notes.Note
-  alias Engram.Workers.EmbedNote
   alias Engram.Repo
+  alias Engram.Workers.EmbedNote
 
   setup :verify_on_exit!
 
@@ -181,7 +181,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       # indexing pipeline: payloads must carry nonces and ciphertext, not plaintext.
       assert_received {:upsert_body, body}
       points = body["points"]
-      assert length(points) > 0
+      assert points != []
 
       Enum.each(points, fn p ->
         payload = p["payload"]

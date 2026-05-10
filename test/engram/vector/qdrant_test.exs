@@ -431,7 +431,9 @@ defmodule Engram.Vector.QdrantTest do
       assert function_exported?(Engram.Vector.Qdrant, :scroll, 2)
     end
 
-    test "posts to points/scroll with filter, returns points and next_page_offset", %{bypass: bypass} do
+    test "posts to points/scroll with filter, returns points and next_page_offset", %{
+      bypass: bypass
+    } do
       points = [
         %{"id" => "uuid-1", "payload" => %{"user_id" => 42, "text" => "hello"}}
       ]
@@ -470,7 +472,10 @@ defmodule Engram.Vector.QdrantTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+        )
       end)
 
       filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
@@ -485,7 +490,10 @@ defmodule Engram.Vector.QdrantTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+        )
       end)
 
       filter = %{must: [%{key: "user_id", match: %{value: 1}}]}
@@ -494,7 +502,12 @@ defmodule Engram.Vector.QdrantTest do
 
     test "returns next_page_offset when more pages exist", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
-        resp = %{"result" => %{"points" => [%{"id" => "uuid-1", "payload" => %{}}], "next_page_offset" => "uuid-1"}}
+        resp = %{
+          "result" => %{
+            "points" => [%{"id" => "uuid-1", "payload" => %{}}],
+            "next_page_offset" => "uuid-1"
+          }
+        }
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")

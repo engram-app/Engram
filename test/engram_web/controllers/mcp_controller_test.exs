@@ -97,19 +97,19 @@ defmodule EngramWeb.McpControllerTest do
       end)
     end
 
-    test "unknown method returns -32601", %{conn: conn} do
+    test "unknown method returns -32_601", %{conn: conn} do
       conn = jsonrpc(conn, "nonexistent/method")
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32601
+      assert resp["error"]["code"] == -32_601
       assert resp["error"]["message"] =~ "Method not found"
     end
 
-    test "missing jsonrpc field returns -32600", %{conn: conn} do
+    test "missing jsonrpc field returns -32_600", %{conn: conn} do
       conn = post(conn, "/api/mcp", %{"id" => 1, "method" => "initialize"})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32600
+      assert resp["error"]["code"] == -32_600
     end
 
     test "notification (no id) returns 202", %{conn: conn} do
@@ -119,11 +119,11 @@ defmodule EngramWeb.McpControllerTest do
       assert conn.status == 202
     end
 
-    test "unknown tool returns -32602", %{conn: conn} do
+    test "unknown tool returns -32_602", %{conn: conn} do
       conn = call_tool(conn, "nonexistent_tool", %{})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32602
+      assert resp["error"]["code"] == -32_602
       assert resp["error"]["message"] =~ "Unknown tool"
     end
 

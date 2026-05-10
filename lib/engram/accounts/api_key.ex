@@ -2,6 +2,8 @@ defmodule Engram.Accounts.ApiKey do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
+
   schema "api_keys" do
     field :key_hash, :string
     field :name, :string

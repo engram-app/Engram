@@ -52,7 +52,7 @@ defmodule Engram.MCP.Handlers do
         text =
           results
           |> Enum.with_index(1)
-          |> Enum.map(fn {r, i} ->
+          |> Enum.map_join("\n", fn {r, i} ->
             lines = ["## Result #{i} (score: #{Float.round(r.score, 3)})"]
             lines = if r[:title], do: lines ++ ["**Title:** #{r.title}"], else: lines
 
@@ -70,7 +70,6 @@ defmodule Engram.MCP.Handlers do
             lines = lines ++ ["\n#{r.text}\n"]
             Enum.join(lines, "\n")
           end)
-          |> Enum.join("\n")
 
         {:ok, text}
 
@@ -295,9 +294,7 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.get_note(user, vault, path) do
       {:ok, note} ->
-        if not String.contains?(note.content, find) do
-          {:ok, "Text not found in #{path}"}
-        else
+        if String.contains?(note.content, find) do
           {new_content, count} = do_replace(note.content, find, replace, occurrence)
 
           case Notes.upsert_note(user, vault, %{
@@ -308,6 +305,8 @@ defmodule Engram.MCP.Handlers do
             {:ok, _} -> {:ok, "Replaced #{count} occurrence(s) in #{path}"}
             {:error, _} -> {:ok, "Failed to patch note: #{path}"}
           end
+        else
+          {:ok, "Text not found in #{path}"}
         end
 
       {:error, :not_found} ->

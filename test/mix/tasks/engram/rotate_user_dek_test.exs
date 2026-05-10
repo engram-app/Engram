@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Repo
+  alias Mix.Tasks.Engram.RotateUserDek
 
   # Stub Qdrant scroll with empty results so the rotation Qdrant sweep phase
   # passes without a real Qdrant instance. Mirrors the pattern in
@@ -31,7 +32,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
     test "rotates user DEK, prints rotation complete, advances dek_version", %{user: user} do
       output =
         capture_io(fn ->
-          Mix.Tasks.Engram.RotateUserDek.run(["--user-id", to_string(user.id)])
+          RotateUserDek.run(["--user-id", to_string(user.id)])
         end)
 
       assert output =~ "rotation complete"
@@ -50,7 +51,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
     test "exits with {:shutdown, 3} for missing user" do
       exit_result =
         catch_exit do
-          Mix.Tasks.Engram.RotateUserDek.run(["--user-id", "999999999"])
+          RotateUserDek.run(["--user-id", "999999999"])
         end
 
       assert exit_result == {:shutdown, 3},
@@ -61,7 +62,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
       output =
         capture_io(:stderr, fn ->
           catch_exit do
-            Mix.Tasks.Engram.RotateUserDek.run(["--user-id", "999999999"])
+            RotateUserDek.run(["--user-id", "999999999"])
           end
         end)
 
@@ -81,7 +82,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
 
       exit_result =
         catch_exit do
-          Mix.Tasks.Engram.RotateUserDek.run(["--user-id", to_string(user.id)])
+          RotateUserDek.run(["--user-id", to_string(user.id)])
         end
 
       assert exit_result == {:shutdown, 2},

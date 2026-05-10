@@ -26,9 +26,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Vaults.Vault
   alias Engram.Workers.EmbedNote
 
-  @batch_size 100
-
   require Logger
+
+  @batch_size 100
 
   # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.

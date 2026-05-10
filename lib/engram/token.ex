@@ -1,4 +1,11 @@
 defmodule Engram.Token do
+  @moduledoc """
+  Joken JWT config for Engram-issued access tokens.
+
+  Defines the `iss`/`aud` required-claim hooks and the access-token lifetime
+  used by both the JWT `exp` claim and the `expires_in` response field.
+  """
+
   use Joken.Config
 
   # Single source of truth for access-token lifetime. Used both as the JWT

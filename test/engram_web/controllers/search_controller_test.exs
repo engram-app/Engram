@@ -21,7 +21,12 @@ defmodule EngramWeb.SearchControllerTest do
   end
 
   describe "POST /search" do
-    test "returns results for a valid query", %{conn: conn, bypass: bypass, user: user, vault: vault} do
+    test "returns results for a valid query", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 

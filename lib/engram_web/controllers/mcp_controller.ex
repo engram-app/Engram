@@ -22,7 +22,7 @@ defmodule EngramWeb.McpController do
   end
 
   def handle(conn, _params) do
-    send_jsonrpc_error(conn, nil, -32600, "Invalid Request")
+    send_jsonrpc_error(conn, nil, -32_600, "Invalid Request")
   end
 
   # -- Method dispatch --
@@ -60,16 +60,16 @@ defmodule EngramWeb.McpController do
         end
 
       :error ->
-        {:error, -32602, "Unknown tool: #{name}"}
+        {:error, -32_602, "Unknown tool: #{name}"}
     end
   end
 
   defp dispatch(_conn, "tools/call", _params) do
-    {:error, -32602, "Invalid params: name and arguments required"}
+    {:error, -32_602, "Invalid params: name and arguments required"}
   end
 
   defp dispatch(_conn, _method, _params) do
-    {:error, -32601, "Method not found"}
+    {:error, -32_601, "Method not found"}
   end
 
   defp call_tool(tool, user, vault, args) do

@@ -10,6 +10,8 @@ defmodule EngramWeb.Assets.MarketingCSSTest do
     test "committed CSS matches fresh Tailwind rebuild" do
       committed = File.read!(@compiled_path)
 
+      # Test runs in CI under a controlled env; no sensitive vars to scrub.
+      # credo:disable-for-next-line Credo.Check.Warning.LeakyEnvironment
       {output, 0} = System.cmd("mix", ["tailwind", "marketing"], stderr_to_stdout: true)
       assert output =~ "Done in"
 

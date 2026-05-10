@@ -32,10 +32,11 @@ defmodule Engram.Crypto.BootCanary do
   """
 
   import Ecto.Query, only: [from: 2]
-  require Logger
 
   alias Engram.Crypto.KeyProvider.Local
   alias Engram.Repo
+
+  require Logger
 
   @canary_dek_size 32
 
@@ -135,5 +136,4 @@ defmodule Engram.Crypto.BootCanary do
   defp reason_label(:invalid_wrapping), do: "invalid_wrapping"
   defp reason_label(:malformed_wrapped_blob), do: "malformed_wrapped_blob"
   defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_label(_), do: "other"
 end

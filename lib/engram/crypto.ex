@@ -5,14 +5,14 @@ defmodule Engram.Crypto do
   Lazy DEK provisioning: users get a DEK only when encryption is first needed.
   """
 
-  require Logger
-
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Crypto.{DekCache, Envelope, KeyProvider.Resolver}
   alias Engram.Repo
+
+  require Logger
 
   # T3.6 / H1 — per-row encryption format version.
   #   1 = legacy: ciphertext was written with empty AAD (`<<>>`).
@@ -68,7 +68,7 @@ defmodule Engram.Crypto do
   end
 
   @doc "AAD string for a relational row's column. T3.6 / H1."
-  @spec aad_for_row(atom() | String.t(), atom() | String.t(), term()) :: binary()
+  @spec aad_for_row(atom() | binary(), atom() | binary(), term()) :: binary()
   def aad_for_row(table, column, row_id) when is_binary(table) and is_binary(column),
     do: table <> ":" <> column <> ":" <> to_string(row_id)
 
@@ -79,7 +79,7 @@ defmodule Engram.Crypto do
     do: aad_for_row(table, Atom.to_string(column), row_id)
 
   @doc "AAD string for a Qdrant payload field. Bound to point UUID, not chunk_index."
-  @spec aad_for_qdrant(String.t(), String.t(), atom() | String.t()) :: binary()
+  @spec aad_for_qdrant(binary(), binary(), atom() | binary()) :: binary()
   def aad_for_qdrant(collection, qdrant_id, field) when is_atom(field),
     do: aad_for_qdrant(collection, qdrant_id, Atom.to_string(field))
 
@@ -259,9 +259,8 @@ defmodule Engram.Crypto do
     if needs_note_decrypt?(note) do
       with {:ok, dek} <- get_dek(user),
            {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_tags(note, dek) do
-        {:ok, note}
+           {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
+        decrypt_phase_b_tags(note, dek)
       end
     else
       {:ok, note}
@@ -292,7 +291,6 @@ defmodule Engram.Crypto do
       {:ok, %{note | content: content, title: title}}
     else
       :error -> {:error, :decrypt_failed}
-      {:error, _} = err -> err
     end
   end
 
@@ -309,7 +307,6 @@ defmodule Engram.Crypto do
       {:ok, %{note | path: path, folder: folder}}
     else
       :error -> {:error, :decrypt_failed}
-      {:error, _} = err -> err
     end
   end
 

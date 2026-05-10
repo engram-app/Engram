@@ -27,10 +27,10 @@ defmodule Engram.Crypto.RotationGate do
   re-reads the user row.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Accounts.User
   alias Engram.Repo
-
-  import Ecto.Query, only: [from: 2]
 
   @spec check(integer()) :: :ok | {:error, :rotation_in_progress | :user_not_found}
   def check(user_id) when is_integer(user_id) do

@@ -17,6 +17,9 @@ erl_crash.dump
 *.ez
 engram-*.tar
 
+# Dialyzer PLT cache (rebuilt on demand; cached separately in CI)
+priv/plts/
+
 # IDE
 .vscode/
 .idea/

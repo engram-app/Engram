@@ -10,7 +10,7 @@ defmodule Engram.Notes.Helpers do
   @doc """
   Extracts the note title from content (frontmatter > h1 heading > filename).
   """
-  @spec extract_title(String.t(), String.t()) :: String.t()
+  @spec extract_title(String.t(), String.t()) :: String.t() | nil
   def extract_title(content, path) do
     extract_frontmatter_title(content) ||
       extract_heading_title(content) ||
@@ -56,7 +56,7 @@ defmodule Engram.Notes.Helpers do
   defp extract_frontmatter_title(content) do
     with fm when fm != nil <- extract_frontmatter(content) do
       case Regex.run(~r/^title:\s*(.+)$/m, fm, capture: :all_but_first) do
-        [title] -> String.trim(title)
+        [title] when is_binary(title) -> String.trim(title)
         _ -> nil
       end
     end
@@ -67,16 +67,16 @@ defmodule Engram.Notes.Helpers do
     body = Regex.replace(@frontmatter_re, content, "")
 
     case Regex.run(@heading_re, body, capture: :all_but_first) do
-      [heading] -> String.trim(heading)
+      [heading] when is_binary(heading) -> String.trim(heading)
       _ -> nil
     end
   end
 
   defp filename_without_extension(path) do
-    path
-    |> String.split("/")
-    |> List.last()
-    |> Path.rootname()
+    case String.split(path, "/") |> List.last() do
+      nil -> ""
+      filename when is_binary(filename) -> Path.rootname(filename)
+    end
   end
 
   defp parse_frontmatter_tags(fm) do

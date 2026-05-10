@@ -29,8 +29,8 @@ defmodule Engram.Crypto.KeyProvider.Local do
 
   @behaviour Engram.Crypto.KeyProvider
 
-  alias Engram.Crypto.Envelope
   alias Engram.Crypto.Config
+  alias Engram.Crypto.Envelope
 
   require Logger
 
@@ -52,8 +52,7 @@ defmodule Engram.Crypto.KeyProvider.Local do
     master = Config.local_master_key!()
     {ct, nonce} = Envelope.encrypt(dek, master, aad)
 
-    {:ok,
-     <<@wrap_version_v2, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>}
+    {:ok, <<@wrap_version_v2, @alg_aes_256_gcm, nonce::binary-size(12), ct::binary>>}
   end
 
   @impl true
@@ -134,15 +133,13 @@ defmodule Engram.Crypto.KeyProvider.Local do
   end
 
   defp previous_fallback_allowed?(ctx) do
-    cond do
-      Map.get(ctx, :disable_previous_fallback) == true ->
-        false
+    if Map.get(ctx, :disable_previous_fallback) == true do
+      false
+    else
+      dek_version = Map.get(ctx, :dek_version)
+      master_key_version = Map.get(ctx, :master_key_version) || Config.master_key_version()
 
-      true ->
-        dek_version = Map.get(ctx, :dek_version)
-        master_key_version = Map.get(ctx, :master_key_version) || Config.master_key_version()
-
-        is_nil(dek_version) or dek_version < master_key_version
+      is_nil(dek_version) or dek_version < master_key_version
     end
   end
 
@@ -169,8 +166,7 @@ defmodule Engram.Crypto.KeyProvider.Local do
       %{
         user_id: Map.get(ctx, :user_id),
         dek_version: Map.get(ctx, :dek_version),
-        master_key_version:
-          Map.get(ctx, :master_key_version) || Config.master_key_version(),
+        master_key_version: Map.get(ctx, :master_key_version) || Config.master_key_version(),
         # T3-audit M1 — `:status` matches rotate.user / aad_rebind.user
         # metadata. Single, consistent dispatch tag across crypto events.
         status: classified
@@ -214,7 +210,8 @@ defmodule Engram.Crypto.KeyProvider.Local do
   this mode and break legitimate rotation reads.
   """
   @spec unwrap_dek_current_only(binary(), keyword()) ::
-          {:ok, <<_::256>>} | {:error, term()}
+          {:ok, <<_::256>>}
+          | {:error, :invalid_wrapping | :malformed_wrapped_blob | :missing_user_id_for_aad}
   def unwrap_dek_current_only(blob, opts \\ []) when is_binary(blob) do
     current = Config.local_master_key!()
     user_id = Keyword.get(opts, :user_id)

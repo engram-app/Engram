@@ -559,6 +559,72 @@ jobs:
         if: always()
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+  lint:
+    # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, engram]
+
+    steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          clean: false  # Preserve _build/ and deps/ for incremental compilation
+
+      - name: Fetch Elixir deps (skip if unchanged)
+        run: |
+          if [ -d deps ] && [ -f deps/.mix_lock_hash ] && [ "$(md5sum mix.lock | cut -d' ' -f1)" = "$(cat deps/.mix_lock_hash)" ]; then
+            echo "mix.lock unchanged — skipping deps.get"
+          else
+            mix deps.get
+            md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
+          fi
+
+      - name: Cache Dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: ${{ runner.os }}-dialyzer-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-
+
+      # ── Quality gates ──
+      # Phase 1: all checks informational (continue-on-error: true).
+      # Phase 2: format + warnings-as-errors → fatal.
+      # Phase 3: sobelow → fatal.
+      # Phase 4: dialyzer → fatal.
+      # Phase 5: credo → fatal.
+      # Phase 6: sobelow drops `--skip` (any `#sobelow_skip` annotation in the
+      #         tree now surfaces as a finding); sobelow threshold already at
+      #         strictest (low). Dialyzer flags already exceed plan target
+      #         (Phase 4 added :missing_return + :extra_return on top of
+      #         :unmatched_returns, :error_handling, :underspecs). Credo
+      #         already strict (config + CLI). Deferred: Readability.Specs
+      #         (~225 public funs need real type info — separate ratchet PR)
+      #         and Design.DuplicatedCode (~13 findings, mostly Phoenix
+      #         controller setup repeats — high noise at default mass=40).
+
+      - name: Format check
+        run: mix format --check-formatted
+
+      - name: Compile warnings-as-errors
+        run: mix compile --warnings-as-errors --force
+
+      - name: Credo (strict)
+        run: mix credo --strict
+
+      - name: Sobelow
+        run: mix sobelow --exit low
+
+      - name: Dialyzer
+        run: |
+          mkdir -p priv/plts
+          mix dialyzer --quiet
+
   e2e-local:
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
@@ -823,13 +889,14 @@ jobs:
 
   ci:
     if: always()
-    needs: [version-check, unit-tests, e2e-clerk, e2e-local, e2e-browser]
+    needs: [version-check, unit-tests, lint, e2e-clerk, e2e-local, e2e-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Check required jobs
         run: |
           VC="${{ needs.version-check.result }}"
           UT="${{ needs.unit-tests.result }}"
+          LN="${{ needs.lint.result }}"
           EC="${{ needs.e2e-clerk.result }}"
           EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
@@ -847,10 +914,10 @@ jobs:
             exit 1
           fi
 
-          # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / e2e-local
-          # / e2e-browser are intentionally skipped — plugin cannot regress backend
-          # internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "e2e-local=$EL" "e2e-browser=$EB"; do
+          # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
+          # e2e-local / e2e-browser are intentionally skipped — plugin cannot regress
+          # backend internals. Only assert success when those jobs actually ran.
+          for pair in "unit-tests=$UT" "lint=$LN" "e2e-local=$EL" "e2e-browser=$EB"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"

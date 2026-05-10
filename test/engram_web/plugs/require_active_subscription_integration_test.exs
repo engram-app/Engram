@@ -1,10 +1,11 @@
 defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
   use EngramWeb.ConnCase, async: true
+
+  alias Engram.{Accounts, Repo}
+
   # Plug is not wired into the router yet — activate when billing goes live.
   # See router.ex TODO and docs/superpowers/plans/2026-04-06-security-hardening.md Task 1.
   @moduletag :skip
-
-  alias Engram.{Accounts, Repo}
 
   setup %{conn: conn} do
     user = insert(:user)

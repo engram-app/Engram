@@ -2,6 +2,8 @@ defmodule Engram.Vaults.Vault do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
+
   schema "vaults" do
     # Phase B.3: name is virtual — populated by maybe_decrypt_vault_fields/2.
     # Persisted form is name_ciphertext + name_nonce + name_hmac.

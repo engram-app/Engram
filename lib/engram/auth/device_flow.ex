@@ -6,9 +6,9 @@ defmodule Engram.Auth.DeviceFlow do
   """
 
   import Ecto.Query
-  alias Engram.Repo
-  alias Engram.Auth.{DeviceAuthorization, DeviceRefreshToken}
   alias Engram.{Accounts, Vaults}
+  alias Engram.Auth.{DeviceAuthorization, DeviceRefreshToken}
+  alias Engram.Repo
 
   @device_code_bytes 32
   @refresh_token_prefix "engram_rt_"

@@ -5,10 +5,10 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
-  alias Engram.Repo
   alias Engram.Billing.Plan
   alias Engram.Billing.Subscription
   alias Engram.Billing.UserOverride
+  alias Engram.Repo
 
   @default_limits %{
     "max_vaults" => 1,
@@ -143,7 +143,7 @@ defmodule Engram.Billing do
   def trial_days_remaining(user) do
     case get_subscription(user) do
       %Subscription{status: "trialing", current_period_end: period_end}
-      when not is_nil(period_end) ->
+      when period_end != nil ->
         days = DateTime.diff(period_end, DateTime.utc_now(), :day)
         max(days, 0)
 
@@ -162,13 +162,13 @@ defmodule Engram.Billing do
     price_id = price_id_for(tier)
 
     params = %{
-      mode: "subscription",
+      mode: :subscription,
       line_items: [%{price: price_id, quantity: 1}],
       customer_email: user.email,
       client_reference_id: to_string(user.id),
       metadata: %{"tier" => tier},
       subscription_data: %{trial_period_days: @trial_days},
-      payment_method_collection: "always",
+      payment_method_collection: :always,
       success_url: success_url(),
       cancel_url: cancel_url()
     }

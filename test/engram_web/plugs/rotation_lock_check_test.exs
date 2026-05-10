@@ -3,8 +3,8 @@ defmodule EngramWeb.Plugs.RotationLockCheckTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias EngramWeb.Plugs.RotationLockCheck
   alias Engram.Accounts.User
+  alias EngramWeb.Plugs.RotationLockCheck
 
   test "passes through when current_user has no lock", %{conn: conn} do
     user = %User{id: 1, dek_rotation_locked_at: nil}
@@ -44,7 +44,11 @@ defmodule EngramWeb.Plugs.RotationLockCheckTest do
     end
 
     @tag :integration
-    test "GET /api/me returns 503 when user is rotation-locked", %{conn: conn, user: _user, api_key: api_key} do
+    test "GET /api/me returns 503 when user is rotation-locked", %{
+      conn: conn,
+      user: _user,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
@@ -55,7 +59,11 @@ defmodule EngramWeb.Plugs.RotationLockCheckTest do
     end
 
     @tag :integration
-    test "GET /api/folders/list returns 503 when user is rotation-locked", %{conn: conn, user: _user, api_key: api_key} do
+    test "GET /api/folders/list returns 503 when user is rotation-locked", %{
+      conn: conn,
+      user: _user,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")

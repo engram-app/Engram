@@ -460,7 +460,7 @@ defmodule Engram.VaultsTest do
       deleted =
         insert(:vault,
           user: user,
-          deleted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          deleted_at: DateTime.utc_now(:second)
         )
 
       assert Engram.Vaults.list_for_ids(user, [to_string(deleted.id)]) == %{}
@@ -518,7 +518,7 @@ defmodule Engram.VaultsTest do
 
     test "orders deterministically when created_at ties", %{user: user} do
       insert(:user_override, user: user, overrides: %{"max_vaults" => 10})
-      same_time = DateTime.utc_now() |> DateTime.truncate(:second)
+      same_time = DateTime.utc_now(:second)
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "vault-order-a"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "vault-order-b"})
@@ -539,7 +539,7 @@ defmodule Engram.VaultsTest do
 
     test "id tiebreaker holds for three vaults at the same timestamp", %{user: user} do
       insert(:user_override, user: user, overrides: %{"max_vaults" => 10})
-      same_time = DateTime.utc_now() |> DateTime.truncate(:second)
+      same_time = DateTime.utc_now(:second)
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "alpha"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "beta"})

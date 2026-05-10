@@ -1,9 +1,9 @@
 defmodule EngramWeb.BillingController do
   use EngramWeb, :controller
 
-  require Logger
-
   alias Engram.Billing
+
+  require Logger
 
   def status(conn, _params) do
     user = conn.assigns.current_user
@@ -58,12 +58,8 @@ defmodule EngramWeb.BillingController do
   end
 
   # Extract safe fields from a Stripe.Error — skip `:extra` which can contain
-  # the raw response body (and with it, echoed user input). Falls back to a
-  # bounded `inspect/1` for any other shape stripity_stripe might return.
+  # the raw response body (and with it, echoed user input).
   defp stripe_error_meta(%Stripe.Error{} = e) do
     [code: e.code, message: e.message, request_id: e.request_id]
   end
-
-  # Logger metadata helper only — both call sites pipe into Logger.error/2.
-  defp stripe_error_meta(other), do: [reason: inspect(other)] # noqa: T3.0.6 — Logger metadata only
 end

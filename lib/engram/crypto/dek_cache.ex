@@ -90,12 +90,12 @@ defmodule Engram.Crypto.DekCache do
     # table. Foreign reads still work (set: true is the default). The
     # `read_concurrency: true` flag keeps direct-ETS reads cheap from
     # any caller process.
-    :ets.new(@table, [:named_table, :protected, :set, read_concurrency: true])
+    _ = :ets.new(@table, [:named_table, :protected, :set, read_concurrency: true])
 
     # T3.3 / M9 — exclude this process's heap from any BEAM crash dump.
     # The ETS table's data lives in this process's memory map, so plaintext
     # DEKs would otherwise be recoverable from `erl_crash.dump`.
-    :erlang.process_flag(:sensitive, true)
+    _ = :erlang.process_flag(:sensitive, true)
 
     schedule_sweep()
     {:ok, %{}}

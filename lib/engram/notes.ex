@@ -4,33 +4,40 @@ defmodule Engram.Notes do
   All operations are tenant-scoped via Repo.with_tenant/2.
   """
 
-  require Logger
-
   import Ecto.Query
 
+  alias Engram.Crypto
+  alias Engram.Crypto.Envelope
+  alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Repo
-  alias Engram.Notes.{Note, Helpers, PathSanitizer, Enqueue}
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
+
+  require Logger
 
   @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
-  @spec upsert_note(map(), map(), map()) :: {:ok, Note.t()} | {:error, Ecto.Changeset.t()}
+  @spec upsert_note(map(), map(), map()) ::
+          {:ok, Note.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :version_conflict, Note.t()}
+          | {:error, atom()}
   def upsert_note(user, vault, attrs) do
     path = attrs["path"] || attrs[:path]
     content = attrs["content"] || attrs[:content] || ""
     mtime = attrs["mtime"] || attrs[:mtime]
     client_version = attrs["version"] || attrs[:version]
 
-    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user),
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
-         sanitized_path = PathSanitizer.sanitize(path),
-         title = Helpers.extract_title(content, sanitized_path),
-         folder = Helpers.extract_folder(sanitized_path),
-         tags = Helpers.extract_tags(content),
-         {:ok, hash} <- content_hash(user, content),
-         now = DateTime.utc_now() do
+         {:ok, hash} <- content_hash(user, content) do
+      sanitized_path = PathSanitizer.sanitize(path)
+      title = Helpers.extract_title(content, sanitized_path)
+      folder = Helpers.extract_folder(sanitized_path)
+      tags = Helpers.extract_tags(content)
+      now = DateTime.utc_now()
+
       base_attrs = %{
         content: content,
         title: title,
@@ -49,49 +56,30 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              # T3.6 — pre-allocate the row id so the AAD bind string
-              # ("notes:<column>:<id>") can be computed before INSERT.
-              note_id = Engram.Crypto.next_row_id(:notes)
-
-              with {:ok, encrypted} <-
-                     Engram.Crypto.encrypt_note_fields(base_attrs, user, note_id) do
-                phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
-                changeset = Note.changeset(%Note{id: note_id}, phase_b)
-
-                case Repo.insert(changeset) do
-                  {:ok, note} -> {:ok, {nil, note}}
-                  {:error, changeset} -> {:error, changeset}
-                end
-              end
+              insert_new_note(base_attrs, user, sanitized_path, folder, tags)
 
             existing ->
-              if client_version != nil and client_version != existing.version do
-                {:conflict, existing}
-              else
-                with {:ok, encrypted} <-
-                       Engram.Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
-                  phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
-
-                  existing
-                  |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
-                  |> Repo.update()
-                  |> case do
-                    {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-                    {:error, changeset} -> {:error, changeset}
-                  end
-                end
-              end
+              update_existing_note(
+                existing,
+                base_attrs,
+                user,
+                sanitized_path,
+                folder,
+                tags,
+                client_version
+              )
           end
         end)
 
       case result do
         {:ok, {:ok, {prev_hash, note}}} ->
-          if prev_hash != note.content_hash do
-            Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
-          end
+          _ =
+            if prev_hash != note.content_hash do
+              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+            end
 
           note = decrypt_or_raise!(note, user)
-          broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -104,6 +92,52 @@ defmodule Engram.Notes do
 
         {:error, _} = err ->
           err
+      end
+    end
+  end
+
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags) do
+    # T3.6 — pre-allocate the row id so the AAD bind string
+    # ("notes:<column>:<id>") can be computed before INSERT.
+    note_id = Crypto.next_row_id(:notes)
+
+    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
+      phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
+      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+      case Repo.insert(changeset) do
+        {:ok, note} -> {:ok, {nil, note}}
+        {:error, changeset} -> {:error, changeset}
+      end
+    end
+  end
+
+  defp update_existing_note(
+         existing,
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         tags,
+         client_version
+       ) do
+    if client_version != nil and client_version != existing.version do
+      {:conflict, existing}
+    else
+      do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+    end
+  end
+
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, tags) do
+    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
+      phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
+
+      existing
+      |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+      |> Repo.update()
+      |> case do
+        {:ok, updated} -> {:ok, {existing.content_hash, updated}}
+        {:error, changeset} -> {:error, changeset}
       end
     end
   end
@@ -138,8 +172,8 @@ defmodule Engram.Notes do
   # Builds the HMAC-based note lookup query. Caller runs it inside their own
   # tenant context (or via find_note_by_path/3 when none is active).
   defp note_by_path_query(user, vault, path) do
-    with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
-      hmac = Engram.Crypto.hmac_field(filter_key, path)
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      hmac = Crypto.hmac_field(filter_key, path)
 
       {:ok,
        from(n in Note,
@@ -161,7 +195,7 @@ defmodule Engram.Notes do
     new_folder = Helpers.extract_folder(new_path)
     now = DateTime.utc_now()
 
-    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
       do_rename_note(user, vault, old_path, new_path, new_folder, now)
     end
   end
@@ -234,13 +268,15 @@ defmodule Engram.Notes do
     case result do
       {:ok, {:ok, note}} ->
         # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-        Enqueue.enqueue(
-          EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
-          "embed_note"
-        )
-        broadcast_change(user.id, vault.id, "delete", old_path)
+        _ =
+          Enqueue.enqueue(
+            EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
+            "embed_note"
+          )
+
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path)
         decrypted = decrypt_or_raise!(note, user)
-        broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
+        :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
         {:ok, decrypted}
 
       {:ok, :not_found} ->
@@ -265,27 +301,28 @@ defmodule Engram.Notes do
         _ -> nil
       end
 
-    if note do
-      Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(set: [deleted_at: now, updated_at: now])
-      end)
+    _ =
+      if note do
+        _ =
+          Repo.with_tenant(user.id, fn ->
+            from(n in Note, where: n.id == ^note.id)
+            |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+          end)
 
-      # T3.2 — pass path_hmac (base64), never plaintext path. The note row
-      # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
-      Enqueue.enqueue(
-        DeleteNoteIndex.new(%{
-          note_id: note.id,
-          user_id: note.user_id,
-          vault_id: note.vault_id,
-          path_hmac: Base.encode64(note.path_hmac)
-        }),
-        "delete_note_index"
-      )
-    end
+        # T3.2 — pass path_hmac (base64), never plaintext path. The note row
+        # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
+        Enqueue.enqueue(
+          DeleteNoteIndex.new(%{
+            note_id: note.id,
+            user_id: note.user_id,
+            vault_id: note.vault_id,
+            path_hmac: Base.encode64(note.path_hmac)
+          }),
+          "delete_note_index"
+        )
+      end
 
     broadcast_change(user.id, vault.id, "delete", path)
-    :ok
   end
 
   @doc """
@@ -333,9 +370,9 @@ defmodule Engram.Notes do
   """
   @spec list_tags(map(), map()) :: {:ok, [String.t()]}
   def list_tags(user, vault) do
-    case Engram.Crypto.dek_filter_key(user) do
+    case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
-        {:ok, dek} = Engram.Crypto.get_dek(user)
+        {:ok, dek} = Crypto.get_dek(user)
 
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
@@ -370,10 +407,10 @@ defmodule Engram.Notes do
   """
   @spec list_folders(map(), map()) :: {:ok, [String.t()]}
   def list_folders(user, vault) do
-    case Engram.Crypto.dek_filter_key(user) do
+    case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
-        {:ok, dek} = Engram.Crypto.get_dek(user)
-        empty_hmac = Engram.Crypto.hmac_field(filter_key, "")
+        {:ok, dek} = Crypto.get_dek(user)
+        empty_hmac = Crypto.hmac_field(filter_key, "")
 
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
@@ -412,9 +449,9 @@ defmodule Engram.Notes do
   """
   @spec list_tags_with_counts(map(), map()) :: {:ok, [%{name: String.t(), count: integer()}]}
   def list_tags_with_counts(user, vault) do
-    case Engram.Crypto.dek_filter_key(user) do
+    case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
-        {:ok, dek} = Engram.Crypto.get_dek(user)
+        {:ok, dek} = Crypto.get_dek(user)
 
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
@@ -451,9 +488,9 @@ defmodule Engram.Notes do
   @spec list_folders_with_counts(map(), map()) ::
           {:ok, [%{folder: String.t(), count: integer()}]}
   def list_folders_with_counts(user, vault) do
-    case Engram.Crypto.dek_filter_key(user) do
+    case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
-        {:ok, dek} = Engram.Crypto.get_dek(user)
+        {:ok, dek} = Crypto.get_dek(user)
 
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
@@ -501,9 +538,9 @@ defmodule Engram.Notes do
     # the plaintext `folder` column. Both root ("") and named folders go
     # through the same HMAC equality check; the empty string has its own
     # well-defined HMAC.
-    case Engram.Crypto.dek_filter_key(user) do
+    case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
-        target_hmac = Engram.Crypto.hmac_field(filter_key, folder)
+        target_hmac = Crypto.hmac_field(filter_key, folder)
 
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
@@ -534,12 +571,13 @@ defmodule Engram.Notes do
   Rewrites path, folder, and title for each affected note.
   Returns {:ok, count} with the number of notes affected.
   """
-  @spec rename_folder(map(), map(), String.t(), String.t()) :: {:ok, integer()}
+  @spec rename_folder(map(), map(), String.t(), String.t()) ::
+          {:ok, integer()} | {:error, term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
-    with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
       do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
     end
   end
@@ -628,7 +666,7 @@ defmodule Engram.Notes do
           # written with empty content/title/tags but the row-id-bound AAD
           # still applies — keeps tombstones decryptable and indistinguishable
           # from any other AAD-bound row at read time.
-          tomb_id = Engram.Crypto.next_row_id(:notes)
+          tomb_id = Crypto.next_row_id(:notes)
           old_path_folder = Helpers.extract_folder(old_path)
 
           full_kw =
@@ -655,15 +693,16 @@ defmodule Engram.Notes do
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       Enum.each(updates, fn {note, old_note_path, new_path, _folder, _title} ->
-        Enqueue.enqueue(
-          Engram.Workers.EmbedNote.new_debounced(note.id,
-            old_path_hmac: old_path_hmac_b64!(user, old_note_path)
-          ),
-          "embed_note"
-        )
+        _ =
+          Enqueue.enqueue(
+            Engram.Workers.EmbedNote.new_debounced(note.id,
+              old_path_hmac: old_path_hmac_b64!(user, old_note_path)
+            ),
+            "embed_note"
+          )
 
-        broadcast_change(user.id, vault.id, "delete", old_note_path)
-        broadcast_change(user.id, vault.id, "upsert", new_path)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path)
+        :ok = broadcast_change(user.id, vault.id, "upsert", new_path)
       end)
 
       {:ok, length(notes)}
@@ -679,8 +718,8 @@ defmodule Engram.Notes do
   # never enters `oban_jobs.args` JSONB. Raises on filter-key load failure
   # (Phase B.4 invariant: every authenticated request has a usable DEK).
   defp old_path_hmac_b64!(user, path) do
-    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-    filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    filter_key |> Crypto.hmac_field(path) |> Base.encode64()
   end
 
   # Phase B.3: decryption MUST raise on failure. Returning the un-decrypted
@@ -692,7 +731,7 @@ defmodule Engram.Notes do
   defp decrypt_or_raise!(nil, _user), do: nil
 
   defp decrypt_or_raise!(%Note{} = note, user) do
-    case Engram.Crypto.maybe_decrypt_note_fields(note, user) do
+    case Crypto.maybe_decrypt_note_fields(note, user) do
       {:ok, decrypted} ->
         decrypted
 
@@ -713,7 +752,7 @@ defmodule Engram.Notes do
   # supplied AAD. Raises if decryption fails — used in Phase B aggregations
   # where a failure means data corruption, not a recoverable condition.
   defp decrypt_envelope!(ct, nonce, dek, aad) do
-    case Engram.Crypto.Envelope.decrypt(ct, nonce, dek, aad) do
+    case Envelope.decrypt(ct, nonce, dek, aad) do
       {:ok, plaintext} -> plaintext
       :error -> raise "Phase B envelope decryption failed"
     end
@@ -724,7 +763,7 @@ defmodule Engram.Notes do
   # AAD-bound rows (v ≥ 2) and `<<>>` for legacy rows.
   defp row_aad(table, column, id, dek_version)
        when is_integer(dek_version) and dek_version >= 2 do
-    Engram.Crypto.aad_for_row(table, column, id)
+    Crypto.aad_for_row(table, column, id)
   end
 
   defp row_aad(_table, _column, _id, _dek_version), do: <<>>
@@ -740,32 +779,40 @@ defmodule Engram.Notes do
   defp validate_path(path), do: {:ok, path}
 
   defp content_hash(user, content) do
-    with {:ok, key} <- Engram.Crypto.dek_content_hash_key(user) do
-      {:ok, Engram.Crypto.hmac_content_hash(key, content)}
+    with {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      {:ok, Crypto.hmac_content_hash(key, content)}
     end
   end
 
+  @spec broadcast_change(integer(), integer(), String.t(), String.t(), Note.t()) :: :ok
   defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do
-    EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-      "event_type" => "upsert",
-      "path" => path,
-      "vault_id" => vault_id,
-      "content" => note.content || "",
-      "title" => note.title || "",
-      "folder" => note.folder || "",
-      "tags" => note.tags || [],
-      "mtime" => note.mtime,
-      "updated_at" => note.updated_at,
-      "version" => note.version
-    })
+    _ =
+      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+        "event_type" => "upsert",
+        "path" => path,
+        "vault_id" => vault_id,
+        "content" => note.content || "",
+        "title" => note.title || "",
+        "folder" => note.folder || "",
+        "tags" => note.tags || [],
+        "mtime" => note.mtime,
+        "updated_at" => note.updated_at,
+        "version" => note.version
+      })
+
+    :ok
   end
 
+  @spec broadcast_change(integer(), integer(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
-    EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-      "event_type" => event_type,
-      "path" => path,
-      "vault_id" => vault_id
-    })
+    _ =
+      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+        "event_type" => event_type,
+        "path" => path,
+        "vault_id" => vault_id
+      })
+
+    :ok
   end
 
   # Phase B.1 dual-write — computes HMAC + envelope-encrypts each filterable field.
@@ -788,21 +835,20 @@ defmodule Engram.Notes do
   # tags_nonce regardless of vault.encrypted. Before B.3 the plaintext `tags`
   # column was the system of record for unencrypted vaults; that column is
   # now gone, so this helper is the only place tags get persisted.
-  defp phase_b_keyword_for(user, note_id, path, folder, tags) do
-    {:ok, dek} = Engram.Crypto.get_dek(user)
-    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-    tags = tags || []
-    tags_aad = Engram.Crypto.aad_for_row(:notes, :tags, note_id)
+  defp phase_b_keyword_for(user, note_id, path, folder, tags) when is_list(tags) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    tags_aad = Crypto.aad_for_row(:notes, :tags, note_id)
 
     {tags_ct, tags_n} =
-      Engram.Crypto.Envelope.encrypt(:erlang.term_to_binary(tags), dek, tags_aad)
+      Envelope.encrypt(:erlang.term_to_binary(tags), dek, tags_aad)
 
     phase_b_path_folder_for(user, note_id, path, folder) ++
       [
         tags_ciphertext: tags_ct,
         tags_nonce: tags_n,
-        tags_hmac: Enum.map(tags, &Engram.Crypto.hmac_field(filter_key, &1)),
-        dek_version: Engram.Crypto.row_version_aad_bound()
+        tags_hmac: Enum.map(tags, &Crypto.hmac_field(filter_key, &1)),
+        dek_version: Crypto.row_version_aad_bound()
       ]
   end
 
@@ -811,42 +857,42 @@ defmodule Engram.Notes do
   # `set: ...` or struct! splicing. Stamps `dek_version=2` so the read path
   # picks up AAD-bound semantics for the whole row in one atomic update.
   defp full_aad_bound_kw(user, note_id, content, title, path, folder, tags) do
-    {:ok, dek} = Engram.Crypto.get_dek(user)
-    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
 
     {content_ct, content_n} =
-      Engram.Crypto.Envelope.encrypt(
+      Envelope.encrypt(
         content,
         dek,
-        Engram.Crypto.aad_for_row(:notes, :content, note_id)
+        Crypto.aad_for_row(:notes, :content, note_id)
       )
 
     {title_ct, title_n} =
-      Engram.Crypto.Envelope.encrypt(
+      Envelope.encrypt(
         title,
         dek,
-        Engram.Crypto.aad_for_row(:notes, :title, note_id)
+        Crypto.aad_for_row(:notes, :title, note_id)
       )
 
     {path_ct, path_n} =
-      Engram.Crypto.Envelope.encrypt(
+      Envelope.encrypt(
         path,
         dek,
-        Engram.Crypto.aad_for_row(:notes, :path, note_id)
+        Crypto.aad_for_row(:notes, :path, note_id)
       )
 
     {folder_ct, folder_n} =
-      Engram.Crypto.Envelope.encrypt(
+      Envelope.encrypt(
         folder,
         dek,
-        Engram.Crypto.aad_for_row(:notes, :folder, note_id)
+        Crypto.aad_for_row(:notes, :folder, note_id)
       )
 
     {tags_ct, tags_n} =
-      Engram.Crypto.Envelope.encrypt(
+      Envelope.encrypt(
         :erlang.term_to_binary(tags || []),
         dek,
-        Engram.Crypto.aad_for_row(:notes, :tags, note_id)
+        Crypto.aad_for_row(:notes, :tags, note_id)
       )
 
     [
@@ -856,14 +902,14 @@ defmodule Engram.Notes do
       title_nonce: title_n,
       path_ciphertext: path_ct,
       path_nonce: path_n,
-      path_hmac: Engram.Crypto.hmac_field(filter_key, path),
+      path_hmac: Crypto.hmac_field(filter_key, path),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
-      folder_hmac: Engram.Crypto.hmac_field(filter_key, folder),
+      folder_hmac: Crypto.hmac_field(filter_key, folder),
       tags_ciphertext: tags_ct,
       tags_nonce: tags_n,
-      tags_hmac: Enum.map(tags || [], &Engram.Crypto.hmac_field(filter_key, &1)),
-      dek_version: Engram.Crypto.row_version_aad_bound()
+      tags_hmac: Enum.map(tags || [], &Crypto.hmac_field(filter_key, &1)),
+      dek_version: Crypto.row_version_aad_bound()
     ]
   end
 
@@ -871,20 +917,20 @@ defmodule Engram.Notes do
   # rename paths that don't change tags — preserves the existing tags_hmac /
   # tags_ciphertext on the row.
   defp phase_b_path_folder_for(user, note_id, path, folder) do
-    {:ok, dek} = Engram.Crypto.get_dek(user)
-    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-    path_aad = Engram.Crypto.aad_for_row(:notes, :path, note_id)
-    folder_aad = Engram.Crypto.aad_for_row(:notes, :folder, note_id)
-    {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek, path_aad)
-    {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek, folder_aad)
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    path_aad = Crypto.aad_for_row(:notes, :path, note_id)
+    folder_aad = Crypto.aad_for_row(:notes, :folder, note_id)
+    {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
+    {folder_ct, folder_n} = Envelope.encrypt(folder, dek, folder_aad)
 
     [
       path_ciphertext: path_ct,
       path_nonce: path_n,
-      path_hmac: Engram.Crypto.hmac_field(filter_key, path),
+      path_hmac: Crypto.hmac_field(filter_key, path),
       folder_ciphertext: folder_ct,
       folder_nonce: folder_n,
-      folder_hmac: Engram.Crypto.hmac_field(filter_key, folder)
+      folder_hmac: Crypto.hmac_field(filter_key, folder)
     ]
   end
 end

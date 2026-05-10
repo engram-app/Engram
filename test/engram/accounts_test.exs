@@ -191,5 +191,4 @@ defmodule Engram.AccountsTest do
                Engram.Auth.Providers.Local.verify_token(token)
     end
   end
-
 end

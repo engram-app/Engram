@@ -3,8 +3,8 @@ defmodule Engram.Auth.TokenResolverTest do
 
   import Engram.Factory
 
-  alias Engram.Auth.TokenResolver
   alias Engram.Accounts
+  alias Engram.Auth.TokenResolver
 
   # ---- Setup: configure Clerk provider for Clerk JWT tests ----
 
@@ -120,7 +120,7 @@ defmodule Engram.Auth.TokenResolverTest do
   end
 
   test "rejects a non-string value" do
-    assert {:error, :invalid_token} = TokenResolver.resolve(12345)
+    assert {:error, :invalid_token} = TokenResolver.resolve(12_345)
   end
 
   test "rejects an empty string" do

@@ -48,7 +48,8 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     test "encrypts text/title/heading_path", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
-      assert {:ok, out} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
+      assert {:ok, out} =
+               Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
 
       # Plaintext fields untouched
       assert out.user_id == "1"
@@ -76,15 +77,19 @@ defmodule Engram.Crypto.QdrantPayloadTest do
     test "produces distinct nonces across calls", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
-      {:ok, o1} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
-      {:ok, o2} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
+      {:ok, o1} =
+        Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
+
+      {:ok, o2} =
+        Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
 
       refute o1.text_nonce == o2.text_nonce
       refute o1.text == o2.text
     end
 
     test "returns {:error, :no_dek} when user lacks a DEK", %{user: user} do
-      assert {:error, :no_dek} = Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
+      assert {:error, :no_dek} =
+               Crypto.encrypt_qdrant_payload(@base_payload, user, "test_collection", "qid-test")
     end
 
     test "encrypts empty strings deterministically-shaped", %{user: user} do
@@ -93,6 +98,7 @@ defmodule Engram.Crypto.QdrantPayloadTest do
 
       assert {:ok, out} =
                Crypto.encrypt_qdrant_payload(payload, user, "test_collection", "qid-empty")
+
       # Empty plaintext still produces 16-byte GCM tag → non-empty b64 ciphertext
       assert byte_size(Base.decode64!(out.text)) == 16
     end

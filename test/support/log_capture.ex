@@ -18,6 +18,7 @@ defmodule Engram.Test.LogCapture do
   async tests do not collide.
   """
   def with_events(fun) when is_function(fun, 0) do
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
     handler_id = String.to_atom("log_capture_#{System.unique_integer([:positive])}")
     test_pid = self()
 

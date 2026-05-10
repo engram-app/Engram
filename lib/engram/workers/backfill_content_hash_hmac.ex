@@ -24,7 +24,6 @@ defmodule Engram.Workers.BackfillContentHashHmac do
     unique: [keys: [:user_id, :vault_id, :scope], states: [:available, :scheduled]]
 
   import Ecto.Query
-  require Logger
 
   alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
@@ -34,6 +33,8 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
+
+  require Logger
 
   @batch_size 100
 
@@ -177,9 +178,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       {:error, reason} ->
         emit_skip_telemetry(:note, note, reason)
 
-        Logger.error(
-          "BackfillContentHashHmac: skipping note #{note.id} (#{inspect(reason)})"
-        )
+        Logger.error("BackfillContentHashHmac: skipping note #{note.id} (#{inspect(reason)})")
     end
   end
 
@@ -200,9 +199,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       err ->
         emit_skip_telemetry(:attachment, att, err)
 
-        Logger.error(
-          "BackfillContentHashHmac: skipping attachment #{att.id} (#{inspect(err)})"
-        )
+        Logger.error("BackfillContentHashHmac: skipping attachment #{att.id} (#{inspect(err)})")
     end
   end
 

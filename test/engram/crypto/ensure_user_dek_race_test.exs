@@ -64,5 +64,4 @@ defmodule Engram.Crypto.EnsureUserDekRaceTest do
     {:ok, u2} = Crypto.ensure_user_dek(user)
     assert u1.encrypted_dek == u2.encrypted_dek
   end
-
 end

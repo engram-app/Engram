@@ -151,7 +151,11 @@ defmodule Engram.Crypto.AadTamperTest do
       # Splice A's rotated ciphertext + nonce into B's in-memory struct.
       # AAD reconstructed from B's row id ("notes:content:<B.id>") must NOT
       # satisfy the tag that was sealed under A's AAD ("notes:content:<A.id>").
-      tampered = %{raw_b | content_ciphertext: raw_a.content_ciphertext, content_nonce: raw_a.content_nonce}
+      tampered = %{
+        raw_b
+        | content_ciphertext: raw_a.content_ciphertext,
+          content_nonce: raw_a.content_nonce
+      }
 
       assert {:error, :decrypt_failed} = Crypto.maybe_decrypt_note_fields(tampered, rotated_user)
     end

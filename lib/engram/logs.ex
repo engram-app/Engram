@@ -5,8 +5,8 @@ defmodule Engram.Logs do
 
   import Ecto.Query
 
-  alias Engram.Repo
   alias Engram.Logs.ClientLog
+  alias Engram.Repo
 
   @max_query_limit 1000
   @default_limit 200
@@ -18,7 +18,7 @@ defmodule Engram.Logs do
   def insert_logs(_user, []), do: {:ok, 0}
 
   def insert_logs(user, entries) when is_list(entries) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now(:second)
 
     rows =
       Enum.map(entries, fn entry ->

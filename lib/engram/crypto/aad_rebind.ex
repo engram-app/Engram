@@ -29,7 +29,6 @@ defmodule Engram.Crypto.AadRebind do
   """
 
   import Ecto.Query
-  require Logger
 
   alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
@@ -39,6 +38,8 @@ defmodule Engram.Crypto.AadRebind do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
+
+  require Logger
 
   @typedoc "`:ok` on rebind, `:skipped` on no-op, `{:error, reason}` on failure."
   @type rebind_result :: :ok | :skipped | {:error, term()}

@@ -5,6 +5,8 @@ defmodule Engram.Accounts.User do
   # Jason.encode!/1 even if a future controller does `json(conn, %{user: user})`.
   @derive {Jason.Encoder, only: [:id, :email, :role, :display_name, :created_at, :updated_at]}
 
+  @type t :: %__MODULE__{}
+
   schema "users" do
     field :email, :string
     field :external_id, :string

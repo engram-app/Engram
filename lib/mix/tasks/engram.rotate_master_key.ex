@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.RotateMasterKey do
+  @shortdoc "Rewrap every user's encrypted_dek with the current master key"
+
   @moduledoc """
   T3.5.1 — Master-key rotation backfill (Mix entrypoint).
 
@@ -41,8 +43,6 @@ defmodule Mix.Tasks.Engram.RotateMasterKey do
   use Mix.Task
 
   alias Engram.Crypto.MasterRotation
-
-  @shortdoc "Rewrap every user's encrypted_dek with the current master key"
 
   @switches [target_version: :integer, batch_size: :integer]
 

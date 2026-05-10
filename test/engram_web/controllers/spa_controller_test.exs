@@ -1,5 +1,5 @@
 defmodule EngramWeb.SpaControllerTest do
-  use EngramWeb.ConnCase
+  use EngramWeb.ConnCase, async: false
 
   setup do
     # Invalidate cached split so each test gets a fresh file read

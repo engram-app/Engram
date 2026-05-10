@@ -3,11 +3,11 @@ defmodule EngramWeb.SyncController do
 
   import Ecto.Query
 
-  alias Engram.Repo
+  alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.Note
-  alias Engram.Attachments.Attachment
+  alias Engram.Repo
 
   def manifest(conn, _params) do
     user = conn.assigns.current_user

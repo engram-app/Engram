@@ -3,6 +3,7 @@ defmodule Engram.IndexingTest do
 
   import Mox
 
+  alias Engram.Crypto.DekCache
   alias Engram.Indexing
   alias Engram.Notes
 
@@ -103,7 +104,7 @@ defmodule Engram.IndexingTest do
 
   describe "index_note/2 with encrypted vault" do
     test "encrypts text/title/heading_path in Qdrant payload", %{bypass: bypass, user: user} do
-      Engram.Crypto.DekCache.invalidate_all()
+      DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
 
@@ -138,7 +139,7 @@ defmodule Engram.IndexingTest do
 
       assert_received {:upsert_body, body}
       points = body["points"]
-      assert length(points) > 0
+      assert points != []
 
       Enum.each(points, fn p ->
         payload = p["payload"]
@@ -157,7 +158,7 @@ defmodule Engram.IndexingTest do
 
     test "Phase B: payload includes base64-encoded path/folder/tags hmacs",
          %{bypass: bypass, user: user} do
-      Engram.Crypto.DekCache.invalidate_all()
+      DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
 
@@ -236,7 +237,7 @@ defmodule Engram.IndexingTest do
         skip_tenant_check: true
       )
 
-      Engram.Crypto.DekCache.invalidate(user.id)
+      DekCache.invalidate(user.id)
       user_cleared = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
       _ = user_cleared
 
@@ -320,7 +321,7 @@ defmodule Engram.IndexingTest do
         skip_tenant_check: true
       )
 
-      Engram.Crypto.DekCache.invalidate(user.id)
+      DekCache.invalidate(user.id)
 
       assert {:error, :no_dek} = Indexing.index_note(plaintext_note, vault)
 
@@ -350,7 +351,7 @@ defmodule Engram.IndexingTest do
       # `path_hmac` payload key, but commit_index/1 was missed in the sweep
       # and kept passing plaintext `note.path`. Result: zero points deleted on
       # every re-index → orphaned ghost chunks accumulate per edit.
-      Engram.Crypto.DekCache.invalidate_all()
+      DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
 

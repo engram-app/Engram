@@ -1,6 +1,8 @@
 defmodule Engram.Crypto.MasterRotationTest do
   use Engram.DataCase, async: false
 
+  import Ecto.Query
+
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, MasterRotation}
   alias Engram.Crypto.KeyProvider.Local
@@ -24,7 +26,9 @@ defmodule Engram.Crypto.MasterRotationTest do
       reloaded = Repo.reload!(user)
       assert reloaded.dek_version == 2
       refute reloaded.encrypted_dek == original_blob
-      assert {:ok, ^original_dek} = Local.unwrap_dek(reloaded.encrypted_dek, %{user_id: reloaded.id})
+
+      assert {:ok, ^original_dek} =
+               Local.unwrap_dek(reloaded.encrypted_dek, %{user_id: reloaded.id})
     end
 
     test "is idempotent — second call at same target_version is a no-op skip", %{user: user} do
@@ -132,6 +136,7 @@ defmodule Engram.Crypto.MasterRotationTest do
 
       try do
         assert {:error, _} = MasterRotation.rotate_user(999_999, 2)
+
         assert_received {:rotate_event, %{duration_us: _},
                          %{status: :failed, reason_label: label}}
 
@@ -202,6 +207,4 @@ defmodule Engram.Crypto.MasterRotationTest do
   end
 
   defp refute_in_counts(_counts, _id), do: :ok
-
-  import Ecto.Query
 end

@@ -87,6 +87,37 @@ curl -X POST http://localhost:4000/notes \
 
 See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeline.
 
+## Quality Tooling
+
+Four lints run on every push: `mix format`, `mix compile --warnings-as-errors`, Credo (strict), Sobelow, Dialyzer. Configs at `.credo.exs`, `.sobelow-conf`, `.dialyzer_ignore.exs`. Baseline counts at `docs/context/quality-tooling-baseline.md`.
+
+**Rollout phases** — see `../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooling-rollout.md`:
+
+| Phase | Tool | Status |
+|-------|------|--------|
+| 1 | All four installed, informational | shipped |
+| 2 | `mix format` + `--warnings-as-errors` fatal | shipped |
+| 3 | Sobelow ratchet → zero | shipped |
+| 4 | Dialyzer ratchet → zero | shipped |
+| 5 | Credo ratchet → zero | shipped |
+| 6 | Strict-mode closeout (Sobelow drop `--skip`, document deferred Specs/DuplicatedCode) | shipped |
+
+**Run locally:**
+
+```bash
+mix format --check-formatted              # fast, gates immediately
+mix compile --warnings-as-errors --force  # fast
+mix credo --strict --mute-exit-status     # ~3s, strict mode (default in this repo)
+mix sobelow --exit low                    # ~5s (no --skip → annotations surface)
+mix dialyzer                              # slow first run (~5-10 min PLT build)
+```
+
+**Pre-push hook** (`.githooks/pre-push`, activated via `git config core.hooksPath .githooks`): runs all four informationally in Phase 1. Promoted to fatal phase by phase. Bypass with `git push --no-verify` for WIP / emergency. Dialyzer skipped from pre-push (too slow); CI handles it.
+
+**CI:** `lint` job in `.github/workflows/ci.yml`. PLT cached via `actions/cache@v4` keyed on `mix.lock` hash. Required check on `main` once Phase 2 lands.
+
+**Ratchet semantics** (Phase 3 onward): each phase fixes findings to zero, then promotes the CI step to fatal. Numbers strictly decrease — new PRs that introduce findings fail.
+
 ## Build Phases
 
 | Phase | What | Acceptance Criteria |

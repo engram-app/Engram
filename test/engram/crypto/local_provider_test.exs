@@ -216,7 +216,7 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
 
   describe "rotate_dek/2" do
     setup do
-      ctx = %{user_id: 12345}
+      ctx = %{user_id: 12_345}
       {:ok, dek_old} = {:ok, :crypto.strong_rand_bytes(32)}
       {:ok, wrapped_old} = Local.wrap_dek(dek_old, ctx)
       {:ok, ctx: ctx, dek_old: dek_old, wrapped_old: wrapped_old}
@@ -228,7 +228,11 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
       assert byte_size(dek_new) == 32
     end
 
-    test "produces a different DEK from the input", %{ctx: ctx, wrapped_old: wrapped_old, dek_old: dek_old} do
+    test "produces a different DEK from the input", %{
+      ctx: ctx,
+      wrapped_old: wrapped_old,
+      dek_old: dek_old
+    } do
       assert {:ok, _wrapped_new, dek_new} = Local.rotate_dek(wrapped_old, ctx)
       refute dek_new == dek_old
     end

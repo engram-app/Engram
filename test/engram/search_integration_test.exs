@@ -1,9 +1,9 @@
 defmodule Engram.SearchIntegrationTest do
   use Engram.DataCase, async: false
 
-  @moduletag :qdrant_integration
-
   import Engram.Fixtures, only: [insert_note!: 3]
+
+  @moduletag :qdrant_integration
 
   setup do
     Engram.Crypto.DekCache.invalidate_all()

@@ -59,10 +59,42 @@ config :engram, Oban,
      ]}
   ]
 
-# Configure Elixir's Logger
+# Configure Elixir's Logger.
+#
+# `metadata:` declares which keys are emitted in formatter output. Credo's
+# `Warning.MissedMetadataKeyInLoggerConfig` check fails for any structured
+# metadata key passed to Logger.* without being listed here. New metadata
+# keys must be added to this list (and any per-env override in
+# config/runtime.exs / config/prod.exs).
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [
+    :attachment_id,
+    :category,
+    :column,
+    :event_id,
+    :event_type,
+    :exception,
+    :exception_struct,
+    :field,
+    :kind,
+    :message,
+    :method,
+    :new_dek_version,
+    :phase,
+    :qdrant_id,
+    :reason,
+    :reason_label,
+    :request_id,
+    :request_path,
+    :request_query,
+    :row_id,
+    :status,
+    :storage_key,
+    :table,
+    :user_id,
+    :vault_id
+  ]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

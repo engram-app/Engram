@@ -1,6 +1,8 @@
 defmodule Engram.Crypto.BootCanaryTest do
   use Engram.DataCase, async: false
 
+  import Ecto.Query
+
   alias Engram.Crypto.{BootCanary, KeyProvider.Local}
   alias Engram.Repo
 
@@ -126,6 +128,4 @@ defmodule Engram.Crypto.BootCanaryTest do
       assert Repo.aggregate("system_canaries", :count) == 2
     end
   end
-
-  import Ecto.Query
 end

@@ -1,9 +1,9 @@
 defmodule EngramWeb.WebhookController do
   use EngramWeb, :controller
 
-  require Logger
-
   alias Engram.Billing
+
+  require Logger
 
   @max_signature_age_seconds 300
 
@@ -98,9 +98,11 @@ defmodule EngramWeb.WebhookController do
   # and validator messages.
   # Logger metadata helper only — sole call site is Logger.warning/2 above.
   defp format_reason(%Ecto.Changeset{} = cs) do
-    Ecto.Changeset.traverse_errors(cs, fn {msg, _opts} -> msg end) |> inspect() # noqa: T3.0.6 — Logger metadata only
+    # noqa: T3.0.6 — Logger metadata only
+    Ecto.Changeset.traverse_errors(cs, fn {msg, _opts} -> msg end) |> inspect()
   end
 
   defp format_reason(reason) when is_atom(reason), do: reason
-  defp format_reason(reason), do: inspect(reason) # noqa: T3.0.6 — Logger metadata only
+  # noqa: T3.0.6 — Logger metadata only
+  defp format_reason(reason), do: inspect(reason)
 end

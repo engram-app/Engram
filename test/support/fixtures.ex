@@ -3,7 +3,11 @@ defmodule Engram.Fixtures do
 
   import Ecto.Query
 
+  alias Engram.Accounts.User
+  alias Engram.Crypto.Envelope
+  alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.Vaults.Vault
 
   @doc """
   Inserts a user with a provisioned DEK. Accepts optional `dek_version` to
@@ -20,7 +24,7 @@ defmodule Engram.Fixtures do
 
       v when is_integer(v) ->
         Repo.update_all(
-          from(u in Engram.Accounts.User, where: u.id == ^user_with_dek.id),
+          from(u in User, where: u.id == ^user_with_dek.id),
           [set: [dek_version: v]],
           skip_tenant_check: true
         )
@@ -75,11 +79,11 @@ defmodule Engram.Fixtures do
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
-    {path_ct, path_n} = Engram.Crypto.Envelope.encrypt(path, dek)
-    {folder_ct, folder_n} = Engram.Crypto.Envelope.encrypt(folder, dek)
-    {tags_ct, tags_n} = Engram.Crypto.Envelope.encrypt(:erlang.term_to_binary(tags), dek)
-    {content_ct, content_n} = Engram.Crypto.Envelope.encrypt(content, dek)
-    {title_ct, title_n} = Engram.Crypto.Envelope.encrypt(title, dek)
+    {path_ct, path_n} = Envelope.encrypt(path, dek)
+    {folder_ct, folder_n} = Envelope.encrypt(folder, dek)
+    {tags_ct, tags_n} = Envelope.encrypt(:erlang.term_to_binary(tags), dek)
+    {content_ct, content_n} = Envelope.encrypt(content, dek)
+    {title_ct, title_n} = Envelope.encrypt(title, dek)
 
     base_attrs = %{
       content_hash:
@@ -117,8 +121,8 @@ defmodule Engram.Fixtures do
 
     {:ok, inserted} =
       Repo.with_tenant(user.id, fn ->
-        %Engram.Notes.Note{}
-        |> Engram.Notes.Note.changeset(note_attrs)
+        %Note{}
+        |> Note.changeset(note_attrs)
         |> Repo.insert!()
       end)
 
@@ -149,7 +153,7 @@ defmodule Engram.Fixtures do
     vault_id = Engram.Crypto.next_row_id(:vaults)
 
     # Legacy encrypt: empty AAD (dek_version 1 — pre-AAD-bind)
-    {ct, nonce} = Engram.Crypto.Envelope.encrypt(name, dek, <<>>)
+    {ct, nonce} = Envelope.encrypt(name, dek, <<>>)
 
     seq = System.unique_integer([:positive, :monotonic])
 
@@ -165,7 +169,7 @@ defmodule Engram.Fixtures do
     }
 
     Repo.insert!(
-      struct(Engram.Vaults.Vault, attrs),
+      struct(Vault, attrs),
       skip_tenant_check: true
     )
   end
@@ -177,14 +181,14 @@ defmodule Engram.Fixtures do
   plaintext path into a `path_hmac` lookup using the user's filter key.
   """
   def raw_note_by_path!(user, path) do
-    user = Engram.Repo.get!(Engram.Accounts.User, user.id)
+    user = Engram.Repo.get!(User, user.id)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     hmac = Engram.Crypto.hmac_field(filter_key, path)
 
     {:ok, note} =
       Repo.with_tenant(user.id, fn ->
         Repo.one!(
-          from(n in Engram.Notes.Note,
+          from(n in Note,
             where: n.user_id == ^user.id and n.path_hmac == ^hmac
           )
         )
@@ -198,7 +202,7 @@ defmodule Engram.Fixtures do
   Mirror of `raw_note_by_path!/2` for attachments.
   """
   def raw_attachment_by_path!(user, path) do
-    user = Engram.Repo.get!(Engram.Accounts.User, user.id)
+    user = Engram.Repo.get!(User, user.id)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     hmac = Engram.Crypto.hmac_field(filter_key, path)
 
@@ -234,7 +238,10 @@ defmodule Engram.Fixtures do
       end
 
     attrs = Enum.into(attrs, %{}, fn {k, v} -> {to_string(k), v} end)
-    path = Map.get(attrs, "path", "test/att-#{System.unique_integer([:positive, :monotonic])}.bin")
+
+    path =
+      Map.get(attrs, "path", "test/att-#{System.unique_integer([:positive, :monotonic])}.bin")
+
     content = Map.get(attrs, "content", <<0, 1, 2, 3>>)
     mime_type = Map.get(attrs, "mime_type", "application/octet-stream")
     mtime = Map.get(attrs, "mtime", 0.0)
@@ -247,8 +254,8 @@ defmodule Engram.Fixtures do
     storage_key = Engram.Storage.key(user.id, vault.id, path)
 
     # Legacy v1 encrypt: empty AAD
-    {content_ct, content_nonce} = Engram.Crypto.Envelope.encrypt(content, dek, <<>>)
-    {path_ct, path_nonce} = Engram.Crypto.Envelope.encrypt(path, dek, <<>>)
+    {content_ct, content_nonce} = Envelope.encrypt(content, dek, <<>>)
+    {path_ct, path_nonce} = Envelope.encrypt(path, dek, <<>>)
 
     # Write ciphertext blob to storage
     :ok = Engram.Storage.adapter().put(storage_key, content_ct, content_type: mime_type)

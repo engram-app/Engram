@@ -151,6 +151,5 @@ defmodule Engram.Notes.EncryptionTest do
       # Log must NOT contain the plaintext or any DEK material
       refute log =~ "will be unreadable"
     end
-
   end
 end

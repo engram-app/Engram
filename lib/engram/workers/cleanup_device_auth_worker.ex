@@ -6,7 +6,7 @@ defmodule Engram.Workers.CleanupDeviceAuthWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    DeviceFlow.cleanup_expired()
+    _ = DeviceFlow.cleanup_expired()
     :ok
   end
 end

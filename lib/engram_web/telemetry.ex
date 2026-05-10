@@ -125,8 +125,7 @@ defmodule EngramWeb.Telemetry do
         event_name: [:engram, :crypto, :rotate, :dek, :snoozed],
         measurement: :count,
         tags: [:user_id],
-        description:
-          "T3.7 per-user DEK rotation snoozed because lock held by another rotation"
+        description: "T3.7 per-user DEK rotation snoozed because lock held by another rotation"
       ),
       counter("engram.crypto.aad_rebind.attachment_skipped.count",
         description:

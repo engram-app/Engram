@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.ContentHashHmac do
+  @shortdoc "Enqueue content_hash MD5→HMAC backfill jobs"
+
   @moduledoc """
   Phase A — enqueue content_hash MD5 → HMAC-SHA256 backfill jobs.
 
@@ -24,8 +26,6 @@ defmodule Mix.Tasks.Engram.ContentHashHmac do
   alias Engram.Repo
   alias Engram.Workers.BackfillContentHashHmac
 
-  @shortdoc "Enqueue content_hash MD5→HMAC backfill jobs"
-
   @impl Mix.Task
   def run(_args) do
     Mix.Task.run("app.start")
@@ -38,13 +38,13 @@ defmodule Mix.Tasks.Engram.ContentHashHmac do
 
     note_count =
       Enum.reduce(note_pairs, 0, fn {user_id, vault_id}, acc ->
-        enqueue!(user_id, vault_id, "notes")
+        _ = enqueue!(user_id, vault_id, "notes")
         acc + 1
       end)
 
     att_count =
       Enum.reduce(att_pairs, 0, fn {user_id, vault_id}, acc ->
-        enqueue!(user_id, vault_id, "attachments")
+        _ = enqueue!(user_id, vault_id, "attachments")
         acc + 1
       end)
 

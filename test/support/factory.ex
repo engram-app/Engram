@@ -1,4 +1,10 @@
 defmodule Engram.Factory do
+  @moduledoc """
+  ExMachina factories for Engram tests. Provides Phase B.3-compatible
+  ciphertext placeholders (random bytes) so factory rows satisfy NOT NULL
+  encryption constraints; tests exercising real decryption override these.
+  """
+
   use ExMachina.Ecto, repo: Engram.Repo
 
   # Phase B.3 dropped the plaintext path/folder/tags/name columns. Every

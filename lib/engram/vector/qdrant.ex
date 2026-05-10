@@ -213,7 +213,11 @@ defmodule Engram.Vector.Qdrant do
       end
 
     case Req.post(url, [json: body] ++ req_opts()) do
-      {:ok, %Req.Response{status: 200, body: %{"result" => %{"points" => points, "next_page_offset" => next}}}} ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         body: %{"result" => %{"points" => points, "next_page_offset" => next}}
+       }} ->
         {:ok, %{points: points, next_page_offset: next}}
 
       {:ok, %Req.Response{status: status, body: body}} ->

@@ -6,8 +6,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
   alias Engram.Attachments
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, UserDekRotation}
+  alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
   alias Engram.Repo
+  alias Engram.Vector.Qdrant
 
   # Module-level Bypass: stubs Qdrant scroll with empty results so all existing
   # tests (which don't seed Qdrant points) pass through the sweep_qdrant phase
@@ -21,7 +22,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
     Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}}))
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+      )
     end)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
@@ -91,7 +95,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_a =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^a.id), skip_tenant_check: true)
@@ -128,10 +134,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_vault =
-        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id), skip_tenant_check: true)
+        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+          skip_tenant_check: true
+        )
 
       assert reloaded_vault.dek_version == 2
       refute reloaded_vault.name_ciphertext == old_ct
@@ -159,7 +169,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_note =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -175,7 +187,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_note =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -191,7 +205,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_note =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -208,10 +224,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_vault =
-        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id), skip_tenant_check: true)
+        Repo.one!(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+          skip_tenant_check: true
+        )
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
@@ -231,7 +251,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_note =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -245,7 +267,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
   end
 
   describe "rotate_user/1 — attachments sweep" do
-    test "happy path: attachment blob re-encrypted under new DEK (legacy v1 fixture)", %{user: user} do
+    test "happy path: attachment blob re-encrypted under new DEK (legacy v1 fixture)", %{
+      user: user
+    } do
       vault = Engram.Fixtures.insert_vault!(user, "AttTest")
 
       # Use insert_attachment! to get a genuinely v1-encrypted (empty-AAD) row,
@@ -260,7 +284,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_att =
         Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
@@ -316,7 +342,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_att =
         Repo.one!(from(a in Engram.Attachments.Attachment, where: a.id == ^attachment.id),
@@ -381,7 +409,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       # Round-trip: if rotation skipped the row, content still decrypts under old DEK
       # which is now gone → this would fail.
@@ -419,7 +449,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       # Look up the note by path_hmac using the NEW filter key.
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
@@ -453,16 +485,16 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # Build a synthetic Qdrant point whose payload fields are encrypted under
       # the user's current (old) DEK using real Envelope.encrypt + AAD.
       {:ok, old_dek} = Crypto.get_dek(user)
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
       qdrant_id = "00000000-0000-0000-0000-000000000001"
 
       text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
       title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
       hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
 
-      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("hello world", old_dek, text_aad)
-      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("My Note", old_dek, title_aad)
-      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("My Note > Intro", old_dek, hp_aad)
+      {text_ct, text_nonce} = Envelope.encrypt("hello world", old_dek, text_aad)
+      {title_ct, title_nonce} = Envelope.encrypt("My Note", old_dek, title_aad)
+      {hp_ct, hp_nonce} = Envelope.encrypt("My Note > Intro", old_dek, hp_aad)
 
       point = %{
         "id" => qdrant_id,
@@ -523,36 +555,53 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       # Reload the user to get the new DEK
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
 
       # Decrypt each re-encrypted field under the new DEK — must succeed with correct plaintext
       new_text_ct = Base.decode64!(new_payload["text"])
       new_text_nonce = Base.decode64!(new_payload["text_nonce"])
-      assert {:ok, "hello world"} = Engram.Crypto.Envelope.decrypt(new_text_ct, new_text_nonce, new_dek, text_aad)
+
+      assert {:ok, "hello world"} =
+               Envelope.decrypt(new_text_ct, new_text_nonce, new_dek, text_aad)
 
       new_title_ct = Base.decode64!(new_payload["title"])
       new_title_nonce = Base.decode64!(new_payload["title_nonce"])
-      assert {:ok, "My Note"} = Engram.Crypto.Envelope.decrypt(new_title_ct, new_title_nonce, new_dek, title_aad)
+
+      assert {:ok, "My Note"} =
+               Envelope.decrypt(new_title_ct, new_title_nonce, new_dek, title_aad)
 
       new_hp_ct = Base.decode64!(new_payload["heading_path"])
       new_hp_nonce = Base.decode64!(new_payload["heading_path_nonce"])
-      assert {:ok, "My Note > Intro"} = Engram.Crypto.Envelope.decrypt(new_hp_ct, new_hp_nonce, new_dek, hp_aad)
+
+      assert {:ok, "My Note > Intro"} =
+               Envelope.decrypt(new_hp_ct, new_hp_nonce, new_dek, hp_aad)
 
       :ets.delete(set_payload_calls)
     end
 
-    test "sweep skips set_payload for points with no encrypted fields", %{user: user, bypass: bypass} do
-      collection = Engram.Vector.Qdrant.collection_name()
+    test "sweep skips set_payload for points with no encrypted fields", %{
+      user: user,
+      bypass: bypass
+    } do
+      collection = Qdrant.collection_name()
 
       # Point has no encrypted text/title/heading_path
-      point = %{"id" => "plain-point-uuid", "payload" => %{"user_id" => user.id, "vault_id" => 999}}
+      point = %{
+        "id" => "plain-point-uuid",
+        "payload" => %{"user_id" => user.id, "vault_id" => 999}
+      }
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}})
+        )
       end)
 
       # set_payload must NOT be called — any call here would fail the test
@@ -563,12 +612,15 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
     end
 
-    test "sweep resumes: already-rotated point skips set_payload (decrypt-as-discriminator)", %{user: user, bypass: bypass} do
+    test "sweep resumes: already-rotated point skips set_payload (decrypt-as-discriminator)", %{
+      user: user,
+      bypass: bypass
+    } do
       # Simulate a point that was already re-encrypted under the new DEK
       # by a prior crashed run. We don't know the new DEK upfront, so we
       # test this via the orchestrator's idempotence: rotate once, then
       # verify the second rotation works cleanly.
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
 
       {:ok, old_dek} = Crypto.get_dek(user)
       qdrant_id = "resume-test-uuid-0001"
@@ -576,9 +628,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
       hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
 
-      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("resume content", old_dek, text_aad)
-      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("Resume Title", old_dek, title_aad)
-      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("Resume Title > S1", old_dek, hp_aad)
+      {text_ct, text_nonce} = Envelope.encrypt("resume content", old_dek, text_aad)
+      {title_ct, title_nonce} = Envelope.encrypt("Resume Title", old_dek, title_aad)
+      {hp_ct, hp_nonce} = Envelope.encrypt("Resume Title > S1", old_dek, hp_aad)
 
       # ETS agent to let the Bypass handler return different payloads per call
       state = :ets.new(:sweep_resume_state, [:set, :public])
@@ -587,25 +639,32 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # After first rotation, we'll update these refs to the new ciphertext
       new_point_ref = :ets.new(:new_point_ref, [:set, :public])
 
-      :ets.insert(new_point_ref, {:point, %{
-        "id" => qdrant_id,
-        "payload" => %{
-          "user_id" => user.id,
-          "text" => Base.encode64(text_ct),
-          "text_nonce" => Base.encode64(text_nonce),
-          "title" => Base.encode64(title_ct),
-          "title_nonce" => Base.encode64(title_nonce),
-          "heading_path" => Base.encode64(hp_ct),
-          "heading_path_nonce" => Base.encode64(hp_nonce)
-        }
-      }})
+      :ets.insert(
+        new_point_ref,
+        {:point,
+         %{
+           "id" => qdrant_id,
+           "payload" => %{
+             "user_id" => user.id,
+             "text" => Base.encode64(text_ct),
+             "text_nonce" => Base.encode64(text_nonce),
+             "title" => Base.encode64(title_ct),
+             "title_nonce" => Base.encode64(title_nonce),
+             "heading_path" => Base.encode64(hp_ct),
+             "heading_path_nonce" => Base.encode64(hp_nonce)
+           }
+         }}
+      )
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         [{:point, p}] = :ets.lookup(new_point_ref, :point)
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [p], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [p], "next_page_offset" => nil}})
+        )
       end)
 
       set_payload_count = :ets.new(:sp_count, [:set, :public])
@@ -619,7 +678,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
         # Update the point ref to simulate Qdrant storing the new payload
         new_payload = decoded["payload"]
         [{:point, p}] = :ets.lookup(new_point_ref, :point)
-        :ets.insert(new_point_ref, {:point, %{p | "payload" => Map.merge(p["payload"], new_payload)}})
+
+        :ets.insert(
+          new_point_ref,
+          {:point, %{p | "payload" => Map.merge(p["payload"], new_payload)}}
+        )
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -646,7 +709,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
 
     test "sweep returns error when scroll fails", %{user: user, bypass: bypass} do
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         conn
@@ -659,15 +722,15 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "sweep returns error when set_payload fails", %{user: user, bypass: bypass} do
       {:ok, old_dek} = Crypto.get_dek(user)
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
       qdrant_id = "fail-payload-uuid-0001"
 
       text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
-      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("content", old_dek, text_aad)
+      {text_ct, text_nonce} = Envelope.encrypt("content", old_dek, text_aad)
       title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
-      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("title", old_dek, title_aad)
+      {title_ct, title_nonce} = Envelope.encrypt("title", old_dek, title_aad)
       hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
-      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("hp", old_dek, hp_aad)
+      {hp_ct, hp_nonce} = Envelope.encrypt("hp", old_dek, hp_aad)
 
       point = %{
         "id" => qdrant_id,
@@ -685,7 +748,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}})
+        )
       end)
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
@@ -717,7 +783,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       # Lock must be cleared after successful rotation.
       assert is_nil(reloaded.dek_rotation_locked_at)
@@ -797,13 +865,17 @@ defmodule Engram.Crypto.UserDekRotationTest do
         skip_tenant_check: true
       )
 
-      assert_raise RuntimeError, ~r/T3\.7 sweep_notes: decrypt failed under both old and new DEK/, fn ->
-        UserDekRotation.rotate_user(user.id)
-      end
+      assert_raise RuntimeError,
+                   ~r/T3\.7 sweep_notes: decrypt failed under both old and new DEK/,
+                   fn ->
+                     UserDekRotation.rotate_user(user.id)
+                   end
 
       # The lock must remain set — operator must investigate before retrying.
       reloaded =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       refute is_nil(reloaded.dek_rotation_locked_at),
              "Expected lock to remain set after decrypt failure, but it was cleared"
@@ -1113,7 +1185,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         conn
@@ -1137,7 +1209,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
 
-      assert_receive {:telemetry_fired, %{status: :failed, reason_label: "qdrant_scroll_failed"}}, 500
+      assert_receive {:telemetry_fired, %{status: :failed, reason_label: "qdrant_scroll_failed"}},
+                     500
     end
 
     test "qdrant_set_payload_failed is classified correctly", %{user: user} do
@@ -1146,14 +1219,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
       {:ok, old_dek} = Crypto.get_dek(user)
-      collection = Engram.Vector.Qdrant.collection_name()
+      collection = Qdrant.collection_name()
       qdrant_id = "classify-set-payload-uuid"
       text_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :text)
-      {text_ct, text_nonce} = Engram.Crypto.Envelope.encrypt("hi", old_dek, text_aad)
+      {text_ct, text_nonce} = Envelope.encrypt("hi", old_dek, text_aad)
       title_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :title)
-      {title_ct, title_nonce} = Engram.Crypto.Envelope.encrypt("t", old_dek, title_aad)
+      {title_ct, title_nonce} = Envelope.encrypt("t", old_dek, title_aad)
       hp_aad = Crypto.aad_for_qdrant(collection, qdrant_id, :heading_path)
-      {hp_ct, hp_nonce} = Engram.Crypto.Envelope.encrypt("h", old_dek, hp_aad)
+      {hp_ct, hp_nonce} = Envelope.encrypt("h", old_dek, hp_aad)
 
       point = %{
         "id" => qdrant_id,
@@ -1171,7 +1244,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}}))
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [point], "next_page_offset" => nil}})
+        )
       end)
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
@@ -1196,7 +1272,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       assert {:error, {:qdrant_set_payload_failed, _}} = UserDekRotation.rotate_user(user.id)
 
-      assert_receive {:telemetry_fired, %{status: :failed, reason_label: "qdrant_set_payload_failed"}}, 500
+      assert_receive {:telemetry_fired,
+                      %{status: :failed, reason_label: "qdrant_set_payload_failed"}},
+                     500
     end
 
     test "postgres error tuple is classified with code", %{user: _user} do
@@ -1228,7 +1306,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       first_wrapped = reloaded.encrypted_dek
       first_version = reloaded.dek_version
@@ -1237,7 +1317,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded2 =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       refute reloaded2.encrypted_dek == first_wrapped,
              "Expected a new wrapped DEK on second call"
@@ -1271,7 +1353,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
-        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id), skip_tenant_check: true)
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
 
       reloaded_note2 =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)

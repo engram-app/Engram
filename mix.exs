@@ -4,13 +4,25 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.42",
+      version: "0.5.48",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: [
+        ignore_warnings: ".dialyzer_ignore.exs",
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        plt_add_apps: [:mix, :ex_unit],
+        flags: [
+          :unmatched_returns,
+          :error_handling,
+          :underspecs,
+          :missing_return,
+          :extra_return
+        ]
+      ]
     ]
   end
 
@@ -86,7 +98,12 @@ defmodule Engram.MixProject do
       # Test
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},
-      {:bypass, "~> 2.1", only: :test}
+      {:bypass, "~> 2.1", only: :test},
+
+      # Quality tooling (dev/test only — never loaded in prod release)
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false}
     ]
   end
 

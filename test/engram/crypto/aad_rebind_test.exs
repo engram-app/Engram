@@ -90,7 +90,12 @@ defmodule Engram.Crypto.AadRebindTest do
       content_aad = Crypto.aad_for_row(:notes, :content, reloaded.id)
 
       assert {:ok, "legacy body"} =
-               Envelope.decrypt(reloaded.content_ciphertext, reloaded.content_nonce, dek, content_aad)
+               Envelope.decrypt(
+                 reloaded.content_ciphertext,
+                 reloaded.content_nonce,
+                 dek,
+                 content_aad
+               )
 
       assert :error =
                Envelope.decrypt(reloaded.content_ciphertext, reloaded.content_nonce, dek, <<>>)
@@ -179,6 +184,7 @@ defmodule Engram.Crypto.AadRebindTest do
 
         assert_received {:attachment_skipped, %{count: count}, %{user_id: uid}}
         assert uid == user.id
+
         assert count >= 2,
                "telemetry must report legacy attachment count so operators can plan natural convergence; got #{count}"
       after

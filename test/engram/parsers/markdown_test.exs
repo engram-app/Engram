@@ -39,7 +39,7 @@ defmodule Engram.Parsers.MarkdownTest do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
       assert is_list(chunks)
-      assert length(chunks) > 0
+      assert chunks != []
     end
 
     test "each chunk has required fields" do
