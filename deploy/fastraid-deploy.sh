@@ -2,7 +2,7 @@
 # Deploy Engram to FastRaid (Unraid). Runs on the FastRaid host itself.
 #
 # Two containers run from the same image, different shapes:
-#   engram-saas      — port 8000 — Voyage embeddings + Clerk auth (engram.ras.band)
+#   engram-saas      — port 8000 — Voyage embeddings + Clerk auth (app.engram.page)
 #   engram-selfhost  — port 8001 — Ollama embeddings + local auth (engram.ax)
 #
 # Usage: bash fastraid-deploy.sh <version>

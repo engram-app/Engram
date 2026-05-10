@@ -3,7 +3,7 @@ defmodule Engram.HostOrigins do
   Parses the `PHX_HOST` env var into a canonical host plus a CORS/WebSocket
   allowlist. Accepts a single host or comma-separated list. Each entry is
   expanded to both `https://` and `http://` origins. Entries may include a
-  port (e.g. `engram.ras.band,engram.ax,10.0.20.214:8000`).
+  port (e.g. `app.engram.page,engram.ax,10.0.20.214:8000`).
 
   The first non-empty entry is canonical (used for URL generation in
   `EngramWeb.Endpoint`).
