@@ -114,6 +114,4 @@ defmodule EngramWeb.OAuthAuthorizeController do
     |> String.replace("\"", "&quot;")
     |> String.replace("'", "&#39;")
   end
-
-  defp html_escape(other), do: html_escape(to_string(other))
 end
