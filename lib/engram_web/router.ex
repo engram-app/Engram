@@ -49,6 +49,15 @@ defmodule EngramWeb.Router do
     post "/register", OAuthRegisterController, :register
   end
 
+  # OAuth 2.1 user-facing authorize endpoint. Requires an authenticated
+  # session (Bearer JWT today; Phase 7 wires browser cookie session).
+  scope "/oauth", EngramWeb do
+    pipe_through [:api, EngramWeb.Plugs.Auth]
+
+    get "/authorize", OAuthAuthorizeController, :show
+    post "/authorize", OAuthAuthorizeController, :submit
+  end
+
   # All API routes under /api prefix
   scope "/api", EngramWeb do
     # Public endpoints (no auth required, no rate limit)
