@@ -158,6 +158,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | `docs/context/docker-build-cache-pitfalls.md` | Why `_build` cache mount across RUN steps ships stale beams |
 | `docs/context/benchmark-plan.md` | Embedding/chunking/reranker benchmark methodology |
 | `docs/context/code-audit-2026-04.md` | Full codebase audit: 7 CRITICAL, 18 HIGH, 30 MEDIUM findings |
+| `docs/context/mcp-oauth.md` | OAuth 2.1 + DCR on `/api/mcp`: wire flow, endpoints, token model, scope grammar, schema |
 
 ## Life OS
 project: engram
