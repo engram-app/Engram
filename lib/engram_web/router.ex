@@ -14,6 +14,11 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  pipeline :oauth_api do
+    plug :accepts, ["json"]
+    plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
+  end
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :put_secure_browser_headers
@@ -34,6 +39,14 @@ defmodule EngramWeb.Router do
 
     get "/oauth-protected-resource", WellKnownController, :protected_resource
     get "/oauth-authorization-server", WellKnownController, :authorization_server
+  end
+
+  # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
+  # validate client credentials and PKCE themselves; no router-level auth.
+  scope "/oauth", EngramWeb do
+    pipe_through :oauth_api
+
+    post "/register", OAuthRegisterController, :register
   end
 
   # All API routes under /api prefix
