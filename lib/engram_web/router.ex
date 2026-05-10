@@ -26,6 +26,16 @@ defmodule EngramWeb.Router do
     post "/stripe", WebhookController, :stripe
   end
 
+  # OAuth 2.1 discovery documents — RFC 8414 + RFC 9728. Public, no auth.
+  # MCP clients (Claude Connectors, Cursor, ChatGPT custom GPTs, etc.)
+  # probe these to learn how to negotiate auth against /api/mcp.
+  scope "/.well-known", EngramWeb do
+    pipe_through :api
+
+    get "/oauth-protected-resource", WellKnownController, :protected_resource
+    get "/oauth-authorization-server", WellKnownController, :authorization_server
+  end
+
   # All API routes under /api prefix
   scope "/api", EngramWeb do
     # Public endpoints (no auth required, no rate limit)
