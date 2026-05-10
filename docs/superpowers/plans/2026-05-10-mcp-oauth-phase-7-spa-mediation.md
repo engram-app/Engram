@@ -75,10 +75,12 @@ Claude → POST /oauth/token with code + PKCE verifier (Phase 4 — already work
 
 | File | Change |
 |------|--------|
-| `lib/engram_web/router.ex` | Move `GET /oauth/authorize` out of the `[:api, EngramWeb.Plugs.Auth]` pipeline into a public scope. Add `POST /api/oauth/authorize/consent` under the existing user-scoped auth pipeline (`[:api, Auth, RotationLockCheck]`). Retire `POST /oauth/authorize`. |
+| `lib/engram_web/router.ex` | Move `GET /oauth/authorize` out of the `[:api, EngramWeb.Plugs.Auth]` pipeline into a public scope. Add `POST /api/oauth/authorize/consent` under the existing user-scoped auth pipeline (`[:api, Auth, RotationLockCheck]`). Add `GET /api/oauth/clients/:client_id` in a public scope (rate-limited). Retire `POST /oauth/authorize`. |
 | `lib/engram_web/controllers/oauth_authorize_controller.ex` | `show/2` no longer renders consent — instead, after validation, 302 to `/app/oauth/authorize?<params>` (preserve every input param incl. `resource`). Drop the inline HTML consent rendering. New `consent/2` action: requires `conn.assigns.current_user`, body has the full param set + `vault_choice`, mints code via existing `OAuth.mint_authorization_code/3`, returns `{redirect_uri: "..."}` JSON. Drop `submit/2`. |
+| `lib/engram_web/controllers/oauth_clients_controller.ex` (new) | `show/2`: looks up client by `client_id`, returns `{"client_id": "...", "client_name": "..."}` JSON. 404 on unknown id. No auth. Per-IP rate-limit. |
 | `lib/engram/oauth.ex` | No public-API change. `mint_authorization_code/3` already returns `{:ok, redirect_url}` — that's what the controller serializes as JSON. |
 | `test/engram_web/controllers/oauth_authorize_controller_test.exs` | Rewrite: GET tests assert 302 to `/app/oauth/authorize?...` (with all params preserved); 400 HTML cases unchanged; redirect-error cases unchanged. New POST tests for `/api/oauth/authorize/consent`: happy path + vault ownership + `vault:*` + 401 without auth + invalid params returns redirect URL with `error=`. |
+| `test/engram_web/controllers/oauth_clients_controller_test.exs` (new) | Happy path returns `{client_id, client_name}`. Unknown id → 404. Returns no other fields (assert keys exact). |
 
 ### SPA changes (`backend/frontend/`)
 
@@ -104,7 +106,11 @@ The SPA is the same React build for both saas and selfhost. Selfhost uses local 
 6. **TDD:** new tests for `consent/2`: 401 without auth (Auth plug), validated request + vault_choice → JSON `{redirect_uri: "..."}` with `code` and `state` query params, vault_ownership rejected → JSON `{redirect_uri: "...?error=access_denied..."}`.
 7. Implement `consent/2` (very similar to today's `submit/2`, but returns JSON not 302).
 8. Drop `submit/2` + the old `POST /oauth/authorize` route.
-9. Bump `mix.exs`, push, open PR.
+9. **TDD:** new `oauth_clients_controller_test.exs` — happy path returns `{client_id, client_name}` only, unknown id → 404, response keys exact.
+10. Implement `OauthClientsController.show/2`. Wire route `GET /api/oauth/clients/:client_id` into a public scope with rate-limiter plug.
+11. Delete dead consent-template HTML (Decision 5).
+12. Run full `mix test`. Run `mix credo --strict` + `mix format --check-formatted` (per ratchet baseline).
+13. Bump `mix.exs`, push, open PR.
 
 **Note on backward-incompat:** dropping `POST /oauth/authorize` breaks the smoke-curl pattern in `docs/context/mcp-oauth.md`. Update that doc's "How to add a client manually" to use the SPA flow OR document curl-only as `POST /api/oauth/authorize/consent`.
 
@@ -137,29 +143,27 @@ After 7.A + 7.B deploy to prod:
 3. Capture the wire trace via Phoenix request logger (RedactFilter from PR #99 already scrubs PKCE + tokens).
 4. File any spec-divergence as Phase 7.D PRs.
 
-## Open questions
+## Decisions (resolved 2026-05-10)
 
-1. **Surface `client_name` to the SPA.** Today's GET `/oauth/authorize` validation returns the Client struct internally; the SPA needs the human-readable name to render *"Authorize **Claude** to access..."*. Two options:
-   - Pass `client_name` as an extra query param in the GET → SPA redirect (URL-encoded). Simple but exposes the name in the URL bar.
-   - SPA fetches `/api/oauth/clients/:client_id` (new public endpoint returning only `client_name`). Cleaner. Add a tiny rate limit.
-   
-   **Lean:** the second option (new endpoint), since it also lets the SPA show client metadata without a backend round-trip if cached.
+1. **`client_name` surface — new public endpoint.** `GET /api/oauth/clients/:client_id` returns `{client_id, client_name}` only. Public (no auth required — `client_id` is already public, returned by DCR; `client_name` is non-secret). Rate-limited via existing rate limiter (per-IP, conservative). Lets SPA render *"Authorize **Claude** to access..."* without leaking name in URL bar.
 
-2. **`resource` parameter (RFC 8707).** Claude sends `resource=https://app.engram.page/api/mcp`. Today we ignore it. Should we:
-   - Validate it matches the canonical `Endpoint.url() <> "/api/mcp"` and reject mismatch? RFC 8707 says "MAY".
-   - Pass-through only? Safer for now — defer to Phase 7.D if Connectors enforces matching.
-   
-   **Lean:** pass-through. If we validate now and Claude ever sends a slightly different host (port, trailing slash), we 400 and break the flow.
+2. **`resource` (RFC 8707) — pass-through, no validation.** Preserve in redirect to SPA + in `mint_authorization_code` call so the issued token's audience claim can carry it. No 400 on host/port/trailing-slash mismatch. Validation deferred to Phase 7.D if Connectors enforces matching.
 
-3. **Cancel UX.** When user clicks Cancel, do we:
-   - Redirect back to Claude with `?error=access_denied&state=...` (RFC-compliant)?
-   - Stay on the SPA and let the user navigate away (Connectors would just timeout)?
-   
-   **Lean:** RFC-compliant redirect. Claude shows a "user cancelled" message gracefully.
+3. **Cancel UX — RFC-compliant redirect.** SPA Cancel button does `window.location.assign(redirect_uri + "?error=access_denied&state=" + state)`. Claude shows "user cancelled" gracefully.
 
-4. **Selfhost auth on `/app/oauth/authorize`.** Selfhost SPA already routes unauth'd users to `/app/sign-in`. Verify that `return_to=/app/oauth/authorize?<params>` works for the local-auth login form (probably already does — `useReturnTo` hook should handle it). If not, fix that bug as part of 7.B.
+4. **Selfhost auth on `/app/oauth/authorize` — verify in 7.B.** Existing `return_to=` flow on `/app/sign-in` should already handle this for local-auth; bug-fix as part of 7.B if not.
 
-5. **Should we DELETE `lib/engram_web/controllers/oauth_authorize_controller.ex`'s consent template HTML?** Yes — it's dead code after 7.A. Removing keeps `mix credo` clean.
+5. **Delete dead consent HTML in `oauth_authorize_controller.ex` — yes**, as part of 7.A. Keeps `mix credo` clean.
+
+## Deployment risk (must mitigate)
+
+**7.A alone in prod = `/oauth/authorize` 302s to `/app/oauth/authorize` which doesn't exist yet → SPA 404 for any Connectors user mid-deploy.** Mitigation options:
+
+- (a) Ship 7.A and 7.B back-to-back same day (gap ≤ 1hr in prod).
+- (b) 7.A merges with redirect target gated behind a `RUNTIME_FEATURE_OAUTH_SPA` env flag, off in prod until 7.B ships.
+- (c) Merge a SPA stub route ("authorize coming soon") FIRST, then 7.A, then 7.B's real consent UI.
+
+**Plan baseline:** option (a). If 7.B can't ship the same day, fall back to (b).
 
 ## Critical files to read before each phase
 
@@ -191,6 +195,10 @@ curl -X POST https://app.engram.page/oauth/register \
 # Authorize redirect (Phase 7.A)
 curl -i "https://app.engram.page/oauth/authorize?response_type=code&client_id=<dcr-id>&redirect_uri=http://localhost:9999/cb&code_challenge=abc&code_challenge_method=S256&state=xyz&scope=mcp"
 # expect: HTTP/2 302  Location: /app/oauth/authorize?...
+
+# Client metadata (Phase 7.A)
+curl -i "https://app.engram.page/api/oauth/clients/<dcr-id>"
+# expect: 200 {"client_id":"<dcr-id>","client_name":"..."}
 
 # Consent (Phase 7.A, with real Bearer)
 curl -X POST https://app.engram.page/api/oauth/authorize/consent \
