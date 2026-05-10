@@ -116,18 +116,31 @@ defmodule EngramWeb.McpController do
   # -- Vault resolution --
 
   defp resolve_mcp_vault(user, args, conn) do
-    case args["vault_id"] do
-      nil ->
+    oauth_bound = conn.assigns[:oauth_scope_vault_id]
+    requested = args["vault_id"]
+
+    cond do
+      is_integer(oauth_bound) and is_nil(requested) ->
+        Engram.Vaults.get_vault(user, oauth_bound)
+
+      is_integer(oauth_bound) and to_string(requested) != to_string(oauth_bound) ->
+        {:error,
+         "OAuth token is bound to vault #{oauth_bound}; tool call requested vault #{requested}"}
+
+      is_integer(oauth_bound) ->
+        Engram.Vaults.get_vault(user, oauth_bound)
+
+      is_nil(requested) ->
         {:ok, conn.assigns.current_vault}
 
-      vault_id ->
-        case Engram.Vaults.get_vault(user, vault_id) do
+      true ->
+        case Engram.Vaults.get_vault(user, requested) do
           {:ok, vault} ->
             api_key = conn.assigns[:current_api_key]
 
             case Engram.Vaults.check_api_key_access(api_key, vault) do
               :ok -> {:ok, vault}
-              :forbidden -> {:error, "API key does not have access to vault #{vault_id}"}
+              :forbidden -> {:error, "API key does not have access to vault #{requested}"}
             end
 
           _ ->

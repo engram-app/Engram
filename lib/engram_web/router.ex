@@ -164,8 +164,13 @@ defmodule EngramWeb.Router do
     # Embedding status
     get "/embed-status", EmbedStatusController, :index
 
-    # MCP endpoint (JSON-RPC 2.0 over HTTP POST)
-    post "/mcp", McpController, :handle
+    # MCP endpoint (JSON-RPC 2.0 over HTTP POST). OAuthScopeEnforce surfaces
+    # vault_id/scope claims from OAuth-issued JWTs so the controller can lock
+    # tool calls to the bound vault.
+    scope "/" do
+      pipe_through EngramWeb.Plugs.OAuthScopeEnforce
+      post "/mcp", McpController, :handle
+    end
   end
 
   # Marketing pages — server-rendered HTML, before SPA catch-all
