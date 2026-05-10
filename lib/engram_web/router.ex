@@ -47,6 +47,7 @@ defmodule EngramWeb.Router do
     pipe_through :oauth_api
 
     post "/register", OAuthRegisterController, :register
+    post "/token", OAuthTokenController, :exchange
   end
 
   # OAuth 2.1 user-facing authorize endpoint. Requires an authenticated

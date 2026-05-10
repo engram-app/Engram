@@ -269,18 +269,28 @@ defmodule Engram.Accounts do
 
   # ── JWT ─────────────────────────────────────────────────────────
 
-  def generate_jwt(user) do
+  def generate_jwt(user, extras \\ %{}) do
     # `sub` + `email` match what the active auth provider's verify_token expects
     # (Local provider rejects tokens missing them with :missing_claims). `user_id`
     # is kept for the internal-JWT fallback in TokenResolver and for any callers
     # that look it up by integer DB id.
-    extra_claims = %{
+    #
+    # `extras` lets OAuth-issued tokens carry `scope` + `vault_id` claims so the
+    # MCP plug (Phase 5) can enforce vault scope without an extra DB lookup.
+    base = %{
       "sub" => user.external_id,
       "email" => user.email,
       "user_id" => user.id
     }
 
-    Engram.Token.generate_and_sign!(extra_claims)
+    Engram.Token.generate_and_sign!(Map.merge(base, stringify_keys(extras)))
+  end
+
+  defp stringify_keys(%{} = map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
   end
 
   def verify_jwt(token) do
