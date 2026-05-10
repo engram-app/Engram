@@ -9,6 +9,7 @@ import ApiKeysPage from './settings/api-keys-page'
 import BillingPlaceholder from './settings/billing-placeholder'
 import EncryptionPage from './settings/encryption-page'
 import SettingsLayout from './settings/settings-layout'
+import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import Dashboard from './viewer/dashboard'
 import NotePage from './viewer/note-page'
 import SearchPage from './viewer/search-page'
@@ -43,6 +44,7 @@ export const router = createBrowserRouter(
           ],
         },
         { path: '/link', element: <DeviceLinkPage /> },
+        { path: '/oauth/authorize', element: <OAuthAuthorizePage /> },
       ],
     },
   ],

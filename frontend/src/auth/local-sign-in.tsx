@@ -1,10 +1,17 @@
 import { useState, useEffect, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useAuthAdapter } from './use-auth-adapter'
+
+function safeReturnTo(raw: string | null): string {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/'
+  return raw
+}
 
 export default function LocalSignIn() {
   const { login, isSignedIn } = useAuthAdapter()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const returnTo = safeReturnTo(searchParams.get('return_to'))
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -12,8 +19,8 @@ export default function LocalSignIn() {
 
   // Navigate after auth state propagates (React 18 batching)
   useEffect(() => {
-    if (isSignedIn) navigate('/', { replace: true })
-  }, [isSignedIn, navigate])
+    if (isSignedIn) navigate(returnTo, { replace: true })
+  }, [isSignedIn, navigate, returnTo])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
