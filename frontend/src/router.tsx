@@ -5,6 +5,7 @@ import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
+import NotFoundPage from './not-found'
 import ApiKeysPage from './settings/api-keys-page'
 import BillingPlaceholder from './settings/billing-placeholder'
 import EncryptionPage from './settings/encryption-page'
@@ -47,5 +48,8 @@ export const router = createBrowserRouter(
         { path: '/oauth/consent', element: <OAuthAuthorizePage /> },
       ],
     },
+
+    // Catch-all (public — typos shouldn't trigger Clerk redirect)
+    { path: '*', element: <NotFoundPage /> },
   ],
 )
