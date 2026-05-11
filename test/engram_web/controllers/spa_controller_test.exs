@@ -53,6 +53,17 @@ defmodule EngramWeb.SpaControllerTest do
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
   end
 
+  test "SPA responses include a Content-Security-Policy header", %{conn: conn} do
+    # CSP restricts where injected JS can exfiltrate data even if script-src
+    # is permissive. Critical for /oauth/consent in particular.
+    conn = get(conn, "/oauth/consent")
+    [csp] = get_resp_header(conn, "content-security-policy")
+    assert csp =~ "default-src 'self'"
+    assert csp =~ "frame-ancestors 'none'"
+    assert csp =~ "connect-src"
+    assert csp =~ "clerk"
+  end
+
   test "GET /api/health still returns JSON (API not shadowed by SPA)", %{conn: conn} do
     conn = get(conn, "/api/health")
     assert json_response(conn, 200)

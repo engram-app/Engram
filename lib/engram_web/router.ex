@@ -22,12 +22,35 @@ defmodule EngramWeb.Router do
   # SPA shell pipeline — HTML responses with strict browser-security headers.
   # x-frame-options=DENY is critical for /oauth/consent: without it the consent
   # UI could be iframed by an attacker site and the approval click hijacked.
+  #
+  # CSP notes: script-src/style-src use 'unsafe-inline' because SpaController
+  # injects a runtime-config <script> into index.html (see
+  # EngramWeb.SpaController.config_script/0). TODO: upgrade to per-request
+  # nonces and drop 'unsafe-inline' from script-src.
+  @csp_policy Enum.join(
+                [
+                  "default-src 'self'",
+                  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com",
+                  "style-src 'self' 'unsafe-inline'",
+                  "img-src 'self' data: blob: https:",
+                  "font-src 'self' data:",
+                  "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com",
+                  "frame-src https://challenges.cloudflare.com https://*.clerk.accounts.dev",
+                  "worker-src 'self' blob:",
+                  "form-action 'self'",
+                  "base-uri 'self'",
+                  "frame-ancestors 'none'"
+                ],
+                "; "
+              )
+
   pipeline :spa do
     plug :accepts, ["html"]
 
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY"
+      "x-frame-options" => "DENY",
+      "content-security-policy" => @csp_policy
     }
   end
 
