@@ -13,6 +13,7 @@ pytest-e2e.log
 /deps/
 /doc/
 /.fetch
+/tmp/
 erl_crash.dump
 *.ez
 engram-*.tar
