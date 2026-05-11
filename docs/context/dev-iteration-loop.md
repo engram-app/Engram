@@ -6,15 +6,15 @@ How to make changes show up in a browser when iterating locally on this VM. Patt
 
 - **Phoenix** (`make dev`): serves API + the **prod-built** SPA bundle from `priv/static/app/`. Listens on `:4000`.
 - **Vite** (`make frontend-dev` / `bun run dev` in `backend/frontend`): hot-reload dev server on `:5173`. Proxies `/api` and `/socket` back to Phoenix on `:4000`.
-- The user-facing host **`engram.ras.band`** (hosts file alias / external route) **routes to this VM's `:4000`**, i.e. to Phoenix. Vite (:5173) is reachable only as `localhost:5173`.
+- The user-facing host **`app.engram.page`** routes to this VM's Phoenix `:4000` via **Cloudflare → FastRaid nginx → Phoenix**. DNS for `app.engram.page` is proxied through Cloudflare; Cloudflare forwards to the FastRaid (10.0.20.214) nginx reverse proxy, which terminates TLS and upstreams to this dev VM on `:4000`. Vite (:5173) is reachable only as `localhost:5173`.
 
 | Want                                | Hit                                  | Requires                                    |
 | ----------------------------------- | ------------------------------------ | ------------------------------------------- |
 | Frontend hot-reload while editing   | `http://localhost:5173/`         | `make frontend-dev` running                 |
 | Test prod bundle locally            | `http://localhost:4000/`         | `make dev` running + `bun run build`        |
-| Share with friends / external test  | `https://engram.ras.band/`       | `make dev` running + `bun run build`        |
+| Share with friends / external test  | `https://app.engram.page/`       | `make dev` running + `bun run build`        |
 
-> **Important:** `engram.ras.band` only sees what Phoenix serves. To make changes visible there during dev, you must run `bun run build` inside `backend/frontend/` so Phoenix has the new static bundle to ship.
+> **Important:** `app.engram.page` only sees what Phoenix serves. To make changes visible there during dev, you must run `bun run build` inside `backend/frontend/` so Phoenix has the new static bundle to ship.
 
 ## The white-page gotcha (and the fix)
 
@@ -32,7 +32,7 @@ How to make changes show up in a browser when iterating locally on this VM. Patt
 
 **Fix:** `config/dev.exs` sets `:spa_cache_enabled?` to `false`. SpaController checks this flag and skips the persistent_term in dev/test, rebuilding the split on every request. `index.html` is ~1KB so the cost is negligible. Prod keeps the cache (one read per BEAM lifetime).
 
-If you ever see a white page on `:4000` or `engram.ras.band` after a rebuild and the controller cache is somehow re-enabled, the recovery is `make dev-stop && make dev`.
+If you ever see a white page on `:4000` or `app.engram.page` after a rebuild and the controller cache is somehow re-enabled, the recovery is `make dev-stop && make dev`.
 
 ## When to rebuild / restart
 
@@ -41,7 +41,7 @@ If you ever see a white page on `:4000` or `engram.ras.band` after a rebuild and
 | Edit `.ex` file                                 | Phoenix code-reloads automatically (Bandit + `Code.reload!`)  |
 | Edit `config/dev.exs`                           | Restart Phoenix (`make dev-stop && make dev`)                 |
 | Edit `.tsx`/`.ts`/`.css` and viewing on `:5173` | Vite hot-reloads automatically                                |
-| Edit `.tsx`/`.ts`/`.css` and viewing on `:4000` or `engram.ras.band` | `bun run build` in `backend/frontend/`. No Phoenix restart needed (cache disabled in dev). |
+| Edit `.tsx`/`.ts`/`.css` and viewing on `:4000` or `app.engram.page` | `bun run build` in `backend/frontend/`. No Phoenix restart needed (cache disabled in dev). |
 
 ## Background-process recipe
 
@@ -61,8 +61,17 @@ make frontend-dev                                         # Vite :5173 (separate
 > `make dev-stop` also kills any stray listeners on :5173–:5199 as a
 > safety net.
 
-Steer the user to `:5173` for fast feedback. If they're on `engram.ras.band`, every UI change requires `bun run build` first. If the page goes white after a rebuild, suspect SPA cache (verify with the curl/grep above) before suspecting JS errors.
+Steer the user to `:5173` for fast feedback. If they're on `app.engram.page`, every UI change requires `bun run build` first. If the page goes white after a rebuild, suspect SPA cache (verify with the curl/grep above) before suspecting JS errors.
 
-## TODO
+## Hosting path
 
-Document the actual mechanism that makes `engram.ras.band` resolve to this VM's `:4000` (hosts file? Tailscale Funnel? Cloudflare tunnel? reverse proxy on FastRaid?). The "alpha test" plan depends on friends hitting this URL externally — needs a deploy target description, not just a dev-loop description.
+`app.engram.page` is the alpha-test public host. Request flow:
+
+1. Browser → `https://app.engram.page` (Cloudflare DNS, proxied/orange-cloud).
+2. Cloudflare → FastRaid (`10.0.20.214`) over Cloudflare tunnel.
+3. FastRaid nginx terminates TLS and reverse-proxies to this dev VM (Claw) on `:4000`.
+4. Phoenix serves the API + prod-built SPA from `priv/static/app/`.
+
+Because step 4 is **this** machine running `make dev`, every UI change still needs `bun run build` to be visible to external testers — same as hitting `localhost:4000` here. Pure-backend changes don't need a rebuild (Phoenix code-reloads on file save).
+
+The marketing site at `engram.page` (apex) is unrelated and points elsewhere — only the `app.` subdomain proxies to this dev VM.

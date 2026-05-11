@@ -49,7 +49,8 @@ defmodule EngramWeb.Router do
   end
 
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
-  # validate client credentials and PKCE themselves; no router-level auth.
+  # validate client_id, redirect_uri, and PKCE themselves; no router-level
+  # auth. DCR mints public PKCE clients with no `client_secret`.
   scope "/oauth", EngramWeb do
     pipe_through :oauth_api
 
@@ -60,9 +61,10 @@ defmodule EngramWeb.Router do
 
   # OAuth 2.1 user-facing authorize endpoint (RFC 6749 §4.1.1).
   # PUBLIC: browsers hit this via 302 from the OAuth client and do not
-  # carry Bearer headers on navigation. The controller validates client
-  # credentials + PKCE then 302s to the SPA at /oauth/consent, which
-  # mediates consent under the user's existing JWT session.
+  # carry Bearer headers on navigation. The controller validates
+  # client_id + redirect_uri + PKCE then 302s to the SPA at
+  # /oauth/consent, which mediates consent under the user's existing
+  # JWT session.
   scope "/oauth", EngramWeb do
     pipe_through :oauth_api
 
