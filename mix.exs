@@ -75,9 +75,6 @@ defmodule Engram.MixProject do
       # Markdown parsing
       {:earmark, "~> 1.4"},
 
-      # CSS
-      {:tailwind, "~> 0.2", runtime: Mix.env() == :dev},
-
       # HTTP client (Qdrant, Voyage AI)
       {:req, "~> 0.5"},
 
@@ -120,7 +117,7 @@ defmodule Engram.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
-      "assets.deploy": ["tailwind marketing --minify", "phx.digest"]
+      "assets.deploy": ["phx.digest"]
     ]
   end
 end

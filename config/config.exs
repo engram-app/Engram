@@ -102,18 +102,6 @@ config :phoenix, :json_library, Jason
 # Stripe billing
 config :stripity_stripe, api_key: "sk_test_placeholder"
 
-# Tailwind CSS (marketing pages only — React SPA uses its own Tailwind via Vite)
-config :tailwind,
-  version: "4.1.4",
-  marketing: [
-    args: ~w(
-      --input=assets/css/marketing.css
-      --output=priv/static/css/marketing.css
-      --config=assets/tailwind.config.js
-    ),
-    cd: Path.expand("..", __DIR__)
-  ]
-
 # Key provider defaults (overridden by runtime.exs via env vars)
 config :engram,
   key_provider: Engram.Crypto.KeyProvider.Local,

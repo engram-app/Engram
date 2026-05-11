@@ -17,7 +17,7 @@ defmodule EngramWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(app assets css fonts images favicon.ico robots.txt)
+  def static_paths, do: ~w(app favicon.ico robots.txt)
 
   def router do
     quote do

@@ -42,9 +42,7 @@ config :engram, EngramWeb.Endpoint,
   # holding :5173+ across restarts. Run `make frontend-dev` separately
   # when you want hot-reload at :5173, or `bun run build` to refresh the
   # bundle Phoenix serves at :4000 / app.engram.page.
-  watchers: [
-    tailwind: {Tailwind, :install_and_run, [:marketing, ~w(--watch)]}
-  ]
+  watchers: []
 
 # ## SSL Support
 #

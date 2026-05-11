@@ -1,3 +1,0 @@
-@import "tailwindcss" source(none);
-@source "../../lib/engram_web/components/**/*.{heex,ex}";
-@source "../../lib/engram_web/controllers/**/*.{heex,ex}";
