@@ -11,10 +11,12 @@ defmodule Engram.SpaIntegrityTest do
       File.mkdir_p!(asset_dir)
       File.write!(Path.join(asset_dir, "index-abc.js"), "console.log('hi')")
       File.write!(Path.join(asset_dir, "index-def.css"), "body{}")
+      File.write!(Path.join(asset_dir, "chunk-ghi.js"), "export {}")
 
       File.write!(Path.join(dir, "index.html"), """
       <!DOCTYPE html><html><head>
       <link rel="stylesheet" href="/assets/index-def.css">
+      <link rel="modulepreload" href="/assets/chunk-ghi.js">
       <script type="module" src="/assets/index-abc.js"></script>
       </head><body></body></html>
       """)

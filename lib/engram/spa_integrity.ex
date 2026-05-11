@@ -14,7 +14,14 @@ defmodule Engram.SpaIntegrity do
   Gated by `:engram, :spa_integrity_check_enabled` (defaults to false so
   test/dev — where vite serves the SPA separately — don't have to maintain
   a fake build). `runtime.exs` flips it on in `:prod`.
+
+  Note: this is a static check against `index.html`. Dynamic `import()`
+  calls embedded in JS bundles (Vite code-splits not referenced from a
+  `<link rel="modulepreload">` tag) are NOT validated here; missing
+  chunks of that shape surface only at runtime as a failed fetch.
   """
+
+  require Logger
 
   @asset_ref_regex ~r{(?:src|href)=["'](/assets/[^"']+)["']}
 
@@ -38,7 +45,7 @@ defmodule Engram.SpaIntegrity do
           content
 
         {:error, reason} ->
-          raise "SPA integrity check failed: cannot read #{index_path} (#{inspect(reason)})"
+          fail!("cannot read #{index_path} (#{inspect(reason)})")
       end
 
     missing =
@@ -51,12 +58,16 @@ defmodule Engram.SpaIntegrity do
       end)
 
     case missing do
-      [] ->
-        :ok
-
-      refs ->
-        raise "SPA integrity check failed: index.html references missing assets: " <>
-                Enum.join(refs, ", ")
+      [] -> :ok
+      refs -> fail!("index.html references missing assets: " <> Enum.join(refs, ", "))
     end
+  end
+
+  # Log before raising so the structured log pipeline captures the failure
+  # before the VM dies — otherwise an OTP :start_error tuple to stderr is the
+  # only signal, and Fly/K8s restart-loops without an obvious cause.
+  defp fail!(reason) do
+    Logger.error("SPA integrity check failed: #{reason}", category: :spa_integrity)
+    raise "SPA integrity check failed: #{reason}"
   end
 end
