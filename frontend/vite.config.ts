@@ -7,7 +7,7 @@ const apiTarget = process.env.VITE_API_TARGET ?? 'http://localhost:4000'
 
 export default defineConfig({
   plugins: [react(), tailwindcss({ plugins: [typography] })],
-  base: '/app/',
+  base: '/',
   build: {
     outDir: '../priv/static/app',
     emptyOutDir: true,

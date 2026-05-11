@@ -186,12 +186,12 @@ defmodule EngramWeb.Router do
     end
   end
 
-  # SPA fallback — serves React app for all /app and /share routes.
-  # Plug.Static in endpoint.ex serves actual asset files first;
-  # only non-file requests reach these catch-all routes.
+  # SPA catch-all — serves the React app at every non-API path.
+  # Plug.Static in endpoint.ex serves real asset files first; only
+  # non-file requests reach these routes. The SPA's own router
+  # handles unknown paths (renders 404 inside the React shell).
   scope "/", EngramWeb do
-    get "/app", SpaController, :index
-    get "/app/*path", SpaController, :index
-    get "/share/*path", SpaController, :index
+    get "/", SpaController, :index
+    get "/*path", SpaController, :index
   end
 end

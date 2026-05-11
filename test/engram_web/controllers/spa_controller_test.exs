@@ -7,8 +7,8 @@ defmodule EngramWeb.SpaControllerTest do
     :ok
   end
 
-  test "GET /app returns HTML with index.html content", %{conn: conn} do
-    conn = get(conn, "/app")
+  test "GET / returns HTML with index.html content", %{conn: conn} do
+    conn = get(conn, "/")
     assert response_content_type(conn, :html)
     assert conn.status == 200
     body = response(conn, 200)
@@ -16,8 +16,8 @@ defmodule EngramWeb.SpaControllerTest do
     assert body =~ "<div id=\"root\">"
   end
 
-  test "GET /app/note/some/path returns index.html (SPA fallback)", %{conn: conn} do
-    conn = get(conn, "/app/note/some/path")
+  test "GET /note/some/path returns index.html (SPA fallback)", %{conn: conn} do
+    conn = get(conn, "/note/some/path")
     assert conn.status == 200
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
@@ -34,8 +34,8 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /app injects runtime config script", %{conn: conn} do
-    body = conn |> get("/app") |> response(200)
+  test "GET / injects runtime config script", %{conn: conn} do
+    body = conn |> get("/") |> response(200)
     assert body =~ "window.__ENGRAM_CONFIG__="
     assert body =~ ~s("authProvider":)
   end

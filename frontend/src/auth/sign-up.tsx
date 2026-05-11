@@ -8,7 +8,7 @@ const ClerkSignUpPage = isClerk
       import('@clerk/clerk-react').then((mod) => ({
         default: () => (
           <main style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}>
-            <mod.SignUp routing="hash" forceRedirectUrl="/app" />
+            <mod.SignUp routing="hash" forceRedirectUrl="/" />
           </main>
         ),
       }))

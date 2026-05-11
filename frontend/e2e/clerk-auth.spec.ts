@@ -23,10 +23,10 @@ const USER_BUTTON = '[data-clerk-component="UserButton"]'
  */
 async function clerkSignIn(page: Page, email: string) {
   // Navigate first so Clerk JS SDK loads on the page
-  await page.goto('/app/sign-in/')
+  await page.goto('/sign-in/')
   await clerk.signIn({ page, emailAddress: email })
-  await page.goto('/app/')
-  await expect(page).toHaveURL(/\/app\/?$/, { timeout: 15_000 })
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
 }
 
 test.describe('Clerk auth provider', () => {
@@ -41,7 +41,7 @@ test.describe('Clerk auth provider', () => {
   })
 
   test('redirects unauthenticated users to sign-in with Clerk UI', async ({ page }) => {
-    await page.goto('/app/')
+    await page.goto('/')
     // Wait for auth provider to finish loading before checking redirect
     await page.getByText('Loading...').waitFor({ state: 'hidden', timeout: 15_000 })
     await expect(page).toHaveURL(/\/sign-in/)
@@ -50,7 +50,7 @@ test.describe('Clerk auth provider', () => {
   })
 
   test('renders Clerk SignUp component', async ({ page }) => {
-    await page.goto('/app/sign-up/')
+    await page.goto('/sign-up/')
     // Wait for Clerk container to attach, then for SDK to render it visible
     await page.locator(SIGN_UP).waitFor({ state: 'attached', timeout: 15_000 })
     await expect(page.locator(SIGN_UP)).toBeVisible({ timeout: 15_000 })
@@ -76,7 +76,7 @@ test.describe('Clerk auth provider', () => {
   })
 
   test('wrong password shows Clerk error', async ({ page }) => {
-    await page.goto('/app/sign-in/')
+    await page.goto('/sign-in/')
     await expect(page.locator(SIGN_IN)).toBeVisible({ timeout: 15_000 })
 
     await page.locator('input[name="identifier"]').fill(state.email)

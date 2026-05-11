@@ -40,9 +40,9 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
   return (
     <ClerkProvider
       publishableKey={clerkPubKey}
-      signInUrl="/app/sign-in"
-      signUpUrl="/app/sign-up"
-      afterSignOutUrl="/app/sign-in"
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
+      afterSignOutUrl="/sign-in"
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>
