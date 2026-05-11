@@ -8,6 +8,7 @@ defmodule Engram.Application do
   @impl true
   def start(_type, _args) do
     Engram.Crypto.Config.validate!()
+    verify_spa_integrity!()
     install_log_redaction_filter()
     EngramWeb.RequestLogger.attach()
 
@@ -43,6 +44,15 @@ defmodule Engram.Application do
         start: {Engram.Crypto.BootCanaryGuard, :start_link, []},
         restart: :temporary
       }
+    end
+  end
+
+  # Gated by config so test/dev (where vite serves the SPA separately,
+  # no priv/static/app build to validate) don't have to maintain a fake
+  # asset tree. runtime.exs enables it in :prod.
+  defp verify_spa_integrity! do
+    if Application.get_env(:engram, :spa_integrity_check_enabled, false) do
+      Engram.SpaIntegrity.verify!()
     end
   end
 
