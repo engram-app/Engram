@@ -19,6 +19,18 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  # SPA shell pipeline — HTML responses with strict browser-security headers.
+  # x-frame-options=DENY is critical for /oauth/consent: without it the consent
+  # UI could be iframed by an attacker site and the approval click hijacked.
+  pipeline :spa do
+    plug :accepts, ["html"]
+
+    plug :put_secure_browser_headers, %{
+      "x-content-type-options" => "nosniff",
+      "x-frame-options" => "DENY"
+    }
+  end
+
   # Stripe webhooks — no auth, raw body for signature verification
   scope "/webhooks", EngramWeb do
     pipe_through :api
@@ -186,12 +198,23 @@ defmodule EngramWeb.Router do
     end
   end
 
-  # SPA catch-all — serves the React app at every non-API path.
-  # Plug.Static in endpoint.ex serves real asset files first; only
-  # non-file requests reach these routes. The SPA's own router
-  # handles unknown paths (renders 404 inside the React shell).
+  # SPA routes — every path here mounts the React app. Whitelisted (not a
+  # blanket /*path catch-all) so unknown URLs hit Phoenix's default 404
+  # instead of silently rendering an HTML 200 over a typo'd API/OAuth/asset
+  # request. Every new top-level SPA route must be added here.
   scope "/", EngramWeb do
+    pipe_through :spa
+
     get "/", SpaController, :index
-    get "/*path", SpaController, :index
+    get "/sign-in", SpaController, :index
+    get "/sign-up", SpaController, :index
+    get "/link", SpaController, :index
+    get "/search", SpaController, :index
+    get "/billing", SpaController, :index
+    get "/settings", SpaController, :index
+    get "/settings/*path", SpaController, :index
+    get "/note/*path", SpaController, :index
+    get "/oauth/consent", SpaController, :index
+    get "/share/*path", SpaController, :index
   end
 end

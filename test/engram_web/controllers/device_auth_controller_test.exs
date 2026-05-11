@@ -19,6 +19,8 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert is_binary(resp["device_code"])
       assert String.match?(resp["user_code"], ~r/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
       assert is_binary(resp["verification_url"])
+      assert resp["verification_url"] =~ ~r{/link$}
+      refute resp["verification_url"] =~ "/app/"
       assert resp["expires_in"] == 300
       assert resp["interval"] == 5
     end

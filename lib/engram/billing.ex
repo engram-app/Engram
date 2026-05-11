@@ -274,7 +274,7 @@ defmodule Engram.Billing do
     end
   end
 
-  defp success_url, do: EngramWeb.Endpoint.url() <> "/app/billing?success=true"
-  defp cancel_url, do: EngramWeb.Endpoint.url() <> "/app/billing?canceled=true"
-  defp return_url, do: EngramWeb.Endpoint.url() <> "/app/billing"
+  defp success_url, do: EngramWeb.Endpoint.url() <> "/billing?success=true"
+  defp cancel_url, do: EngramWeb.Endpoint.url() <> "/billing?canceled=true"
+  defp return_url, do: EngramWeb.Endpoint.url() <> "/billing"
 end

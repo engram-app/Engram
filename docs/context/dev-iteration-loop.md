@@ -10,9 +10,9 @@ How to make changes show up in a browser when iterating locally on this VM. Patt
 
 | Want                                | Hit                                  | Requires                                    |
 | ----------------------------------- | ------------------------------------ | ------------------------------------------- |
-| Frontend hot-reload while editing   | `http://localhost:5173/app/`         | `make frontend-dev` running                 |
-| Test prod bundle locally            | `http://localhost:4000/app/`         | `make dev` running + `bun run build`        |
-| Share with friends / external test  | `https://engram.ras.band/app/`       | `make dev` running + `bun run build`        |
+| Frontend hot-reload while editing   | `http://localhost:5173/`         | `make frontend-dev` running                 |
+| Test prod bundle locally            | `http://localhost:4000/`         | `make dev` running + `bun run build`        |
+| Share with friends / external test  | `https://engram.ras.band/`       | `make dev` running + `bun run build`        |
 
 > **Important:** `engram.ras.band` only sees what Phoenix serves. To make changes visible there during dev, you must run `bun run build` inside `backend/frontend/` so Phoenix has the new static bundle to ship.
 
@@ -26,7 +26,7 @@ How to make changes show up in a browser when iterating locally on this VM. Patt
 
 **Symptom signature:**
 
-- `curl http://localhost:4000/app/ | grep index-` returns an asset hash that is **not** present in `priv/static/app/assets/`.
+- `curl http://localhost:4000/ | grep index-` returns an asset hash that is **not** present in `priv/static/app/assets/`.
 - DevTools Network tab shows 404 on the JS module.
 - DevTools Console shows nothing (the failure is at `<script type="module">` resolution, before any app code runs).
 

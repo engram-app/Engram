@@ -4,7 +4,7 @@ defmodule EngramWeb.DeviceAuthController do
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
-  @verification_path "/app/link"
+  @verification_path "/link"
 
   def start(conn, params) do
     client_id = Map.get(params, "client_id", "unknown")
