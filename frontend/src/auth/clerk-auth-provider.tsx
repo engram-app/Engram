@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { AuthContext, type AuthAdapter } from './auth-context'
 import { setTokenGetter } from '../api/client'
 import { config } from '../config'
+import { ROUTES } from '../routes'
 
 const clerkPubKey = config.clerkPublishableKey
 
@@ -40,9 +41,9 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
   return (
     <ClerkProvider
       publishableKey={clerkPubKey}
-      signInUrl="/sign-in"
-      signUpUrl="/sign-up"
-      afterSignOutUrl="/sign-in"
+      signInUrl={ROUTES.SIGN_IN}
+      signUpUrl={ROUTES.SIGN_UP}
+      afterSignOutUrl={ROUTES.SIGN_IN}
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>

@@ -206,6 +206,11 @@ if phx_hosts do
 end
 
 if config_env() == :prod do
+  # Boot-time guard against shipping a release whose index.html references
+  # bundle hashes that don't exist on disk (stale Docker layer cache, etc).
+  # See Engram.SpaIntegrity and docs/context/docker-build-cache-pitfalls.md.
+  config :engram, :spa_integrity_check_enabled, true
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

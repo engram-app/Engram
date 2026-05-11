@@ -22,12 +22,35 @@ defmodule EngramWeb.Router do
   # SPA shell pipeline — HTML responses with strict browser-security headers.
   # x-frame-options=DENY is critical for /oauth/consent: without it the consent
   # UI could be iframed by an attacker site and the approval click hijacked.
+  #
+  # CSP notes: script-src/style-src use 'unsafe-inline' because SpaController
+  # injects a runtime-config <script> into index.html (see
+  # EngramWeb.SpaController.config_script/0). TODO: upgrade to per-request
+  # nonces and drop 'unsafe-inline' from script-src.
+  @csp_policy Enum.join(
+                [
+                  "default-src 'self'",
+                  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com",
+                  "style-src 'self' 'unsafe-inline'",
+                  "img-src 'self' data: blob: https:",
+                  "font-src 'self' data:",
+                  "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com",
+                  "frame-src https://challenges.cloudflare.com https://*.clerk.accounts.dev",
+                  "worker-src 'self' blob:",
+                  "form-action 'self'",
+                  "base-uri 'self'",
+                  "frame-ancestors 'none'"
+                ],
+                "; "
+              )
+
   pipeline :spa do
     plug :accepts, ["html"]
 
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY"
+      "x-frame-options" => "DENY",
+      "content-security-policy" => @csp_policy
     }
   end
 
@@ -49,7 +72,8 @@ defmodule EngramWeb.Router do
   end
 
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
-  # validate client credentials and PKCE themselves; no router-level auth.
+  # validate client_id, redirect_uri, and PKCE themselves; no router-level
+  # auth. DCR mints public PKCE clients with no `client_secret`.
   scope "/oauth", EngramWeb do
     pipe_through :oauth_api
 
@@ -60,9 +84,10 @@ defmodule EngramWeb.Router do
 
   # OAuth 2.1 user-facing authorize endpoint (RFC 6749 §4.1.1).
   # PUBLIC: browsers hit this via 302 from the OAuth client and do not
-  # carry Bearer headers on navigation. The controller validates client
-  # credentials + PKCE then 302s to the SPA at /oauth/consent, which
-  # mediates consent under the user's existing JWT session.
+  # carry Bearer headers on navigation. The controller validates
+  # client_id + redirect_uri + PKCE then 302s to the SPA at
+  # /oauth/consent, which mediates consent under the user's existing
+  # JWT session.
   scope "/oauth", EngramWeb do
     pipe_through :oauth_api
 

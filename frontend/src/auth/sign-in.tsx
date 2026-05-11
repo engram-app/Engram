@@ -1,17 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { useSearchParams } from 'react-router'
 import { config } from '../config'
+import { safeReturnTo } from './safe-return-to'
 
 const isClerk = config.authProvider === 'clerk'
-
-// Reject return_to values that aren't a SPA-relative path. Prevents
-// open-redirect via /sign-in?return_to=https://attacker/...
-function safeReturnTo(raw: string | null): string {
-  if (!raw) return '/'
-  if (!raw.startsWith('/')) return '/'
-  if (raw.startsWith('//')) return '/'
-  return raw
-}
 
 const ClerkSignInPage = isClerk
   ? lazy(() =>

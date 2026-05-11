@@ -1,4 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router'
+import { ROUTES } from '../routes'
 import { useAuthAdapter } from './use-auth-adapter'
 
 export default function AuthGuard() {
@@ -12,9 +13,9 @@ export default function AuthGuard() {
   if (!isSignedIn) {
     const returnTo = location.pathname + location.search + location.hash
     const target =
-      returnTo && returnTo !== '/'
-        ? `/sign-in?return_to=${encodeURIComponent(returnTo)}`
-        : '/sign-in'
+      returnTo && returnTo !== ROUTES.HOME
+        ? `${ROUTES.SIGN_IN}?return_to=${encodeURIComponent(returnTo)}`
+        : ROUTES.SIGN_IN
     return <Navigate to={target} replace />
   }
 

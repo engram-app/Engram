@@ -5,11 +5,13 @@ import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
+import NotFoundPage from './not-found'
 import ApiKeysPage from './settings/api-keys-page'
 import BillingPlaceholder from './settings/billing-placeholder'
 import EncryptionPage from './settings/encryption-page'
 import SettingsLayout from './settings/settings-layout'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
+import { ROUTES } from './routes'
 import Dashboard from './viewer/dashboard'
 import NotePage from './viewer/note-page'
 import SearchPage from './viewer/search-page'
@@ -17,8 +19,8 @@ import SearchPage from './viewer/search-page'
 export const router = createBrowserRouter(
   [
     // Public routes
-    { path: '/sign-in', element: <SignInPage /> },
-    { path: '/sign-up', element: <SignUpPage /> },
+    { path: ROUTES.SIGN_IN, element: <SignInPage /> },
+    { path: ROUTES.SIGN_UP, element: <SignUpPage /> },
 
     // Authenticated routes
     {
@@ -27,7 +29,7 @@ export const router = createBrowserRouter(
         {
           element: <AppLayout />,
           children: [
-            { path: '/', element: <Dashboard /> },
+            { path: ROUTES.HOME, element: <Dashboard /> },
             { path: '/note/*', element: <NotePage /> },
             { path: '/search', element: <SearchPage /> },
             { path: '/billing', element: <BillingPage /> },
@@ -43,9 +45,12 @@ export const router = createBrowserRouter(
             },
           ],
         },
-        { path: '/link', element: <DeviceLinkPage /> },
-        { path: '/oauth/consent', element: <OAuthAuthorizePage /> },
+        { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
+        { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
       ],
     },
+
+    // Catch-all (public — typos shouldn't trigger Clerk redirect)
+    { path: '*', element: <NotFoundPage /> },
   ],
 )
