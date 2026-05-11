@@ -66,6 +66,7 @@ defmodule Engram.SpaIntegrity do
   # Log before raising so the structured log pipeline captures the failure
   # before the VM dies — otherwise an OTP :start_error tuple to stderr is the
   # only signal, and Fly/K8s restart-loops without an obvious cause.
+  @spec fail!(String.t()) :: no_return()
   defp fail!(reason) do
     Logger.error("SPA integrity check failed: #{reason}", category: :spa_integrity)
     raise "SPA integrity check failed: #{reason}"
