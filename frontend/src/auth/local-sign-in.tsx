@@ -1,11 +1,8 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
+import { ROUTES } from '../routes'
+import { safeReturnTo } from './safe-return-to'
 import { useAuthAdapter } from './use-auth-adapter'
-
-function safeReturnTo(raw: string | null): string {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/'
-  return raw
-}
 
 export default function LocalSignIn() {
   const { login, isSignedIn } = useAuthAdapter()
@@ -78,7 +75,7 @@ export default function LocalSignIn() {
 
         <p className="text-center text-sm text-gray-500">
           Don't have an account?{' '}
-          <Link to="/sign-up" className="text-blue-600 hover:underline">Sign up</Link>
+          <Link to={ROUTES.SIGN_UP} className="text-blue-600 hover:underline">Sign up</Link>
         </p>
       </form>
     </main>

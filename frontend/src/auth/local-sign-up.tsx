@@ -1,5 +1,6 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { ROUTES } from '../routes'
 import { useAuthAdapter } from './use-auth-adapter'
 
 export default function LocalSignUp() {
@@ -13,7 +14,7 @@ export default function LocalSignUp() {
 
   // Navigate after auth state propagates (React 18 batching)
   useEffect(() => {
-    if (isSignedIn) navigate('/', { replace: true })
+    if (isSignedIn) navigate(ROUTES.HOME, { replace: true })
   }, [isSignedIn, navigate])
 
   async function handleSubmit(e: FormEvent) {
@@ -90,7 +91,7 @@ export default function LocalSignUp() {
 
         <p className="text-center text-sm text-gray-500">
           Already have an account?{' '}
-          <Link to="/sign-in" className="text-blue-600 hover:underline">Sign in</Link>
+          <Link to={ROUTES.SIGN_IN} className="text-blue-600 hover:underline">Sign in</Link>
         </p>
       </form>
     </main>
