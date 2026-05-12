@@ -258,5 +258,35 @@ defmodule Engram.AwsKms.ExAwsTest do
         :telemetry.detach("kms-failure")
       end
     end
+
+    test "emits :request and :failure with error_class :exception when the inner call raises" do
+      prev_key_id = Application.get_env(:engram, :aws_kms_key_id)
+      Application.delete_env(:engram, :aws_kms_key_id)
+
+      :telemetry.attach_many(
+        "kms-exception",
+        [
+          [:engram, :crypto, :kms, :request],
+          [:engram, :crypto, :kms, :failure]
+        ],
+        fn name, _meas, meta, _ -> send(self(), {name, meta}) end,
+        nil
+      )
+
+      try do
+        assert_raise ArgumentError, fn ->
+          Engram.AwsKms.ExAws.encrypt("pt", %{"user_id" => "1", "purpose" => "dek_wrap"})
+        end
+
+        assert_received {[:engram, :crypto, :kms, :request],
+                         %{op: :encrypt, status: :error, error_class: :exception}}
+
+        assert_received {[:engram, :crypto, :kms, :failure],
+                         %{op: :encrypt, error_class: :exception}}
+      after
+        :telemetry.detach("kms-exception")
+        if prev_key_id, do: Application.put_env(:engram, :aws_kms_key_id, prev_key_id)
+      end
+    end
   end
 end

@@ -145,29 +145,57 @@ defmodule Engram.AwsKms.ExAws do
 
   defp instrument(op, fun) do
     start = System.monotonic_time()
-    result = fun.()
-    duration_us = System.convert_time_unit(System.monotonic_time() - start, :native, :microsecond)
 
-    case result do
-      :ok ->
-        :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
-        :ok
+    try do
+      result = fun.()
 
-      {:ok, _} = ok ->
-        :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
-        ok
+      duration_us =
+        System.convert_time_unit(System.monotonic_time() - start, :native, :microsecond)
 
-      {:error, reason} = err ->
-        error_class = classify_for_telemetry(reason)
+      case result do
+        :ok ->
+          :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
+          :ok
+
+        {:ok, _} = ok ->
+          :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
+          ok
+
+        {:error, reason} = err ->
+          error_class = classify_for_telemetry(reason)
+
+          :telemetry.execute(
+            @event_request,
+            %{duration_us: duration_us},
+            %{op: op, status: :error, error_class: error_class}
+          )
+
+          :telemetry.execute(
+            @event_failure,
+            %{count: 1, duration_us: duration_us},
+            %{op: op, error_class: error_class}
+          )
+
+          err
+      end
+    rescue
+      e ->
+        duration_us =
+          System.convert_time_unit(System.monotonic_time() - start, :native, :microsecond)
 
         :telemetry.execute(
           @event_request,
           %{duration_us: duration_us},
-          %{op: op, status: :error, error_class: error_class}
+          %{op: op, status: :error, error_class: :exception}
         )
 
-        :telemetry.execute(@event_failure, %{count: 1}, %{op: op, error_class: error_class})
-        err
+        :telemetry.execute(
+          @event_failure,
+          %{count: 1, duration_us: duration_us},
+          %{op: op, error_class: :exception}
+        )
+
+        reraise e, __STACKTRACE__
     end
   end
 
