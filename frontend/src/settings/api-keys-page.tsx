@@ -17,8 +17,8 @@ export default function ApiKeysPage() {
     <article className="space-y-6">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">API Keys</h1>
-          <p className="mt-1 text-sm text-gray-600">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">API Keys</h1>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
             Used by the Obsidian plugin and MCP clients to access your vault.
           </p>
         </div>
@@ -32,13 +32,13 @@ export default function ApiKeysPage() {
       </header>
 
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="rounded-md bg-red-50 dark:bg-red-950 px-3 py-2 text-sm text-red-700 dark:text-red-200" role="alert">
           Failed to load API keys: {error instanceof Error ? error.message : 'unknown error'}
         </p>
       )}
 
       {isLoading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
       ) : keys && keys.length > 0 ? (
         <ApiKeyTable keys={keys} />
       ) : (
@@ -62,8 +62,8 @@ export default function ApiKeysPage() {
 
 function EmptyState() {
   return (
-    <section className="rounded-lg border border-dashed border-gray-300 p-8 text-center">
-      <p className="text-sm text-gray-600">
+    <section className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-8 text-center">
+      <p className="text-sm text-gray-600 dark:text-gray-300">
         No API keys yet. Generate one to connect Claude Desktop, MCP, or the Obsidian plugin.
       </p>
     </section>
@@ -74,9 +74,9 @@ function ApiKeyTable({ keys }: { keys: ApiKey[] }) {
   const revoke = useRevokeApiKey()
 
   return (
-    <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+    <section className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
       <table className="w-full text-sm">
-        <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <thead className="bg-gray-50 dark:bg-gray-950 text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
           <tr>
             <th className="px-4 py-3 font-medium">Name</th>
             <th className="px-4 py-3 font-medium">Key</th>
@@ -85,13 +85,13 @@ function ApiKeyTable({ keys }: { keys: ApiKey[] }) {
             <th className="px-4 py-3" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
           {keys.map((k) => (
             <tr key={k.id}>
-              <td className="px-4 py-3 font-medium text-gray-900">{k.name || '(unnamed)'}</td>
-              <td className="px-4 py-3 font-mono text-xs text-gray-500">engram_••••••</td>
-              <td className="px-4 py-3 text-gray-600">{formatDate(k.created_at)}</td>
-              <td className="px-4 py-3 text-gray-600">
+              <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{k.name || '(unnamed)'}</td>
+              <td className="px-4 py-3 font-mono text-xs text-gray-500 dark:text-gray-400">engram_••••••</td>
+              <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{formatDate(k.created_at)}</td>
+              <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                 {k.last_used ? formatDate(k.last_used) : '—'}
               </td>
               <td className="px-4 py-3 text-right">
@@ -141,16 +141,16 @@ function CreateKeyModal({
     <ModalShell onClose={onClose} title="New API Key">
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
-          <span className="text-sm font-medium text-gray-700">Name</span>
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Name</span>
           <input
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. iPhone MCP"
             maxLength={64}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
-          <span className="mt-1 block text-xs text-gray-500">
+          <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
             Helps you identify the key later — pick something memorable.
           </span>
         </label>
@@ -167,7 +167,7 @@ function CreateKeyModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            className="rounded-md px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             Cancel
           </button>
@@ -209,7 +209,7 @@ function RevealKeyModal({
   return (
     <ModalShell onClose={onClose} title="Save your API key">
       <div className="space-y-4">
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <p className="rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
           This is the only time the key will be shown. Copy it now and store it somewhere safe.
         </p>
 
@@ -220,7 +220,7 @@ function RevealKeyModal({
             value={createdKey.key}
             onFocus={selectAll}
             onClick={selectAll}
-            className="flex-1 min-w-0 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 font-mono text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="flex-1 min-w-0 rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             aria-label="API key"
           />
           <button
@@ -246,7 +246,7 @@ function RevealKeyModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+            className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-800"
           >
             Done
           </button>
@@ -334,11 +334,11 @@ function ModalShell({
       onClick={onClose}
     >
       <article
-        className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl"
+        className="w-full max-w-md rounded-lg bg-white dark:bg-gray-900 p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="mb-4">
-          <h2 id="modal-title" className="text-lg font-semibold text-gray-900">
+          <h2 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             {title}
           </h2>
         </header>

@@ -12,15 +12,15 @@ export default function EncryptionPage() {
   const { data: vaults, isLoading } = useVaults()
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading…</p>
+    return <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
   }
 
   if (!vaults || vaults.length === 0) {
     return (
       <article className="space-y-4">
-        <h1 className="text-2xl font-bold text-gray-900">Encryption at Rest</h1>
-        <section className="rounded-lg border border-dashed border-gray-300 p-8 text-center">
-          <p className="text-sm text-gray-600">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Encryption at Rest</h1>
+        <section className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-8 text-center">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
             Connect a vault from the Obsidian plugin to enable encryption.
           </p>
         </section>
@@ -31,8 +31,8 @@ export default function EncryptionPage() {
   return (
     <article className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-gray-900">Encryption at Rest</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Encryption at Rest</h1>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
           {vaults.length === 1
             ? 'Vault encryption status.'
             : `${vaults.length} vaults — manage encryption per vault.`}
@@ -58,12 +58,12 @@ function VaultEncryptionCard({ vault }: { vault: Vault }) {
   const [confirming, setConfirming] = useState(false)
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
+    <section className="rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 space-y-4">
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-gray-900">{vault.name}</h2>
+          <h2 className="truncate text-base font-semibold text-gray-900 dark:text-gray-100">{vault.name}</h2>
           {vault.is_default && (
-            <p className="text-xs text-gray-500">Default vault</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Default vault</p>
           )}
         </div>
         <StatusBadge status={vault.encryption_status} />
@@ -71,12 +71,12 @@ function VaultEncryptionCard({ vault }: { vault: Vault }) {
 
       {vault.encryption_status === 'none' && (
         <>
-          <p className="text-sm text-gray-700">
+          <p className="text-sm text-gray-700 dark:text-gray-200">
             Notes and vector payloads are stored as plaintext on the server. Enabling encryption
             protects your data with a key derived from your account.
           </p>
           {vault.cooldown_days != null && vault.cooldown_days > 0 && (
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
               After enabling, you cannot disable encryption for {vault.cooldown_days} days.
             </p>
           )}
@@ -111,7 +111,7 @@ function VaultEncryptionCard({ vault }: { vault: Vault }) {
       )}
 
       {vault.encryption_status === 'encrypted' && (
-        <p className="text-sm text-gray-700">
+        <p className="text-sm text-gray-700 dark:text-gray-200">
           All notes and vector payloads are encrypted.
           {vault.encrypted_at && (
             <> Enabled {new Date(vault.encrypted_at).toLocaleDateString()}.</>
@@ -125,30 +125,30 @@ function VaultEncryptionCard({ vault }: { vault: Vault }) {
 type BadgeStyle = { bg: string; text: string; dot: string; label: string }
 
 const STATUS_STYLES: Record<EncryptionStatus, BadgeStyle> = {
-  none: { bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-400', label: 'Not encrypted' },
+  none: { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-200', dot: 'bg-gray-400', label: 'Not encrypted' },
   encrypting: {
-    bg: 'bg-blue-50',
-    text: 'text-blue-700',
+    bg: 'bg-blue-50 dark:bg-blue-950',
+    text: 'text-blue-700 dark:text-blue-300',
     dot: 'bg-blue-500 animate-pulse',
     label: 'Encrypting…',
   },
   encrypted: {
-    bg: 'bg-green-50',
-    text: 'text-green-700',
+    bg: 'bg-green-50 dark:bg-green-950',
+    text: 'text-green-700 dark:text-green-300',
     dot: 'bg-green-500',
     label: 'Encrypted',
   },
   decrypt_pending: {
-    bg: 'bg-amber-50',
-    text: 'text-amber-700',
+    bg: 'bg-amber-50 dark:bg-amber-950',
+    text: 'text-amber-700 dark:text-amber-300',
     dot: 'bg-amber-500 animate-pulse',
     label: 'Decrypt pending…',
   },
 }
 
 const UNKNOWN_STYLE: BadgeStyle = {
-  bg: 'bg-gray-100',
-  text: 'text-gray-700',
+  bg: 'bg-gray-100 dark:bg-gray-800',
+  text: 'text-gray-700 dark:text-gray-200',
   dot: 'bg-gray-400',
   label: 'Unknown',
 }
@@ -183,10 +183,10 @@ function ProgressView({
 
   return (
     <section aria-live="polite" className="space-y-2">
-      <p className="text-sm text-gray-700">
+      <p className="text-sm text-gray-700 dark:text-gray-200">
         {verb} {processed.toLocaleString()} of {total.toLocaleString()} notes ({percent}%)
       </p>
-      <div className="h-2 overflow-hidden rounded-full bg-gray-200">
+      <div className="h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
         <div
           className="h-full rounded-full bg-blue-500 transition-all"
           style={{ width: `${percent}%` }}
@@ -210,9 +210,9 @@ function ConfirmEncrypt({
   onConfirm: () => void
 }) {
   return (
-    <section className="rounded-md border border-amber-200 bg-amber-50 p-4 space-y-3">
-      <p className="text-sm font-medium text-amber-900">Encrypt this vault?</p>
-      <ul className="ml-4 list-disc space-y-1 text-sm text-amber-800">
+    <section className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4 space-y-3">
+      <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Encrypt this vault?</p>
+      <ul className="ml-4 list-disc space-y-1 text-sm text-amber-800 dark:text-amber-300">
         <li>All existing notes will be re-encrypted in the background.</li>
         <li>Vector search continues to work — payloads are encrypted too.</li>
         {cooldownDays != null && cooldownDays > 0 && (
@@ -230,7 +230,7 @@ function ConfirmEncrypt({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+          className="rounded-md px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
         >
           Cancel
         </button>

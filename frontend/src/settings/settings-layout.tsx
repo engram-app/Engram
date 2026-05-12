@@ -11,7 +11,7 @@ export default function SettingsLayout() {
   return (
     <section className="mx-auto flex max-w-5xl gap-8 py-2">
       <nav aria-label="Settings sections" className="w-48 shrink-0">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Settings
         </h2>
         <ul className="space-y-1">
@@ -22,8 +22,8 @@ export default function SettingsLayout() {
                 className={({ isActive }) =>
                   `block rounded-md px-3 py-2 text-sm transition-colors ${
                     isActive
-                      ? 'bg-blue-50 font-medium text-blue-700'
-                      : 'text-gray-700 hover:bg-gray-100'
+                      ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
+                      : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
                   }`
                 }
               >

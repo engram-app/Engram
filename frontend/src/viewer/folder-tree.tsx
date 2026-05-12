@@ -50,13 +50,13 @@ export default function FolderTree() {
     : null
 
   if (isLoading) {
-    return <p className="px-3 py-2 text-xs text-gray-500">Loading…</p>
+    return <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">Loading…</p>
   }
   if (isError) {
-    return <p className="px-3 py-2 text-xs text-red-600">Failed to load folders.</p>
+    return <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">Failed to load folders.</p>
   }
   if (!folders || folders.length === 0) {
-    return <p className="px-3 py-2 text-xs text-gray-500">No notes yet.</p>
+    return <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">No notes yet.</p>
   }
 
   const tree = buildTree(folders)
@@ -115,11 +115,11 @@ function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={isOpen}
-        className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-gray-700 hover:bg-gray-100"
+        className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         <span
-          className={`shrink-0 text-[10px] text-gray-400 transition-transform ${
+          className={`shrink-0 text-[10px] text-gray-400 dark:text-gray-500 transition-transform ${
             isOpen ? 'rotate-90' : ''
           }`}
           aria-hidden="true"
@@ -164,7 +164,7 @@ function FolderFiles({
   if (isLoading) {
     return (
       <li
-        className="px-1 py-0.5 text-xs text-gray-400"
+        className="px-1 py-0.5 text-xs text-gray-400 dark:text-gray-500"
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         …
@@ -203,8 +203,8 @@ function NoteLeaf({
         aria-current={isSelected ? 'page' : undefined}
         className={`flex items-center gap-1 rounded px-1 py-0.5 ${
           isSelected
-            ? 'bg-blue-50 font-medium text-blue-700'
-            : 'text-gray-700 hover:bg-gray-100'
+            ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
+            : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
         }`}
         style={{ paddingLeft: `${depth * 12 + 16}px` }}
       >
@@ -243,7 +243,7 @@ function FolderIcon({ open }: { open: boolean }) {
     <svg
       aria-hidden="true"
       viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-500"
+      className="h-3.5 w-3.5 shrink-0 text-gray-500 dark:text-gray-400"
       fill="currentColor"
     >
       {open ? (
@@ -260,7 +260,7 @@ function FileIcon() {
     <svg
       aria-hidden="true"
       viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-400"
+      className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500"
       fill="currentColor"
     >
       <path d="M4 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.414a1 1 0 0 0-.293-.707L9.293 1.293A1 1 0 0 0 8.586 1H4zm5 0v4a1 1 0 0 0 1 1h3" />

@@ -18,7 +18,7 @@ export default function NotePage() {
   }
 
   if (error) {
-    return <p className="text-red-600">Failed to load note: {error.message}</p>
+    return <p className="text-red-600 dark:text-red-400">Failed to load note: {error.message}</p>
   }
 
   if (!note) {

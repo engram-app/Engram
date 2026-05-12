@@ -9,23 +9,23 @@ export default function SearchPage() {
 
   return (
     <section className="mx-auto max-w-3xl">
-      <h1 className="mb-4 text-xl font-semibold text-gray-900">Search</h1>
+      <h1 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-100">Search</h1>
       <input
         type="search"
         placeholder="Search your notes…"
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        className="mb-6 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+        className="mb-6 w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
         autoFocus
       />
 
-      {isLoading && <p className="text-sm text-gray-500">Searching…</p>}
+      {isLoading && <p className="text-sm text-gray-500 dark:text-gray-400">Searching…</p>}
       {error && (
-        <p className="text-sm text-red-600">Search failed: {error.message}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">Search failed: {error.message}</p>
       )}
 
       {results && results.length === 0 && deferredQuery && !isLoading && (
-        <p className="text-sm text-gray-500">No results for "{deferredQuery}"</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">No results for "{deferredQuery}"</p>
       )}
 
       {results && results.length > 0 && (
@@ -39,7 +39,7 @@ export default function SearchPage() {
       )}
 
       {!deferredQuery && !isLoading && (
-        <p className="text-sm text-gray-400">Type to search your notes.</p>
+        <p className="text-sm text-gray-400 dark:text-gray-500">Type to search your notes.</p>
       )}
     </section>
   )
@@ -51,25 +51,25 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
   return (
     <Link
       to={href}
-      className="block rounded-md border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:bg-blue-50/40"
+      className="block rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 transition hover:border-blue-300 hover:bg-blue-50/40 dark:hover:border-blue-700 dark:hover:bg-blue-950/40"
     >
       {result.folder && (
-        <p className="text-xs text-gray-400">{result.folder}</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500">{result.folder}</p>
       )}
-      <p className="mt-0.5 text-base font-medium text-gray-900">
+      <p className="mt-0.5 text-base font-medium text-gray-900 dark:text-gray-100">
         {result.title || lastSegment(result.path)}
       </p>
       {result.heading_path && result.heading_path !== result.title && (
-        <p className="mt-0.5 text-xs text-gray-500">↳ {result.heading_path}</p>
+        <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">↳ {result.heading_path}</p>
       )}
       {result.snippet && (
-        <p className="mt-2 text-sm text-gray-700 line-clamp-3">
+        <p className="mt-2 text-sm text-gray-700 dark:text-gray-200 line-clamp-3">
           {highlightQuery(result.snippet, query)}
         </p>
       )}
       {result.match_count > 1 && (
-        <p className="mt-2 text-xs text-gray-400">
-          +{result.match_count - 1} more match{result.match_count - 1 === 1 ? '' : 'es'} in this note
+        <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+            +{result.match_count - 1} more match{result.match_count - 1 === 1 ? '' : 'es'} in this note
         </p>
       )}
     </Link>
@@ -94,7 +94,7 @@ function highlightQuery(text: string, query: string): React.ReactNode {
 
   return parts.map((part, i) =>
     i % 2 === 1 ? (
-      <mark key={i} className="bg-yellow-100 text-gray-900">
+      <mark key={i} className="bg-yellow-100 dark:bg-yellow-900 text-gray-900 dark:text-gray-100">
         {part}
       </mark>
     ) : (

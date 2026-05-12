@@ -4,12 +4,12 @@ export default function BillingPlaceholder() {
   return (
     <article className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
-        <p className="mt-1 text-sm text-gray-600">Manage your subscription and payment method.</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Billing</h1>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Manage your subscription and payment method.</p>
       </header>
 
-      <section className="rounded-lg border border-dashed border-gray-300 p-8 text-center space-y-3">
-        <p className="text-sm text-gray-600">
+      <section className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-8 text-center space-y-3">
+        <p className="text-sm text-gray-600 dark:text-gray-300">
           Billing details will move into Settings soon. For now, manage your plan from the
           standalone billing page.
         </p>
