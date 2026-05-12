@@ -29,6 +29,9 @@ defmodule Engram.AwsKms.ExAws do
 
   @behaviour Engram.AwsKms
 
+  @event_request [:engram, :crypto, :kms, :request]
+  @event_failure [:engram, :crypto, :kms, :failure]
+
   # Do not retry client errors at the ExAws level — let callers (Oban) handle
   # retry scheduling. Server errors (5xx) retain the ExAws default retry.
   @ex_aws_opts [
@@ -42,54 +45,62 @@ defmodule Engram.AwsKms.ExAws do
 
   @impl true
   def encrypt(plaintext, enc_ctx) when is_binary(plaintext) and is_map(enc_ctx) do
-    key_id = key_id!()
+    instrument(:encrypt, fn ->
+      key_id = key_id!()
 
-    key_id
-    |> ExAws.KMS.encrypt(Base.encode64(plaintext), encryption_context: enc_ctx)
-    |> ExAws.request(@ex_aws_opts)
-    |> case do
-      {:ok, %{"CiphertextBlob" => ct_b64}} -> {:ok, Base.decode64!(ct_b64)}
-      {:error, reason} -> {:error, classify(reason)}
-    end
+      key_id
+      |> ExAws.KMS.encrypt(Base.encode64(plaintext), encryption_context: enc_ctx)
+      |> ExAws.request(@ex_aws_opts)
+      |> case do
+        {:ok, %{"CiphertextBlob" => ct_b64}} -> {:ok, Base.decode64!(ct_b64)}
+        {:error, reason} -> {:error, classify(reason)}
+      end
+    end)
   end
 
   @impl true
   def decrypt(ciphertext, enc_ctx) when is_binary(ciphertext) and is_map(enc_ctx) do
-    Base.encode64(ciphertext)
-    |> ExAws.KMS.decrypt(encryption_context: enc_ctx)
-    |> ExAws.request(@ex_aws_opts)
-    |> case do
-      {:ok, %{"Plaintext" => pt_b64}} -> {:ok, Base.decode64!(pt_b64)}
-      {:error, reason} -> {:error, classify(reason)}
-    end
+    instrument(:decrypt, fn ->
+      Base.encode64(ciphertext)
+      |> ExAws.KMS.decrypt(encryption_context: enc_ctx)
+      |> ExAws.request(@ex_aws_opts)
+      |> case do
+        {:ok, %{"Plaintext" => pt_b64}} -> {:ok, Base.decode64!(pt_b64)}
+        {:error, reason} -> {:error, classify(reason)}
+      end
+    end)
   end
 
   @impl true
   def re_encrypt(ciphertext, source_ctx, dest_ctx)
       when is_binary(ciphertext) and is_map(source_ctx) and is_map(dest_ctx) do
-    key_id = key_id!()
+    instrument(:re_encrypt, fn ->
+      key_id = key_id!()
 
-    Base.encode64(ciphertext)
-    |> ExAws.KMS.re_encrypt(key_id,
-      source_encryption_context: source_ctx,
-      destination_encryption_context: dest_ctx
-    )
-    |> ExAws.request(@ex_aws_opts)
-    |> case do
-      {:ok, %{"CiphertextBlob" => ct_b64}} -> {:ok, Base.decode64!(ct_b64)}
-      {:error, reason} -> {:error, classify(reason)}
-    end
+      Base.encode64(ciphertext)
+      |> ExAws.KMS.re_encrypt(key_id,
+        source_encryption_context: source_ctx,
+        destination_encryption_context: dest_ctx
+      )
+      |> ExAws.request(@ex_aws_opts)
+      |> case do
+        {:ok, %{"CiphertextBlob" => ct_b64}} -> {:ok, Base.decode64!(ct_b64)}
+        {:error, reason} -> {:error, classify(reason)}
+      end
+    end)
   end
 
   @impl true
   def describe_key do
-    key_id!()
-    |> ExAws.KMS.describe_key()
-    |> ExAws.request(@ex_aws_opts)
-    |> case do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, classify(reason)}
-    end
+    instrument(:describe_key, fn ->
+      key_id!()
+      |> ExAws.KMS.describe_key()
+      |> ExAws.request(@ex_aws_opts)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, classify(reason)}
+      end
+    end)
   end
 
   defp key_id! do
@@ -131,4 +142,36 @@ defmodule Engram.AwsKms.ExAws do
       other -> {:aws, other, msg}
     end
   end
+
+  defp instrument(op, fun) do
+    start = System.monotonic_time()
+    result = fun.()
+    duration_us = System.convert_time_unit(System.monotonic_time() - start, :native, :microsecond)
+
+    case result do
+      :ok ->
+        :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
+        :ok
+
+      {:ok, _} = ok ->
+        :telemetry.execute(@event_request, %{duration_us: duration_us}, %{op: op, status: :ok})
+        ok
+
+      {:error, reason} = err ->
+        error_class = classify_for_telemetry(reason)
+
+        :telemetry.execute(
+          @event_request,
+          %{duration_us: duration_us},
+          %{op: op, status: :error, error_class: error_class}
+        )
+
+        :telemetry.execute(@event_failure, %{count: 1}, %{op: op, error_class: error_class})
+        err
+    end
+  end
+
+  defp classify_for_telemetry(reason) when is_atom(reason), do: reason
+  defp classify_for_telemetry({:aws, _code, _msg}), do: :other
+  defp classify_for_telemetry(_other), do: :other
 end

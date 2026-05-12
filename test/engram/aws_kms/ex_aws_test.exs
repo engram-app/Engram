@@ -199,4 +199,64 @@ defmodule Engram.AwsKms.ExAwsTest do
     ctx = %{"user_id" => "5", "purpose" => "dek_wrap"}
     assert {:ok, <<0xBB, 0xCC>>} = KmsExAws.re_encrypt(<<0xAA>>, ctx, ctx)
   end
+
+  describe "telemetry" do
+    test "emits :request event with duration_us, op, status on successful encrypt", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/", fn conn ->
+        Plug.Conn.resp(conn, 200, ~s({"CiphertextBlob":"#{Base.encode64("ct")}"}))
+      end)
+
+      :telemetry.attach(
+        "kms-req-ok",
+        [:engram, :crypto, :kms, :request],
+        fn _name, meas, meta, _ -> send(self(), {:tel_req, meas, meta}) end,
+        nil
+      )
+
+      try do
+        assert {:ok, "ct"} =
+                 Engram.AwsKms.ExAws.encrypt("pt", %{"user_id" => "1", "purpose" => "dek_wrap"})
+
+        assert_received {:tel_req, %{duration_us: dur}, %{op: :encrypt, status: :ok}}
+        assert is_integer(dur) and dur >= 0
+      after
+        :telemetry.detach("kms-req-ok")
+      end
+    end
+
+    test "emits :failure event with error_class on AccessDenied", %{bypass: bypass} do
+      Bypass.expect(bypass, "POST", "/", fn conn ->
+        Plug.Conn.resp(
+          conn,
+          400,
+          ~s({"__type":"AccessDeniedException","message":"nope"})
+        )
+      end)
+
+      :telemetry.attach_many(
+        "kms-failure",
+        [
+          [:engram, :crypto, :kms, :request],
+          [:engram, :crypto, :kms, :failure]
+        ],
+        fn name, _meas, meta, _ -> send(self(), {name, meta}) end,
+        nil
+      )
+
+      try do
+        assert {:error, :access_denied} =
+                 Engram.AwsKms.ExAws.encrypt("pt", %{"user_id" => "1", "purpose" => "dek_wrap"})
+
+        assert_received {[:engram, :crypto, :kms, :request],
+                         %{op: :encrypt, status: :error, error_class: :access_denied}}
+
+        assert_received {[:engram, :crypto, :kms, :failure],
+                         %{op: :encrypt, error_class: :access_denied}}
+      after
+        :telemetry.detach("kms-failure")
+      end
+    end
+  end
 end
