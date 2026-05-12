@@ -6,6 +6,23 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Engram</title>
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('engram:theme');
+          var valid = stored === 'light' || stored === 'dark' || stored === 'system';
+          var choice = valid ? stored : 'system';
+          var prefersDark =
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var resolved = choice === 'system' ? (prefersDark ? 'dark' : 'light') : choice;
+          if (resolved === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {
+          /* fall back to default (light) */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
