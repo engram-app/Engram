@@ -23,7 +23,7 @@ defmodule Engram.Crypto.BootCanaryTest do
 
       try do
         assert :ok = BootCanary.verify!()
-        assert_received {:canary, %{status: :provisioned}}
+        assert_received {:canary, %{status: :provisioned, provider: :local}}
         assert Repo.aggregate("system_canaries", :count) == 1
       after
         :telemetry.detach("boot-canary-provision")
@@ -42,7 +42,7 @@ defmodule Engram.Crypto.BootCanaryTest do
 
       try do
         assert :ok = BootCanary.verify!()
-        assert_received {:canary, %{status: :ok}}
+        assert_received {:canary, %{status: :ok, provider: :local}}
       after
         :telemetry.detach("boot-canary-ok")
       end
@@ -67,7 +67,8 @@ defmodule Engram.Crypto.BootCanaryTest do
           BootCanary.verify!()
         end
 
-        assert_received {:canary, %{status: :failed, reason_label: "invalid_wrapping"}}
+        assert_received {:canary,
+                         %{status: :failed, reason_label: "invalid_wrapping", provider: :local}}
       after
         :telemetry.detach("boot-canary-fail")
         Application.put_env(:engram, :encryption_master_key, original_master)
@@ -91,7 +92,7 @@ defmodule Engram.Crypto.BootCanaryTest do
       try do
         # Sanity: a regular Local.unwrap_dek/2 with fallback DOES succeed.
         canary_blob = Repo.one(from c in "system_canaries", select: c.wrapped_dek)
-        assert {:ok, _dek} = Local.unwrap_dek(canary_blob, %{user_id: :canary})
+        assert {:ok, _dek} = Local.unwrap_dek(canary_blob, %{user_id: 0})
 
         # But boot canary refuses fallback and raises.
         assert_raise RuntimeError, ~r/boot canary unwrap failed/, fn ->
@@ -106,7 +107,7 @@ defmodule Engram.Crypto.BootCanaryTest do
     test "raises with sha_mismatch label when canary plaintext SHA disagrees" do
       # Insert a canary row whose recorded sha256 is wrong on purpose.
       dek = :crypto.strong_rand_bytes(32)
-      {:ok, wrapped} = Local.wrap_dek(dek, %{user_id: :canary})
+      {:ok, wrapped} = Local.wrap_dek(dek, %{user_id: 0})
       bad_sha = :crypto.hash(:sha256, "wrong plaintext")
       now = DateTime.utc_now()
 
@@ -115,7 +116,7 @@ defmodule Engram.Crypto.BootCanaryTest do
         [%{wrapped_dek: wrapped, dek_sha256: bad_sha, inserted_at: now, updated_at: now}]
       )
 
-      assert_raise RuntimeError, ~r/does not match the\s+recorded SHA256/, fn ->
+      assert_raise RuntimeError, ~r/does not match the recorded\s+SHA256/s, fn ->
         BootCanary.verify!()
       end
     end
@@ -126,6 +127,77 @@ defmodule Engram.Crypto.BootCanaryTest do
       BootCanary.provision!()
       BootCanary.provision!()
       assert Repo.aggregate("system_canaries", :count) == 2
+    end
+  end
+
+  describe "verify!/0 — AwsKms provider" do
+    import Mox
+    setup :verify_on_exit!
+
+    setup do
+      prev_provider = Application.get_env(:engram, :key_provider)
+      prev_client = Application.get_env(:engram, :aws_kms_client)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :aws_kms_client, Engram.AwsKmsMock)
+
+      on_exit(fn ->
+        restore_env(:engram, :key_provider, prev_provider)
+        restore_env(:engram, :aws_kms_client, prev_client)
+      end)
+
+      :ok
+    end
+
+    defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+    defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+    test "raises when boot_check (DescribeKey) fails" do
+      Repo.insert_all("system_canaries", [
+        %{
+          wrapped_dek: <<0xAA, 0x01, :crypto.strong_rand_bytes(48)::binary>>,
+          dek_sha256: :crypto.hash(:sha256, <<0>>),
+          inserted_at: DateTime.utc_now(),
+          updated_at: DateTime.utc_now()
+        }
+      ])
+
+      expect(Engram.AwsKmsMock, :describe_key, fn -> {:error, :access_denied} end)
+
+      assert_raise RuntimeError, ~r/describe_key|boot_check/i, fn ->
+        Engram.Crypto.BootCanary.verify!()
+      end
+    end
+
+    test "tags :ok telemetry with provider: :aws_kms when DEK round-trips" do
+      dek = :crypto.strong_rand_bytes(32)
+      sha = :crypto.hash(:sha256, dek)
+      blob = <<0xAA, 0x01, :crypto.strong_rand_bytes(48)::binary>>
+
+      Repo.insert_all("system_canaries", [
+        %{
+          wrapped_dek: blob,
+          dek_sha256: sha,
+          inserted_at: DateTime.utc_now(),
+          updated_at: DateTime.utc_now()
+        }
+      ])
+
+      stub(Engram.AwsKmsMock, :describe_key, fn -> :ok end)
+      stub(Engram.AwsKmsMock, :decrypt, fn _ct, _ctx -> {:ok, dek} end)
+
+      :telemetry.attach(
+        "boot-canary-aws-ok",
+        [:engram, :crypto, :boot_canary],
+        fn _n, _m, meta, _ -> send(self(), {:canary, meta}) end,
+        nil
+      )
+
+      try do
+        assert :ok = Engram.Crypto.BootCanary.verify!()
+        assert_received {:canary, %{status: :ok, provider: :aws_kms}}
+      after
+        :telemetry.detach("boot-canary-aws-ok")
+      end
     end
   end
 end
