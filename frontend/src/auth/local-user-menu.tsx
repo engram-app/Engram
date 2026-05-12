@@ -29,16 +29,16 @@ export default function LocalUserMenu() {
       </button>
 
       {open && (
-        <menu className="absolute right-0 mt-2 w-48 rounded border border-gray-200 bg-white py-1 shadow-lg" role="menu">
+        <menu className="absolute right-0 mt-2 w-48 rounded border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-800 dark:bg-gray-900" role="menu">
           <li role="none">
-            <p className="truncate px-4 py-2 text-sm text-gray-700">{user?.email}</p>
+            <p className="truncate px-4 py-2 text-sm text-gray-700 dark:text-gray-200">{user?.email}</p>
           </li>
-          <hr className="border-gray-100" />
+          <hr className="border-gray-100 dark:border-gray-800" />
           <li role="none">
             <button
               role="menuitem"
               onClick={async () => { await logout(); setOpen(false) }}
-              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
             >
               Sign out
             </button>
