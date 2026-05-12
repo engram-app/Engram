@@ -77,15 +77,12 @@ jobs:
           docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Orphan Xvfb from prior aborted runs holds the display + leaves
-          # /tmp/.X{N}-lock, which makes subsequent runs error with
-          # "Xvfb failed to start on display :N". The display range cycles
-          # every 15 GitHub runs ((GITHUB_RUN_NUMBER % 15) * 6 + 50), so a
-          # runner WILL be re-assigned a poisoned display eventually.
-          # Note: $E2E_DISPLAY_BASE isn't set yet at this step — fall back
-          # to job env after ports are allocated; for now wipe likely range.
-          for D in $(seq 50 145); do
-            pkill -9 -f "Xvfb :$D " 2>/dev/null || true
-          done
+          # /tmp/.X{N}-lock. The display range is computed dynamically per
+          # CI run (worker math subtracts from base, so :45..:144 across
+          # the 15-run cycle). engram-ci concurrency serializes flows and
+          # only e2e-clerk uses Xvfb, so nuking ALL Xvfb at pre-cleanup is
+          # safe on this dedicated runner.
+          pkill -9 Xvfb 2>/dev/null || true
           sleep 1
           rm -f /tmp/.X[0-9]*-lock 2>/dev/null || true
           rm -f /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
@@ -472,19 +469,15 @@ jobs:
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill
-          # them by THIS run's display range and clean the lock files.
-          # E2E_DISPLAY_BASE..base+5 (6 instances = 2 workers × 3 obsidians).
-          # Scoped via env so concurrent CI runs in different ranges aren't
-          # touched.
-          for D in $(seq $E2E_DISPLAY_BASE $((E2E_DISPLAY_BASE + 5))); do
-            pkill -9 -f "Xvfb :$D " 2>/dev/null || true
-          done
+          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so the
+          # earlier pkill missed it. Tear-down should leave no orphan Xvfb
+          # or X11 locks behind. Only e2e-clerk uses Xvfb on this runner
+          # and the workflow's concurrency group serializes flows, so
+          # killing all Xvfb here is safe (nothing else is using it).
+          pkill -9 Xvfb 2>/dev/null || true
           # Wait for processes to die before removing their dirs
           sleep 1
-          for D in $(seq $E2E_DISPLAY_BASE $((E2E_DISPLAY_BASE + 5))); do
-            rm -f /tmp/.X${D}-lock /tmp/.X11-unix/X${D} 2>/dev/null || true
-          done
+          rm -f /tmp/.X[0-9]*-lock /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
