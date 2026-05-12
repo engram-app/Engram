@@ -45,7 +45,7 @@ defmodule Engram.Crypto.KeyProvider do
   - `<<0x02, _, _::binary-size(60)>>` → `Engram.Crypto.KeyProvider.Local` (v2)
   - 60-byte raw → `Engram.Crypto.KeyProvider.Local` (pre-T3.4 legacy)
   """
-  @spec identify_from_blob(binary() | term()) ::
+  @spec identify_from_blob(term()) ::
           {:ok, module()} | {:error, :unrecognised_blob}
   def identify_from_blob(<<0xAA, _rest::binary>>),
     do: {:ok, Engram.Crypto.KeyProvider.AwsKms}
