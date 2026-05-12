@@ -44,6 +44,9 @@ config :engram, EngramWeb.Endpoint,
   secret_key_base: "JBTH+ZYHTDIRrr+N6s2ooO4ckeuJvolFrrF3N5KuC8vU75YeOgmr2beGWxrZq3Qi",
   server: false
 
+# Use mock AWS KMS client in tests — never hits the network
+config :engram, :aws_kms_client, Engram.AwsKmsMock
+
 # Use mock embedder in tests — never hits Voyage AI
 config :engram, :embedder, Engram.MockEmbedder
 
