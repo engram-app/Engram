@@ -26,6 +26,8 @@ import { useBillingStatus } from '../api/queries'
 import { useChannel } from '../api/use-channel'
 import ThemeToggle from '../theme/theme-toggle'
 import FolderTree from '../viewer/folder-tree'
+import FolderActions from './folder-actions'
+import { FolderTreeProvider } from './folder-tree-context'
 import MobileLayout from './mobile-layout'
 import { RightSidebarProvider, useRightSidebar } from './right-sidebar-context'
 import VaultSwitcher from './vault-switcher'
@@ -113,23 +115,26 @@ function DesktopLayout() {
           onExpand={() => setLeftCollapsed(false)}
           className="border-r border-border bg-card"
         >
-          <div className="flex h-full flex-col">
-            <div className="flex shrink-0 items-center justify-end border-b border-border px-1 py-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={toggleLeft}
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-              >
-                <PanelLeftClose />
-              </Button>
-            </div>
-            <ScrollArea className="flex-1">
+          <FolderTreeProvider>
+            <div className="flex h-full flex-col">
+              <div className="flex shrink-0 items-center justify-end border-b border-border px-1 py-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={toggleLeft}
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose />
+                </Button>
+              </div>
+              <ScrollArea className="flex-1">
+                <FolderTree />
+              </ScrollArea>
+              <FolderActions />
               <VaultSwitcher />
-              <FolderTree />
-            </ScrollArea>
-          </div>
+            </div>
+          </FolderTreeProvider>
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel id="main" order={2} defaultSize={60} minSize={30}>
