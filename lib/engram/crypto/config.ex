@@ -5,8 +5,9 @@ defmodule Engram.Crypto.Config do
   """
 
   @valid_providers [
-    Engram.Crypto.KeyProvider.Local
-    # Future: Engram.Crypto.KeyProvider.AwsKms, Engram.Crypto.KeyProvider.Passphrase
+    Engram.Crypto.KeyProvider.Local,
+    Engram.Crypto.KeyProvider.AwsKms
+    # Future: Engram.Crypto.KeyProvider.Passphrase
   ]
 
   @spec validate!() :: :ok
@@ -26,6 +27,10 @@ defmodule Engram.Crypto.Config do
 
     if provider == Engram.Crypto.KeyProvider.Local do
       validate_local_master_key!()
+    end
+
+    if provider == Engram.Crypto.KeyProvider.AwsKms do
+      validate_aws_kms!()
     end
 
     :ok
@@ -71,6 +76,39 @@ defmodule Engram.Crypto.Config do
     _ = local_master_key!()
     :ok
   end
+
+  defp validate_aws_kms! do
+    key_id = Application.get_env(:engram, :aws_kms_key_id)
+    region = Application.get_env(:engram, :aws_kms_region)
+    access = Application.get_env(:ex_aws, :access_key_id)
+    secret = Application.get_env(:ex_aws, :secret_access_key)
+
+    cond do
+      is_nil(key_id) or key_id == "" ->
+        raise "AWS_KMS_KEY_ID is required when KEY_PROVIDER=aws_kms"
+
+      not valid_key_id?(key_id) ->
+        raise "AWS_KMS_KEY_ID must be an ARN (arn:aws:kms:...) or an alias (alias/...)"
+
+      is_nil(region) or region == "" ->
+        raise "AWS_REGION is required when KEY_PROVIDER=aws_kms"
+
+      is_nil(access) or access == "" ->
+        raise "AWS_ACCESS_KEY_ID is required when KEY_PROVIDER=aws_kms"
+
+      is_nil(secret) or secret == "" ->
+        raise "AWS_SECRET_ACCESS_KEY is required when KEY_PROVIDER=aws_kms"
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_key_id?(id) when is_binary(id) do
+    String.starts_with?(id, "arn:aws:kms:") or String.starts_with?(id, "alias/")
+  end
+
+  defp valid_key_id?(_), do: false
 
   defp decode_master_key!(nil, name), do: raise("#{name} is required when KEY_PROVIDER=local")
   defp decode_master_key!("", name), do: raise("#{name} is required when KEY_PROVIDER=local")
