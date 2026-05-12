@@ -45,6 +45,7 @@ defmodule Engram.Crypto.KeyProvider.AwsKms do
       {:error, :access_denied} -> {:error, :kms_access_denied}
       {:error, :throttled} -> {:error, :kms_throttled}
       {:error, :context_mismatch} -> {:error, :invalid_wrapping}
+      {:error, :key_not_found} -> {:error, :kms_key_not_found}
       {:error, reason} -> {:error, {:kms_decrypt_failed, reason}}
     end
   end

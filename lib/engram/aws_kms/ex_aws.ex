@@ -118,7 +118,7 @@ defmodule Engram.AwsKms.ExAws do
   defp classify({:http_error, _status, _other}), do: :network_error
   defp classify(:timeout), do: :network_error
   defp classify({:socket_error, _}), do: :network_error
-  defp classify(other), do: {:aws, "Unknown", inspect(other)}
+  defp classify(_other), do: {:aws, "Unknown", "unrecognised_error_shape"}
 
   defp classify_type(type, msg) do
     case String.split(type, "#", parts: 2) |> List.last() do

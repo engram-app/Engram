@@ -194,7 +194,10 @@ if config_env() != :test do
       aws_kms_key_id: System.fetch_env!("AWS_KMS_KEY_ID"),
       aws_kms_region: System.fetch_env!("AWS_REGION")
 
-    config :ex_aws,
+    # Scoped to :ex_aws, :kms so we don't overwrite the global :ex_aws creds
+    # that the S3 storage backend (Fly Tigris) configured above with
+    # STORAGE_ACCESS_KEY_ID/STORAGE_SECRET_ACCESS_KEY/STORAGE_REGION.
+    config :ex_aws, :kms,
       access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
       secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
       region: System.fetch_env!("AWS_REGION")

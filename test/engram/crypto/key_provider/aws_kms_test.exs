@@ -131,4 +131,11 @@ defmodule Engram.Crypto.KeyProvider.AwsKmsTest do
       AwsKms.rotate_dek(<<0xAA, 0x01, 0xDE, 0xAD>>, %{})
     end
   end
+
+  test "unwrap_dek maps :key_not_found to :kms_key_not_found" do
+    expect(Engram.AwsKmsMock, :decrypt, fn _, _ -> {:error, :key_not_found} end)
+
+    assert {:error, :kms_key_not_found} =
+             AwsKms.unwrap_dek(<<0xAA, 0x01, 0xDE, 0xAD>>, %{user_id: 7})
+  end
 end
