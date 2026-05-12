@@ -24,7 +24,7 @@ export default function NoteEditor({ value, onChange }: NoteEditorProps) {
         highlightActiveLineGutter: false,
         autocompletion: false,
       }}
-      className="min-h-[60vh] rounded-md border border-gray-200 text-sm dark:border-gray-800"
+      className="min-h-[70vh] rounded-md border border-gray-200 bg-gray-50/50 text-sm dark:border-gray-800 dark:bg-gray-950/40"
     />
   )
 }

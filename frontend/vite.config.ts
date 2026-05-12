@@ -1,12 +1,19 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import typography from '@tailwindcss/typography'
 
 const apiTarget = process.env.VITE_API_TARGET ?? 'http://localhost:4000'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss({ plugins: [typography] })],
+  // Tailwind v4 loads the typography plugin via `@plugin` in main.css —
+  // the vite plugin's `plugins` option is ignored in this version.
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   base: '/',
   build: {
     outDir: '../priv/static/app',

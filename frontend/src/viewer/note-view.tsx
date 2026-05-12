@@ -63,7 +63,7 @@ export default function NoteView({ content, title, tags, updatedAt }: NoteViewPr
   const frontmatterEntries = Object.entries(frontmatter).filter(([, v]) => v != null && v !== '')
 
   return (
-    <article className="mx-auto w-full max-w-[72ch] px-4 py-6">
+    <article className="w-full px-8 py-8 lg:px-12 lg:py-10">
       <header className="mb-6 border-b border-gray-200 pb-4 dark:border-gray-800">
         <h1 className="mb-1 text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-50">{title}</h1>
         <p className="text-xs text-gray-500 dark:text-gray-400">
