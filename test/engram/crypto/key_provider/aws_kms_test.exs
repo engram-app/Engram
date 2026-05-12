@@ -115,4 +115,20 @@ defmodule Engram.Crypto.KeyProvider.AwsKmsTest do
       AwsKms.wrap_dek(<<1::256>>, %{})
     end
   end
+
+  test "rotate_wrapping rejects non-tagged blobs" do
+    assert {:error, :malformed_wrapped_blob} =
+             AwsKms.rotate_wrapping(<<0x02, 0x01, 0x00>>, %{user_id: 7})
+  end
+
+  test "rotate_wrapping rejects unknown payload versions" do
+    assert {:error, :malformed_wrapped_blob} =
+             AwsKms.rotate_wrapping(<<0xAA, 0x02, 0xDE, 0xAD>>, %{user_id: 7})
+  end
+
+  test "rotate_dek requires user_id in ctx" do
+    assert_raise FunctionClauseError, fn ->
+      AwsKms.rotate_dek(<<0xAA, 0x01, 0xDE, 0xAD>>, %{})
+    end
+  end
 end

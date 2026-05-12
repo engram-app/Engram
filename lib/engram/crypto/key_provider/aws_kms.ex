@@ -61,6 +61,8 @@ defmodule Engram.Crypto.KeyProvider.AwsKms do
     end
   end
 
+  def rotate_wrapping(_other, _ctx), do: {:error, :malformed_wrapped_blob}
+
   @impl true
   def rotate_dek(_old, %{user_id: _} = ctx) do
     dek = generate_dek()
