@@ -98,7 +98,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :access_key_id, "AKIA_TEST")
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
-      assert :ok = Engram.Crypto.Config.validate!()
+      assert :ok = Config.validate!()
     end
 
     test "raises when AWS_KMS_KEY_ID is missing" do
@@ -108,7 +108,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
       assert_raise RuntimeError, ~r/AWS_KMS_KEY_ID/, fn ->
-        Engram.Crypto.Config.validate!()
+        Config.validate!()
       end
     end
 
@@ -119,7 +119,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
       assert_raise RuntimeError, ~r/AWS_KMS_KEY_ID/, fn ->
-        Engram.Crypto.Config.validate!()
+        Config.validate!()
       end
     end
 
@@ -130,7 +130,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
       assert_raise RuntimeError, ~r/AWS_REGION/, fn ->
-        Engram.Crypto.Config.validate!()
+        Config.validate!()
       end
     end
 
@@ -141,7 +141,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
       assert_raise RuntimeError, ~r/AWS_ACCESS_KEY_ID/, fn ->
-        Engram.Crypto.Config.validate!()
+        Config.validate!()
       end
     end
 
@@ -152,7 +152,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.delete_env(:ex_aws, :secret_access_key)
 
       assert_raise RuntimeError, ~r/AWS_SECRET_ACCESS_KEY/, fn ->
-        Engram.Crypto.Config.validate!()
+        Config.validate!()
       end
     end
 
@@ -162,7 +162,7 @@ defmodule Engram.Crypto.ConfigTest do
       Application.put_env(:ex_aws, :access_key_id, "AKIA_TEST")
       Application.put_env(:ex_aws, :secret_access_key, "secret_test")
 
-      assert :ok = Engram.Crypto.Config.validate!()
+      assert :ok = Config.validate!()
     end
   end
 end
