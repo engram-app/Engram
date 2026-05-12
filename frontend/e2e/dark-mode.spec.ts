@@ -25,31 +25,43 @@ async function signIn(page: import('@playwright/test').Page, email: string) {
 }
 
 test.describe('Dark mode', () => {
-  test('header toggle cycles Light → Dark → System and persists', async ({ page, baseURL }) => {
-    const email = testEmail('cycle')
+  test('header toggle opens menu and picks each theme', async ({ page, baseURL }) => {
+    const email = testEmail('menu')
     await registerUser(baseURL!, email)
     await signIn(page, email)
 
-    const toggle = page.getByRole('button', { name: /switch to .* theme/i })
-    // Default is system. On a default headless Chromium, system pref is light.
+    const toggle = page.getByRole('button', { name: /^theme:/i })
     await expect(page.locator('html')).not.toHaveClass(/dark/)
-
-    // System → Light
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'light')
-    await expect(page.locator('html')).not.toHaveClass(/dark/)
-
-    // Light → Dark
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'dark')
-    await expect(page.locator('html')).toHaveClass(/dark/)
-
-    // Dark → System
-    await toggle.click()
     await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
 
+    // Open menu → pick Dark
+    await toggle.click()
+    const menu = page.getByRole('menu', { name: 'Theme' })
+    await expect(menu).toBeVisible()
+    await menu.getByRole('menuitem', { name: 'Dark' }).click()
+    await expect(menu).toBeHidden()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+    await expect(toggle).toHaveAttribute('data-theme-choice', 'dark')
+
+    // Open menu → pick Light
+    await toggle.click()
+    await page.getByRole('menuitem', { name: 'Light' }).click()
+    await expect(page.locator('html')).not.toHaveClass(/dark/)
+    await expect(toggle).toHaveAttribute('data-theme-choice', 'light')
+
+    // Open menu → pick System; localStorage persists
+    await toggle.click()
+    await page.getByRole('menuitem', { name: 'System' }).click()
+    await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
     const stored = await page.evaluate(() => window.localStorage.getItem('engram:theme'))
     expect(stored).toBe('system')
+
+    // Esc closes the menu without changing theme
+    await toggle.click()
+    await expect(page.getByRole('menu', { name: 'Theme' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('menu', { name: 'Theme' })).toBeHidden()
+    await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
   })
 
   test('Settings → Appearance segmented control sets theme', async ({ page, baseURL }) => {
@@ -58,13 +70,16 @@ test.describe('Dark mode', () => {
     await signIn(page, email)
 
     await page.goto('/settings/appearance')
-    await page.getByRole('button', { name: 'Dark' }).click()
+    const segDark = page.locator('button[data-theme-option="dark"]')
+    const segLight = page.locator('button[data-theme-option="light"]')
+    await expect(segDark).toBeVisible()
+    await segDark.click()
     await expect(page.locator('html')).toHaveClass(/dark/)
-    await expect(page.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(segDark).toHaveAttribute('aria-pressed', 'true')
 
-    await page.getByRole('button', { name: 'Light' }).click()
+    await segLight.click()
     await expect(page.locator('html')).not.toHaveClass(/dark/)
-    await expect(page.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(segLight).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('System mode tracks prefers-color-scheme', async ({ browser, baseURL }) => {
