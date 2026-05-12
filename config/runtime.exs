@@ -176,7 +176,8 @@ if config_env() != :test do
   key_provider_module =
     case System.get_env("KEY_PROVIDER", "local") do
       "local" -> Engram.Crypto.KeyProvider.Local
-      other -> raise "Unknown KEY_PROVIDER=#{other}; supported: local"
+      "aws_kms" -> Engram.Crypto.KeyProvider.AwsKms
+      other -> raise "Unknown KEY_PROVIDER=#{other}; supported: local | aws_kms"
     end
 
   config :engram,
@@ -186,6 +187,18 @@ if config_env() != :test do
     encryption_master_key_version:
       String.to_integer(System.get_env("ENCRYPTION_MASTER_KEY_VERSION", "1")),
     dek_cache_ttl_ms: String.to_integer(System.get_env("DEK_CACHE_TTL_MS", "3600000"))
+
+  if key_provider_module == Engram.Crypto.KeyProvider.AwsKms do
+    config :engram,
+      aws_kms_client: Engram.AwsKms.ExAws,
+      aws_kms_key_id: System.fetch_env!("AWS_KMS_KEY_ID"),
+      aws_kms_region: System.fetch_env!("AWS_REGION")
+
+    config :ex_aws,
+      access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
+      secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
+      region: System.fetch_env!("AWS_REGION")
+  end
 end
 
 # Endpoint URL — used by EngramWeb.Endpoint.url() for device flow verification links,
