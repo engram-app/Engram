@@ -90,6 +90,7 @@ defmodule Engram.MixProject do
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},
       {:ex_aws_s3, "~> 2.5"},
+      {:ex_aws_kms, "~> 2.4"},
       {:sweet_xml, "~> 0.7"},
 
       # Test
