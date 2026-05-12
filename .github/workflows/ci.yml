@@ -588,12 +588,20 @@ jobs:
             md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
           fi
 
+      - name: Resolve OTP/Elixir version (for cache key)
+        id: beam-version
+        run: |
+          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
+          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
+          ELX=$(elixir --short-version)
+          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Dialyzer PLT
         uses: actions/cache@v4
         with:
           path: priv/plts
-          key: ${{ runner.os }}-dialyzer-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-dialyzer-
+          key: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-
 
       # ── Quality gates ──
       # Phase 1: all checks informational (continue-on-error: true).

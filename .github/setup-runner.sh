@@ -50,7 +50,7 @@ done
 
 # ── Python packages (pytest, playwright, requests) ───────────────────────
 echo "Installing Python packages..."
-pip3 install --upgrade 'playwright>=1.48' pytest pytest-rerunfailures pytest-xdist requests websockets
+pip3 install --upgrade 'playwright>=1.48' pytest pytest-rerunfailures pytest-xdist pytest-timeout requests websockets
 
 echo "Installing Playwright Chromium..."
 # Install browser only — skip --with-deps (requires apt, unavailable on Fedora).
