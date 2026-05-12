@@ -28,6 +28,7 @@ defmodule Engram.Crypto.BootCanary do
   require Logger
 
   @canary_dek_size 32
+  # sentinel — system_canaries has no FK to users; reserved out-of-band from normal user IDs
   @canary_user_id 0
 
   @doc """

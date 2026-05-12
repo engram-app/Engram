@@ -182,8 +182,8 @@ defmodule Engram.Crypto.BootCanaryTest do
         }
       ])
 
-      stub(Engram.AwsKmsMock, :describe_key, fn -> :ok end)
-      stub(Engram.AwsKmsMock, :decrypt, fn _ct, _ctx -> {:ok, dek} end)
+      expect(Engram.AwsKmsMock, :describe_key, fn -> :ok end)
+      expect(Engram.AwsKmsMock, :decrypt, fn _ct, _ctx -> {:ok, dek} end)
 
       :telemetry.attach(
         "boot-canary-aws-ok",
