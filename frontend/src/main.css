@@ -1,2 +1,4 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
