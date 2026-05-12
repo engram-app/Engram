@@ -20,13 +20,23 @@ const USER_BUTTON = '[data-clerk-component="UserButton"]'
  * Sign in via Clerk Backend API ticket — bypasses form + bot detection entirely.
  * Creates a sign-in token server-side, then uses it client-side via strategy: 'ticket'.
  * Requires CLERK_SECRET_KEY env var (set in global-setup).
+ *
+ * After `clerk.signIn` resolves, the Clerk SDK occasionally issues its own
+ * redirect to `afterSignInUrl` (defaults to `/`). If we issue `page.goto('/')`
+ * concurrently, Chromium aborts the slower navigation with `net::ERR_ABORTED`
+ * and the test fails on a flake. Sequence the two paths instead of racing:
+ * wait briefly for the SDK-driven nav; if it doesn't happen, do it ourselves.
  */
 async function clerkSignIn(page: Page, email: string) {
-  // Navigate first so Clerk JS SDK loads on the page
   await page.goto('/sign-in/')
   await clerk.signIn({ page, emailAddress: email })
-  await page.goto('/')
-  await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
+
+  try {
+    await page.waitForURL(/\/$/, { timeout: 3_000 })
+  } catch {
+    await page.goto('/')
+    await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
+  }
 }
 
 test.describe('Clerk auth provider', () => {
