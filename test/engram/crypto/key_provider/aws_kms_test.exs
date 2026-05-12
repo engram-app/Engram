@@ -138,4 +138,46 @@ defmodule Engram.Crypto.KeyProvider.AwsKmsTest do
     assert {:error, :kms_key_not_found} =
              AwsKms.unwrap_dek(<<0xAA, 0x01, 0xDE, 0xAD>>, %{user_id: 7})
   end
+
+  describe "boot_check/0" do
+    test "returns :ok when describe_key succeeds" do
+      expect(Engram.AwsKmsMock, :describe_key, fn -> :ok end)
+      assert :ok = Engram.Crypto.KeyProvider.AwsKms.boot_check()
+    end
+
+    test "propagates an error tuple when describe_key fails" do
+      expect(Engram.AwsKmsMock, :describe_key, fn -> {:error, :access_denied} end)
+
+      assert {:error, :access_denied} =
+               Engram.Crypto.KeyProvider.AwsKms.boot_check()
+    end
+  end
+
+  describe "unwrap_dek_no_fallback/2" do
+    test "delegates to unwrap_dek/2 (AwsKms has no fallback concept)" do
+      dek = :crypto.strong_rand_bytes(32)
+
+      expect(Engram.AwsKmsMock, :decrypt, fn _ct, %{"user_id" => "7", "purpose" => "dek_wrap"} ->
+        {:ok, dek}
+      end)
+
+      blob = <<0xAA, 0x01, :crypto.strong_rand_bytes(48)::binary>>
+
+      assert {:ok, ^dek} =
+               Engram.Crypto.KeyProvider.AwsKms.unwrap_dek_no_fallback(
+                 blob,
+                 %{user_id: 7}
+               )
+    end
+
+    test "returns :malformed_wrapped_blob for blob without provider tag" do
+      blob = <<0x42, 0x01, :crypto.strong_rand_bytes(48)::binary>>
+
+      assert {:error, :malformed_wrapped_blob} =
+               Engram.Crypto.KeyProvider.AwsKms.unwrap_dek_no_fallback(
+                 blob,
+                 %{user_id: 7}
+               )
+    end
+  end
 end

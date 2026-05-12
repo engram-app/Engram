@@ -65,6 +65,15 @@ defmodule Engram.Crypto.KeyProvider.AwsKms do
   def rotate_wrapping(_other, _ctx), do: {:error, :malformed_wrapped_blob}
 
   @impl true
+  def boot_check, do: aws_kms().describe_key()
+
+  @impl true
+  def unwrap_dek_no_fallback(<<@provider_tag, @payload_v1, _::binary>> = blob, ctx),
+    do: unwrap_dek(blob, ctx)
+
+  def unwrap_dek_no_fallback(_other, _ctx), do: {:error, :malformed_wrapped_blob}
+
+  @impl true
   def rotate_dek(_old, %{user_id: _} = ctx) do
     dek = generate_dek()
     with {:ok, wrapped} <- wrap_dek(dek, ctx), do: {:ok, wrapped, dek}
