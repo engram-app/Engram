@@ -202,6 +202,14 @@ defmodule Engram.Crypto.KeyProvider.Local do
     {:ok, new_wrapped, new_dek}
   end
 
+  @impl true
+  def boot_check, do: :ok
+
+  @impl true
+  def unwrap_dek_no_fallback(blob, %{user_id: uid}) when is_binary(blob) do
+    unwrap_dek_current_only(blob, user_id: uid)
+  end
+
   @doc """
   T3.5.5 / M3 — current-master-key-only unwrap, for `BootCanary`. Bypasses
   `_PREVIOUS` fallback so a misconfigured `ENCRYPTION_MASTER_KEY` cannot

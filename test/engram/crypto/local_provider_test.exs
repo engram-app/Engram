@@ -248,6 +248,52 @@ defmodule Engram.Crypto.KeyProvider.LocalTest do
     end
   end
 
+  describe "boot_check/0" do
+    test "returns :ok (Local provider has no external state to verify)" do
+      assert :ok = Engram.Crypto.KeyProvider.Local.boot_check()
+    end
+  end
+
+  describe "unwrap_dek_no_fallback/2" do
+    setup do
+      Application.put_env(
+        :engram,
+        :encryption_master_key,
+        Base.encode64(:crypto.strong_rand_bytes(32))
+      )
+
+      :ok
+    end
+
+    test "round-trips a freshly-wrapped DEK" do
+      dek = :crypto.strong_rand_bytes(32)
+      {:ok, wrapped} = Engram.Crypto.KeyProvider.Local.wrap_dek(dek, %{user_id: 7})
+
+      assert {:ok, ^dek} =
+               Engram.Crypto.KeyProvider.Local.unwrap_dek_no_fallback(
+                 wrapped,
+                 %{user_id: 7}
+               )
+    end
+
+    test "does NOT consult _PREVIOUS — wrong master key returns :invalid_wrapping" do
+      dek = :crypto.strong_rand_bytes(32)
+      {:ok, wrapped} = Engram.Crypto.KeyProvider.Local.wrap_dek(dek, %{user_id: 7})
+
+      Application.put_env(
+        :engram,
+        :encryption_master_key,
+        Base.encode64(:crypto.strong_rand_bytes(32))
+      )
+
+      assert {:error, :invalid_wrapping} =
+               Engram.Crypto.KeyProvider.Local.unwrap_dek_no_fallback(
+                 wrapped,
+                 %{user_id: 7}
+               )
+    end
+  end
+
   describe "Logger on dual-fallback failure (T3-audit M5)" do
     test "logs error when neither current nor _PREVIOUS unwraps the DEK" do
       # T3-audit M5 — a user whose DEK cannot be unwrapped by EITHER the
