@@ -34,4 +34,30 @@ defmodule Engram.Crypto.KeyProvider do
   @doc "Default DEK generator — providers may override."
   @spec default_generate_dek() :: dek()
   def default_generate_dek, do: :crypto.strong_rand_bytes(32)
+
+  @doc """
+  Returns the KeyProvider module responsible for unwrapping `blob`, based
+  on the leading bytes. Used during cross-provider migration windows so
+  reads route by blob format rather than by `users.key_provider` column.
+
+  - `<<0xAA, _::binary>>` → `Engram.Crypto.KeyProvider.AwsKms`
+  - `<<0x01, _, _::binary-size(60)>>` → `Engram.Crypto.KeyProvider.Local` (v1)
+  - `<<0x02, _, _::binary-size(60)>>` → `Engram.Crypto.KeyProvider.Local` (v2)
+  - 60-byte raw → `Engram.Crypto.KeyProvider.Local` (pre-T3.4 legacy)
+  """
+  @spec identify_from_blob(binary() | term()) ::
+          {:ok, module()} | {:error, :unrecognised_blob}
+  def identify_from_blob(<<0xAA, _rest::binary>>),
+    do: {:ok, Engram.Crypto.KeyProvider.AwsKms}
+
+  def identify_from_blob(<<0x01, 0x01, _::binary-size(60)>>),
+    do: {:ok, Engram.Crypto.KeyProvider.Local}
+
+  def identify_from_blob(<<0x02, 0x01, _::binary-size(60)>>),
+    do: {:ok, Engram.Crypto.KeyProvider.Local}
+
+  def identify_from_blob(blob) when is_binary(blob) and byte_size(blob) == 60,
+    do: {:ok, Engram.Crypto.KeyProvider.Local}
+
+  def identify_from_blob(_other), do: {:error, :unrecognised_blob}
 end
