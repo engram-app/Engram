@@ -40,6 +40,8 @@ defmodule Engram.Crypto.KeyProvider do
   - `AwsKms` issues a single `DescribeKey` call against the configured
     CMK — surfaces wrong-ARN, IAM-denied, wrong-region misconfiguration
     before the first user request hits the hot path.
+
+  No `ctx` parameter: boot check is tenant-agnostic, running once at app startup before any user context exists.
   """
   @callback boot_check() :: :ok | {:error, term()}
 
