@@ -168,14 +168,28 @@ class ObsidianInstance:
 
     def _start_xvfb(self) -> None:
         """Start Xvfb virtual framebuffer."""
+        # TEMP DIAGNOSTIC: capture stderr so a failed start surfaces the
+        # actual Xvfb error. Revert to DEVNULL once CI is stable.
+        stderr_path = f"/tmp/xvfb-stderr-{self.display.lstrip(':')}-{os.getpid()}.log"
+        self._xvfb_stderr = open(stderr_path, "w+b")
         self._xvfb_proc = subprocess.Popen(
             ["Xvfb", self.display, "-screen", "0", "1024x768x24", "-ac"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=self._xvfb_stderr,
         )
         time.sleep(0.5)
         if self._xvfb_proc.poll() is not None:
-            raise RuntimeError(f"Xvfb failed to start on display {self.display}")
+            rc = self._xvfb_proc.returncode
+            try:
+                self._xvfb_stderr.flush()
+                self._xvfb_stderr.seek(0)
+                err = self._xvfb_stderr.read().decode("utf-8", errors="replace")
+            except Exception as e:
+                err = f"<could not read stderr: {e}>"
+            raise RuntimeError(
+                f"Xvfb failed to start on display {self.display} "
+                f"(rc={rc}, stderr_path={stderr_path}):\n{err}"
+            )
         logger.info("[%s] Xvfb started on %s", self.name, self.display)
 
     def _start_obsidian(self) -> None:
