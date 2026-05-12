@@ -9,6 +9,7 @@ const ClerkUserButton = isClerk
 const LocalUserMenu = lazy(() => import('../auth/local-user-menu'))
 import { useChannel } from '../api/use-channel'
 import { useBillingStatus } from '../api/queries'
+import ThemeToggle from '../theme/theme-toggle'
 import FolderTree from '../viewer/folder-tree'
 import VaultSwitcher from './vault-switcher'
 
@@ -58,6 +59,7 @@ export default function AppLayout() {
             <Link to="/settings" className="text-sm text-gray-600 hover:text-gray-900 hover:underline">
               Settings
             </Link>
+            <ThemeToggle />
             <Suspense fallback={null}>
               {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
             </Suspense>
