@@ -39,15 +39,62 @@ env:
   ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY }}
 
 jobs:
-  # Build the CI engram image ONCE per CI run. All e2e-* jobs share the
-  # same docker daemon on this VM, so a single `docker tag` here makes
-  # the image visible to every downstream runner without registry push.
+  # Fingerprint: content-hash of every source path that affects test
+  # results. If the same hash already produced a green CI run, downstream
+  # test jobs AND the image prebuild skip entirely — deploy-fastraid (on
+  # main) runs against the already-validated tree.
   #
-  # Image tag = content hash of every source path the Dockerfile reads.
-  # Identical trees across runs reuse the same tag → docker image inspect
-  # short-circuits the build entirely.
+  # The merge-to-main commit produced by a squash merge has the same
+  # `git ls-tree` output as the PR's head commit — same content, same
+  # fingerprint, same cache key.
+  fingerprint:
+    # Runs on every trigger (push, repository_dispatch, workflow_dispatch).
+    runs-on: [self-hosted, engram, isolated]
+    outputs:
+      hash: ${{ steps.compute.outputs.hash }}
+      cache-hit: ${{ steps.lookup.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compute content fingerprint
+        id: compute
+        run: |
+          # `git ls-tree -r HEAD -- <paths>` emits `<mode> <type> <sha>\t<path>`
+          # per file. Hashing this is content-stable across rebases/squashes.
+          # Includes the workflow itself so any CI change forces a full run.
+          HASH=$(git ls-tree -r HEAD -- \
+            lib priv config test frontend \
+            Dockerfile entrypoint.sh \
+            mix.exs mix.lock \
+            docker-compose.ci.yml docker-compose.ci-local.yml \
+            .github/workflows/ci.yml \
+            | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Fingerprint: $HASH"
+
+      - name: Look up prior pass for this fingerprint
+        id: lookup
+        uses: actions/cache/restore@v5
+        with:
+          path: .ci-fingerprint.marker
+          key: ci-pass-${{ steps.compute.outputs.hash }}
+          lookup-only: true
+
+      - name: Report decision
+        run: |
+          if [ "${{ steps.lookup.outputs.cache-hit }}" = "true" ]; then
+            echo "::notice::Fingerprint ${{ steps.compute.outputs.hash }} already proved green — test jobs will skip"
+          else
+            echo "Fingerprint ${{ steps.compute.outputs.hash }} not previously proven — running full test suite"
+          fi
+
+  # Build the CI engram image ONCE per CI run. All e2e-* jobs share the
+  # same docker daemon on this VM, so a single `docker tag` makes the
+  # image visible to every downstream runner without registry push.
+  # Image tag = content-stable hash of Dockerfile inputs; identical trees
+  # short-circuit via `docker image inspect`.
   prebuild-ci-image:
-    if: github.event_name != 'repository_dispatch'
+    needs: fingerprint
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
     outputs:
       image: ${{ steps.tag.outputs.image }}
@@ -57,8 +104,6 @@ jobs:
       - name: Compute image tag
         id: tag
         run: |
-          # `git ls-tree -r HEAD -- <paths>` is content-stable across
-          # rebases/squashes/timestamps. Hash whatever the Dockerfile copies.
           HASH=$(git ls-tree -r HEAD -- \
             Dockerfile entrypoint.sh \
             mix.exs mix.lock \
@@ -76,9 +121,6 @@ jobs:
             echo "::notice::Image $IMAGE already cached locally — skipping build"
             exit 0
           fi
-
-          # Build through compose to keep one Dockerfile/context definition.
-          # ENGRAM_CI_IMAGE drives the `image:` tag in docker-compose.ci.yml.
           ENGRAM_CI_IMAGE="$IMAGE" \
             docker compose -f docker-compose.ci.yml build engram
           docker image inspect "$IMAGE" >/dev/null
@@ -104,7 +146,8 @@ jobs:
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
 
   e2e-clerk:
-    needs: prebuild-ci-image
+    needs: [fingerprint, prebuild-ci-image]
+    if: needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
 
     env:
@@ -526,8 +569,10 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   unit-tests:
+    needs: fingerprint
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
-    if: github.event_name != 'repository_dispatch'
+    # Also skip when fingerprint already proved green for this content.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
 
     env:
@@ -617,8 +662,10 @@ jobs:
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   lint:
+    needs: fingerprint
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
-    if: github.event_name != 'repository_dispatch'
+    # Also skip when fingerprint already proved green.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
 
     steps:
@@ -691,10 +738,11 @@ jobs:
           mix dialyzer --quiet
 
   e2e-local:
-    needs: prebuild-ci-image
+    needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
-    if: github.event_name != 'repository_dispatch'
+    # Also skip when fingerprint already proved green.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
 
     env:
@@ -805,9 +853,11 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   e2e-browser:
+    needs: fingerprint
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
-    if: github.event_name != 'repository_dispatch'
+    # Also skip when fingerprint already proved green.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
     runs-on: [self-hosted, engram, isolated]
 
     env:
@@ -948,8 +998,8 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   ci:
-    if: always()
-    needs: [version-check, unit-tests, lint, e2e-clerk, e2e-local, e2e-browser]
+    if: always() && needs.fingerprint.outputs.cache-hit != 'true'
+    needs: [fingerprint, version-check, unit-tests, lint, e2e-clerk, e2e-local, e2e-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Check required jobs
@@ -985,9 +1035,32 @@ jobs:
             fi
           done
 
+  # Cache the green-CI fingerprint so the *next* run with the same tree
+  # (typically the squash-merge to main) can skip the full test suite.
+  record-pass:
+    if: always() && needs.ci.result == 'success'
+    needs: [fingerprint, ci]
+    runs-on: [self-hosted, engram, isolated]
+    steps:
+      - name: Write fingerprint marker
+        run: echo "passed at $(date -u +%FT%TZ) on ${GITHUB_SHA}" > .ci-fingerprint.marker
+      - name: Save to cache
+        uses: actions/cache/save@v5
+        with:
+          path: .ci-fingerprint.marker
+          key: ci-pass-${{ needs.fingerprint.outputs.hash }}
+
   deploy-fastraid:
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.ci.result == 'success'
-    needs: [ci]
+    # Deploy when EITHER (a) full CI just succeeded OR (b) fingerprint
+    # already proved green for this tree. Branch protection should still
+    # require the `ci` check on PRs; this only kicks in on the main push
+    # whose tree has been validated upstream.
+    if: |
+      always()
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && (needs.ci.result == 'success' || needs.fingerprint.outputs.cache-hit == 'true')
+    needs: [fingerprint, ci]
     runs-on: [self-hosted, engram, isolated]
     permissions:
       packages: write
