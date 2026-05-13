@@ -2,7 +2,23 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # Only fire on conventional branch prefixes + main. Prevents a fork-PR
+    # branch (no prefix) from running on self-hosted runners if someone
+    # ever fetches one and pushes it to the base repo to test.
+    branches:
+      - main
+      - "bump/**"
+      - "chore/**"
+      - "docs/**"
+      - "feat/**"
+      - "fix/**"
+      - "hotfix/**"
+      - "perf/**"
+      - "refactor/**"
+      - "release/**"
+      - "revert/**"
+      - "security/**"
+      - "test/**"
     tags-ignore: ["v*"]
   repository_dispatch:
     types: [plugin-e2e-trigger]
