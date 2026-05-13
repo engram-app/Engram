@@ -1071,9 +1071,9 @@ jobs:
             echo "Capture from FastRaid: ssh root@10.0.20.214 'cat /boot/config/plugins/engram-deployer/cert.pem'" >&2
             exit 1
           fi
-          printf '%s\n' "$DEPLOYER_CERT_PEM" > /tmp/deployer-cert.pem
+          printf '%s\n' "$DEPLOYER_CERT_PEM" > ${RUNNER_TEMP}/deployer-cert.pem
           # Sanity-check it parses as a cert before we use it for TLS.
-          openssl x509 -in /tmp/deployer-cert.pem -noout -subject -fingerprint -sha256
+          openssl x509 -in ${RUNNER_TEMP}/deployer-cert.pem -noout -subject -fingerprint -sha256
 
       - name: Deploy via engram-deployer
         env:
@@ -1086,16 +1086,16 @@ jobs:
           # for terminal-line status parsing.
           set -o pipefail
           curl -sS -X POST \
-            --cacert /tmp/deployer-cert.pem \
+            --cacert ${RUNNER_TEMP}/deployer-cert.pem \
             --max-time 600 \
             -H "Authorization: Bearer ${OIDC_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{\"version\":\"${VERSION}\",\"sha\":\"${SHA_SHORT}\"}" \
             https://10.0.20.214:8443/deploy \
-            | tee /tmp/deploy-stream.ndjson
+            | tee ${RUNNER_TEMP}/deploy-stream.ndjson
 
           # Last non-empty line is the DeployResult.
-          RESULT=$(grep -v '^$' /tmp/deploy-stream.ndjson | tail -n 1)
+          RESULT=$(grep -v '^$' ${RUNNER_TEMP}/deploy-stream.ndjson | tail -n 1)
           STATUS=$(printf '%s' "$RESULT" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("status",""))')
 
           if [ "$STATUS" != "ok" ]; then
