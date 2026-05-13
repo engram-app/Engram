@@ -167,15 +167,48 @@ class ObsidianInstance:
         logger.info("[%s] Config prepared at %s", self.name, self.config_dir)
 
     def _start_xvfb(self) -> None:
-        """Start Xvfb virtual framebuffer."""
+        """Start Xvfb virtual framebuffer.
+
+        Pre-flight kills any orphan Xvfb on this display + clears its lock.
+        A fixture whose setup raises after _start_xvfb (e.g., _start_obsidian
+        fails) doesn't run inst.stop(), so Xvfb leaks; pytest-rerunfailures
+        then recreates the fixture and the new Xvfb errors with "Server is
+        already active for display N". Cleaning unconditionally is safe: only
+        this test process should ever hold a display in this range.
+        """
+        display_num = self.display.lstrip(":")
+        subprocess.run(
+            ["pkill", "-9", "-f", f"Xvfb {self.display} "],
+            capture_output=True,
+        )
+        # Wait for the killed process to release the lock, then clean.
+        time.sleep(0.2)
+        for path in (f"/tmp/.X{display_num}-lock", f"/tmp/.X11-unix/X{display_num}"):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+        stderr_path = f"/tmp/xvfb-stderr-{display_num}-{os.getpid()}.log"
+        self._xvfb_stderr = open(stderr_path, "w+b")
         self._xvfb_proc = subprocess.Popen(
             ["Xvfb", self.display, "-screen", "0", "1024x768x24", "-ac"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=self._xvfb_stderr,
         )
         time.sleep(0.5)
         if self._xvfb_proc.poll() is not None:
-            raise RuntimeError(f"Xvfb failed to start on display {self.display}")
+            rc = self._xvfb_proc.returncode
+            try:
+                self._xvfb_stderr.flush()
+                self._xvfb_stderr.seek(0)
+                err = self._xvfb_stderr.read().decode("utf-8", errors="replace")
+            except Exception as e:
+                err = f"<could not read stderr: {e}>"
+            raise RuntimeError(
+                f"Xvfb failed to start on display {self.display} "
+                f"(rc={rc}, stderr_path={stderr_path}):\n{err}"
+            )
         logger.info("[%s] Xvfb started on %s", self.name, self.display)
 
     def _start_obsidian(self) -> None:

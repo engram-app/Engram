@@ -59,7 +59,7 @@ jobs:
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
 
   e2e-clerk:
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
 
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}
@@ -76,6 +76,16 @@ jobs:
         run: |
           docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
+          # Orphan Xvfb from prior aborted runs holds the display + leaves
+          # /tmp/.X{N}-lock. The display range is computed dynamically per
+          # CI run (worker math subtracts from base, so :45..:144 across
+          # the 15-run cycle). engram-ci concurrency serializes flows and
+          # only e2e-clerk uses Xvfb, so nuking ALL Xvfb at pre-cleanup is
+          # safe on this dedicated runner.
+          pkill -9 Xvfb 2>/dev/null || true
+          sleep 1
+          rm -f /tmp/.X[0-9]*-lock 2>/dev/null || true
+          rm -f /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Sparse-checkout leak recovery. Cross-repo plugin checkouts and the
           # obsidian-update workflow can leave `core.sparseCheckout=true` and
@@ -459,8 +469,15 @@ jobs:
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
+          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so the
+          # earlier pkill missed it. Tear-down should leave no orphan Xvfb
+          # or X11 locks behind. Only e2e-clerk uses Xvfb on this runner
+          # and the workflow's concurrency group serializes flows, so
+          # killing all Xvfb here is safe (nothing else is using it).
+          pkill -9 Xvfb 2>/dev/null || true
           # Wait for processes to die before removing their dirs
           sleep 1
+          rm -f /tmp/.X[0-9]*-lock /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
@@ -478,7 +495,7 @@ jobs:
   unit-tests:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
 
     env:
       PG_CONTAINER: engram-unit-test-${{ github.run_id }}
@@ -565,7 +582,7 @@ jobs:
   lint:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -588,12 +605,20 @@ jobs:
             md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
           fi
 
+      - name: Resolve OTP/Elixir version (for cache key)
+        id: beam-version
+        run: |
+          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
+          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
+          ELX=$(elixir --short-version)
+          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Dialyzer PLT
         uses: actions/cache@v4
         with:
           path: priv/plts
-          key: ${{ runner.os }}-dialyzer-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-dialyzer-
+          key: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-
 
       # ── Quality gates ──
       # Phase 1: all checks informational (continue-on-error: true).
@@ -632,7 +657,7 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
 
     env:
       CI_PROJECT: engram-ci-local-${{ github.run_id }}
@@ -757,7 +782,7 @@ jobs:
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     if: github.event_name != 'repository_dispatch'
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
 
     env:
       PG_CONTAINER: engram-e2e-browser-${{ github.run_id }}
@@ -931,7 +956,7 @@ jobs:
   deploy-fastraid:
     if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.ci.result == 'success'
     needs: [ci]
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
     permissions:
       packages: write
       contents: read

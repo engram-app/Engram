@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   update:
-    runs-on: [self-hosted, engram]
+    runs-on: [self-hosted, engram, isolated]
     steps:
       # Full checkout (no sparse). Earlier versions used sparse-checkout to fetch
       # only update-obsidian.sh, but that left `core.sparseCheckout=true` and

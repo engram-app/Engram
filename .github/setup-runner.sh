@@ -13,6 +13,20 @@ echo "=== Engram CI Runner Setup ==="
 DOCKER_REGISTRY="10.0.20.214:5000"
 NPM_REGISTRY="http://10.0.20.214:4873"
 
+# ── System dependencies for e2e tests ───────────────────────────────────
+# Obsidian (Electron) needs GTK3 + a bunch of GUI libs; Xvfb + xkb files +
+# xdg-utils + xmllint for sitemap test. Run as root via sudo.
+if command -v apt-get &>/dev/null; then
+  echo "Installing apt system dependencies (Electron/Obsidian + Xvfb + xmllint)..."
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq \
+    xvfb xdg-utils libxml2-utils \
+    libgtk-3-0 libgbm1 libnss3 libxss1 libasound2t64 libxshmfence1 \
+    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libnotify4 libsecret-1-0 fonts-noto-color-emoji >/dev/null
+fi
+
 # ── Docker insecure registry ─────────────────────────────────────────────
 DAEMON_JSON="/etc/docker/daemon.json"
 if ! grep -q "$DOCKER_REGISTRY" "$DAEMON_JSON" 2>/dev/null; then
@@ -50,7 +64,7 @@ done
 
 # ── Python packages (pytest, playwright, requests) ───────────────────────
 echo "Installing Python packages..."
-pip3 install --upgrade 'playwright>=1.48' pytest pytest-rerunfailures pytest-xdist requests websockets
+pip3 install --upgrade 'playwright>=1.48' pytest pytest-rerunfailures pytest-xdist pytest-timeout requests websockets
 
 echo "Installing Playwright Chromium..."
 # Install browser only — skip --with-deps (requires apt, unavailable on Fedora).
