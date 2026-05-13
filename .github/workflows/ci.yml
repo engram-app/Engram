@@ -886,6 +886,12 @@ jobs:
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
           JWT_SECRET: test-e2e-browser-secret
+          # Phoenix backend spawned by Playwright's webServer inherits this
+          # env. Without an override, :rate_limit_auth defaults to 10 req/60s
+          # and the local-auth + dark-mode + mobile suites collectively burst
+          # past it on /api/auth/register → 429s. Matches the value already
+          # set in docker-compose.ci-local.yml for the e2e-local job.
+          RATE_LIMIT_AUTH_OVERRIDE: "1000"
           PW_LOCAL_BACKEND_PORT: ${{ steps.ports.outputs.pw_local_backend_port }}
           PW_LOCAL_VITE_PORT: ${{ steps.ports.outputs.pw_local_vite_port }}
           PW_CLERK_BACKEND_PORT: ${{ steps.ports.outputs.pw_clerk_backend_port }}
