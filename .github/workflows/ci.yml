@@ -126,6 +126,97 @@ jobs:
           docker image inspect "$IMAGE" >/dev/null
           echo "Built and tagged $IMAGE"
 
+  # Compile Elixir code ONCE in both :dev and :test envs, cache deps and
+  # _build artifacts. Downstream jobs (unit-tests, lint, e2e-browser) all
+  # do their own `mix compile` today — three redundant compiles of the
+  # same 143 source files. This job front-loads the work and exports
+  # cache keys; downstream jobs restore via actions/cache before any mix
+  # command, making compile incremental (or instant on cache hit).
+  prebuild-mix:
+    needs: fingerprint
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
+    runs-on: [self-hosted, engram, isolated]
+    outputs:
+      beam-tag: ${{ steps.beam.outputs.tag }}
+      deps-key: ${{ steps.keys.outputs.deps }}
+      build-dev-key: ${{ steps.keys.outputs.build-dev }}
+      build-test-key: ${{ steps.keys.outputs.build-test }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          clean: false  # Preserve _build/ + deps/ for incremental compile
+
+      - name: Resolve OTP/Elixir version
+        id: beam
+        run: |
+          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
+          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
+          ELX=$(elixir --short-version)
+          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute cache keys
+        id: keys
+        env:
+          BEAM: ${{ steps.beam.outputs.tag }}
+        run: |
+          # BEAM files are tied to OTP version — include in every key.
+          # _build keys hash the source content the compiler actually
+          # reads. :test additionally hashes test/** because that's part
+          # of its compile scope; :dev does not.
+          DEPS_KEY="mix-deps-${BEAM}-${{ hashFiles('mix.lock') }}"
+          DEV_KEY="mix-build-dev-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**') }}"
+          TEST_KEY="mix-build-test-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**', 'test/**') }}"
+          echo "deps=$DEPS_KEY" >> "$GITHUB_OUTPUT"
+          echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
+          echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Cache deps/
+        id: cache-deps
+        uses: actions/cache@v5
+        with:
+          path: deps
+          key: ${{ steps.keys.outputs.deps }}
+          restore-keys: mix-deps-${{ steps.beam.outputs.tag }}-
+
+      - name: Cache _build/dev
+        id: cache-build-dev
+        uses: actions/cache@v5
+        with:
+          path: _build/dev
+          key: ${{ steps.keys.outputs.build-dev }}
+          restore-keys: mix-build-dev-${{ steps.beam.outputs.tag }}-
+
+      - name: Cache _build/test
+        id: cache-build-test
+        uses: actions/cache@v5
+        with:
+          path: _build/test
+          key: ${{ steps.keys.outputs.build-test }}
+          restore-keys: mix-build-test-${{ steps.beam.outputs.tag }}-
+
+      - name: Fetch deps (if missing)
+        run: |
+          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
+            mix deps.get
+          else
+            echo "deps/ restored from cache"
+          fi
+
+      - name: Compile :dev
+        env:
+          MIX_ENV: dev
+        run: |
+          # --warnings-as-errors here means the lint job downstream can
+          # skip its own --force compile (cache restore + this proven
+          # warning-free build = same guarantee).
+          mix compile --warnings-as-errors
+
+      - name: Compile :test
+        env:
+          MIX_ENV: test
+        run: |
+          mix compile --warnings-as-errors
+
   version-check:
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -569,7 +660,7 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   unit-tests:
-    needs: fingerprint
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
     # Also skip when fingerprint already proved green for this content.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
@@ -637,13 +728,32 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
-      - name: Fetch Elixir deps (skip if unchanged)
+      # Restore deps + _build/test compiled by `prebuild-mix`. Cache keys
+      # are pinned via the prebuild-mix job's outputs, so this restore
+      # matches exactly what was just compiled — `mix test` reuses the
+      # BEAM files instead of recompiling.
+      - name: Restore deps cache
+        uses: actions/cache/restore@v5
+        with:
+          path: deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: |
+            mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Restore _build/test cache
+        uses: actions/cache/restore@v5
+        with:
+          path: _build/test
+          key: ${{ needs.prebuild-mix.outputs.build-test-key }}
+          restore-keys: |
+            mix-build-test-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Verify or fetch deps
         run: |
-          if [ -d deps ] && [ -f deps/.mix_lock_hash ] && [ "$(md5sum mix.lock | cut -d' ' -f1)" = "$(cat deps/.mix_lock_hash)" ]; then
-            echo "mix.lock unchanged — skipping deps.get"
-          else
+          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
             mix deps.get --only test
-            md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
+          else
+            echo "deps/ restored from cache"
           fi
 
       - name: Run Elixir unit tests
@@ -676,7 +786,7 @@ jobs:
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   lint:
-    needs: fingerprint
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
     # Also skip when fingerprint already proved green.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.cache-hit != 'true'
@@ -694,29 +804,40 @@ jobs:
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
-      - name: Fetch Elixir deps (skip if unchanged)
-        run: |
-          if [ -d deps ] && [ -f deps/.mix_lock_hash ] && [ "$(md5sum mix.lock | cut -d' ' -f1)" = "$(cat deps/.mix_lock_hash)" ]; then
-            echo "mix.lock unchanged — skipping deps.get"
-          else
-            mix deps.get
-            md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
-          fi
+      # Restore prebuild-mix caches. deps + _build/dev populate ahead of
+      # any mix command, so the redundant compile + deps.get is skipped
+      # below. The Compile step then becomes a fast --warnings-as-errors
+      # re-validation (no --force; cache was built warnings-clean).
+      - name: Restore deps cache
+        uses: actions/cache/restore@v5
+        with:
+          path: deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: |
+            mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
-      - name: Resolve OTP/Elixir version (for cache key)
-        id: beam-version
+      - name: Restore _build/dev cache
+        uses: actions/cache/restore@v5
+        with:
+          path: _build/dev
+          key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
+          restore-keys: |
+            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Verify or fetch deps
         run: |
-          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
-          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
-          ELX=$(elixir --short-version)
-          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
+            mix deps.get
+          else
+            echo "deps/ restored from cache"
+          fi
 
       - name: Cache Dialyzer PLT
         uses: actions/cache@v5
         with:
           path: priv/plts
-          key: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-dialyzer-${{ steps.beam-version.outputs.tag }}-
+          key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       # ── Quality gates ──
       # Phase 1: all checks informational (continue-on-error: true).
@@ -738,7 +859,10 @@ jobs:
         run: mix format --check-formatted
 
       - name: Compile warnings-as-errors
-        run: mix compile --warnings-as-errors --force
+        # No --force: _build/dev was restored from prebuild-mix which
+        # already compiled with --warnings-as-errors. This re-runs as a
+        # safety net (incremental no-op when nothing changed).
+        run: mix compile --warnings-as-errors
 
       - name: Credo (strict)
         run: mix credo --strict
@@ -867,7 +991,7 @@ jobs:
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
   e2e-browser:
-    needs: fingerprint
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip when fingerprint already proved green.
@@ -892,6 +1016,25 @@ jobs:
       - uses: actions/checkout@v6
         with:
           clean: false
+
+      # Restore prebuild-mix caches so `mix phx.server` (spawned by
+      # Playwright's webServer config) reuses compiled BEAM files
+      # instead of recompiling at boot.
+      - name: Restore deps cache
+        uses: actions/cache/restore@v5
+        with:
+          path: deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: |
+            mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Restore _build/dev cache
+        uses: actions/cache/restore@v5
+        with:
+          path: _build/dev
+          key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
+          restore-keys: |
+            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Allocate dynamic ports
         id: ports
@@ -957,11 +1100,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
         run: |
-          if [ -d deps ] && [ -f deps/.mix_lock_hash ] && [ "$(md5sum mix.lock | cut -d' ' -f1)" = "$(cat deps/.mix_lock_hash)" ]; then
-            echo "mix.lock unchanged — skipping deps.get"
-          else
+          # deps/ already restored from prebuild-mix cache; fetch only if
+          # restore missed (first-ever run for this mix.lock content).
+          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
             mix deps.get
-            md5sum mix.lock | cut -d' ' -f1 > deps/.mix_lock_hash
           fi
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
