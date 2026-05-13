@@ -607,17 +607,31 @@ jobs:
             PG_IMAGE="postgres:16-alpine"
           fi
 
-          # Use -p 0:5432 for a random available host port (parallel-safe)
-          docker run -d --name "$PG_CONTAINER" \
-            -e POSTGRES_USER=engram \
-            -e POSTGRES_PASSWORD=engram \
-            -e POSTGRES_DB=engram_test \
-            -p 0:5432 \
-            --health-cmd "pg_isready -U engram" \
-            --health-interval 3s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            "$PG_IMAGE"
+          # `docker run -p 0:5432` races concurrent runners on the shared VM:
+          # docker auto-allocates an ephemeral port, but between resolve and
+          # bind another runner (or any process) can claim it. Retry the run
+          # up to 5 times; each retry gets a fresh allocation.
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$PG_CONTAINER" \
+                -e POSTGRES_USER=engram \
+                -e POSTGRES_PASSWORD=engram \
+                -e POSTGRES_DB=engram_test \
+                -p 0:5432 \
+                --health-cmd "pg_isready -U engram" \
+                --health-interval 3s \
+                --health-timeout 3s \
+                --health-retries 10 \
+                "$PG_IMAGE"; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Postgres container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
 
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
@@ -913,16 +927,28 @@ jobs:
           else
             PG_IMAGE="postgres:16-alpine"
           fi
-          docker run -d --name "$PG_CONTAINER" \
-            -e POSTGRES_USER=engram \
-            -e POSTGRES_PASSWORD=engram \
-            -e POSTGRES_DB=engram_dev \
-            -p 0:5432 \
-            --health-cmd "pg_isready -U engram" \
-            --health-interval 3s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            "$PG_IMAGE"
+          # Retry on ephemeral-port race with sibling runners (see unit-tests).
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$PG_CONTAINER" \
+                -e POSTGRES_USER=engram \
+                -e POSTGRES_PASSWORD=engram \
+                -e POSTGRES_DB=engram_dev \
+                -p 0:5432 \
+                --health-cmd "pg_isready -U engram" \
+                --health-interval 3s \
+                --health-timeout 3s \
+                --health-retries 10 \
+                "$PG_IMAGE"; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Postgres container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
