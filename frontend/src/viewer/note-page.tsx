@@ -75,7 +75,7 @@ export default function NotePage() {
     <Tabs
       value={mode}
       onValueChange={(v) => setMode(v as Mode)}
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl bg-card text-card-foreground shadow-sm ring-1 ring-border/60"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl"
     >
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
         <TabsList variant="line">

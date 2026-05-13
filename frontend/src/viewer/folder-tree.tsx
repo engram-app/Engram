@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import { type NoteSummary, useFolders, useFolderNotes, type Folder } from '../api/queries'
+import { type SortKey, useFolderTreeState } from '../layout/folder-tree-context'
 
 interface TreeNode {
   name: string
@@ -8,7 +8,7 @@ interface TreeNode {
   children: TreeNode[]
 }
 
-function buildTree(folders: Folder[]): TreeNode[] {
+function buildTree(folders: Folder[], sort: SortKey): TreeNode[] {
   const root: TreeNode[] = []
 
   for (const folder of folders) {
@@ -29,17 +29,31 @@ function buildTree(folders: Folder[]): TreeNode[] {
     }
   }
 
-  sortTree(root)
+  sortTree(root, sort)
   return root
 }
 
-function sortTree(nodes: TreeNode[]) {
-  nodes.sort((a, b) => a.name.localeCompare(b.name))
-  for (const n of nodes) sortTree(n.children)
+function sortTree(nodes: TreeNode[], sort: SortKey) {
+  // Folders always sort by name — modification time doesn't make sense for them.
+  const dir = sort === 'name-desc' ? -1 : 1
+  nodes.sort((a, b) => dir * a.name.localeCompare(b.name))
+  for (const n of nodes) sortTree(n.children, sort)
+}
+
+function sortNotes(notes: NoteSummary[], sort: SortKey): NoteSummary[] {
+  const sign = sort.endsWith('-desc') ? -1 : 1
+  if (sort.startsWith('modified')) {
+    return [...notes].sort((a, b) => sign * (Date.parse(a.updated_at) - Date.parse(b.updated_at)))
+  }
+  if (sort.startsWith('created')) {
+    return [...notes].sort((a, b) => sign * (Date.parse(a.created_at) - Date.parse(b.created_at)))
+  }
+  return [...notes].sort((a, b) => sign * a.title.localeCompare(b.title))
 }
 
 export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
+  const { sort } = useFolderTreeState()
   const location = useLocation()
   // Note routes: /note/<path>. Read from pathname directly because
   // useParams() in the parent layout doesn't expose the child route's
@@ -59,12 +73,12 @@ export default function FolderTree() {
     return <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">No notes yet.</p>
   }
 
-  const tree = buildTree(folders)
+  const tree = buildTree(folders, sort)
   const hasRootFiles = folders.some((f) => f.name === '')
 
   return (
-    <nav aria-label="Files" className="py-2 text-sm">
-      <ul role="list" className="space-y-px">
+    <nav aria-label="Files" className="py-2 text-base">
+      <ul role="list" className="space-y-1">
         {hasRootFiles && (
           <RootFiles selectedNotePath={selectedNotePath} />
         )}
@@ -83,10 +97,11 @@ export default function FolderTree() {
 
 function RootFiles({ selectedNotePath }: { selectedNotePath: string | null }) {
   const { data: notes } = useFolderNotes('', { enabled: true })
+  const { sort } = useFolderTreeState()
   if (!notes || notes.length === 0) return null
   return (
     <>
-      {notes.map((note) => (
+      {sortNotes(notes, sort).map((note) => (
         <NoteLeaf
           key={note.path}
           note={note}
@@ -105,17 +120,20 @@ interface FolderNodeProps {
 }
 
 function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
-  const [open, setOpen] = useState(false)
+  const { isOpen: getIsOpen, toggle } = useFolderTreeState()
+  // Force-open the chain leading to the active note so the user can always see
+  // where they are. Side effect: "Collapse all" leaves the active-note chain
+  // open, which matches Obsidian's behaviour — intentional, not a bug.
   const containsSelected = selectedNotePath?.startsWith(`${node.fullPath}/`) ?? false
-  const isOpen = open || containsSelected
+  const isOpen = getIsOpen(node.fullPath) || containsSelected
 
   return (
     <li>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => toggle(node.fullPath)}
         aria-expanded={isOpen}
-        className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+        className="flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         <span
@@ -127,11 +145,11 @@ function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
           ▶
         </span>
         <FolderIcon open={isOpen} />
-        <span className="truncate">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate">{node.name}</span>
       </button>
 
       {isOpen && (
-        <ul role="list" className="space-y-px">
+        <ul role="list" className="space-y-1">
           {node.children.map((child) => (
             <FolderNode
               key={child.fullPath}
@@ -161,6 +179,7 @@ function FolderFiles({
   selectedNotePath: string | null
 }) {
   const { data: notes, isLoading } = useFolderNotes(folderPath, { enabled: true })
+  const { sort } = useFolderTreeState()
   if (isLoading) {
     return (
       <li
@@ -174,7 +193,7 @@ function FolderFiles({
   if (!notes || notes.length === 0) return null
   return (
     <>
-      {notes.map((note) => (
+      {sortNotes(notes, sort).map((note) => (
         <NoteLeaf
           key={note.path}
           note={note}
@@ -196,12 +215,13 @@ function NoteLeaf({
   selectedNotePath: string | null
 }) {
   const isSelected = selectedNotePath === note.path
+  const extension = nonMdExtension(note.path)
   return (
     <li>
       <Link
         to={`/note/${encodePathForRouter(note.path)}`}
         aria-current={isSelected ? 'page' : undefined}
-        className={`flex items-center gap-1 rounded px-1 py-0.5 ${
+        className={`flex items-center gap-1 rounded py-0.5 pl-1 pr-3 ${
           isSelected
             ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
             : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -209,7 +229,12 @@ function NoteLeaf({
         style={{ paddingLeft: `${depth * 12 + 16}px` }}
       >
         <FileIcon />
-        <span className="truncate">{noteLabel(note)}</span>
+        <span className="min-w-0 flex-1 truncate">{noteLabel(note)}</span>
+        {extension && (
+          <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">
+            {extension}
+          </span>
+        )}
       </Link>
     </li>
   )
@@ -218,7 +243,41 @@ function NoteLeaf({
 function noteLabel(note: NoteSummary): string {
   if (note.title) return note.title
   const last = note.path.split('/').pop() ?? note.path
-  return last.replace(/\.md$/, '')
+  // Only strip recognized extensions, otherwise "archive.tar.gz" loses ".gz"
+  // and the row reads "archive.tar" + "GZ" chip — confusing.
+  const ext = recognizedExtension(last)
+  return ext ? last.slice(0, -(ext.length + 1)) : last
+}
+
+const KNOWN_EXTENSIONS = new Set([
+  'md',
+  'pdf',
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'svg',
+  'mp3',
+  'mp4',
+  'webm',
+  'mov',
+  'csv',
+  'json',
+  'txt',
+])
+
+function recognizedExtension(filename: string): string | null {
+  const dot = filename.lastIndexOf('.')
+  if (dot <= 0) return null
+  const ext = filename.slice(dot + 1).toLowerCase()
+  return KNOWN_EXTENSIONS.has(ext) ? ext : null
+}
+
+function nonMdExtension(path: string): string | null {
+  const last = path.split('/').pop() ?? path
+  const ext = recognizedExtension(last)
+  return ext && ext !== 'md' ? ext : null
 }
 
 function encodePathForRouter(path: string): string {

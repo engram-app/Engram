@@ -14,6 +14,7 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { config } from '../config'
 
 const isClerk = config.authProvider === 'clerk'
@@ -25,6 +26,9 @@ import { useBillingStatus } from '../api/queries'
 import { useChannel } from '../api/use-channel'
 import ThemeToggle from '../theme/theme-toggle'
 import FolderTree from '../viewer/folder-tree'
+import FolderActions from './folder-actions'
+import { FolderTreeProvider } from './folder-tree-context'
+import MobileLayout from './mobile-layout'
 import { RightSidebarProvider, useRightSidebar } from './right-sidebar-context'
 import VaultSwitcher from './vault-switcher'
 
@@ -43,15 +47,12 @@ function HeaderLink({ to, label }: { to: string; label: string }) {
   )
 }
 
-function AppLayoutInner() {
+function DesktopLayout() {
   const leftRef = useRef<ImperativePanelHandle>(null)
   const rightRef = useRef<ImperativePanelHandle>(null)
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const { content: rightContent, collapsed: rightCollapsed, setCollapsed: setRightCollapsed } =
     useRightSidebar()
-
-  useChannel()
-  const { data: billing } = useBillingStatus()
 
   const toggleLeft = () => {
     const p = leftRef.current
@@ -80,46 +81,41 @@ function AppLayoutInner() {
   const hasRight = rightContent != null
 
   return (
-    <>
-      {billing?.subscription?.status === 'trialing' && billing.trial_days_remaining > 0 && billing.trial_days_remaining <= 3 && (
-        <aside className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100" role="alert">
-          {billing.trial_days_remaining} days left in your trial.
-        </aside>
-      )}
-      <section className="flex h-screen flex-col bg-background text-foreground">
-        <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-          <Link to="/" className="text-lg font-semibold text-foreground hover:text-foreground/80">
-            Engram
-          </Link>
-          <nav className="flex items-center gap-3" aria-label="Main navigation">
-            <HeaderLink to="/search" label="Search" />
-            <HeaderLink to="/billing" label="Billing" />
-            <HeaderLink to="/settings" label="Settings" />
-            <ThemeToggle />
-            <Suspense fallback={null}>
-              {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
-            </Suspense>
-          </nav>
-        </header>
+    <section className="flex h-screen flex-col bg-background text-foreground">
+      <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
+        <Link to="/" className="text-lg font-semibold text-foreground hover:text-foreground/80">
+          Engram
+        </Link>
+        <nav className="flex items-center gap-3" aria-label="Main navigation">
+          <HeaderLink to="/search" label="Search" />
+          <HeaderLink to="/billing" label="Billing" />
+          <HeaderLink to="/settings" label="Settings" />
+          <ThemeToggle />
+          <Suspense fallback={null}>
+            {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
+          </Suspense>
+        </nav>
+      </header>
 
-        <ResizablePanelGroup
-          direction="horizontal"
-          autoSaveId="engram:app-layout"
-          className="flex-1"
+      <ResizablePanelGroup
+        direction="horizontal"
+        autoSaveId="engram:app-layout"
+        className="flex-1"
+      >
+        <ResizablePanel
+          id="sidebar"
+          order={1}
+          ref={leftRef}
+          defaultSize={18}
+          minSize={12}
+          maxSize={40}
+          collapsible
+          collapsedSize={0}
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
+          className="border-r border-border bg-card"
         >
-          <ResizablePanel
-            id="sidebar"
-            order={1}
-            ref={leftRef}
-            defaultSize={18}
-            minSize={12}
-            maxSize={40}
-            collapsible
-            collapsedSize={0}
-            onCollapse={() => setLeftCollapsed(true)}
-            onExpand={() => setLeftCollapsed(false)}
-            className="border-r border-border bg-card"
-          >
+          <FolderTreeProvider>
             <div className="flex h-full flex-col">
               <div className="flex shrink-0 items-center justify-end border-b border-border px-1 py-1">
                 <Button
@@ -133,72 +129,90 @@ function AppLayoutInner() {
                 </Button>
               </div>
               <ScrollArea className="flex-1">
-                <VaultSwitcher />
                 <FolderTree />
               </ScrollArea>
+              <FolderActions />
+              <VaultSwitcher />
             </div>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel id="main" order={2} defaultSize={60} minSize={30}>
-            <main className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground">
-              {leftCollapsed && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={toggleLeft}
-                  aria-label="Expand sidebar"
-                  title="Expand sidebar"
-                  className="absolute left-2 top-2 z-10 bg-card/80 backdrop-blur"
-                >
-                  <PanelLeftOpen />
-                </Button>
-              )}
-              {hasRight && rightCollapsed && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={toggleRight}
-                  aria-label="Expand outline"
-                  title="Expand outline"
-                  className="absolute right-2 top-2 z-10 bg-card/80 backdrop-blur"
-                >
-                  <PanelRightOpen />
-                </Button>
-              )}
-              <Outlet />
-            </main>
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel
-            id="right-sidebar"
-            order={3}
-            ref={rightRef}
-            defaultSize={22}
-            minSize={12}
-            maxSize={40}
-            collapsible
-            collapsedSize={0}
-            onCollapse={() => setRightCollapsed(true)}
-            onExpand={() => setRightCollapsed(false)}
-            className="border-l border-border bg-card"
-          >
-            <div className="flex h-full flex-col">
-              <div className="flex shrink-0 items-center justify-start border-b border-border px-1 py-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={toggleRight}
-                  aria-label="Collapse outline"
-                  title="Collapse outline"
-                >
-                  <PanelRightClose />
-                </Button>
-              </div>
-              <ScrollArea className="flex-1">{rightContent}</ScrollArea>
+          </FolderTreeProvider>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel id="main" order={2} defaultSize={60} minSize={30}>
+          <main className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground">
+            {leftCollapsed && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleLeft}
+                aria-label="Expand sidebar"
+                title="Expand sidebar"
+                className="absolute left-2 top-2 z-10 bg-card/80 backdrop-blur"
+              >
+                <PanelLeftOpen />
+              </Button>
+            )}
+            {hasRight && rightCollapsed && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleRight}
+                aria-label="Expand outline"
+                title="Expand outline"
+                className="absolute right-2 top-2 z-10 bg-card/80 backdrop-blur"
+              >
+                <PanelRightOpen />
+              </Button>
+            )}
+            <Outlet />
+          </main>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel
+          id="right-sidebar"
+          order={3}
+          ref={rightRef}
+          defaultSize={22}
+          minSize={12}
+          maxSize={40}
+          collapsible
+          collapsedSize={0}
+          onCollapse={() => setRightCollapsed(true)}
+          onExpand={() => setRightCollapsed(false)}
+          className="border-l border-border bg-card"
+        >
+          <div className="flex h-full flex-col">
+            <div className="flex shrink-0 items-center justify-start border-b border-border px-1 py-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleRight}
+                aria-label="Collapse outline"
+                title="Collapse outline"
+              >
+                <PanelRightClose />
+              </Button>
             </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      </section>
+            <ScrollArea className="flex-1">{rightContent}</ScrollArea>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </section>
+  )
+}
+
+function AppLayoutInner() {
+  useChannel()
+  const { data: billing } = useBillingStatus()
+  const isDesktop = useMediaQuery('(min-width: 768px)')
+
+  return (
+    <>
+      {billing?.subscription?.status === 'trialing' && billing.trial_days_remaining > 0 && billing.trial_days_remaining <= 3 && (
+        <aside className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100" role="alert">
+          {billing.trial_days_remaining} days left in your trial.
+        </aside>
+      )}
+      {isDesktop ? <DesktopLayout /> : <MobileLayout />}
     </>
   )
 }

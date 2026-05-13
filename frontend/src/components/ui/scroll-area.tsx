@@ -14,9 +14,14 @@ function ScrollArea({
       className={cn("relative", className)}
       {...props}
     >
+      {/* [&>div]:!block overrides Radix's default `display: table; min-width: 100%`
+          on the viewport's inner wrapper so flex children with `truncate` truncate
+          instead of pushing the wrapper wider than its container. If a future
+          ScrollArea consumer genuinely needs horizontal scrolling, do it locally
+          rather than reverting this. */}
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:!block"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

@@ -45,6 +45,7 @@ defmodule EngramWeb.FoldersController do
       tags: note.tags || [],
       version: note.version,
       mtime: note.mtime,
+      created_at: note.created_at,
       updated_at: note.updated_at
     }
   end

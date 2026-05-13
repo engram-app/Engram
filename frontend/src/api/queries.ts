@@ -22,6 +22,7 @@ export interface NoteSummary {
   tags: string[]
   version: number
   mtime: string
+  created_at: string
   updated_at: string
 }
 

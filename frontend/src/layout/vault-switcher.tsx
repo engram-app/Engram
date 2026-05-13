@@ -36,7 +36,7 @@ export default function VaultSwitcher() {
   if (vaults.length === 1) return <VaultLabel vault={active} />
 
   return (
-    <section className="border-b border-border">
+    <section className="border-t border-border">
       <DropdownMenu>
         <DropdownMenuTrigger className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-muted aria-expanded:bg-muted">
           <span className="min-w-0 flex-1">
@@ -48,7 +48,7 @@ export default function VaultSwitcher() {
               {active.name}
             </span>
           </span>
-          <ChevronDown className="size-4 text-muted-foreground transition-transform group-aria-expanded/dropdown-trigger:rotate-180" />
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/dropdown-trigger:rotate-180" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-56">
           <DropdownMenuRadioGroup
@@ -73,7 +73,7 @@ export default function VaultSwitcher() {
 
 function VaultLabel({ vault }: { vault: Vault }) {
   return (
-    <section className="border-b border-border px-3 py-2">
+    <section className="border-t border-border px-3 py-2">
       <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vault</p>
       <p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
         {vault.encrypted && <Lock className="size-3 shrink-0 text-muted-foreground" />}
