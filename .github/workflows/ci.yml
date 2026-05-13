@@ -569,7 +569,11 @@ jobs:
           MIX_ENV=test mix ecto.migrate
           # Ensure Tailwind binary is valid (cache prune can corrupt native deps)
           mix tailwind.install 2>/dev/null || true
-          mix test
+          # --warnings-as-errors treats compile-time warnings in test files
+          # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
+          # already gated by `mix compile --warnings-as-errors` in the lint
+          # job; this extends the same bar to test/**.
+          mix test --warnings-as-errors
 
       - name: Stop ephemeral postgres
         if: always()
