@@ -307,4 +307,4 @@ Contributions are accepted under the
 [Engram Contributor License Agreement](.github/CLA.md). See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Copyright 2026 Rasbandit Software Solutions LLC d/b/a Engram.
+Copyright (c) 2026 Rasbandit Software Solutions LLC d/b/a Engram.
