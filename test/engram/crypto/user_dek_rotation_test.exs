@@ -888,7 +888,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
   describe "Phase A — B4: final_flip user-vanish returns structured error (not raise)" do
     test "returns {:error, {:user_vanished_mid_rotation, user_id}} when user deleted mid-rotation",
-         %{user: user} do
+         %{user: _user} do
       # Set up a vault + note so the sweeps run real work first, then hard-delete
       # the user row after the sweeps complete but before final_flip commits.
       # We simulate this by deleting the user row right before rotate_user is called
@@ -1073,7 +1073,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
          %{user: user} do
       vault = Engram.Fixtures.insert_vault!(user, "B5RescueVault")
 
-      note =
+      _note =
         Engram.Fixtures.insert_note!(user, vault, %{
           path: "corrupt.md",
           content: "original"
@@ -1158,7 +1158,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
 
     test "raises RuntimeError with structured log when storage get returns {:error, :not_found}",
-         %{user: user, attachment: attachment} do
+         %{user: user, attachment: _attachment} do
       # Override only the get/1 call so it returns :not_found (simulates blob hard-deleted,
       # GDPR job ran mid-rotation, or S3 outage).
       expect(Engram.MockStorage, :get, fn _key -> {:error, :not_found} end)

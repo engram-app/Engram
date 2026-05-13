@@ -1,6 +1,13 @@
 ExUnit.start(assert_receive_timeout: 2_000)
 Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 
+# Capture log output during tests. Logger messages are buffered per-test and
+# only re-emitted to stdout when that test FAILS — green tests stay silent.
+# This hides intentional-error-path noise (e.g. `vault decrypt_failed`
+# reason=:no_dek from test factories that skip DEK provisioning) while
+# preserving full diagnostic output for real failures.
+ExUnit.configure(capture_log: true)
+
 # Exclude :qdrant_integration tests unless QDRANT_INTEGRATION=1 is set.
 # These tests require a running Qdrant instance at localhost:6333 (CI stack).
 if System.get_env("QDRANT_INTEGRATION") != "1" do
