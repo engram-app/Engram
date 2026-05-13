@@ -998,29 +998,54 @@ jobs:
           IMAGE_LC="ghcr.io/${{ github.repository_owner }}/engram"
           IMAGE_LC=$(echo "$IMAGE_LC" | tr '[:upper:]' '[:lower:]')
 
-          # Check version was bumped from the previous deploy
+          # Check whether this version already exists in GHCR.
+          #
+          # Policy:
+          #   first-attempt + exists  → ERROR (developer forgot to bump version)
+          #   rerun        + exists  → SKIP build, proceed straight to deploy
+          #                            (this is the recovery path when an
+          #                            earlier attempt built+pushed but failed
+          #                            at deploy time — e.g. the IP-allowlist
+          #                            NAT issue, a transient daemon outage)
+          #   first or rerun + missing → BUILD + PUSH + DEPLOY as normal
+          #
+          # github.run_attempt is 1 on the first push-triggered run, 2+ on
+          # any `gh run rerun` invocation. Cleanly distinguishes "operator
+          # didn't bump" from "operator is retrying a known-good build".
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
+          IMAGE_EXISTS=false
           if docker manifest inspect "${IMAGE_LC}:${VERSION}" > /dev/null 2>&1; then
-            echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
-            exit 1
+            if [ "${{ github.run_attempt }}" = "1" ]; then
+              echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
+              exit 1
+            fi
+            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}); skipping build, jumping to deploy."
+            IMAGE_EXISTS=true
           fi
 
           SHA_SHORT="${GITHUB_SHA::7}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE_LC" >> "$GITHUB_OUTPUT"
           echo "sha_short=$SHA_SHORT" >> "$GITHUB_OUTPUT"
-          echo "Version ${VERSION} is new — proceeding"
+          echo "image_exists=$IMAGE_EXISTS" >> "$GITHUB_OUTPUT"
+          if [ "$IMAGE_EXISTS" = "true" ]; then
+            echo "Version ${VERSION} already built; will skip build + push."
+          else
+            echo "Version ${VERSION} is new — proceeding with build."
+          fi
 
       # Host daemon on the runner has Docker 29's containerd-snapshotter enabled,
       # whose push client hits GHCR with `405 Not Allowed` on /blobs/uploads/.
       # docker-container driver runs buildkit in an isolated container with its
       # own push path, sidestepping the host daemon entirely.
       - name: Set up Docker Buildx
+        if: steps.version.outputs.image_exists != 'true'
         uses: docker/setup-buildx-action@v4
         with:
           driver: docker-container
 
       - name: Login to GHCR
+        if: steps.version.outputs.image_exists != 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1028,6 +1053,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
+        if: steps.version.outputs.image_exists != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
