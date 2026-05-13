@@ -34,9 +34,20 @@ contribution. You grant Rasbandit Software Solutions LLC d/b/a Engram a broad
 license — including the right to relicense your contribution under the
 commercial license — so the dual-license model works.
 
-Signing is automated: when you open your first PR, the CLA Assistant bot will
-post a comment with a link. Sign once via your GitHub identity and you are
-covered for all future contributions to this repo.
+**How to sign (interim manual flow):** Read [.github/CLA.md](.github/CLA.md),
+then post the following line as a comment on your pull request, verbatim:
+
+> I have read the Engram Contributor License Agreement v1.0 and I hereby sign
+> the CLA.
+
+A maintainer will record your signature and proceed with review.
+
+> **TODO (deferred):** automated CLA enforcement tooling will be wired up
+> when external contributions become regular. The CLA Assistant Lite
+> GitHub Action was archived upstream in March 2026, and the hosted
+> `cla-assistant.io` service has been on maintenance-only mode since late
+> 2023. Choosing tooling against a moving landscape was deferred until a
+> real signal exists.
 
 ## Development setup
 

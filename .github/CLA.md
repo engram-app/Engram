@@ -6,8 +6,9 @@ limited liability company (the "**Company**"). This Contributor License
 Agreement ("**Agreement**") clarifies the intellectual property license granted
 with Contributions from any person or entity to the Company.
 
-By signing this Agreement — via the CLA Assistant bot on the
-[github.com/engram-app/Engram](https://github.com/engram-app/Engram) repository
+By signing this Agreement — by posting the acceptance line specified at the
+end of this document as a comment on Your pull request to the
+[github.com/engram-app/Engram](https://github.com/engram-app/Engram) repository,
 or by any other written acceptance — You accept and agree to the following
 terms and conditions for Your present and future Contributions submitted to
 the Project.
@@ -107,8 +108,12 @@ become aware that would make these representations inaccurate in any respect.
 
 ---
 
-**To sign:** comment on your first pull request as instructed by the CLA
-Assistant bot, or include the following line in a pull request comment:
+**To sign:** post the following line as a comment on Your pull request to
+this repository, verbatim:
 
 > I have read the Engram Contributor License Agreement v1.0 and I hereby
 > sign the CLA.
+
+A maintainer will record Your signature manually. Automated enforcement
+tooling is intentionally deferred until external contributions become
+regular (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
