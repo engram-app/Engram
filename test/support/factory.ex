@@ -22,6 +22,22 @@ defmodule Engram.Factory do
     }
   end
 
+  @doc """
+  Insert a user matching prod registration shape — DEK provisioned via
+  `Engram.Crypto.ensure_user_dek/1`. Prefer this over raw `insert(:user)`
+  for tests that touch encrypted columns (notes/vaults/attachments);
+  factory users without a DEK trigger `:no_dek` errors that mask the
+  real assertions and spam test logs.
+
+  Raw `insert(:user)` remains valid for tests that intentionally
+  exercise the no-DEK error path.
+  """
+  def insert_user(attrs \\ []) do
+    user = insert(:user, attrs)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    user
+  end
+
   def note_factory do
     user = build(:user)
 
