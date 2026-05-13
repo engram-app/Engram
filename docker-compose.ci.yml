@@ -61,11 +61,18 @@ services:
       STORAGE_PORT: "9000"
       STORAGE_REGION: us-east-1
     healthcheck:
+      # 1s interval (was 3s) so docker compose --wait detects "ready" with
+      # finer granularity — BEAM cold boot finishes mid-interval and the
+      # next probe fires within 1s instead of waiting up to 3s.
+      # start_period 10s covers release migrate + Phoenix endpoint listen.
+      # Retry budget: 10s start_period + 60*1s = 70s before docker marks
+      # container failed (was 3s + 15*3s = 48s) — slightly more lenient but
+      # ready-detection is much tighter on the happy path.
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/api/health || exit 1"]
-      start_period: 3s
-      interval: 3s
-      timeout: 3s
-      retries: 15
+      start_period: 10s
+      interval: 1s
+      timeout: 2s
+      retries: 60
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,9 +90,9 @@ services:
       POSTGRES_DB: engram
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engram"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
+      interval: 1s
+      timeout: 2s
+      retries: 30
     restart: "no"
 
   minio:
@@ -96,9 +103,9 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 1s
+      timeout: 3s
+      retries: 30
     restart: "no"
 
   minio-init:
