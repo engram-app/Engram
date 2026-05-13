@@ -18,6 +18,10 @@ name: engram-ci
 
 services:
   engram:
+    # Pre-built tag from the CI `prebuild-ci-image` job — all e2e-* jobs
+    # share this image via the runner VM's shared docker daemon. Local dev
+    # falls back to `engram-ci:local` (built by `docker compose build`).
+    image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
     build:
       context: .
       args:

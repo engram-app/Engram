@@ -39,6 +39,51 @@ env:
   ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY }}
 
 jobs:
+  # Build the CI engram image ONCE per CI run. All e2e-* jobs share the
+  # same docker daemon on this VM, so a single `docker tag` here makes
+  # the image visible to every downstream runner without registry push.
+  #
+  # Image tag = content hash of every source path the Dockerfile reads.
+  # Identical trees across runs reuse the same tag → docker image inspect
+  # short-circuits the build entirely.
+  prebuild-ci-image:
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, engram, isolated]
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          # `git ls-tree -r HEAD -- <paths>` is content-stable across
+          # rebases/squashes/timestamps. Hash whatever the Dockerfile copies.
+          HASH=$(git ls-tree -r HEAD -- \
+            Dockerfile entrypoint.sh \
+            mix.exs mix.lock \
+            config lib priv frontend \
+            | sha256sum | cut -c1-12)
+          IMAGE="engram-ci:${HASH}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $IMAGE"
+
+      - name: Build image (skip if already cached on this daemon)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "::notice::Image $IMAGE already cached locally — skipping build"
+            exit 0
+          fi
+
+          # Build through compose to keep one Dockerfile/context definition.
+          # ENGRAM_CI_IMAGE drives the `image:` tag in docker-compose.ci.yml.
+          ENGRAM_CI_IMAGE="$IMAGE" \
+            docker compose -f docker-compose.ci.yml build engram
+          docker image inspect "$IMAGE" >/dev/null
+          echo "Built and tagged $IMAGE"
+
   version-check:
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -59,6 +104,7 @@ jobs:
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
 
   e2e-clerk:
+    needs: prebuild-ci-image
     runs-on: [self-hosted, engram, isolated]
 
     env:
@@ -67,6 +113,7 @@ jobs:
       MARKER_PREFIX: /tmp/ci-${{ github.run_id }}
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}
       E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
 
     steps:
       # ------------------------------------------------------------------
@@ -197,25 +244,11 @@ jobs:
             # Clean up stale CI collection on SlowRaid Qdrant before starting
             curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
-            # Hash source files that affect the Docker image — skip rebuild if unchanged
-            IMG_HASH=$(find Dockerfile docker-compose.ci.yml mix.exs mix.lock config/ lib/ priv/ frontend/ \
-              -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum | cut -d' ' -f1)
-            CACHED_TAG="engram-ci:${IMG_HASH}"
-
-            if docker image inspect "$CACHED_TAG" > /dev/null 2>&1; then
-              echo "Image $CACHED_TAG exists — skipping build"
-              docker tag "$CACHED_TAG" ${CI_PROJECT}-engram:latest
-              docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" up -d --no-build --wait
-            else
-              echo "Image cache miss ($CACHED_TAG) — building"
-              docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" up -d --build --wait
-              # Tag the built image for future cache hits
-              BUILT_IMG=$(docker images --format '{{.ID}}' --filter "reference=${CI_PROJECT}-engram" | head -1)
-              if [ -n "$BUILT_IMG" ]; then
-                docker tag "$BUILT_IMG" "$CACHED_TAG"
-                echo "Tagged $BUILT_IMG as $CACHED_TAG"
-              fi
-            fi
+            # Image was already built by the `prebuild-ci-image` job.
+            # ENGRAM_CI_IMAGE pins docker-compose.ci.yml's `image:` to that
+            # exact tag. `--no-build` makes startup fail loudly if the tag
+            # is missing (regression detector vs a silent rebuild).
+            docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" up -d --no-build --wait
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -658,6 +691,7 @@ jobs:
           mix dialyzer --quiet
 
   e2e-local:
+    needs: prebuild-ci-image
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
     if: github.event_name != 'repository_dispatch'
@@ -666,6 +700,7 @@ jobs:
     env:
       CI_PROJECT: engram-ci-local-${{ github.run_id }}
       QDRANT_COLLECTION: ci_local_${{ github.run_id }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -713,24 +748,11 @@ jobs:
           # Clean up stale Qdrant collection
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
-          # Reuse cached image if available, otherwise build
-          IMG_HASH=$(find Dockerfile docker-compose.ci.yml mix.exs mix.lock config/ lib/ priv/ frontend/ \
-            -type f 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum | cut -d' ' -f1)
-          CACHED_TAG="engram-ci:${IMG_HASH}"
-
-          if docker image inspect "$CACHED_TAG" > /dev/null 2>&1; then
-            echo "Image $CACHED_TAG exists — skipping build"
-            docker tag "$CACHED_TAG" ${CI_PROJECT}-engram:latest
-            docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
-              -p "$CI_PROJECT" up -d --no-build --wait
-          else
-            docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
-              -p "$CI_PROJECT" up -d --build --wait
-            BUILT_IMG=$(docker images --format '{{.ID}}' --filter "reference=${CI_PROJECT}-engram" | head -1)
-            if [ -n "$BUILT_IMG" ]; then
-              docker tag "$BUILT_IMG" "$CACHED_TAG"
-            fi
-          fi
+          # Image was already built by `prebuild-ci-image`. ENGRAM_CI_IMAGE
+          # pins docker-compose.ci.yml's `image:` to that tag and --no-build
+          # fails loudly if missing instead of silently rebuilding.
+          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+            -p "$CI_PROJECT" up -d --no-build --wait
 
           # Wait for health
           for i in $(seq 1 60); do
