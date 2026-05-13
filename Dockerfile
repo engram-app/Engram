@@ -75,6 +75,7 @@ WORKDIR /app
 RUN chown nobody /app
 
 COPY --from=builder --chown=nobody:root /app/_release ./
+COPY --chown=nobody:root --chmod=0755 entrypoint.sh /entrypoint.sh
 
 USER nobody
 
@@ -88,4 +89,8 @@ ENV PHX_SERVER=true
 # in-depth default so a template that drifts can't open the leak.
 ENV ERL_CRASH_DUMP_BYTES=0
 
-CMD /app/bin/engram eval "Engram.Release.migrate()" && exec /app/bin/engram start
+# Migrate-then-start via /entrypoint.sh. CMD is JSON/exec form so signals
+# (SIGTERM on graceful shutdown) reach BEAM directly instead of being
+# absorbed by an intermediate shell.
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/app/bin/engram", "start"]
