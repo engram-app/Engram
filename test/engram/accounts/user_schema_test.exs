@@ -5,8 +5,6 @@ defmodule Engram.Accounts.UserSchemaTest do
   # landmine identified in the encryption tier-3 audit.
   use Engram.DataCase, async: true
 
-  alias Engram.Accounts.User
-
   defp user_with_secrets do
     %User{
       id: 1,

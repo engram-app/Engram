@@ -4,7 +4,6 @@ defmodule Engram.Workers.RotateUserDekTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Engram.Repo
   alias Engram.Workers.RotateUserDek
 
   # Stub Qdrant scroll with empty results so the Qdrant sweep phase passes

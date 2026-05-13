@@ -4,7 +4,6 @@ defmodule Engram.Workers.RotateUserMasterKeyTest do
 
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, MasterRotation}
-  alias Engram.Repo
   alias Engram.Workers.RotateUserMasterKey
 
   setup do

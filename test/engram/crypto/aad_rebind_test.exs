@@ -5,8 +5,6 @@ defmodule Engram.Crypto.AadRebindTest do
 
   alias Engram.Crypto
   alias Engram.Crypto.{AadRebind, DekCache, Envelope}
-  alias Engram.Notes.Note
-  alias Engram.Repo
 
   setup do
     DekCache.invalidate_all()

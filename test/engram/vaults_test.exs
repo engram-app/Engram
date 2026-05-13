@@ -1,10 +1,7 @@
 defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
 
-  import Ecto.Query
-
   alias Engram.Vaults
-  alias Engram.Vaults.Vault
 
   setup do
     user = insert(:user)

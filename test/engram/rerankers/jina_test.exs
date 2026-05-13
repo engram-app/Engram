@@ -3,8 +3,6 @@ defmodule Engram.Rerankers.JinaTest do
 
   import ExUnit.CaptureLog
 
-  alias Engram.Rerankers.Jina
-
   setup do
     bypass = Bypass.open()
     Application.put_env(:engram, :jina_url, "http://localhost:#{bypass.port}")

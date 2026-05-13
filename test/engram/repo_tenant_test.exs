@@ -1,8 +1,6 @@
 defmodule Engram.RepoTenantTest do
   use Engram.DataCase, async: true
 
-  alias Engram.Notes.Note
-
   describe "with_tenant/2" do
     test "tenant isolation — user B cannot see user A's notes" do
       user_a = insert(:user)

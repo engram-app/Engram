@@ -1,8 +1,6 @@
 defmodule Engram.Rerankers.NoneTest do
   use ExUnit.Case, async: true
 
-  alias Engram.Rerankers.None
-
   describe "rerank/3" do
     test "returns candidates sorted by score, limited to top_n" do
       candidates = [

@@ -5,12 +5,9 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Ecto.Query, only: [from: 2]
   import Mox
 
-  alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
-  alias Engram.Notes.Note
-  alias Engram.Repo
   alias Engram.Workers.EmbedNote
 
   setup :verify_on_exit!

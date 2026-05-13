@@ -4,7 +4,6 @@ defmodule Engram.Crypto.BootCanaryTest do
   import Ecto.Query
 
   alias Engram.Crypto.{BootCanary, KeyProvider.Local}
-  alias Engram.Repo
 
   setup do
     # Each test starts from an empty canary table.

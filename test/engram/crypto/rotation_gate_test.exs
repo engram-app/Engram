@@ -3,9 +3,7 @@ defmodule Engram.Crypto.RotationGateTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Engram.Accounts.User
   alias Engram.Crypto.RotationGate
-  alias Engram.Repo
 
   setup do
     user = insert(:user)
