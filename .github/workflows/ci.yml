@@ -1052,6 +1052,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Local FS cache on the self-hosted runner — bounded by disk speed
+      # instead of GHCR latency. The old registry cache fetched every layer
+      # over HTTPS on every build; local cache is ~10× faster for cache hits.
+      - name: Restore buildx cache
+        if: steps.version.outputs.image_exists != 'true'
+        uses: actions/cache@v5
+        with:
+          path: /tmp/buildx-cache
+          key: buildx-${{ runner.os }}-${{ hashFiles('Dockerfile', 'mix.lock', 'frontend/bun.lock') }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
       - name: Build and push image
         if: steps.version.outputs.image_exists != 'true'
         uses: docker/build-push-action@v7
@@ -1061,12 +1073,22 @@ jobs:
           provenance: false
           sbom: false
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ steps.version.outputs.image }}:buildcache
-          cache-to: type=registry,ref=${{ steps.version.outputs.image }}:buildcache,mode=max
+          cache-from: type=local,src=/tmp/buildx-cache
+          cache-to: type=local,dest=/tmp/buildx-cache-new,mode=max
           tags: |
             ${{ steps.version.outputs.image }}:latest
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.sha_short }}
+
+      # Atomically swap new cache over old. actions/cache@v5 has no built-in
+      # rotation; without this step the cache grows unbounded across runs.
+      - name: Rotate buildx cache
+        if: steps.version.outputs.image_exists != 'true' && always()
+        run: |
+          if [ -d /tmp/buildx-cache-new ]; then
+            rm -rf /tmp/buildx-cache
+            mv /tmp/buildx-cache-new /tmp/buildx-cache
+          fi
 
       # ── Pull-based deploy via engram-deployer on FastRaid ────────────────
       # Replaces the old "SSH as root + run a shell script" pattern. Runner

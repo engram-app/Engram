@@ -13,7 +13,9 @@ FROM oven/bun:1.3 AS frontend
 
 WORKDIR /frontend
 COPY frontend/package.json frontend/bun.lock ./
-RUN bun install --frozen-lockfile
+# Bun global package cache survives across builds on self-hosted runners.
+RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-cache \
+    bun install --frozen-lockfile
 COPY frontend/ ./
 RUN bun run build
 
@@ -26,13 +28,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-RUN mix local.hex --force && mix local.rebar --force
-
 ENV MIX_ENV="prod"
+# Persist hex + rebar package caches across builds (self-hosted runner disk).
+# Without these mounts, mix.exs invalidation re-downloads every hex tarball.
+RUN --mount=type=cache,target=/root/.hex,id=mix-hex \
+    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
+    mix local.hex --force && mix local.rebar --force
 
 # Fetch deps — cache mount means only changed deps are re-downloaded
 COPY mix.exs mix.lock ./
 RUN --mount=type=cache,target=/app/deps,id=mix-deps \
+    --mount=type=cache,target=/root/.hex,id=mix-hex \
+    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
     mix deps.get --only $MIX_ENV
 
 # Compile deps — cache mount preserves compiled artifacts between builds
@@ -40,14 +47,16 @@ RUN mkdir -p config
 COPY config/config.exs config/runtime.exs config/prod.exs config/
 RUN --mount=type=cache,target=/app/deps,id=mix-deps \
     --mount=type=cache,target=/app/_build,id=mix-build \
+    --mount=type=cache,target=/root/.hex,id=mix-hex \
+    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
     mix deps.compile
 
 # Compile app code — frontend assets not needed for compilation,
 # only for the release. Keeping them separate means frontend-only
 # changes don't invalidate the Elixir compile layer.
+# (runtime.exs already copied above — not re-copied here.)
 COPY lib lib
 COPY priv priv
-COPY config/runtime.exs config/
 COPY --from=frontend /priv/static/app priv/static/app
 # Compile and release in one RUN, no _build cache mount. Splitting the
 # two steps with a shared _build cache produced stale beams in CI —
