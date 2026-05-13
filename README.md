@@ -293,4 +293,18 @@ See `docs/context/production-deployment.md` for full infrastructure details.
 
 ## License
 
-MIT
+Engram is **dual-licensed**.
+
+- For individuals and organizations that satisfy the Small Business clause
+  (fewer than 100 total employees + contractors, and less than $1M USD
+  inflation-adjusted revenue in the prior tax year), the source code is
+  available under the [PolyForm Small Business License 1.0.0](LICENSE).
+- For all other organizations, a separate commercial license is required.
+  See [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md) or email
+  `support@engram.page`.
+
+Contributions are accepted under the
+[Engram Contributor License Agreement](.github/CLA.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Copyright 2026 Rasbandit Software Solutions LLC d/b/a Engram.

@@ -4,12 +4,13 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.90",
+      version: "0.5.91",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      package: package(),
       listeners: [Phoenix.CodeReloader],
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore.exs",
@@ -45,6 +46,14 @@ defmodule Engram.MixProject do
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  defp package do
+    [
+      name: "engram",
+      licenses: ["PolyForm-Small-Business-1.0.0"],
+      links: %{"Source" => "https://github.com/Rasbandit/Engram"}
+    ]
+  end
 
   # Specifies your project dependencies.
   #

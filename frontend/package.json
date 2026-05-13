@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Engram web frontend",
   "main": "index.js",
+  "private": true,
+  "license": "SEE LICENSE IN ../LICENSE",
+  "author": "Rasbandit Software Solutions LLC d/b/a Engram",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -12,8 +15,6 @@
     "test:e2e:clerk": "playwright test --project=clerk"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@clerk/clerk-react": "^5.61.4",
     "@codemirror/lang-markdown": "^6.5.0",
