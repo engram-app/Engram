@@ -7,7 +7,7 @@ Agreement ("**Agreement**") clarifies the intellectual property license granted
 with Contributions from any person or entity to the Company.
 
 By signing this Agreement — via the CLA Assistant bot on the
-[github.com/Rasbandit/Engram](https://github.com/Rasbandit/Engram) repository
+[github.com/engram-app/Engram](https://github.com/engram-app/Engram) repository
 or by any other written acceptance — You accept and agree to the following
 terms and conditions for Your present and future Contributions submitted to
 the Project.

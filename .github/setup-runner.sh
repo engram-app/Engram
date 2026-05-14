@@ -92,7 +92,7 @@ fi
 #   curl -o actions-runner-linux-x64.tar.gz -L \
 #     https://github.com/actions/runner/releases/download/v2.323.0/actions-runner-linux-x64-2.323.0.tar.gz
 #   tar xzf actions-runner-linux-x64.tar.gz
-#   ./config.sh --url https://github.com/Rasbandit/Engram \
+#   ./config.sh --url https://github.com/engram-app/Engram \
 #     --labels self-hosted,engram --name engram-runner-2
 #   sudo ./svc.sh install && sudo ./svc.sh start
 #

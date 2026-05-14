@@ -6,7 +6,7 @@ token, daemon validates against GitHub's JWKS and pins
 `repository`/`ref`/`workflow_ref`. Runner holds zero long-lived
 credentials.
 
-See [engram-deployer repo](https://github.com/Rasbandit/engram-deployer)
+See [engram-deployer repo](https://github.com/engram-app/engram-deployer)
 for the daemon implementation. See `package/INSTALL.md` in that repo for
 plugin install details.
 
@@ -20,7 +20,7 @@ the deploy-fastraid job will fail (missing secret).
 Unraid web UI → **Plugins** → **Install Plugin** → paste:
 
 ```
-https://github.com/Rasbandit/engram-deployer/releases/download/v0.1.0/engram-deployer.plg
+https://github.com/engram-app/engram-deployer/releases/download/v0.1.0/engram-deployer.plg
 ```
 
 The install hook generates a self-signed ed25519 cert (10-year validity)
@@ -32,7 +32,7 @@ and prints its SHA-256 fingerprint. Capture it.
 ssh root@10.0.20.214 'cat /boot/config/plugins/engram-deployer/cert.pem'
 ```
 
-Paste the entire PEM into a new repo secret on `Rasbandit/Engram`:
+Paste the entire PEM into a new repo secret on `engram-app/Engram`:
 
 - **Name:** `DEPLOYER_CERT_PEM`
 - **Value:** the PEM (including `-----BEGIN CERTIFICATE-----` lines)

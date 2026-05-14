@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.101",
+      version: "0.5.102",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -51,7 +51,7 @@ defmodule Engram.MixProject do
     [
       name: "engram",
       licenses: ["PolyForm-Small-Business-1.0.0"],
-      links: %{"Source" => "https://github.com/Rasbandit/Engram"}
+      links: %{"Source" => "https://github.com/engram-app/Engram"}
     ]
   end
 

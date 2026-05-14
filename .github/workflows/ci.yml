@@ -79,6 +79,15 @@ jobs:
       e2e-cache-hit: ${{ steps.e2e-lookup.outputs.cache-hit }}
       plugin-sha: ${{ steps.plugin-sha.outputs.sha }}
     steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram-obsidian-sync
+
       - uses: actions/checkout@v6
 
       - name: Resolve plugin SHA
@@ -87,7 +96,7 @@ jobs:
           DISPATCH_REF: ${{ github.event.client_payload.plugin_ref }}
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # Pin exact plugin commit that downstream e2e-clerk will checkout.
           # Priority matches e2e-clerk's "Checkout plugin" step:
@@ -97,7 +106,7 @@ jobs:
           #
           # Uses curl (not gh CLI) — the engram-isolated runners don't ship gh
           # on the default PATH for the fingerprint runner image.
-          API="https://api.github.com/repos/Rasbandit/Engram-obsidian-sync"
+          API="https://api.github.com/repos/engram-app/Engram-obsidian-sync"
           AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
           resolve_sha() {
@@ -352,6 +361,15 @@ jobs:
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
 
     steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram-obsidian-sync
+
       # ------------------------------------------------------------------
       # Cleanup + checkout (both repos)
       # ------------------------------------------------------------------
@@ -410,7 +428,7 @@ jobs:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
           PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # Branch is used only to scope the fetch; the final checkout pins
           # the exact PLUGIN_SHA resolved by the `fingerprint` job. This
@@ -422,7 +440,7 @@ jobs:
           elif curl -fsS -o /dev/null \
                  -H "Authorization: Bearer ${GH_TOKEN}" \
                  -H "Accept: application/vnd.github+json" \
-                 "https://api.github.com/repos/Rasbandit/Engram-obsidian-sync/branches/$CURRENT_BRANCH" 2>/dev/null; then
+                 "https://api.github.com/repos/engram-app/Engram-obsidian-sync/branches/$CURRENT_BRANCH" 2>/dev/null; then
             BRANCH="$CURRENT_BRANCH"
             echo "🔗 Auto-linked plugin branch: $BRANCH"
           else
@@ -437,7 +455,7 @@ jobs:
             git checkout -B "$BRANCH" "$PLUGIN_SHA"
           else
             git clone --branch "$BRANCH" --single-branch \
-              "https://x-access-token:${GH_TOKEN}@github.com/Rasbandit/Engram-obsidian-sync.git" plugin-src
+              "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian-sync.git" plugin-src
             cd plugin-src
             git checkout "$PLUGIN_SHA"
           fi
@@ -715,7 +733,7 @@ jobs:
         if: always() && github.event_name == 'repository_dispatch'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           SHORT_SHA="${{ github.event.client_payload.plugin_ref }}"
           if [ -z "$SHORT_SHA" ]; then
@@ -723,7 +741,7 @@ jobs:
             exit 0
           fi
           # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
-          API="https://api.github.com/repos/Rasbandit/Engram-obsidian-sync"
+          API="https://api.github.com/repos/engram-app/Engram-obsidian-sync"
           AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
           PLUGIN_SHA=$(curl -fsS "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
@@ -1379,17 +1397,26 @@ jobs:
     needs: fingerprint
     runs-on: ubuntu-latest
     steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram-obsidian-sync
+
       - name: Report cached e2e pass to plugin repo
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SHORT_SHA: ${{ github.event.client_payload.plugin_ref }}
         run: |
           if [ -z "$SHORT_SHA" ]; then
             echo "No plugin_ref in payload, skipping status report"
             exit 0
           fi
-          PLUGIN_SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/${SHORT_SHA}" --jq '.sha')
-          gh api "repos/Rasbandit/Engram-obsidian-sync/statuses/${PLUGIN_SHA}" \
+          PLUGIN_SHA=$(gh api "repos/engram-app/Engram-obsidian-sync/commits/${SHORT_SHA}" --jq '.sha')
+          gh api "repos/engram-app/Engram-obsidian-sync/statuses/${PLUGIN_SHA}" \
             -f state="success" \
             -f context="backend/e2e" \
             -f description="E2E tests passed (cached fingerprint match)" \

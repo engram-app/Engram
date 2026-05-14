@@ -29,7 +29,7 @@ jobs:
 
           # 4. Keep only latest 3 GHCR engram release tags
           docker images --format '{{.Repository}}:{{.Tag}}' \
-            --filter "reference=ghcr.io/rasbandit/engram:*" \
+            --filter "reference=ghcr.io/engram-app/engram:*" \
             | grep -v ':latest$' \
             | tail -n +3 \
             | xargs -r docker rmi 2>/dev/null || true
