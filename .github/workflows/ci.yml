@@ -71,7 +71,7 @@ jobs:
     # This lets a plugin-only change (same backend, different plugin SHA) miss the
     # e2e cache and re-run integration, while still hitting the backend cache so
     # pure backend jobs skip.
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     outputs:
       backend-hash: ${{ steps.compute.outputs.backend-hash }}
       e2e-hash: ${{ steps.compute.outputs.e2e-hash }}
@@ -202,7 +202,7 @@ jobs:
     if: |
       needs.fingerprint.outputs.e2e-cache-hit != 'true'
       || (github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true')
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     outputs:
       image: ${{ steps.tag.outputs.image }}
     steps:
@@ -244,7 +244,7 @@ jobs:
     # Consumed by unit-tests, lint, e2e-browser — all backend-only and skipped
     # on plugin dispatch.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
@@ -350,7 +350,7 @@ jobs:
     # e2e-clerk is the plugin↔backend contract test. Skip only when this
     # exact (backend, plugin) pair has already passed.
     if: needs.fingerprint.outputs.e2e-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
 
     env:
       CI_PROJECT: engram-ci-${{ github.run_id }}
@@ -820,7 +820,7 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
     # Also skip when fingerprint already proved green for this content.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
 
     env:
       PG_CONTAINER: engram-unit-test-${{ github.run_id }}
@@ -946,7 +946,7 @@ jobs:
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
     # Also skip when fingerprint already proved green.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -1037,7 +1037,7 @@ jobs:
     # so the local-auth API path is backend-internal.
     # Also skip when fingerprint already proved green.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
 
     env:
       CI_PROJECT: engram-ci-local-${{ github.run_id }}
@@ -1152,7 +1152,7 @@ jobs:
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip when fingerprint already proved green.
     if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
 
     env:
       PG_CONTAINER: engram-e2e-browser-${{ github.run_id }}
@@ -1368,7 +1368,7 @@ jobs:
   record-pass:
     if: always() && needs.ci.result == 'success'
     needs: [fingerprint, ci]
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Write backend fingerprint marker
         if: github.event_name != 'repository_dispatch'
@@ -1435,7 +1435,7 @@ jobs:
       && github.event_name == 'push'
       && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
     needs: [fingerprint, ci]
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       packages: write
       contents: read
