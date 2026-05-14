@@ -131,7 +131,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | **7: MCP** | Hermes MCP server | MCP tools work from Claude/Cursor |
 | **8: Web UI** | LiveView for login, search, logs | Web UI functional |
 | **9: Deploy** | Fly.io, dns_cluster, CI, load testing | All tests pass on Fly |
-| **10: Billing** *(future)* | Stripe, subscriptions, quotas | Users can subscribe/upgrade |
+| **10: Billing** *(future)* | Paddle (Merchant-of-Record), subscriptions, quotas | Users can subscribe/upgrade |
 
 ## Product Tiers
 
@@ -159,6 +159,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | `docs/context/benchmark-plan.md` | Embedding/chunking/reranker benchmark methodology |
 | `docs/context/code-audit-2026-04.md` | Full codebase audit: 7 CRITICAL, 18 HIGH, 30 MEDIUM findings |
 | `docs/context/mcp-oauth.md` | OAuth 2.1 + DCR on `/api/mcp`: wire flow, endpoints, token model, scope grammar, schema |
+| `docs/context/paddle-integration.md` | Paddle MoR integration: webhook signature, event lifecycle, `custom_data` contract, affiliate flow |
 
 ## Life OS
 project: engram
