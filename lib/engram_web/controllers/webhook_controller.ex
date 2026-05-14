@@ -53,9 +53,8 @@ defmodule EngramWeb.WebhookController do
   # delimited. Reject anything older than @max_signature_age_seconds to
   # prevent replay.
   defp verify_signature(payload, sig_header) do
-    secret = Application.get_env(:engram, :paddle_notification_secret)
-
-    with {:ok, timestamp} <- extract_timestamp(sig_header),
+    with {:ok, secret} <- fetch_notification_secret(),
+         {:ok, timestamp} <- extract_timestamp(sig_header),
          {:ok, expected_sig} <- extract_h1_signature(sig_header),
          :ok <- check_timestamp_age(timestamp) do
       signed_payload = "#{timestamp}:#{payload}"
@@ -69,6 +68,17 @@ defmodule EngramWeb.WebhookController do
       else
         {:error, "invalid signature"}
       end
+    end
+  end
+
+  # Fail clearly when PADDLE_NOTIFICATION_SECRET is missing rather than letting
+  # :crypto.mac/4 crash on a nil key. The 400 the caller emits is appropriate:
+  # we cannot verify, so we cannot accept.
+  defp fetch_notification_secret do
+    case Application.get_env(:engram, :paddle_notification_secret) do
+      nil -> {:error, "webhook secret not configured"}
+      "" -> {:error, "webhook secret not configured"}
+      secret when is_binary(secret) -> {:ok, secret}
     end
   end
 

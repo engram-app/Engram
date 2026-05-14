@@ -126,6 +126,17 @@ defmodule Engram.BillingTest do
 
       assert {:error, {:paddle_error, 500}} = Billing.create_portal_session(user)
     end
+
+    test "propagates :paddle_not_configured when api key is missing" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_customer_id: "ctm_unconfig")
+
+      expect(Engram.Paddle.ClientMock, :create_customer_portal_session, fn _ ->
+        {:error, :paddle_not_configured}
+      end)
+
+      assert {:error, :paddle_not_configured} = Billing.create_portal_session(user)
+    end
   end
 
   describe "upsert_from_paddle_event/1" do
