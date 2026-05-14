@@ -17,7 +17,11 @@ defmodule Engram.Paddle.Client.HTTP do
     url = base_url() <> "/customers/" <> customer_id <> "/portal-sessions"
 
     case Req.post(url, headers: headers(), json: %{}, receive_timeout: 10_000) do
-      {:ok, %Req.Response{status: 201, body: %{"data" => %{"urls" => %{"general" => %{"overview" => overview}}}}}} ->
+      {:ok,
+       %Req.Response{
+         status: 201,
+         body: %{"data" => %{"urls" => %{"general" => %{"overview" => overview}}}}
+       }} ->
         {:ok, overview}
 
       {:ok, %Req.Response{status: status, body: body}} ->
