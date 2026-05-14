@@ -54,11 +54,11 @@ defmodule EngramWeb.Router do
     }
   end
 
-  # Stripe webhooks — no auth, raw body for signature verification
+  # Paddle webhooks — no auth, raw body for signature verification
   scope "/webhooks", EngramWeb do
     pipe_through :api
 
-    post "/stripe", WebhookController, :stripe
+    post "/paddle", WebhookController, :paddle
   end
 
   # OAuth 2.1 discovery documents — RFC 8414 + RFC 9728. Public, no auth.
@@ -149,9 +149,11 @@ defmodule EngramWeb.Router do
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
 
-    # Billing
+    # Billing — Paddle checkout opens client-side via paddle.js, so the
+    # backend only exposes status, the public client config, and a portal
+    # redirect.
     get "/billing/status", BillingController, :status
-    post "/billing/checkout-session", BillingController, :create_checkout
+    get "/billing/config", BillingController, :config
     get "/billing/portal", BillingController, :customer_portal
 
     # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer

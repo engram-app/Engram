@@ -48,8 +48,8 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
         user_id: user.id,
         status: "active",
         tier: "starter",
-        stripe_customer_id: "cus_test",
-        stripe_subscription_id: "sub_test"
+        paddle_customer_id: "ctm_test",
+        paddle_subscription_id: "sub_test"
       },
       skip_tenant_check: true
     )
@@ -65,8 +65,8 @@ defmodule EngramWeb.Plugs.RequireActiveSubscriptionIntegrationTest do
           user_id: user.id,
           status: unquote(status),
           tier: "starter",
-          stripe_customer_id: "cus_test",
-          stripe_subscription_id: "sub_test"
+          paddle_customer_id: "ctm_test",
+          paddle_subscription_id: "sub_test"
         },
         skip_tenant_check: true
       )

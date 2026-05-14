@@ -35,10 +35,22 @@ defmodule EngramWeb.BillingControllerTest do
     end
   end
 
-  describe "POST /api/billing/checkout-session" do
-    test "returns 400 for invalid tier", %{conn: conn} do
-      conn = post(conn, "/api/billing/checkout-session", %{"tier" => "invalid"})
-      assert json_response(conn, 400)["error"] =~ "tier"
+  describe "GET /api/billing/config" do
+    test "returns Paddle.js overlay config for the authenticated user", %{conn: conn, user: user} do
+      conn = get(conn, "/api/billing/config")
+      body = json_response(conn, 200)
+
+      assert body["client_token"] == "live_token_test_fake"
+      assert body["environment"] == "sandbox"
+      assert body["price_ids"]["starter"] == "pri_starter_test"
+      assert body["price_ids"]["pro"] == "pri_pro_test"
+      assert body["customer_email"] == user.email
+      assert body["custom_data"]["user_id"] == user.id
+    end
+
+    test "returns 401 without auth" do
+      conn = build_conn() |> get("/api/billing/config")
+      assert json_response(conn, 401)
     end
   end
 end

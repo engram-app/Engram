@@ -78,7 +78,7 @@ mix engram.set_cooldown <user_id> <days|null>
 
 The Mix task accepts `null`, `none`, or `NULL` to clear the column. Negative values are rejected at the function-clause level — there is no `0`-vs-`NULL` distinction at the Crypto layer (both bypass the cooldown predicate).
 
-Hosted-mode default policy (until Stripe webhook wiring lands per follow-up #10): the operator sets cooldown manually per user, typically by tier (Free=1 day, Pro=NULL).
+Hosted-mode default policy (until Paddle webhook wiring lands per follow-up #10): the operator sets cooldown manually per user, typically by tier (Free=1 day, Pro=NULL).
 
 ## Toggle Flow & State Machine
 

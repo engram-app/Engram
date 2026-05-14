@@ -156,18 +156,25 @@ if auth_provider == :clerk do
   config :engram, :clerk_publishable_key, clerk_pub_key
 end
 
-# Stripe billing
-if stripe_key = System.get_env("STRIPE_SECRET_KEY") do
-  config :stripity_stripe, api_key: stripe_key
-end
-
-if stripe_webhook_secret = System.get_env("STRIPE_WEBHOOK_SECRET") do
-  config :engram, :stripe_webhook_secret, stripe_webhook_secret
-end
-
+# Paddle billing (Merchant-of-Record). Secret/server keys are required only
+# when actually calling the Paddle API; the public client_token + price_ids
+# are required for the frontend overlay. PADDLE_ENV chooses sandbox vs prod.
 if config_env() != :test do
-  config :engram, :stripe_starter_price_id, System.get_env("STRIPE_STARTER_PRICE_ID")
-  config :engram, :stripe_pro_price_id, System.get_env("STRIPE_PRO_PRICE_ID")
+  if api_key = System.get_env("PADDLE_API_KEY") do
+    config :engram, :paddle_api_key, api_key
+  end
+
+  if secret = System.get_env("PADDLE_NOTIFICATION_SECRET") do
+    config :engram, :paddle_notification_secret, secret
+  end
+
+  if token = System.get_env("PADDLE_CLIENT_TOKEN") do
+    config :engram, :paddle_client_token, token
+  end
+
+  config :engram, :paddle_starter_price_id, System.get_env("PADDLE_STARTER_PRICE_ID")
+  config :engram, :paddle_pro_price_id, System.get_env("PADDLE_PRO_PRICE_ID")
+  config :engram, :paddle_env, System.get_env("PADDLE_ENV", "sandbox")
 end
 
 # Key provider — skip in :test so test.exs stable key is not overwritten by a nil env read.

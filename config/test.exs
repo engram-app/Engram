@@ -86,11 +86,14 @@ config :phoenix,
 config :engram, :clerk_jwks_url, nil
 config :engram, :clerk_issuer, nil
 
-# Stripe — disabled in tests, use Mox
-config :stripity_stripe, api_key: "sk_test_fake"
-config :engram, :stripe_webhook_secret, "whsec_test_fake"
-config :engram, :stripe_starter_price_id, "price_starter_test"
-config :engram, :stripe_pro_price_id, "price_pro_test"
+# Paddle — sandbox fixtures, no live network calls. Client behaviour is Mox-mocked.
+config :engram, :paddle_api_key, "pdl_apns_test_fake"
+config :engram, :paddle_notification_secret, "pdl_ntfn_test_fake"
+config :engram, :paddle_client_token, "live_token_test_fake"
+config :engram, :paddle_starter_price_id, "pri_starter_test"
+config :engram, :paddle_pro_price_id, "pri_pro_test"
+config :engram, :paddle_env, "sandbox"
+config :engram, :paddle_client, Engram.Paddle.ClientMock
 
 # Default to local auth provider in tests
 config :engram, :auth_provider, :local

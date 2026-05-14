@@ -1,7 +1,9 @@
 defmodule Engram.Billing do
   @moduledoc """
-  Billing context: Stripe checkout sessions, webhook processing, tier/trial queries,
-  and plan-based limits enforcement.
+  Billing context: Paddle event processing, tier/trial queries, customer
+  portal redirect, and plan-based limits enforcement. Checkout itself
+  happens client-side in the Paddle.js overlay — the backend only reacts
+  to webhooks.
   """
 
   import Ecto.Query
@@ -68,8 +70,6 @@ defmodule Engram.Billing do
 
   # ── Private Limit Helpers ─────────────────────────────────────────
 
-  # Returns the value from the user's override row for `key`, or nil if no override exists
-  # or the key is absent in the overrides JSONB column.
   defp override_value(user_id, key) do
     Repo.one(
       from(o in UserOverride,
@@ -81,7 +81,6 @@ defmodule Engram.Billing do
     |> decode_json_value()
   end
 
-  # Returns the value from the user's plan limits for `key`, or nil.
   defp plan_value(%{plan_id: nil}, _key), do: nil
 
   defp plan_value(%{plan_id: plan_id}, key) do
@@ -95,12 +94,7 @@ defmodule Engram.Billing do
     |> decode_json_value()
   end
 
-  # Postgres returns JSON values as Postgrex decoded types:
-  # integers → integer, booleans → boolean, nil (missing key) → nil.
-  # No transformation needed — just return as-is.
   defp decode_json_value(value), do: value
-
-  @trial_days 7
 
   # ── Tier & Status Queries ──────────────────────────────────────
 
@@ -120,7 +114,8 @@ defmodule Engram.Billing do
 
   @doc """
   Returns true if the user has an active, past_due, or trialing subscription.
-  Users must start a trial (with card on file) via Stripe Checkout before syncing.
+  Users must start a 7-day trial (card on file) via the Paddle overlay
+  before syncing — the trial is configured on the Paddle price.
   """
   def active?(user) do
     case get_subscription(user) do
@@ -139,7 +134,7 @@ defmodule Engram.Billing do
     )
   end
 
-  @doc "Returns remaining trial days from the Stripe subscription, or 0."
+  @doc "Returns remaining trial days from the Paddle subscription, or 0."
   def trial_days_remaining(user) do
     case get_subscription(user) do
       %Subscription{status: "trialing", current_period_end: period_end}
@@ -152,106 +147,86 @@ defmodule Engram.Billing do
     end
   end
 
-  # ── Checkout Session ───────────────────────────────────────────
-
-  @doc """
-  Creates a Stripe Checkout Session. Includes a 7-day trial with card collection
-  so the user can try before being charged.
-  """
-  def create_checkout_session(user, tier) when tier in ~w(starter pro) do
-    price_id = price_id_for(tier)
-
-    params = %{
-      mode: :subscription,
-      line_items: [%{price: price_id, quantity: 1}],
-      customer_email: user.email,
-      client_reference_id: to_string(user.id),
-      metadata: %{"tier" => tier},
-      subscription_data: %{trial_period_days: @trial_days},
-      payment_method_collection: :always,
-      success_url: success_url(),
-      cancel_url: cancel_url()
-    }
-
-    case Stripe.Checkout.Session.create(params) do
-      {:ok, session} -> {:ok, session.url}
-      {:error, error} -> {:error, error}
-    end
-  end
-
   # ── Customer Portal ────────────────────────────────────────────
 
+  @doc """
+  Create a Paddle customer-portal session for the user's subscription and
+  return the URL. Returns `{:error, :no_subscription}` if the user has no
+  subscription yet.
+  """
   def create_portal_session(user) do
     case get_subscription(user) do
-      %Subscription{stripe_customer_id: customer_id} ->
-        case Stripe.BillingPortal.Session.create(%{
-               customer: customer_id,
-               return_url: return_url()
-             }) do
-          {:ok, session} -> {:ok, session.url}
-          {:error, error} -> {:error, error}
-        end
+      %Subscription{paddle_customer_id: customer_id} when is_binary(customer_id) ->
+        Engram.Paddle.Client.impl().create_customer_portal_session(customer_id)
 
-      nil ->
+      _ ->
         {:error, :no_subscription}
     end
   end
 
   # ── Webhook Event Processing ───────────────────────────────────
 
-  def upsert_from_stripe_event(%{
-        "type" => "checkout.session.completed",
-        "data" => %{"object" => session}
-      }) do
-    %{
-      "customer" => customer_id,
-      "subscription" => subscription_id,
-      "client_reference_id" => user_id_str,
-      "metadata" => %{"tier" => tier}
-    } = session
+  @doc """
+  Upsert a Subscription row from a verified Paddle notification.
 
-    user_id = String.to_integer(user_id_str)
+  Handles `subscription.created` (insert), `subscription.activated`,
+  `subscription.updated`, `subscription.past_due`, and
+  `subscription.canceled` (update by paddle_subscription_id). All other
+  event types are accepted but ignored.
+  """
+  def upsert_from_paddle_event(%{"event_type" => "subscription.created", "data" => data}) do
+    case extract_user_id(data) do
+      {:ok, user_id} ->
+        attrs = %{
+          user_id: user_id,
+          paddle_customer_id: data["customer_id"],
+          paddle_subscription_id: data["id"],
+          tier: tier_from_subscription(data),
+          status: data["status"],
+          current_period_end: parse_period_end(data),
+          custom_data: data["custom_data"] || %{}
+        }
 
-    attrs = %{
-      user_id: user_id,
-      stripe_customer_id: customer_id,
-      stripe_subscription_id: subscription_id,
-      tier: tier,
-      status: "trialing"
-    }
+        # Omit :custom_data from the replace list. Paddle delivers at-least-once,
+        # so a retried subscription.created must NOT clobber the affiliate /
+        # utm attribution captured on first delivery.
+        %Subscription{}
+        |> Subscription.changeset(attrs)
+        |> Repo.insert(
+          on_conflict:
+            {:replace,
+             [
+               :paddle_customer_id,
+               :paddle_subscription_id,
+               :tier,
+               :status,
+               :current_period_end,
+               :updated_at
+             ]},
+          conflict_target: :user_id,
+          skip_tenant_check: true
+        )
 
-    %Subscription{}
-    |> Subscription.changeset(attrs)
-    |> Repo.insert(
-      on_conflict:
-        {:replace, [:stripe_customer_id, :stripe_subscription_id, :tier, :status, :updated_at]},
-      conflict_target: :user_id,
-      skip_tenant_check: true
-    )
+      :error ->
+        {:error, :missing_user_id}
+    end
   end
 
-  def upsert_from_stripe_event(%{
-        "type" => type,
-        "data" => %{"object" => sub_obj}
-      })
-      when type in ~w(customer.subscription.updated customer.subscription.deleted) do
-    %{
-      "id" => subscription_id,
-      "status" => status,
-      "current_period_end" => period_end_unix,
-      "items" => %{"data" => [%{"price" => %{"id" => price_id}} | _]}
-    } = sub_obj
-
-    tier = tier_from_price_id(price_id)
-    period_end = DateTime.from_unix!(period_end_unix)
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(subscription.activated subscription.updated subscription.past_due subscription.canceled) do
+    subscription_id = data["id"]
 
     case Repo.one(
-           from(s in Subscription, where: s.stripe_subscription_id == ^subscription_id),
+           from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
            skip_tenant_check: true
          ) do
       %Subscription{} = sub ->
         sub
-        |> Subscription.changeset(%{status: status, tier: tier, current_period_end: period_end})
+        |> Subscription.changeset(%{
+          status: data["status"],
+          tier: tier_from_subscription(data),
+          current_period_end: parse_period_end(data)
+        })
         |> Repo.update(skip_tenant_check: true)
 
       nil ->
@@ -259,22 +234,40 @@ defmodule Engram.Billing do
     end
   end
 
-  def upsert_from_stripe_event(_event), do: {:ok, :ignored}
+  def upsert_from_paddle_event(_event), do: {:ok, :ignored}
 
   # ── Helpers ────────────────────────────────────────────────────
 
-  defp price_id_for("starter"), do: Application.get_env(:engram, :stripe_starter_price_id)
-  defp price_id_for("pro"), do: Application.get_env(:engram, :stripe_pro_price_id)
+  defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_integer(id), do: {:ok, id}
+
+  defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_binary(id) do
+    case Integer.parse(id) do
+      {parsed, ""} -> {:ok, parsed}
+      _ -> :error
+    end
+  end
+
+  defp extract_user_id(_), do: :error
+
+  defp tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
+    do: tier_from_price_id(price_id)
+
+  defp tier_from_subscription(_), do: "starter"
 
   defp tier_from_price_id(price_id) do
     cond do
-      price_id == Application.get_env(:engram, :stripe_starter_price_id) -> "starter"
-      price_id == Application.get_env(:engram, :stripe_pro_price_id) -> "pro"
+      price_id == Application.get_env(:engram, :paddle_starter_price_id) -> "starter"
+      price_id == Application.get_env(:engram, :paddle_pro_price_id) -> "pro"
       true -> "starter"
     end
   end
 
-  defp success_url, do: EngramWeb.Endpoint.url() <> "/billing?success=true"
-  defp cancel_url, do: EngramWeb.Endpoint.url() <> "/billing?canceled=true"
-  defp return_url, do: EngramWeb.Endpoint.url() <> "/billing"
+  defp parse_period_end(%{"current_billing_period" => %{"ends_at" => ts}}) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _offset} -> DateTime.truncate(dt, :second)
+      _ -> nil
+    end
+  end
+
+  defp parse_period_end(_), do: nil
 end

@@ -40,7 +40,7 @@ Complete decision audit for the Engram Elixir/Phoenix architecture. Captures wha
 | **MCP fallback** | Hermes MCP (primary) | If Hermes abandoned: raw JSON-RPC stdio server (~200 LOC). MCP protocol is simple. Monitor Hermes activity quarterly. |
 | **Tokenizer for chunking** | Approximate word-based (~4 chars/token) | Voyage handles actual tokenization. 512 "tokens" is a soft target. |
 | **Email** | None for launch | API key auth doesn't need email verification. Add Swoosh for password reset when there are paying users. |
-| **Billing** | None for launch (future Phase 10) | Stripe integration after core product works. Quota enforcement designed separately. |
+| **Billing** | None for launch (future Phase 10) | Paddle (Merchant-of-Record) integration after core product works — Paddle handles VAT/sales tax globally, simplifying international SaaS pricing. Quota enforcement designed separately. |
 | **Load testing** | Deferred to Phase 9 (Deploy) | Key questions: WebSocket connections/machine, embedding throughput, Voyage rate ceiling impact on bulk operations. |
 
 ## Unchanged Decisions

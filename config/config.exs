@@ -99,9 +99,6 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Stripe billing
-config :stripity_stripe, api_key: "sk_test_placeholder"
-
 # Key provider defaults (overridden by runtime.exs via env vars)
 config :engram,
   key_provider: Engram.Crypto.KeyProvider.Local,

@@ -1,8 +1,12 @@
 defmodule Engram.BillingTest do
   use Engram.DataCase, async: true
 
+  import Mox
+
   alias Engram.Billing
   alias Engram.Billing.Subscription
+
+  setup :verify_on_exit!
 
   describe "tier/1" do
     test "returns :none for user with no subscription" do
@@ -95,88 +99,199 @@ defmodule Engram.BillingTest do
     end
   end
 
-  describe "upsert_from_stripe_event/1" do
-    test "creates subscription from checkout.session.completed" do
+  describe "create_portal_session/1" do
+    test "returns portal URL from the Paddle client" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_customer_id: "ctm_portal_test")
+
+      expect(Engram.Paddle.ClientMock, :create_customer_portal_session, fn "ctm_portal_test" ->
+        {:ok, "https://customer-portal.paddle.com/abc"}
+      end)
+
+      assert {:ok, "https://customer-portal.paddle.com/abc"} = Billing.create_portal_session(user)
+    end
+
+    test "returns :no_subscription when user has no subscription" do
+      user = insert(:user)
+      assert {:error, :no_subscription} = Billing.create_portal_session(user)
+    end
+
+    test "propagates client errors" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_customer_id: "ctm_err")
+
+      expect(Engram.Paddle.ClientMock, :create_customer_portal_session, fn _ ->
+        {:error, {:paddle_error, 500}}
+      end)
+
+      assert {:error, {:paddle_error, 500}} = Billing.create_portal_session(user)
+    end
+
+    test "propagates :paddle_not_configured when api key is missing" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_customer_id: "ctm_unconfig")
+
+      expect(Engram.Paddle.ClientMock, :create_customer_portal_session, fn _ ->
+        {:error, :paddle_not_configured}
+      end)
+
+      assert {:error, :paddle_not_configured} = Billing.create_portal_session(user)
+    end
+  end
+
+  describe "upsert_from_paddle_event/1" do
+    test "subscription.created inserts a new row with custom_data" do
       user = insert(:user)
 
       event = %{
-        "type" => "checkout.session.completed",
+        "event_type" => "subscription.created",
+        "event_id" => "ntf_create_1",
         "data" => %{
-          "object" => %{
-            "customer" => "cus_test123",
-            "subscription" => "sub_test123",
-            "client_reference_id" => to_string(user.id),
-            "metadata" => %{"tier" => "starter"}
-          }
+          "id" => "sub_paddle_1",
+          "status" => "trialing",
+          "customer_id" => "ctm_paddle_1",
+          "items" => [
+            %{"price" => %{"id" => "pri_starter_test"}, "status" => "trialing"}
+          ],
+          "current_billing_period" => %{
+            "starts_at" => "2026-05-13T00:00:00Z",
+            "ends_at" => "2026-05-20T00:00:00Z"
+          },
+          "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
         }
       }
 
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
+      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_paddle_event(event)
       assert sub.user_id == user.id
-      assert sub.stripe_customer_id == "cus_test123"
-      assert sub.stripe_subscription_id == "sub_test123"
+      assert sub.paddle_customer_id == "ctm_paddle_1"
+      assert sub.paddle_subscription_id == "sub_paddle_1"
       assert sub.tier == "starter"
       assert sub.status == "trialing"
+      assert sub.custom_data == %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
     end
 
-    test "updates subscription from customer.subscription.updated" do
+    test "retried subscription.created preserves original custom_data (affiliate attribution)" do
       user = insert(:user)
 
-      insert(:subscription,
-        user: user,
-        stripe_subscription_id: "sub_test123",
-        stripe_customer_id: "cus_test123",
-        tier: "starter",
-        status: "active"
-      )
-
-      event = %{
-        "type" => "customer.subscription.updated",
+      first_event = %{
+        "event_type" => "subscription.created",
         "data" => %{
-          "object" => %{
-            "id" => "sub_test123",
-            "customer" => "cus_test123",
-            "status" => "past_due",
-            "current_period_end" => 1_750_000_000,
-            "items" => %{
-              "data" => [%{"price" => %{"id" => "price_pro_test"}}]
-            }
-          }
+          "id" => "sub_retry_1",
+          "status" => "trialing",
+          "customer_id" => "ctm_retry_1",
+          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
+          "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_original"}
         }
       }
 
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
-      assert sub.status == "past_due"
-      assert sub.tier == "pro"
+      assert {:ok, _} = Billing.upsert_from_paddle_event(first_event)
+
+      # Paddle redelivers. The replay arrives with different (or empty)
+      # custom_data — e.g. an operator-replayed event from the dashboard.
+      retry_event =
+        put_in(first_event, ["data", "custom_data"], %{
+          "user_id" => user.id,
+          "affiliate_ref" => "rf_replay"
+        })
+
+      assert {:ok, _} = Billing.upsert_from_paddle_event(retry_event)
+
+      # Re-fetch — Ecto's on_conflict struct return reflects the changeset, not
+      # the DB. The DB row is what we care about.
+      reloaded = Billing.get_subscription(user)
+      assert reloaded.custom_data["affiliate_ref"] == "rf_original"
     end
 
-    test "marks subscription canceled from customer.subscription.deleted" do
+    test "subscription.created accepts user_id as string in custom_data" do
       user = insert(:user)
 
-      insert(:subscription,
-        user: user,
-        stripe_subscription_id: "sub_test123",
-        stripe_customer_id: "cus_test123",
-        status: "active"
-      )
-
       event = %{
-        "type" => "customer.subscription.deleted",
+        "event_type" => "subscription.created",
         "data" => %{
-          "object" => %{
-            "id" => "sub_test123",
-            "customer" => "cus_test123",
-            "status" => "canceled",
-            "current_period_end" => 1_750_000_000,
-            "items" => %{
-              "data" => [%{"price" => %{"id" => "price_starter_test"}}]
-            }
-          }
+          "id" => "sub_paddle_2",
+          "status" => "active",
+          "customer_id" => "ctm_paddle_2",
+          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-06-13T00:00:00Z"},
+          "custom_data" => %{"user_id" => to_string(user.id)}
         }
       }
 
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
-      assert sub.status == "canceled"
+      assert {:ok, %Subscription{tier: "pro"}} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.created without user_id returns :missing_user_id" do
+      event = %{
+        "event_type" => "subscription.created",
+        "data" => %{
+          "id" => "sub_paddle_3",
+          "status" => "trialing",
+          "customer_id" => "ctm_paddle_3",
+          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
+          "custom_data" => %{}
+        }
+      }
+
+      assert {:error, :missing_user_id} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.updated mutates the existing row" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_upd_1", status: "trialing")
+
+      event = %{
+        "event_type" => "subscription.updated",
+        "data" => %{
+          "id" => "sub_upd_1",
+          "status" => "past_due",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
+               Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.canceled marks the row canceled" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_can_1", status: "active")
+
+      event = %{
+        "event_type" => "subscription.canceled",
+        "data" => %{
+          "id" => "sub_can_1",
+          "status" => "canceled",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.updated for unknown id returns :subscription_not_found" do
+      event = %{
+        "event_type" => "subscription.updated",
+        "data" => %{
+          "id" => "sub_does_not_exist",
+          "status" => "active",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:error, :subscription_not_found} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "unknown event types return {:ok, :ignored}" do
+      event = %{"event_type" => "transaction.completed", "data" => %{}}
+      assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
     end
   end
 end

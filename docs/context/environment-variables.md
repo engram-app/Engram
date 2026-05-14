@@ -72,6 +72,19 @@ Complete list of environment variables for the Engram Elixir/Phoenix application
 |----------|---------|---------|
 | `SENTRY_DSN` | — | Sentry error tracking DSN (empty = disabled) |
 
+## Billing (Paddle)
+
+Paddle is the Merchant-of-Record. Server-side keys gate API calls (portal sessions, etc.); the client token is sent to the frontend so it can open the Paddle.js overlay; price IDs map tiers to Paddle prices. See `docs/context/paddle-integration.md`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PADDLE_ENV` | `sandbox` | `sandbox` or `production` — selects api.paddle.com base URL |
+| `PADDLE_API_KEY` | — | Server-side Paddle API key (Bearer auth for portal sessions, etc.) |
+| `PADDLE_NOTIFICATION_SECRET` | — | Webhook signing secret — HMAC-SHA256 of `ts:body` |
+| `PADDLE_CLIENT_TOKEN` | — | Public token returned by `GET /api/billing/config` for the Paddle.js overlay |
+| `PADDLE_STARTER_PRICE_ID` | — | Paddle price ID for the Starter tier (`pri_…`) |
+| `PADDLE_PRO_PRICE_ID` | — | Paddle price ID for the Pro tier (`pri_…`) |
+
 ## References
 - Runtime config: `config/runtime.exs`
 - Dev config: `config/dev.exs`
