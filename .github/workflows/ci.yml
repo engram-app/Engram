@@ -398,9 +398,13 @@ jobs:
           # the exact PLUGIN_SHA resolved by the `fingerprint` job. This
           # guarantees the tested commit matches the e2e cache key even if
           # the upstream branch moves between fingerprint and this step.
+          # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
           if [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
             BRANCH="$EXPLICIT_BRANCH"
-          elif gh api "repos/Rasbandit/Engram-obsidian-sync/branches/$CURRENT_BRANCH" --silent 2>/dev/null; then
+          elif curl -fsS -o /dev/null \
+                 -H "Authorization: Bearer ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/Rasbandit/Engram-obsidian-sync/branches/$CURRENT_BRANCH" 2>/dev/null; then
             BRANCH="$CURRENT_BRANCH"
             echo "🔗 Auto-linked plugin branch: $BRANCH"
           else
@@ -698,8 +702,11 @@ jobs:
             echo "No plugin_ref in payload, skipping status report"
             exit 0
           fi
+          # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
+          API="https://api.github.com/repos/Rasbandit/Engram-obsidian-sync"
+          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
-          PLUGIN_SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/${SHORT_SHA}" --jq '.sha')
+          PLUGIN_SHA=$(curl -fsS "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
           # Determine overall E2E result from prior steps
           if [ "${{ job.status }}" = "success" ]; then
             STATE="success"
@@ -708,11 +715,9 @@ jobs:
             STATE="failure"
             DESC="E2E tests failed"
           fi
-          gh api "repos/Rasbandit/Engram-obsidian-sync/statuses/${PLUGIN_SHA}" \
-            -f state="$STATE" \
-            -f context="backend/e2e" \
-            -f description="$DESC" \
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -fsS -X POST "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
+            -d "$(jq -nc --arg state "$STATE" --arg context "backend/e2e" --arg description "$DESC" --arg target_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                  '{state:$state, context:$context, description:$description, target_url:$target_url}')"
 
       # ------------------------------------------------------------------
       # Cleanup — MUST kill everything, even on cancel/failure
