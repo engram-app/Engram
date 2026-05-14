@@ -35,20 +35,25 @@ RUN --mount=type=cache,target=/root/.hex,id=mix-hex \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
     mix local.hex --force && mix local.rebar --force
 
-# Fetch deps — cache mount means only changed deps are re-downloaded
+# Fetch deps — cache mount means only changed deps are re-downloaded.
+# sharing=locked: concurrent builds (push + plugin dispatch) serialize on
+# this mount inside buildkit instead of corrupting shared state. Default
+# sharing=shared raced and aborted with "graceful_stop" mid-compile.
 COPY mix.exs mix.lock ./
-RUN --mount=type=cache,target=/app/deps,id=mix-deps \
-    --mount=type=cache,target=/root/.hex,id=mix-hex \
-    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
+RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
+    --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
+    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
     mix deps.get --only $MIX_ENV
 
-# Compile deps — cache mount preserves compiled artifacts between builds
+# Compile deps — cache mount preserves compiled artifacts between builds.
+# sharing=locked on the large write-heavy mounts (mix-deps, mix-build) —
+# see comment above.
 RUN mkdir -p config
 COPY config/config.exs config/runtime.exs config/prod.exs config/
-RUN --mount=type=cache,target=/app/deps,id=mix-deps \
-    --mount=type=cache,target=/app/_build,id=mix-build \
-    --mount=type=cache,target=/root/.hex,id=mix-hex \
-    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
+RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
+    --mount=type=cache,target=/app/_build,id=mix-build,sharing=locked \
+    --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
+    --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
     mix deps.compile
 
 # Compile app code — frontend assets not needed for compilation,
@@ -64,7 +69,7 @@ COPY --from=frontend /priv/static/app priv/static/app
 # saw old beam files. Single-step build is correct; the extra minute
 # of compile time is worth the guarantee that the release matches the
 # current source.
-RUN --mount=type=cache,target=/app/deps,id=mix-deps \
+RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
     mix compile --force && \
     mix release && \
     cp -r /app/_build/prod/rel/engram /app/_release

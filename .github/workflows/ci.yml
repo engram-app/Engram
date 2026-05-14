@@ -32,14 +32,14 @@ on:
 permissions:
   contents: read
 
-# Serialize all backend CI runs on the self-hosted runner pool. Two parallel
-# `docker compose build` invocations collide on the shared buildkit cache
-# mounts (`id=mix-deps`, `id=mix-build`) and intermittently abort with
-# "graceful_stop" mid-compile. Queue runs instead of cancelling so plugin
-# dispatches and main pushes both complete.
-concurrency:
-  group: engram-backend-ci
-  cancel-in-progress: false
+# No workflow-level concurrency group: backend CI runs in parallel across
+# triggers (push + plugin dispatch). Previously serialized because shared
+# state collided — that's been addressed:
+#   1. Dockerfile cache mounts (`mix-deps`, `mix-build`) now use sharing=locked,
+#      so buildkit serializes mount access internally instead of corrupting.
+#   2. Xvfb cleanup is scoped to each run's owned display range
+#      (`pkill -9 -f "Xvfb :$d"` for $DISPLAY_MIN..$DISPLAY_MAX) so a
+#      concurrent e2e-clerk on a different run_number bucket isn't killed.
 
 env:
   DOCKER_BUILDKIT: "1"
@@ -355,20 +355,38 @@ jobs:
       # ------------------------------------------------------------------
       # Cleanup + checkout (both repos)
       # ------------------------------------------------------------------
+      - name: Compute display range for this run
+        id: display
+        run: |
+          # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
+          # runs with different run_numbers (modulo 15) get non-overlapping
+          # 6-display windows. Pre-cleanup and tear-down both need this range
+          # so they can scope Xvfb kills to displays this run actually owns.
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
+          MIN=$((BASE - 5))
+          MAX=$BASE
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "min=$MIN" >> "$GITHUB_OUTPUT"
+          echo "max=$MAX" >> "$GITHUB_OUTPUT"
+          echo "Display range owned by this run: :$MIN..:$MAX"
+
       - name: Pre-cleanup stale resources
+        env:
+          DISPLAY_MIN: ${{ steps.display.outputs.min }}
+          DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
           docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Orphan Xvfb from prior aborted runs holds the display + leaves
-          # /tmp/.X{N}-lock. The display range is computed dynamically per
-          # CI run (worker math subtracts from base, so :45..:144 across
-          # the 15-run cycle). engram-ci concurrency serializes flows and
-          # only e2e-clerk uses Xvfb, so nuking ALL Xvfb at pre-cleanup is
-          # safe on this dedicated runner.
-          pkill -9 Xvfb 2>/dev/null || true
+          # Orphan Xvfb cleanup is scoped to THIS run's display range only,
+          # so a concurrent e2e-clerk on a different run_number bucket isn't
+          # killed mid-test. Xvfb processes match via the `:N` arg on the
+          # command line; lock files live at /tmp/.X{N}-lock and the socket
+          # at /tmp/.X11-unix/X{N}.
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
+            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
+          done
           sleep 1
-          rm -f /tmp/.X[0-9]*-lock 2>/dev/null || true
-          rm -f /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Sparse-checkout leak recovery. Cross-repo plugin checkouts and the
           # obsidian-update workflow can leave `core.sparseCheckout=true` and
@@ -429,6 +447,8 @@ jobs:
       # ------------------------------------------------------------------
       - name: Allocate dynamic ports
         id: ports
+        env:
+          DISPLAY_BASE: ${{ steps.display.outputs.base }}
         run: |
           get_free_port() {
             python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
@@ -444,8 +464,8 @@ jobs:
           CDP_PORT_A_W1=$(get_free_port)
           CDP_PORT_B_W1=$(get_free_port)
           CDP_PORT_C_W1=$(get_free_port)
-          # Xvfb display numbers: 6 displays per run (2 workers × 3). Stride 6.
-          DISPLAY_BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
+          # DISPLAY_BASE comes from the earlier "Compute display range" step so
+          # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (get_free_port can fail silently)
           for var in ENGRAM_PORT PG_PORT \
@@ -744,20 +764,25 @@ jobs:
 
       - name: Tear down
         if: always()
+        env:
+          DISPLAY_MIN: ${{ steps.display.outputs.min }}
+          DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so the
-          # earlier pkill missed it. Tear-down should leave no orphan Xvfb
-          # or X11 locks behind. Only e2e-clerk uses Xvfb on this runner
-          # and the workflow's concurrency group serializes flows, so
-          # killing all Xvfb here is safe (nothing else is using it).
-          pkill -9 Xvfb 2>/dev/null || true
+          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
+          # by the display number we own. Scope is mandatory now that the
+          # workflow can run in parallel — blanket pkill would nuke neighbors.
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
+          done
           # Wait for processes to die before removing their dirs
           sleep 1
-          rm -f /tmp/.X[0-9]*-lock /tmp/.X11-unix/X[0-9]* 2>/dev/null || true
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
+          done
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
