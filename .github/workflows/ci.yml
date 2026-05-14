@@ -83,7 +83,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
           private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
           owner: engram-app
           repositories: Engram-obsidian-sync
@@ -365,7 +365,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
           private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
           owner: engram-app
           repositories: Engram-obsidian-sync
@@ -1401,7 +1401,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.ENGRAM_CI_APP_ID }}
+          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
           private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
           owner: engram-app
           repositories: Engram-obsidian-sync
