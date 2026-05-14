@@ -3,11 +3,12 @@ defmodule Engram.Billing.Subscription do
   import Ecto.Changeset
 
   schema "subscriptions" do
-    field :stripe_customer_id, :string
-    field :stripe_subscription_id, :string
-    field :tier, :string, default: "trial"
+    field :paddle_customer_id, :string
+    field :paddle_subscription_id, :string
+    field :tier, :string
     field :status, :string, default: "trialing"
     field :current_period_end, :utc_datetime
+    field :custom_data, :map, default: %{}
 
     belongs_to :user, Engram.Accounts.User
 
@@ -18,15 +19,17 @@ defmodule Engram.Billing.Subscription do
     subscription
     |> cast(attrs, [
       :user_id,
-      :stripe_customer_id,
-      :stripe_subscription_id,
+      :paddle_customer_id,
+      :paddle_subscription_id,
       :tier,
       :status,
-      :current_period_end
+      :current_period_end,
+      :custom_data
     ])
-    |> validate_required([:user_id, :stripe_customer_id, :tier, :status])
-    |> validate_inclusion(:tier, ~w(trial starter pro))
-    |> validate_inclusion(:status, ~w(trialing active past_due canceled))
+    |> validate_required([:user_id, :paddle_customer_id, :tier, :status])
+    |> validate_inclusion(:tier, ~w(starter pro))
+    |> validate_inclusion(:status, ~w(trialing active past_due paused canceled))
     |> unique_constraint(:user_id)
+    |> unique_constraint(:paddle_subscription_id)
   end
 end

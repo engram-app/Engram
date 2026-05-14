@@ -297,8 +297,8 @@ defmodule Engram.Fixtures do
       user_id: user.id,
       status: "active",
       tier: "starter",
-      stripe_customer_id: "cus_#{System.unique_integer([:positive])}",
-      stripe_subscription_id: "sub_#{System.unique_integer([:positive])}"
+      paddle_customer_id: "ctm_#{System.unique_integer([:positive])}",
+      paddle_subscription_id: "sub_#{System.unique_integer([:positive])}"
     }
 
     Repo.insert!(

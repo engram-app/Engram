@@ -2,7 +2,6 @@ defmodule Engram.BillingTest do
   use Engram.DataCase, async: true
 
   alias Engram.Billing
-  alias Engram.Billing.Subscription
 
   describe "tier/1" do
     test "returns :none for user with no subscription" do
@@ -95,91 +94,6 @@ defmodule Engram.BillingTest do
     end
   end
 
-  # Paddle migration WIP — Stripe event upserts skipped until Paddle wire-up
-  # commit replaces them with upsert_from_paddle_event/1 + Paddle event fixtures.
-  describe "upsert_from_stripe_event/1" do
-    @describetag :skip
-    test "creates subscription from checkout.session.completed" do
-      user = insert(:user)
-
-      event = %{
-        "type" => "checkout.session.completed",
-        "data" => %{
-          "object" => %{
-            "customer" => "cus_test123",
-            "subscription" => "sub_test123",
-            "client_reference_id" => to_string(user.id),
-            "metadata" => %{"tier" => "starter"}
-          }
-        }
-      }
-
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
-      assert sub.user_id == user.id
-      assert sub.stripe_customer_id == "cus_test123"
-      assert sub.stripe_subscription_id == "sub_test123"
-      assert sub.tier == "starter"
-      assert sub.status == "trialing"
-    end
-
-    test "updates subscription from customer.subscription.updated" do
-      user = insert(:user)
-
-      insert(:subscription,
-        user: user,
-        stripe_subscription_id: "sub_test123",
-        stripe_customer_id: "cus_test123",
-        tier: "starter",
-        status: "active"
-      )
-
-      event = %{
-        "type" => "customer.subscription.updated",
-        "data" => %{
-          "object" => %{
-            "id" => "sub_test123",
-            "customer" => "cus_test123",
-            "status" => "past_due",
-            "current_period_end" => 1_750_000_000,
-            "items" => %{
-              "data" => [%{"price" => %{"id" => "price_pro_test"}}]
-            }
-          }
-        }
-      }
-
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
-      assert sub.status == "past_due"
-      assert sub.tier == "pro"
-    end
-
-    test "marks subscription canceled from customer.subscription.deleted" do
-      user = insert(:user)
-
-      insert(:subscription,
-        user: user,
-        stripe_subscription_id: "sub_test123",
-        stripe_customer_id: "cus_test123",
-        status: "active"
-      )
-
-      event = %{
-        "type" => "customer.subscription.deleted",
-        "data" => %{
-          "object" => %{
-            "id" => "sub_test123",
-            "customer" => "cus_test123",
-            "status" => "canceled",
-            "current_period_end" => 1_750_000_000,
-            "items" => %{
-              "data" => [%{"price" => %{"id" => "price_starter_test"}}]
-            }
-          }
-        }
-      }
-
-      assert {:ok, %Subscription{} = sub} = Billing.upsert_from_stripe_event(event)
-      assert sub.status == "canceled"
-    end
-  end
+  # Webhook upsert tests live with the Paddle wire-up commit — Stripe-shaped
+  # fixtures (checkout.session.completed, customer.subscription.*) are gone.
 end
