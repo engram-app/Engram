@@ -94,20 +94,33 @@ jobs:
           #   dispatch payload SHA > workflow_dispatch branch > matching branch > main HEAD
           # Failing to resolve a SHA is fatal — cache key would be empty and
           # every run would force a miss, masking the bug.
+          #
+          # Uses curl (not gh CLI) — the engram-isolated runners don't ship gh
+          # on the default PATH for the fingerprint runner image.
+          API="https://api.github.com/repos/Rasbandit/Engram-obsidian-sync"
+          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+
+          resolve_sha() {
+            curl -fsS "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
+          }
+          branch_exists() {
+            curl -fsS -o /dev/null "${AUTH[@]}" "${API}/branches/$1"
+          }
+
           if [ -n "$DISPATCH_REF" ]; then
-            SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/$DISPATCH_REF" --jq '.sha')
+            SHA=$(resolve_sha "$DISPATCH_REF")
             SRC="dispatch payload"
           elif [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
-            SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/$EXPLICIT_BRANCH" --jq '.sha')
+            SHA=$(resolve_sha "$EXPLICIT_BRANCH")
             SRC="workflow_dispatch input ($EXPLICIT_BRANCH)"
-          elif gh api "repos/Rasbandit/Engram-obsidian-sync/branches/$CURRENT_BRANCH" --silent 2>/dev/null; then
-            SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/$CURRENT_BRANCH" --jq '.sha')
+          elif branch_exists "$CURRENT_BRANCH" 2>/dev/null; then
+            SHA=$(resolve_sha "$CURRENT_BRANCH")
             SRC="matching branch ($CURRENT_BRANCH)"
           else
-            SHA=$(gh api "repos/Rasbandit/Engram-obsidian-sync/commits/main" --jq '.sha')
+            SHA=$(resolve_sha "main")
             SRC="plugin main HEAD"
           fi
-          if [ -z "$SHA" ]; then
+          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
             echo "::error::Could not resolve plugin SHA ($SRC)"
             exit 1
           fi
