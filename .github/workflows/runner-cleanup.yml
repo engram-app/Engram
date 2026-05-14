@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   cleanup:
-    runs-on: [self-hosted, engram, isolated]
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Docker cleanup
         run: |
