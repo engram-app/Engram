@@ -4,7 +4,7 @@ Your vault remembers everything.
 
 AI-powered personal knowledge base that makes your Obsidian vault queryable by any AI assistant via [MCP](https://modelcontextprotocol.io). Built with Elixir/Phoenix. Notes are stored in PostgreSQL, embedded into vectors via Voyage AI, and searched with semantic similarity through Qdrant.
 
-Pairs with the [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian-sync) plugin for real-time bidirectional sync between Obsidian and the server via Phoenix Channels (WebSocket).
+Pairs with the [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin for real-time bidirectional sync between Obsidian and the server via Phoenix Channels (WebSocket).
 
 ## How It Works
 
@@ -170,7 +170,7 @@ curl -X POST http://localhost:4000/search \
 
 ### 7. Connect the Obsidian Plugin
 
-Install [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian-sync) via BRAT, then configure:
+Install [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) via BRAT, then configure:
 
 - **Server URL**: `http://your-server:4000`
 - **API Key**: your `engram_` key
