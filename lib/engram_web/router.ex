@@ -30,12 +30,12 @@ defmodule EngramWeb.Router do
   @csp_policy Enum.join(
                 [
                   "default-src 'self'",
-                  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com",
+                  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com https://*.paddle.com",
                   "style-src 'self' 'unsafe-inline'",
                   "img-src 'self' data: blob: https:",
                   "font-src 'self' data:",
-                  "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com",
-                  "frame-src https://challenges.cloudflare.com https://*.clerk.accounts.dev",
+                  "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com https://*.paddle.com",
+                  "frame-src https://challenges.cloudflare.com https://*.clerk.accounts.dev https://*.paddle.com",
                   "worker-src 'self' blob:",
                   "form-action 'self'",
                   "base-uri 'self'",
