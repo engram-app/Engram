@@ -11,7 +11,6 @@ defmodule Engram.Repo.Migrations.CreateUserAgreements do
       add :user_agent, :text
     end
 
-    create index(:user_agreements, [:user_id, :document])
     create index(:user_agreements, [:user_id, :document, :accepted_at])
 
     execute "ALTER TABLE user_agreements ENABLE ROW LEVEL SECURITY"
