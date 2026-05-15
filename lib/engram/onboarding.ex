@@ -23,7 +23,7 @@ defmodule Engram.Onboarding do
       user_id: user.id,
       document: @terms_document,
       version: version,
-      accepted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      accepted_at: DateTime.utc_now(:second),
       ip_address: Map.get(meta, :ip_address),
       user_agent: Map.get(meta, :user_agent)
     }

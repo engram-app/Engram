@@ -168,7 +168,7 @@ defmodule Engram.Factory do
       user: build(:user),
       document: "terms_of_service",
       version: "2026-05-15",
-      accepted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      accepted_at: DateTime.utc_now(:second),
       ip_address: nil,
       user_agent: nil
     }
