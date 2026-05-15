@@ -1,0 +1,82 @@
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import OnboardingGate from './onboarding-gate'
+
+vi.mock('../api/queries', () => ({
+  useOnboardingStatus: vi.fn(),
+}))
+
+import { useOnboardingStatus } from '../api/queries'
+
+function renderWith(status: ReturnType<typeof useOnboardingStatus>) {
+  vi.mocked(useOnboardingStatus).mockReturnValue(status as never)
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<OnboardingGate />}>
+            <Route path="/" element={<div>dashboard</div>} />
+          </Route>
+          <Route path="/onboard/agreement" element={<div>agreement-step</div>} />
+          <Route path="/onboard/billing" element={<div>billing-step</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+describe('OnboardingGate', () => {
+  it('renders loading state while status query is pending', () => {
+    renderWith({ data: undefined, isLoading: true, isError: false } as never)
+    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+  })
+
+  it('renders children when next_step is done', () => {
+    renderWith({
+      data: { enabled: true, next_step: 'done', terms_ok: true, subscription_ok: true },
+      isLoading: false,
+      isError: false,
+    } as never)
+    expect(screen.getByText('dashboard')).toBeInTheDocument()
+  })
+
+  it('renders children when wizard is disabled (self-host)', () => {
+    renderWith({
+      data: { enabled: false, next_step: 'done' },
+      isLoading: false,
+      isError: false,
+    } as never)
+    expect(screen.getByText('dashboard')).toBeInTheDocument()
+  })
+
+  it('redirects to /onboard/agreement when next_step=agreement', () => {
+    renderWith({
+      data: {
+        enabled: true,
+        next_step: 'agreement',
+        terms_ok: false,
+        subscription_ok: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as never)
+    expect(screen.getByText('agreement-step')).toBeInTheDocument()
+  })
+
+  it('redirects to /onboard/billing when next_step=billing', () => {
+    renderWith({
+      data: {
+        enabled: true,
+        next_step: 'billing',
+        terms_ok: true,
+        subscription_ok: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as never)
+    expect(screen.getByText('billing-step')).toBeInTheDocument()
+  })
+})
