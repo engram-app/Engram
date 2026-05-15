@@ -11,6 +11,7 @@ export default defineConfig({
     environment: 'happy-dom',
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**'],
   },
   // Tailwind v4 loads the typography plugin via `@plugin` in main.css —
   // the vite plugin's `plugins` option is ignored in this version.
