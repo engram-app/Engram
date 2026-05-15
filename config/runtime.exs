@@ -177,6 +177,15 @@ if config_env() != :test do
   config :engram, :paddle_env, System.get_env("PADDLE_ENV", "sandbox")
 end
 
+# Onboarding wizard toggle. Active when Paddle API key is set (SaaS mode);
+# disabled in self-host (no PADDLE_API_KEY → no payment → no wizard).
+config :engram, :billing_enabled, System.get_env("PADDLE_API_KEY") != nil
+
+# Current Terms of Service version. Must match the version exported by
+# frontend/src/legal/terms-of-service.tsx. Bumping this re-prompts every
+# user on next request via the RequireOnboarding plug.
+config :engram, :current_tos_version, System.get_env("CURRENT_TOS_VERSION", "2026-05-15")
+
 # Key provider — skip in :test so test.exs stable key is not overwritten by a nil env read.
 # Dev and prod (including Docker CI containers) read from KEY_PROVIDER / ENCRYPTION_MASTER_KEY.
 if config_env() != :test do
