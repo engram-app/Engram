@@ -156,6 +156,12 @@ defmodule EngramWeb.Router do
     get "/billing/config", BillingController, :config
     get "/billing/portal", BillingController, :customer_portal
 
+    # Onboarding wizard — status + TOS acceptance. Exempt from
+    # RequireOnboarding (the plug is only on the vault-scoped pipeline)
+    # so the wizard can actually function before completion.
+    get "/onboarding/status", OnboardingController, :status
+    post "/onboarding/accept-terms", OnboardingController, :accept_terms
+
     # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
     # JWT after the React consent UI is approved. Returns JSON
     # `{redirect_uri: "..."}` so the SPA can `window.location.assign`.
@@ -174,12 +180,13 @@ defmodule EngramWeb.Router do
 
   # Vault-scoped authenticated endpoints (VaultPlug resolves current_vault)
   scope "/api", EngramWeb do
-    # NOTE: EngramWeb.Plugs.RequireActiveSubscription will be added here when
-    # billing goes live (tracked in docs/superpowers/plans/2026-04-06-security-hardening.md).
+    # RequireOnboarding gates vault access on TOS + active subscription
+    # (skipped entirely in self-host mode; see lib/engram/onboarding.ex).
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
       EngramWeb.Plugs.RotationLockCheck,
+      EngramWeb.Plugs.RequireOnboarding,
       EngramWeb.Plugs.VaultPlug
     ]
 
@@ -238,6 +245,8 @@ defmodule EngramWeb.Router do
     get "/link", SpaController, :index
     get "/search", SpaController, :index
     get "/billing", SpaController, :index
+    get "/onboard", SpaController, :index
+    get "/onboard/*path", SpaController, :index
     get "/settings", SpaController, :index
     get "/settings/*path", SpaController, :index
     get "/note/*path", SpaController, :index
