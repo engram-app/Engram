@@ -1,14 +1,12 @@
 defmodule Engram.RepoUserAgreementsTenantTest do
   use Engram.DataCase, async: false
 
-  @tag :skip
   test "querying user_agreements without with_tenant raises TenantError" do
     assert_raise Engram.TenantError, fn ->
       Engram.Repo.all(Engram.Onboarding.Agreement)
     end
   end
 
-  @tag :skip
   test "querying user_agreements inside with_tenant succeeds" do
     user = insert(:user)
 

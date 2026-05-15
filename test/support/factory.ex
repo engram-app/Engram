@@ -162,4 +162,15 @@ defmodule Engram.Factory do
       revoked_at: nil
     }
   end
+
+  def agreement_factory do
+    %Engram.Onboarding.Agreement{
+      user: build(:user),
+      document: "terms_of_service",
+      version: "2026-05-15",
+      accepted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      ip_address: nil,
+      user_agent: nil
+    }
+  end
 end
