@@ -142,6 +142,27 @@ export function useBillingStatus() {
   })
 }
 
+export interface BillingConfig {
+  client_token: string
+  environment: 'sandbox' | 'production'
+  price_ids: {
+    starter: string
+    pro: string
+  }
+  customer_email: string
+  custom_data: {
+    user_id: number
+  }
+}
+
+export function useBillingConfig() {
+  return useQuery({
+    queryKey: ['billing', 'config'],
+    queryFn: () => api.get<BillingConfig>('/billing/config'),
+    staleTime: Infinity,
+  })
+}
+
 // API key types
 
 export interface ApiKey {

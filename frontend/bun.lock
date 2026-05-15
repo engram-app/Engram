@@ -10,6 +10,7 @@
         "@codemirror/state": "^6.6.0",
         "@codemirror/view": "^6.42.1",
         "@fontsource-variable/geist": "^5.2.8",
+        "@paddle/paddle-js": "^1.6.4",
         "@portaljs/remark-callouts": "^1.0.5",
         "@tailwindcss/typography": "^0.5.19",
         "@tanstack/react-query": "^5.96.2",
@@ -243,6 +244,8 @@
     "@open-draft/until": ["@open-draft/until@2.1.0", "http://10.0.20.214:4873/@open-draft/until/-/until-2.1.0.tgz", {}, "sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.124.0", "http://10.0.20.214:4873/@oxc-project/types/-/types-0.124.0.tgz", {}, "sha512-VBFWMTBvHxS11Z5Lvlr3IWgrwhMTXV+Md+EQF0Xf60+wAdsGFTBx7X7K/hP4pi8N7dcm1RvcHwDxZ16Qx8keUg=="],
+
+    "@paddle/paddle-js": ["@paddle/paddle-js@1.6.4", "http://10.0.20.214:4873/@paddle/paddle-js/-/paddle-js-1.6.4.tgz", {}, "sha512-ncfnS6I8mCX6krZ3Sgz2iAYivGmhdI81yt9mT6prtPj4Ipd9J3M12LCJRUFL4FB7BYeeuV04c33RSEnbZUBCaA=="],
 
     "@playwright/test": ["@playwright/test@1.59.1", "http://10.0.20.214:4873/@playwright/test/-/test-1.59.1.tgz", { "dependencies": { "playwright": "1.59.1" }, "bin": { "playwright": "cli.js" } }, "sha512-PG6q63nQg5c9rIi4/Z5lR5IVF7yU5MqmKaPOe0HSc0O2cX1fPi96sUQu5j7eo4gKCkB2AnNGoWt7y4/Xx3Kcqg=="],
 
