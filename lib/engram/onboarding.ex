@@ -7,6 +7,7 @@ defmodule Engram.Onboarding do
   unconditionally and `RequireOnboarding` is a no-op.
   """
 
+  alias Engram.Billing
   alias Engram.Onboarding.Agreement
   alias Engram.Repo
 
@@ -31,4 +32,57 @@ defmodule Engram.Onboarding do
     |> Agreement.changeset(attrs)
     |> Repo.insert(skip_tenant_check: true)
   end
+
+  @doc """
+  Compute the onboarding state for a user. Returns a map with:
+
+    * `:enabled` — true when billing (and therefore the wizard) is active
+    * `:terms_ok` — current TOS version accepted
+    * `:subscription_ok` — user has trialing/active/past_due subscription
+    * `:current_tos_version` — string from config
+    * `:next_step` — one of `:agreement | :billing | :done`
+
+  When `billing_enabled` is false (self-host), returns `{enabled: false,
+  next_step: :done}` immediately so callers can skip all gates.
+  """
+  def status(user) do
+    if Application.get_env(:engram, :billing_enabled, false) do
+      current_version = Application.get_env(:engram, :current_tos_version)
+      terms_ok = terms_accepted?(user, current_version)
+      subscription_ok = Billing.active?(user)
+      next = next_step(terms_ok, subscription_ok)
+
+      %{
+        enabled: true,
+        terms_ok: terms_ok,
+        subscription_ok: subscription_ok,
+        current_tos_version: current_version,
+        next_step: next
+      }
+    else
+      %{enabled: false, next_step: :done}
+    end
+  end
+
+  defp terms_accepted?(user, current_version) do
+    import Ecto.Query
+
+    latest =
+      from(a in Agreement,
+        where: a.user_id == ^user.id and a.document == ^@terms_document,
+        order_by: [desc: a.accepted_at],
+        limit: 1,
+        select: a.version
+      )
+      |> Repo.one(skip_tenant_check: true)
+
+    case latest do
+      nil -> false
+      accepted -> accepted >= current_version
+    end
+  end
+
+  defp next_step(false, _), do: :agreement
+  defp next_step(true, false), do: :billing
+  defp next_step(true, true), do: :done
 end

@@ -41,4 +41,64 @@ defmodule Engram.OnboardingTest do
       assert {:error, %Ecto.Changeset{}} = Onboarding.accept_terms(user, "", %{})
     end
   end
+
+  describe "status/1 when billing is disabled (self-host)" do
+    setup do
+      Application.put_env(:engram, :billing_enabled, false)
+      Application.put_env(:engram, :current_tos_version, "2026-05-15")
+      on_exit(fn -> Application.put_env(:engram, :billing_enabled, true) end)
+      :ok
+    end
+
+    test "returns enabled=false and next_step=done regardless of state" do
+      user = insert(:user)
+      assert %{enabled: false, next_step: :done} = Onboarding.status(user)
+    end
+  end
+
+  describe "status/1 when billing is enabled" do
+    setup do
+      Application.put_env(:engram, :billing_enabled, true)
+      Application.put_env(:engram, :current_tos_version, "2026-05-15")
+      :ok
+    end
+
+    test "next_step=agreement when user has no agreement and no subscription" do
+      user = insert(:user)
+
+      assert %{
+               enabled: true,
+               terms_ok: false,
+               subscription_ok: false,
+               current_tos_version: "2026-05-15",
+               next_step: :agreement
+             } = Onboarding.status(user)
+    end
+
+    test "next_step=billing when terms accepted but no subscription" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      assert %{terms_ok: true, subscription_ok: false, next_step: :billing} =
+               Onboarding.status(user)
+    end
+
+    test "next_step=done when terms accepted and active subscription exists" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "trialing")
+
+      assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
+               Onboarding.status(user)
+    end
+
+    test "next_step=agreement when accepted version is older than current_tos_version" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2025-01-01", %{})
+      insert(:subscription, user: user, status: "active")
+
+      assert %{terms_ok: false, subscription_ok: true, next_step: :agreement} =
+               Onboarding.status(user)
+    end
+  end
 end
