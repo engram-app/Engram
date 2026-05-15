@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "paddle-docs": {
+      "type": "http",
+      "url": "https://paddlehq.mcp.kapa.ai"
+    }
+  }
+}
