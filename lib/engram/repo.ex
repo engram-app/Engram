@@ -3,7 +3,7 @@ defmodule Engram.Repo do
     otp_app: :engram,
     adapter: Ecto.Adapters.Postgres
 
-  @tenant_tables ~w(notes chunks attachments api_keys vaults)a
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)a
 
   @doc """
   Executes `fun` inside a transaction with RLS tenant context set.
