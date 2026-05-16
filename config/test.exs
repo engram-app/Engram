@@ -102,3 +102,8 @@ config :engram, :auth_provider, :local
 config :engram,
   key_provider: Engram.Crypto.KeyProvider.Local,
   encryption_master_key: Base.encode64(:binary.copy(<<0xAB>>, 32))
+
+# Onboarding wizard defaults for tests. Individual tests can override
+# via Application.put_env/3 in their setup blocks.
+config :engram, :billing_enabled, true
+config :engram, :current_tos_version, "2026-05-15"

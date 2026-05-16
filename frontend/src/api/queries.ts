@@ -142,6 +142,59 @@ export function useBillingStatus() {
   })
 }
 
+export interface BillingConfig {
+  client_token: string
+  environment: 'sandbox' | 'production'
+  price_ids: {
+    starter: string
+    pro: string
+  }
+  customer_email: string
+  custom_data: {
+    user_id: number
+  }
+}
+
+export function useBillingConfig() {
+  return useQuery({
+    queryKey: ['billing', 'config'],
+    queryFn: () => api.get<BillingConfig>('/billing/config'),
+    staleTime: Infinity,
+  })
+}
+
+// Onboarding types
+
+export interface OnboardingStatus {
+  enabled: boolean
+  terms_ok?: boolean
+  subscription_ok?: boolean
+  current_tos_version?: string
+  next_step: 'agreement' | 'billing' | 'done'
+}
+
+// Onboarding hooks
+
+export function useOnboardingStatus() {
+  return useQuery({
+    queryKey: ['onboarding', 'status'],
+    queryFn: () => api.get<OnboardingStatus>('/onboarding/status'),
+    staleTime: Infinity,
+    refetchOnWindowFocus: true,
+  })
+}
+
+export function useAcceptTerms() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) =>
+      api.post<{ version: string; accepted_at: string }>('/onboarding/accept-terms', { version }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    },
+  })
+}
+
 // API key types
 
 export interface ApiKey {

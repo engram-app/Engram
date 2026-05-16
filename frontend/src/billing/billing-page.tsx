@@ -1,4 +1,6 @@
-import { useBillingStatus } from '../api/queries'
+import { useEffect, useState } from 'react'
+import { initializePaddle, type Paddle } from '@paddle/paddle-js'
+import { useBillingStatus, useBillingConfig, type BillingConfig } from '../api/queries'
 import { api } from '../api/client'
 
 const TIER_LABELS = {
@@ -10,6 +12,19 @@ const TIER_LABELS = {
 
 export default function BillingPage() {
   const { data: billing, isLoading } = useBillingStatus()
+  const { data: config } = useBillingConfig()
+  const [paddle, setPaddle] = useState<Paddle>()
+
+  useEffect(() => {
+    if (!config) return
+    initializePaddle({
+      token: config.client_token,
+      environment: config.environment,
+      checkout: { settings: { displayMode: 'overlay', theme: 'light', locale: 'en' } },
+    }).then((instance) => {
+      if (instance) setPaddle(instance)
+    })
+  }, [config])
 
   if (isLoading || !billing) {
     return <p className="text-gray-500 dark:text-gray-400">Loading billing info...</p>
@@ -17,6 +32,7 @@ export default function BillingPage() {
 
   const needsSubscription = billing.tier === 'none'
   const isTrial = billing.subscription?.status === 'trialing'
+  const checkoutReady = Boolean(paddle && config)
 
   return (
     <article className="mx-auto max-w-2xl space-y-8">
@@ -69,12 +85,18 @@ export default function BillingPage() {
               price="$5/mo"
               features={['10 GB storage', '5 devices', 'Standard search']}
               tier="starter"
+              paddle={paddle}
+              config={config}
+              disabled={!checkoutReady}
             />
             <PlanCard
               name="Pro"
               price="$10/mo"
               features={['50 GB storage', 'Unlimited devices', '2x search rate']}
               tier="pro"
+              paddle={paddle}
+              config={config}
+              disabled={!checkoutReady}
             />
           </ul>
         </section>
@@ -86,7 +108,7 @@ export default function BillingPage() {
             onClick={handlePortal}
             className="text-sm text-blue-600 underline hover:text-blue-800"
           >
-            Manage subscription in Stripe
+            Manage subscription
           </button>
         </section>
       )}
@@ -99,15 +121,28 @@ function PlanCard({
   price,
   features,
   tier,
+  paddle,
+  config,
+  disabled,
 }: {
   name: string
   price: string
   features: string[]
   tier: 'starter' | 'pro'
+  paddle: Paddle | undefined
+  config: BillingConfig | undefined
+  disabled: boolean
 }) {
-  async function handleCheckout() {
-    const { url } = await api.post<{ url: string }>('/billing/checkout-session', { tier })
-    window.location.href = url
+  function handleCheckout() {
+    if (!paddle || !config) return
+    paddle.Checkout.open({
+      items: [{ priceId: config.price_ids[tier], quantity: 1 }],
+      customer: { email: config.customer_email },
+      customData: config.custom_data,
+      settings: {
+        successUrl: `${window.location.origin}/billing?status=success`,
+      },
+    })
   }
 
   return (
@@ -121,7 +156,8 @@ function PlanCard({
       </ul>
       <button
         onClick={handleCheckout}
-        className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        disabled={disabled}
+        className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Start free trial
       </button>

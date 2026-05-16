@@ -111,7 +111,7 @@ class ObsidianInstance:
         if self.vault_path.exists():
             shutil.rmtree(self.vault_path)
 
-        plugin_dir = self.vault_path / ".obsidian" / "plugins" / "engram-sync"
+        plugin_dir = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync"
         plugin_dir.mkdir(parents=True)
 
         for fname in ("main.js", "manifest.json", "styles.css"):
@@ -143,7 +143,7 @@ class ObsidianInstance:
 
         obsidian_dir = self.vault_path / ".obsidian"
         (obsidian_dir / "community-plugins.json").write_text(
-            '["engram-sync"]', encoding="utf-8"
+            '["engram-vault-sync"]', encoding="utf-8"
         )
 
         logger.info("[%s] Vault prepared at %s", self.name, self.vault_path)
@@ -271,7 +271,7 @@ class ObsidianInstance:
         raise TimeoutError(f"CDP not available on port {self.cdp_port} after {timeout}s")
 
     async def _enable_plugin_async(self) -> None:
-        """Enable community plugins and load engram-sync via CDP.
+        """Enable community plugins and load engram-vault-sync via CDP.
 
         Fresh Obsidian installs have restricted mode on. The gate is:
         localStorage.getItem("enable-plugin-" + app.appId) === "true"
@@ -297,7 +297,7 @@ class ObsidianInstance:
                 manifests = await cdp.evaluate(
                     "JSON.stringify(Object.keys(app.plugins.manifests))"
                 )
-                if "engram-sync" in (manifests or ""):
+                if "engram-vault-sync" in (manifests or ""):
                     break
             except Exception:
                 pass
@@ -313,7 +313,7 @@ class ObsidianInstance:
 
         # Load the plugin (void return — don't try to serialize the result)
         await cdp.evaluate(
-            'app.plugins.loadPlugin("engram-sync").then(() => "ok")',
+            'app.plugins.loadPlugin("engram-vault-sync").then(() => "ok")',
             await_promise=True,
         )
 
