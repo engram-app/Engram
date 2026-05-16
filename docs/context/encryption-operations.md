@@ -11,7 +11,7 @@ _Last verified: 2026-05-05 (post-B.3)_
 > - Decrypt routes return 404 (route removed in B.3, no replacement).
 > - To check vault state, query Postgres directly or use the engram MCP `list_vaults`.
 >
-> **Forward plan:** see `workspace/docs/encryption-tier-2-plan.md`. B.4 retires the `vault.encrypted` flag, drops `notes.content`/`title` plaintext columns, and removes the encrypt toggle entirely (every vault encrypted by default at create time).
+> **Forward plan shipped:** B.4 (PR #72, 2026-05-06) retired the `vault.encrypted` flag, dropped `notes.content`/`title` plaintext columns, and removed the encrypt toggle entirely. Every vault encrypted by default at create time.
 
 ## Status (historical — pre-B.3)
 
@@ -147,15 +147,13 @@ Confirm both:
 1. `vaults.encryption_status = 'encrypted'` for their active vault.
 2. They have **no attachments** in that vault, OR they understand attachments are still plaintext.
 
-If they have attachments and need full coverage, Phase 7 isn't shipped yet — add them to a waitlist and flag in `docs/encryption-toggle-followups.md`.
+Attachment AAD bind shipped as part of T3.x — see Tier-3 sections below.
 
 ## References
 
-- Architecture spec: `docs/superpowers/specs/2026-04-07-encryption-at-rest-design.md`
 - Phase 6 implementation: PR #43 (toggle endpoints + backfill workers)
 - Cooldown implementation: PR #50 (per-user cooldown), PR #51 (mix task)
 - Plugin UI: PR #24 (encryption tab + status badge), PR #25 (error handling + persistent status row)
-- Follow-up tracking: `docs/encryption-toggle-followups.md`
 
 ---
 
@@ -243,7 +241,7 @@ If you discover post-step-5 that the new key is wrong (lost, corrupted, mistyped
 1. Re-add `ENCRYPTION_MASTER_KEY_PREVIOUS=<NEW>` and set `ENCRYPTION_MASTER_KEY=<OLD>`.
 2. Decrement `ENCRYPTION_MASTER_KEY_VERSION` to the value it held before the rotation.
 3. Boot canary fails (canary now wrapped under wrong-from-its-perspective key) — disable boot_canary_enabled.
-4. Run rotate-down by manually resetting `users.dek_version` to the prior target via SQL, then rotate forward to that target. Current rotate-down ergonomics are minimal — see Open Questions in `workspace/docs/encryption-tier-3-audit.md`.
+4. Run rotate-down by manually resetting `users.dek_version` to the prior target via SQL, then rotate forward to that target. Current rotate-down ergonomics are minimal.
 
 ---
 
