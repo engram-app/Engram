@@ -58,6 +58,21 @@ defmodule Engram.Crypto.ProviderMigrationTest do
     user
   end
 
+  defp attach_telemetry_capture(test_pid) do
+    handler_id = "test-migrate-provider-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :crypto, :migrate_provider, :user],
+      fn _name, measurements, metadata, _cfg ->
+        send(test_pid, {:telemetry, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   describe "migrate_user/2 Local→KMS" do
     test "rewraps blob with KMS provider tag and stamps key_provider" do
       stub_kms_roundtrip()
@@ -107,6 +122,67 @@ defmodule Engram.Crypto.ProviderMigrationTest do
       expect(Engram.AwsKmsMock, :decrypt, 0, fn _, _ -> :unused end)
 
       assert :skipped = ProviderMigration.migrate_user(user.id, :aws_kms)
+    end
+  end
+
+  describe "migrate_user/2 failure modes" do
+    test ":kms_access_denied surfaces, txn rolls back, blob unchanged, telemetry :failed" do
+      Application.put_env(:engram, :aws_kms_client, Engram.AwsKmsMock)
+      stub(Engram.AwsKmsMock, :encrypt, fn _, _ -> {:error, :access_denied} end)
+
+      user = user_with_local_dek!()
+      original_blob = user.encrypted_dek
+
+      attach_telemetry_capture(self())
+
+      assert {:error, {:kms_encrypt_failed, :access_denied}} =
+               ProviderMigration.migrate_user(user.id, :aws_kms)
+
+      reloaded = Repo.one!(from(u in User, where: u.id == ^user.id), skip_tenant_check: true)
+      assert reloaded.encrypted_dek == original_blob
+      assert reloaded.key_provider == "local"
+
+      assert_receive {:telemetry, %{count: 1}, %{status: :failed, reason_label: "kms_encrypt_failed"}}
+    end
+
+    test ":kms_throttled surfaces verbatim" do
+      stub(Engram.AwsKmsMock, :encrypt, fn _, _ -> {:error, :throttled} end)
+
+      user = user_with_local_dek!()
+
+      assert {:error, {:kms_encrypt_failed, :throttled}} =
+               ProviderMigration.migrate_user(user.id, :aws_kms)
+    end
+
+    test "user deleted mid-flight returns {:error, {:not_found, uid}}" do
+      stub_kms_roundtrip()
+      missing_id = 99_999_999
+
+      assert {:error, {:not_found, ^missing_id}} =
+               ProviderMigration.migrate_user(missing_id, :aws_kms)
+    end
+
+    test "user with nil encrypted_dek returns {:error, :no_dek}" do
+      stub_kms_roundtrip()
+      user = insert(:user)
+      # Sanity: factory does not auto-provision a wrapped DEK.
+      assert is_nil(user.encrypted_dek)
+
+      assert {:error, :no_dek} = ProviderMigration.migrate_user(user.id, :aws_kms)
+    end
+
+    test "happy path emits :ok telemetry with target_provider metadata" do
+      stub_kms_roundtrip()
+      user = user_with_local_dek!()
+
+      attach_telemetry_capture(self())
+
+      assert :ok = ProviderMigration.migrate_user(user.id, :aws_kms)
+      assert_receive {:telemetry, %{count: 1, duration_us: dur},
+                      %{user_id: uid, target_provider: :aws_kms, status: :ok}}
+                     when is_integer(dur) and dur >= 0
+
+      assert uid == user.id
     end
   end
 end
