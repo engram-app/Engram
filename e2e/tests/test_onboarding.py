@@ -1,10 +1,18 @@
-"""Onboarding wizard: new user must accept TOS before reaching the dashboard."""
+"""Onboarding wizard: new user must accept TOS before reaching the dashboard.
+
+Skipped entirely when billing is disabled (self-host mode). The wizard only
+exists on the SaaS deployment — a self-host run sets PADDLE_API_KEY=nil and
+Engram.Onboarding.status/1 returns `{enabled: false}`, so RequireOnboarding
+never halts. Local CI runs self-host, hosted runs (where the gate matters)
+should set PADDLE_API_KEY in docker-compose.
+"""
 
 import os
 import secrets
 from datetime import datetime
 
 import pytest
+import requests
 
 from helpers.api import ApiClient
 from helpers.auth_provider import get_auth_provider
@@ -20,6 +28,15 @@ def onboarding_user():
     password = secrets.token_urlsafe(32)
     provider = get_auth_provider(API_URL)
     _, api_key = provider.provision_user(email, password)
+
+    status = requests.get(
+        f"{API_URL}/onboarding/status",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=10,
+    ).json()
+    if not status.get("enabled"):
+        pytest.skip("Onboarding wizard disabled (self-host mode); nothing to test.")
+
     return email, api_key
 
 
