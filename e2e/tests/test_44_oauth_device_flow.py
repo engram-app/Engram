@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # CDP plugin path shorthand
-_P = "app.plugins.plugins['engram-sync']"
+_P = "app.plugins.plugins['engram-vault-sync']"
 
 
 @pytest.fixture

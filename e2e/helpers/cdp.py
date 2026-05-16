@@ -13,7 +13,7 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_ID = "engram-sync"
+PLUGIN_ID = "engram-vault-sync"
 PLUGIN_PATH = f"app.plugins.plugins['{PLUGIN_ID}']"
 ENGINE_PATH = f"{PLUGIN_PATH}.syncEngine"
 
@@ -105,7 +105,7 @@ class CdpClient:
             return await _send_recv()
 
     async def wait_for_plugin_ready(self, timeout: float = 30) -> None:
-        """Poll until the engram-sync plugin's SyncEngine reports ready."""
+        """Poll until the engram-vault-sync plugin's SyncEngine reports ready."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:

@@ -11,7 +11,7 @@ import pytest
 
 from helpers.vault import write_note
 
-ENGINE = "app.plugins.plugins['engram-sync'].syncEngine"
+ENGINE = "app.plugins.plugins['engram-vault-sync'].syncEngine"
 
 
 @pytest.mark.asyncio

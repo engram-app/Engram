@@ -49,7 +49,7 @@ async def test_conflict_keep_local(vault_a, vault_b, cdp_a, cdp_b, api_sync):
         escaped_path = json.dumps(path)
         await cdp_b.evaluate(f"""
             (async function() {{
-                const se = app.plugins.plugins['engram-sync'].syncEngine;
+                const se = app.plugins.plugins['engram-vault-sync'].syncEngine;
                 const file = app.vault.getAbstractFileByPath({escaped_path});
                 const content = await app.vault.read(file);
                 const mtime = file.stat.mtime / 1000;

@@ -15,7 +15,7 @@ import pytest
 
 from helpers.vault import read_note, write_note
 
-ENGINE = "app.plugins.plugins['engram-sync'].syncEngine"
+ENGINE = "app.plugins.plugins['engram-vault-sync'].syncEngine"
 
 
 BASE_CONTENT = """\

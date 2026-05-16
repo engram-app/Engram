@@ -22,7 +22,7 @@ from helpers.device_flow import start_device_flow, poll_for_tokens
 
 logger = logging.getLogger(__name__)
 
-_P = "app.plugins.plugins['engram-sync']"
+_P = "app.plugins.plugins['engram-vault-sync']"
 
 
 async def provision_oauth_tokens(

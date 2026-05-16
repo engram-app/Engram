@@ -54,7 +54,7 @@ async def test_restart_preserves_queue(vault_a, cdp_a, api_sync, obsidian_a):
     # 3. Force persist queue to data.json (bypass debounce)
     await cdp_a.evaluate("""
         (async function() {
-            const plugin = app.plugins.plugins['engram-sync'];
+            const plugin = app.plugins.plugins['engram-vault-sync'];
             await plugin.saveData({
                 settings: plugin.settings,
                 lastSync: plugin.syncEngine.getLastSync(),
