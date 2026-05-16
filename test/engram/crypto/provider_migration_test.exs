@@ -185,4 +185,35 @@ defmodule Engram.Crypto.ProviderMigrationTest do
       assert uid == user.id
     end
   end
+
+  describe "migrate_user/2 concurrent races" do
+    test "4 parallel migrate_user calls for same user → exactly one rewrap, three :skipped" do
+      stub_kms_roundtrip()
+      user = user_with_local_dek!()
+      uid = user.id
+      parent = self()
+
+      results =
+        1..4
+        |> Task.async_stream(
+          fn _ ->
+            Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, parent, self())
+            ProviderMigration.migrate_user(uid, :aws_kms)
+          end,
+          max_concurrency: 4,
+          ordered: false,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      ok_count = Enum.count(results, &(&1 == :ok))
+      skipped_count = Enum.count(results, &(&1 == :skipped))
+
+      assert ok_count == 1, "expected exactly one :ok, got #{ok_count} (results=#{inspect(results)})"
+      assert skipped_count == 3, "expected three :skipped, got #{skipped_count}"
+
+      reloaded = Repo.one!(from(u in User, where: u.id == ^uid), skip_tenant_check: true)
+      assert reloaded.key_provider == "aws_kms"
+    end
+  end
 end
