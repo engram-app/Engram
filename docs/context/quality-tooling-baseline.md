@@ -75,7 +75,7 @@ Phase 5 (this PR) burned the 676-finding baseline to **0 findings** across 230 f
 - `broadcast_change/4-5` got `@spec ... :: :ok` so call sites can `:ok = ...` cleanly without unmatched-return noise.
 
 **Threshold tweaks (documented in `.credo.exs`):**
-- `Refactor.CyclomaticComplexity` — `max_complexity: 9` → `21`. Phoenix controllers, Stripe webhook dispatch, and encryption pipelines legitimately reach 15-21. Functions exceeding 21 must be refactored.
+- `Refactor.CyclomaticComplexity` — `max_complexity: 9` → `21`. Phoenix controllers, Paddle webhook dispatch, and encryption pipelines legitimately reach 15-21. Functions exceeding 21 must be refactored.
 - `Refactor.Nesting` — `max_nesting: 2` → `5`. `Repo.transaction(fn -> case Repo.X do nil -> ... ; existing -> case ... do ... end end end)` legitimately reaches depth 5 in attachment write paths.
 - `Design.AliasUsage` — `if_called_more_often_than: 0` → `2` (Credo default). Flagging single inline uses produced 104 findings on call sites where adding an alias is pure noise.
 

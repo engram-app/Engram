@@ -2,7 +2,7 @@
 
 > **Workspace:** For cross-project work, open `../engram-workspace/` instead. It provides unified context for both plugin and backend.
 
-Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS-only at launch: Starter $5/mo, Pro $10/mo. See `docs/context/pricing-strategy.md`.
+Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS-only at launch: Starter $5/mo, Pro $10/mo. Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md`; billing integration details in `docs/context/paddle-integration.md`.
 
 ## Architecture
 
@@ -31,8 +31,13 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Search | `lib/engram/search.ex` | Vector search, optional reranking |
 | MCP Server | `lib/engram/mcp/` | MCP tool definitions via Hermes MCP |
 | Attachments | `lib/engram/attachments.ex` | Fly Tigris S3 (ExAws) or local |
-| Auth | `lib/engram/auth.ex` | API keys, JWT (Joken), RLS context |
-| Oban Workers | `lib/engram/workers/` | EmbedNote, ReindexAll, PurgeSoftDeletes, RetryDiscarded, OrphanChunkScan |
+| Auth | `lib/engram/auth.ex` | API keys, internal JWT (Joken), RLS context |
+| Clerk Auth | `lib/engram/auth/clerk*.ex` | Clerk JWT verification (SPA + WebSocket primary path) |
+| Onboarding | `lib/engram_web/plugs/require_onboarding.ex` | TOS + active-sub gate on vault pipeline (`router.ex:189`) |
+| Billing | `lib/engram/billing/`, `lib/engram/paddle/` | Paddle webhook receiver, billing config endpoint, subscriptions |
+| Crypto | `lib/engram/crypto/`, `lib/engram/encryption/` | Per-user DEKs, AAD bind, master-key rotation, boot canary |
+| MCP OAuth | `lib/engram_web/oauth/` | OAuth 2.1 + Dynamic Client Registration for Claude Desktop Connectors |
+| Oban Workers | `lib/engram/workers/` | EmbedNote, ReindexAll, PurgeSoftDeletes, RetryDiscarded, OrphanChunkScan, RotateUserDek, MasterRotation, AadRebind, BackfillContentHashHmac, ReconcileEmbeddings |
 
 ### Key Patterns
 
@@ -89,18 +94,9 @@ See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeli
 
 ## Quality Tooling
 
-Four lints run on every push: `mix format`, `mix compile --warnings-as-errors`, Credo (strict), Sobelow, Dialyzer. Configs at `.credo.exs`, `.sobelow-conf`, `.dialyzer_ignore.exs`. Baseline counts at `docs/context/quality-tooling-baseline.md`.
+All quality lints are fatal in CI: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix sobelow --exit low`, `mix dialyzer`. Configs at `.credo.exs`, `.sobelow-conf`, `.dialyzer_ignore.exs`. Historical phase 1-6 ratchet record + threshold rationale at `docs/context/quality-tooling-baseline.md`.
 
-**Rollout phases** — see `../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooling-rollout.md`:
-
-| Phase | Tool | Status |
-|-------|------|--------|
-| 1 | All four installed, informational | shipped |
-| 2 | `mix format` + `--warnings-as-errors` fatal | shipped |
-| 3 | Sobelow ratchet → zero | shipped |
-| 4 | Dialyzer ratchet → zero | shipped |
-| 5 | Credo ratchet → zero | shipped |
-| 6 | Strict-mode closeout (Sobelow drop `--skip`, document deferred Specs/DuplicatedCode) | shipped |
+Deferred ratchets (future): `Readability.Specs` (forces `@spec` on every public function — ~225 outstanding) and `Design.DuplicatedCode` (13 outstanding).
 
 **Run locally:**
 
@@ -118,20 +114,22 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 
 **Ratchet semantics** (Phase 3 onward): each phase fixes findings to zero, then promotes the CI step to fatal. Numbers strictly decrease — new PRs that introduce findings fail.
 
-## Build Phases
+## Build Phases — Status
 
-| Phase | What | Acceptance Criteria |
-|-------|------|---------------------|
-| **1: Scaffold** | Phoenix app, Ecto schemas, RLS migrations, auth, health, Oban | `GET /health` 200, RLS spike test passes, Oban processes test job |
-| **2: Notes CRUD** | Upsert/read/delete/rename/changes, path sanitization | `mix test` CRUD tests pass |
-| **3: Indexing** | Earmark parser, Voyage embedder, Qdrant client, pipeline | Upsert triggers embedding + Qdrant upsert |
-| **4: Search** | Vector search, folder/tag filter | `mix test` search tests pass |
-| **5: Real-time** | Phoenix Channel sync, Presence | E2E sync tests pass |
-| **6: Attachments** | Tigris S3 via ExAws | `mix test` attachment tests pass |
-| **7: MCP** | Hermes MCP server | MCP tools work from Claude/Cursor |
-| **8: Web UI** | LiveView for login, search, logs | Web UI functional |
-| **9: Deploy** | Fly.io, dns_cluster, CI, load testing | All tests pass on Fly |
-| **10: Billing** *(future)* | Paddle (Merchant-of-Record), subscriptions, quotas | Users can subscribe/upgrade |
+| Phase | What | Status |
+|-------|------|--------|
+| 1: Scaffold | Phoenix app, Ecto schemas, RLS migrations, auth, health, Oban | shipped |
+| 2: Notes CRUD | Upsert/read/delete/rename/changes, path sanitization | shipped |
+| 3: Indexing | Earmark parser, Voyage embedder, Qdrant client, pipeline | shipped |
+| 4: Search | Vector search, folder/tag filter | shipped |
+| 5: Real-time | Phoenix Channel sync, Presence | shipped |
+| 6: Attachments | Tigris S3 via ExAws | shipped |
+| 7: MCP | Hermes MCP server + OAuth 2.1 + DCR | shipped |
+| 8: Web UI | React SPA (Vite + shadcn/ui), Obsidian-style viewer + CodeMirror 6 editor | shipped |
+| 9: Deploy | Fly.io for SaaS, OIDC pull-based deploy to self-host, isolated runner VM pool | shipped |
+| 10: Billing | Paddle (Merchant-of-Record), subscriptions, RequireOnboarding gate | shipped |
+| 11: Encryption | Per-user DEKs + AAD bind + boot canary + per-user DEK rotation | shipped (T3.0-T3.7) |
+| Future | AWS KMS provider routing (Tier-4 / Phase F), T3.8-T3.11 hardening, frontend Paddle.js overlay smoke, Rewardful affiliate hookup, annual price IDs | pending |
 
 ## Product Tiers
 
@@ -140,7 +138,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | **Starter** | $5/mo ($50/yr) | Text search, MCP, WebSocket sync, 5 devices, 10GB storage |
 | **Pro** | $10/mo ($100/yr) | + unlimited devices, 50GB, 2x rate limit, multimodal (future) |
 
-7-day free trial (card required). See `docs/context/paddle-integration.md`.
+14-day free trial (card required). Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md`.
 
 ## Context Docs
 
@@ -154,12 +152,16 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | `docs/context/environment-variables.md` | All env vars by category |
 | `docs/context/testing-strategy.md` | Test layers, ExUnit tooling, CI pipeline |
 | `docs/context/production-deployment.md` | Fly.io deploy, backups, observability, security checklist |
-| `docs/context/pricing-strategy.md` | Full SaaS pricing model |
 | `docs/context/docker-build-cache-pitfalls.md` | Why `_build` cache mount across RUN steps ships stale beams |
-| `docs/context/benchmark-plan.md` | Embedding/chunking/reranker benchmark methodology |
-| `docs/context/code-audit-2026-04.md` | Full codebase audit: 7 CRITICAL, 18 HIGH, 30 MEDIUM findings |
+| `docs/context/dev-iteration-loop.md` | Local dev loop, hot reload, IEx tricks |
+| `docs/context/quality-tooling-baseline.md` | Phase 1-6 lint ratchet history + threshold rationale |
+| `docs/context/encryption-operations.md` | Runbooks: master-key rotation, per-user DEK rotation (T3.7), AAD rebind, half-state recovery |
 | `docs/context/mcp-oauth.md` | OAuth 2.1 + DCR on `/api/mcp`: wire flow, endpoints, token model, scope grammar, schema |
 | `docs/context/paddle-integration.md` | Paddle MoR integration: webhook signature, event lifecycle, `custom_data` contract, affiliate flow |
+| `docs/context/oidc-deploy-cutover.md` | OIDC pull-based deploy daemon, legacy SSH-as-root retirement |
+| `docs/context/aws-kms-provider-integration.md` | Tier-4 / Phase F roadmap for KMS provider routing |
+| `docs/context/followup-show-attachments-in-tree.md` | One-feature follow-up tracker |
+| `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS
 project: engram
