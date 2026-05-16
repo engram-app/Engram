@@ -74,4 +74,39 @@ defmodule Engram.Crypto.ProviderMigrationTest do
       assert reloaded.dek_version == Engram.Crypto.Config.master_key_version()
     end
   end
+
+  describe "migrate_user/2 KMS→Local reverse" do
+    test "rewraps from KMS blob back to Local with 0x01/0x02 leading byte" do
+      stub_kms_roundtrip()
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      user = insert(:user)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      assert <<0xAA, _::binary>> = user.encrypted_dek
+
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.Local)
+      assert :ok = ProviderMigration.migrate_user(user.id, :local)
+
+      reloaded = Repo.one!(from(x in User, where: x.id == ^user.id), skip_tenant_check: true)
+      assert <<tag, 0x01, _::binary-size(60)>> = reloaded.encrypted_dek
+      assert tag in [0x01, 0x02]
+      assert reloaded.key_provider == "local"
+    end
+  end
+
+  describe "migrate_user/2 idempotence" do
+    test "returns :skipped when user is already at target_provider, no provider calls made" do
+      stub_kms_roundtrip()
+      user = user_with_local_dek!()
+
+      # First migration: Local→KMS.
+      assert :ok = ProviderMigration.migrate_user(user.id, :aws_kms)
+
+      # Second migration to same target: skipped, zero KMS calls expected
+      # because the cond branch short-circuits before touching providers.
+      expect(Engram.AwsKmsMock, :encrypt, 0, fn _, _ -> :unused end)
+      expect(Engram.AwsKmsMock, :decrypt, 0, fn _, _ -> :unused end)
+
+      assert :skipped = ProviderMigration.migrate_user(user.id, :aws_kms)
+    end
+  end
 end
