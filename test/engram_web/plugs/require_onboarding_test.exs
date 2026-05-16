@@ -62,4 +62,40 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
   end
+
+  test "halts 401 (not crashes) when current_user assign is missing", %{conn: conn} do
+    conn = RequireOnboarding.call(conn, [])
+    assert conn.halted
+    assert conn.status == 401
+    body = Phoenix.ConnTest.json_response(conn, 401)
+    assert body["error"] == "authentication_required"
+  end
+
+  test "401 path is safe even when billing is disabled", %{conn: conn} do
+    Application.put_env(:engram, :billing_enabled, false)
+    conn = RequireOnboarding.call(conn, [])
+    assert conn.halted
+    assert conn.status == 401
+  end
+
+  test "403 body includes next_step matching first missing gate", %{conn: conn} do
+    user = insert(:user)
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    body = Phoenix.ConnTest.json_response(conn, 403)
+    assert body["next_step"] == "agreement"
+  end
+
+  test "403 next_step is 'billing' when terms accepted but no subscription", %{conn: conn} do
+    user = insert(:user)
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    body = Phoenix.ConnTest.json_response(conn, 403)
+    assert body["next_step"] == "billing"
+  end
+
+  test "403 includes Content-Type application/json", %{conn: conn} do
+    user = insert(:user)
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    assert Plug.Conn.get_resp_header(conn, "content-type") |> List.first() =~ "application/json"
+  end
 end
