@@ -23,8 +23,19 @@ defmodule Engram.Crypto.ProviderMigration do
   user) serialize cleanly: the loser sees the post-commit `key_provider`
   and short-circuits to `:skipped`.
 
-  `DekCache.put/2` is deferred until AFTER the transaction commits — a
-  rolled-back txn must NOT leave a cached DEK that no longer matches DB.
+  The plaintext DEK is unchanged across rewrap (only its wrapping
+  changes), so `DekCache` entries remain valid and do NOT need
+  invalidation. The `:sensitive` process flag is set at entry to keep
+  the DEK out of any crash dump if the wrap call raises.
+
+  ## `dek_version` after migration
+
+  `dek_version` tracks master-key generation, not provider. After
+  rewrap, the new blob is encoded under the current master-key version
+  (Local always; AwsKms ignores it but stamps the column so a
+  subsequent `MasterRotation` pass correctly skips just-migrated rows).
+  Stamping `dek_version: Config.master_key_version()` is the right
+  floor for both providers.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -44,6 +55,8 @@ defmodule Engram.Crypto.ProviderMigration do
   @doc "Migrate one user's wrapped DEK to `target_provider`."
   @spec migrate_user(integer() | User.t(), provider_atom()) :: migrate_result()
   def migrate_user(user_or_id, target_provider) when target_provider in [:local, :aws_kms] do
+    Process.flag(:sensitive, true)
+
     user_id =
       case user_or_id do
         %User{id: id} -> id
@@ -56,7 +69,7 @@ defmodule Engram.Crypto.ProviderMigration do
     emit_telemetry(user_id, target_provider, result, duration_us)
 
     case result do
-      {:migrated, _user, _dek} -> :ok
+      {:migrated, _user} -> :ok
       {:skipped, _user} -> :skipped
       {:error, reason} -> {:error, reason}
     end
@@ -91,14 +104,18 @@ defmodule Engram.Crypto.ProviderMigration do
 
     case txn do
       {:ok, {:skipped, user}} -> {:skipped, user}
-      {:ok, {:migrated, user, dek}} -> {:migrated, user, dek}
+      {:ok, {:migrated, user}} -> {:migrated, user}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp rewrap_locked(%User{} = locked, target_module, target_name) do
     with {:ok, source_module} <- KeyProvider.identify_from_blob(locked.encrypted_dek),
-         ctx = %{user_id: locked.id},
+         ctx = %{
+           user_id: locked.id,
+           dek_version: locked.dek_version,
+           master_key_version: Engram.Crypto.Config.master_key_version()
+         },
          {:ok, dek} <- source_module.unwrap_dek(locked.encrypted_dek, ctx),
          {:ok, new_blob} <- target_module.wrap_dek(dek, ctx),
          {:ok, updated} <-
@@ -107,7 +124,7 @@ defmodule Engram.Crypto.ProviderMigration do
              key_provider: target_name,
              dek_version: Config.master_key_version()
            }) do
-      {:migrated, updated, dek}
+      {:migrated, updated}
     else
       {:error, reason} -> Repo.rollback(reason)
     end
@@ -124,7 +141,7 @@ defmodule Engram.Crypto.ProviderMigration do
     )
   end
 
-  defp emit_telemetry(user_id, target_provider, {:migrated, _, _}, duration_us) do
+  defp emit_telemetry(user_id, target_provider, {:migrated, _}, duration_us) do
     :telemetry.execute(
       [:engram, :crypto, :migrate_provider, :user],
       %{duration_us: duration_us, count: 1},
@@ -172,5 +189,9 @@ defmodule Engram.Crypto.ProviderMigration do
   defp classify_reason(:unrecognised_blob), do: "unrecognised_blob"
   defp classify_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp classify_reason(%Ecto.Changeset{}), do: "changeset_invalid"
+
+  defp classify_reason(reason) when is_exception(reason),
+    do: reason.__struct__ |> Module.split() |> List.last()
+
   defp classify_reason(_other), do: "other"
 end
