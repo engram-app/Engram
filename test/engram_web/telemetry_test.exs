@@ -101,5 +101,19 @@ defmodule EngramWeb.TelemetryTest do
       assert "engram.crypto.rotate.dek.gate_blocked.count" in names,
              "T3.7 writes/reads blocked at channel/worker bypass path must be counted"
     end
+
+    # Phase 3 — per-user provider migration telemetry (Local↔AwsKms cutover).
+    test "registers engram.crypto.migrate_provider.user counter (Phase 3 provider migration)", %{
+      names: names
+    } do
+      assert "engram.crypto.migrate_provider.user.count" in names,
+             "ProviderMigration per-user outcome must be counted (target_provider, status, reason_label)"
+    end
+
+    test "registers engram.crypto.migrate_provider.user duration summary (Phase 3 provider migration)",
+         %{names: names} do
+      assert "engram.crypto.migrate_provider.user.duration_us" in names,
+             "ProviderMigration per-user duration must be measured"
+    end
   end
 end
