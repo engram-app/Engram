@@ -66,6 +66,10 @@ defmodule Engram.Crypto.DekCache do
     GenServer.call(__MODULE__, {:invalidate, user_id})
   end
 
+  @doc "Removes the cached DEK for `user_id`, if any. Alias of `invalidate/1`."
+  @spec delete(user_id :: integer()) :: :ok
+  def delete(user_id), do: invalidate(user_id)
+
   @spec invalidate_all() :: :ok
   def invalidate_all do
     GenServer.call(__MODULE__, :invalidate_all)
