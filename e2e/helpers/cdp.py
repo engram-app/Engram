@@ -304,12 +304,16 @@ class CdpClient:
         if clicked is not True:
             raise CdpError("Modal confirm button not present")
 
-    async def install_choice_spy(self) -> None:
+    async def install_choice_spy(self, swallow: bool = False) -> None:
         """Wrap plugin.runSyncFromChoice so tests can read the resolved choice.
 
-        Replaces runSyncFromChoice with a wrapper that records the last
-        argument on plugin.__lastSyncChoice. Original behavior is preserved.
+        When swallow=False the original method still runs (the spy is purely
+        an observer). When swallow=True the spy records the choice and
+        substitutes a no-op — useful for tests that want to verify modal
+        dispatch without performing the underlying sync (which would push,
+        pull, or delete real files).
         """
+        swallow_js = "true" if swallow else "false"
         await self.evaluate(
             f"""
             (() => {{
@@ -317,8 +321,17 @@ class CdpClient:
                 if (p.__origRunSyncFromChoice) return 'already-installed';
                 p.__origRunSyncFromChoice = p.runSyncFromChoice.bind(p);
                 p.__lastSyncChoice = null;
+                const swallow = {swallow_js};
                 p.runSyncFromChoice = async (choice) => {{
                     p.__lastSyncChoice = choice;
+                    if (swallow) {{
+                        // Mirror markSyncGateAccepted's side effect so the
+                        // post-choice gate-state assertion remains valid.
+                        if (choice !== 'cancel' && choice !== 'change-vault') {{
+                            await p.markSyncGateAccepted();
+                        }}
+                        return choice !== 'cancel' && choice !== 'change-vault';
+                    }}
                     return p.__origRunSyncFromChoice(choice);
                 }};
                 return 'installed';
@@ -636,22 +649,16 @@ class CdpClient:
         """Synchronously flush settings + queue + sync state to data.json.
 
         The plugin debounces writes by default; tests that hard-kill the
-        Obsidian process (test_31 restart) need to force a flush so the
-        queue survives the crash. Mirrors the payload the plugin itself
-        assembles at savePluginData time, so it stays in lockstep with
-        any field additions there.
+        Obsidian process (test_31 restart) need to force a flush so all
+        on-disk state survives the crash. Drives the plugin's own
+        savePluginData so the payload never drifts from what the plugin
+        actually persists (private in TS, accessible at runtime).
         """
         await self.evaluate(
             """
             (async () => {
                 const p = app.plugins.plugins['engram-vault-sync'];
-                await p.saveData({
-                    settings: p.settings,
-                    lastSync: p.syncEngine.getLastSync(),
-                    offlineQueue: p.syncEngine.queue.all(),
-                    syncState: p.syncEngine.exportSyncState(),
-                    syncedHashes: p.syncEngine.exportHashes(),
-                });
+                await p.savePluginData(p.syncEngine.getLastSync());
                 return 'saved';
             })()
             """,

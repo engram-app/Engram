@@ -113,6 +113,12 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     """Swap Obsidian plugin to OAuth auth via CDP.
 
     Returns original settings as JSON string for later restore.
+
+    Auth/vault change rotates the sync fingerprint, which would normally
+    close the gate and queue a SyncPreviewModal for the user to pick a
+    new direction. Tests simulate that user choice by re-accepting the
+    gate immediately — otherwise syncBlocked=true silently drops every
+    WebSocket event (sync.ts handleStreamEvent short-circuit).
     """
     original = await cdp.evaluate(
         f"JSON.stringify({{apiKey: {_P}.settings.apiKey, "
@@ -143,6 +149,7 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
             }}
         }}
         plugin.setupNoteStream();
+        await plugin.markSyncGateAccepted();
         return 'oauth configured';
     }})()
     """
@@ -152,7 +159,11 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
 
 
 async def restore_auth(cdp, original_settings_json: str) -> None:
-    """Restore Obsidian plugin to its original auth settings via CDP."""
+    """Restore Obsidian plugin to its original auth settings via CDP.
+
+    Like swap_to_oauth, this rotates the sync fingerprint back, so the
+    gate must be re-accepted to keep the engine sync-active.
+    """
     settings = json.loads(original_settings_json)
     api_key = json.dumps(settings.get("apiKey", ""))
     refresh_token = json.dumps(settings.get("refreshToken", ""))
@@ -177,6 +188,7 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
             }}
         }}
         plugin.setupNoteStream();
+        await plugin.markSyncGateAccepted();
         return 'auth restored';
     }})()
     """
