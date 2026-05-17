@@ -146,7 +146,12 @@ async def test_full_device_flow(
 
 
 async def _swap_to_oauth(cdp, tokens: dict) -> None:
-    """Reconfigure Obsidian plugin to use OAuth auth via CDP."""
+    """Reconfigure Obsidian plugin to use OAuth auth via CDP.
+
+    Re-accepts the sync gate after the swap because the fingerprint
+    rotates with the auth/vault change — without the accept,
+    syncBlocked stays true and the post-swap fullSync silently no-ops.
+    """
     refresh_token = json.dumps(tokens["refresh_token"])
     vault_id = json.dumps(str(tokens["vault_id"]))
     user_email = json.dumps(tokens.get("user_email", ""))
@@ -160,7 +165,6 @@ async def _swap_to_oauth(cdp, tokens: dict) -> None:
         plugin.settings.userEmail = {user_email};
         plugin.settings.authMethod = 'oauth';
         await plugin.saveSettings();
-        // Reload auth provider
         plugin.authProvider = plugin.createAuthProvider();
         if (plugin.authProvider) {{
             plugin.api.setAuthProvider(plugin.authProvider);
@@ -168,6 +172,7 @@ async def _swap_to_oauth(cdp, tokens: dict) -> None:
                 plugin.noteStream.setAuthProvider(plugin.authProvider);
             }}
         }}
+        await plugin.markSyncGateAccepted();
         return 'oauth configured';
     }})()
     """
@@ -201,6 +206,7 @@ async def _restore_auth(cdp, original_settings_json: str) -> None:
                 plugin.noteStream.setAuthProvider(plugin.authProvider);
             }}
         }}
+        await plugin.markSyncGateAccepted();
         return 'auth restored';
     }})()
     """
