@@ -477,6 +477,32 @@ class CdpClient:
         await self.evaluate(f"{ENGINE_PATH}.queue.entries.clear()")
         logger.info("Queue cleared on CDP port %d", self.port)
 
+    async def persist_plugin_data(self) -> None:
+        """Synchronously flush settings + queue + sync state to data.json.
+
+        The plugin debounces writes by default; tests that hard-kill the
+        Obsidian process (test_31 restart) need to force a flush so the
+        queue survives the crash. Mirrors the payload the plugin itself
+        assembles at savePluginData time, so it stays in lockstep with
+        any field additions there.
+        """
+        await self.evaluate(
+            """
+            (async () => {
+                const p = app.plugins.plugins['engram-vault-sync'];
+                await p.saveData({
+                    settings: p.settings,
+                    lastSync: p.syncEngine.getLastSync(),
+                    offlineQueue: p.syncEngine.queue.all(),
+                    syncState: p.syncEngine.exportSyncState(),
+                    syncedHashes: p.syncEngine.exportHashes(),
+                });
+                return 'saved';
+            })()
+            """,
+            await_promise=True,
+        )
+
     async def get_offline_status(self) -> bool:
         """Read whether the engine is in offline mode."""
         result = await self.evaluate(f"{ENGINE_PATH}.offline")

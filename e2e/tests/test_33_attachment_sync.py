@@ -5,11 +5,9 @@ extension, pushes via pushAttachment. B syncs and receives the file
 with identical bytes. Deletion on A propagates to server and then to B.
 """
 
-import time
-
 import pytest
 
-from helpers.vault import write_binary, wait_for_binary, wait_for_file_gone
+from helpers.vault import wait_for_binary, wait_for_file_gone, write_binary
 
 
 # Minimal valid PNG: 1x1 red pixel
@@ -26,22 +24,10 @@ async def test_attachment_push_and_pull(vault_a, vault_b, cdp_a, cdp_b, api_sync
     """A writes a PNG → server stores it → B pulls identical bytes."""
     att_path = "E2E/attachments/test33.png"
 
-    # A creates attachment
     write_binary(vault_a, att_path, TINY_PNG)
+    api_sync.wait_for_attachment(att_path)
 
-    # Poll until plugin pushes attachment to server
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        resp = api_sync.get_attachment(att_path)
-        if resp.status_code == 200:
-            break
-        time.sleep(0.5)
-    assert resp.status_code == 200, f"Attachment should be on server, got {resp.status_code}"
-
-    # B syncs
     await cdp_b.trigger_full_sync()
-
-    # Verify B has the file with matching bytes
     b_data = wait_for_binary(vault_b, att_path, timeout=15)
     assert b_data == TINY_PNG, (
         f"B's attachment bytes should match. Got {len(b_data)} bytes, expected {len(TINY_PNG)}"
@@ -53,39 +39,19 @@ async def test_attachment_delete_propagation(vault_a, vault_b, cdp_a, cdp_b, api
     """Deleting an attachment on A removes it from server and B."""
     att_path = "E2E/attachments/test33del.png"
 
-    # Setup: A creates, poll until server has it
+    # Setup: A creates, server receives, B pulls a copy.
     write_binary(vault_a, att_path, TINY_PNG)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if api_sync.get_attachment(att_path).status_code == 200:
-            break
-        time.sleep(0.5)
-    assert api_sync.get_attachment(att_path).status_code == 200, "Server should have attachment"
+    api_sync.wait_for_attachment(att_path)
+    await cdp_b.trigger_full_sync()
+    wait_for_binary(vault_b, att_path, timeout=15)
 
-    # B syncs — retry if first pull doesn't fetch the attachment
-    for attempt in range(3):
-        await cdp_b.trigger_full_sync()
-        if (vault_b / att_path).exists():
-            break
-        time.sleep(0.5)
-    assert (vault_b / att_path).exists(), "B should have attachment before delete"
-
-    # A deletes the attachment
+    # A deletes — vault.delete fires handleDelete on A, which calls
+    # /attachments DELETE. Server reflects the soft-delete as 404.
     (vault_a / att_path).unlink()
+    api_sync.wait_for_attachment_gone(att_path)
 
-    # Poll until server reflects deletion
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        resp = api_sync.get_attachment(att_path)
-        if resp.status_code == 404:
-            break
-        time.sleep(0.5)
-    assert resp.status_code == 404, f"Attachment should be gone from server, got {resp.status_code}"
-
-    # B syncs — retry pull to propagate deletion
-    for attempt in range(3):
-        await cdp_b.trigger_full_sync()
-        if not (vault_b / att_path).exists():
-            break
-        time.sleep(0.5)
-    assert not (vault_b / att_path).exists(), "B should not have deleted attachment"
+    # B pulls — deletion propagates. Live-sync channel may already have
+    # delivered the delete by the time fullSync runs; either path lands
+    # B in the same final state.
+    await cdp_b.trigger_full_sync()
+    wait_for_file_gone(vault_b, att_path, timeout=15)

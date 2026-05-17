@@ -124,6 +124,28 @@ class ApiClient:
             time.sleep(poll)
         raise TimeoutError(f"Note {path} still on server after {timeout}s")
 
+    def wait_for_attachment(
+        self, path: str, timeout: float = 15, poll: float = 0.5
+    ) -> None:
+        """Poll until attachment is reachable on server (2xx)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.get_attachment(path).status_code == 200:
+                return
+            time.sleep(poll)
+        raise TimeoutError(f"Attachment {path} not on server after {timeout}s")
+
+    def wait_for_attachment_gone(
+        self, path: str, timeout: float = 15, poll: float = 0.5
+    ) -> None:
+        """Poll until attachment returns 404 on server."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.get_attachment(path).status_code == 404:
+                return
+            time.sleep(poll)
+        raise TimeoutError(f"Attachment {path} still on server after {timeout}s")
+
     def rename_note(self, old_path: str, new_path: str) -> int:
         """POST /notes/rename. Returns HTTP status code."""
         resp = self.session.post(
