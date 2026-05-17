@@ -342,4 +342,129 @@ defmodule Engram.CryptoTest do
       assert hash =~ ~r/^[0-9a-f]{64}$/
     end
   end
+
+  describe "get_dek/1 dual-read + lazy migration" do
+    use Oban.Testing, repo: Engram.Repo
+    import Mox
+    setup :verify_on_exit!
+
+    setup do
+      original_master_key = Application.get_env(:engram, :encryption_master_key)
+      original_kms_client = Application.get_env(:engram, :aws_kms_client)
+      original_provider = Application.get_env(:engram, :key_provider)
+
+      on_exit(fn ->
+        if original_master_key,
+          do: Application.put_env(:engram, :encryption_master_key, original_master_key),
+          else: Application.delete_env(:engram, :encryption_master_key)
+
+        if original_kms_client,
+          do: Application.put_env(:engram, :aws_kms_client, original_kms_client),
+          else: Application.delete_env(:engram, :aws_kms_client)
+
+        if original_provider,
+          do: Application.put_env(:engram, :key_provider, original_provider),
+          else: Application.delete_env(:engram, :key_provider)
+      end)
+
+      Application.put_env(
+        :engram,
+        :encryption_master_key,
+        Base.encode64(:crypto.strong_rand_bytes(32))
+      )
+
+      Application.put_env(:engram, :aws_kms_client, Engram.AwsKmsMock)
+
+      table = :ets.new(:dual_read_stub, [:set, :public])
+
+      stub(Engram.AwsKmsMock, :encrypt, fn pt, _ ->
+        ct = :crypto.strong_rand_bytes(48)
+        :ets.insert(table, {ct, pt})
+        {:ok, ct}
+      end)
+
+      stub(Engram.AwsKmsMock, :decrypt, fn ct, _ ->
+        case :ets.lookup(table, ct) do
+          [{^ct, pt}] -> {:ok, pt}
+          [] -> {:error, :context_mismatch}
+        end
+      end)
+
+      stub(Engram.AwsKmsMock, :describe_key, fn -> :ok end)
+      :ok
+    end
+
+    defp make_user_with_provider!(provider_module) do
+      Application.put_env(:engram, :key_provider, provider_module)
+      user = insert(:user)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      DekCache.delete(user.id)
+      user
+    end
+
+    test "Local blob + KEY_PROVIDER=local → succeeds, no enqueue" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.Local)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.Local)
+
+      assert {:ok, <<_::256>>} = Crypto.get_dek(user)
+
+      refute_enqueued(worker: Engram.Workers.MigrateUserProvider, args: %{"user_id" => user.id})
+    end
+
+    test "Local blob + KEY_PROVIDER=aws_kms → succeeds via Local, enqueues lazy migration to KMS" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.Local)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+
+      assert {:ok, <<_::256>>} = Crypto.get_dek(user)
+
+      assert_enqueued(
+        worker: Engram.Workers.MigrateUserProvider,
+        args: %{"user_id" => user.id, "target_provider" => "aws_kms"}
+      )
+    end
+
+    test "KMS blob + KEY_PROVIDER=aws_kms → succeeds, no enqueue" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+
+      assert {:ok, <<_::256>>} = Crypto.get_dek(user)
+
+      refute_enqueued(worker: Engram.Workers.MigrateUserProvider, args: %{"user_id" => user.id})
+    end
+
+    test "KMS blob + KEY_PROVIDER=local → succeeds via KMS, enqueues reverse migration to local" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.Local)
+
+      assert {:ok, <<_::256>>} = Crypto.get_dek(user)
+
+      assert_enqueued(
+        worker: Engram.Workers.MigrateUserProvider,
+        args: %{"user_id" => user.id, "target_provider" => "local"}
+      )
+    end
+
+    test "cache hit short-circuits identify_from_blob — no lazy enqueue on cache hit" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.Local)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+
+      # First call: miss → unwrap → enqueue.
+      {:ok, dek} = Crypto.get_dek(user)
+      assert_enqueued(worker: Engram.Workers.MigrateUserProvider, args: %{"user_id" => user.id})
+
+      # Snapshot enqueue count, then make a second call — cache hit returns
+      # immediately without calling identify_from_blob, so no second enqueue.
+      first_count =
+        all_enqueued(worker: Engram.Workers.MigrateUserProvider)
+        |> Enum.count(&(&1.args["user_id"] == user.id))
+
+      assert {:ok, ^dek} = Crypto.get_dek(user)
+
+      second_count =
+        all_enqueued(worker: Engram.Workers.MigrateUserProvider)
+        |> Enum.count(&(&1.args["user_id"] == user.id))
+
+      assert first_count == second_count
+    end
+  end
 end
