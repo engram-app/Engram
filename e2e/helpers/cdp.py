@@ -202,6 +202,161 @@ class CdpClient:
         )
         logger.info("Sync gate reset on CDP port %d", self.port)
 
+    async def is_sync_blocked(self) -> bool:
+        """Read the engine's syncBlocked flag."""
+        return await self.evaluate(f"{ENGINE_PATH}.isSyncBlocked()") is True
+
+    async def open_sync_preview_modal(self) -> None:
+        """Fire SyncPreviewModal in the background (does not await user choice).
+
+        Mirrors production calls into plugin.doSyncWithFirstSyncCheck.
+        Returns immediately — the modal stays open until a button is
+        clicked or the modal is dismissed.
+        """
+        # Note: NOT await_promise. The promise from doSyncWithFirstSyncCheck
+        # only resolves once the user picks (or cancels). Returning early
+        # lets the test poll DOM presence and then drive the interaction.
+        await self.evaluate(
+            f"void {PLUGIN_PATH}.doSyncWithFirstSyncCheck()"
+        )
+
+    async def wait_for_sync_preview_modal(self, timeout: float = 5) -> None:
+        """Poll until SyncPreviewModal is mounted in the DOM."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.engram-sync-preview-modal'))"
+            )
+            if present is True:
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError(
+            f"SyncPreviewModal not mounted after {timeout}s on CDP port {self.port}"
+        )
+
+    async def wait_for_modal_closed(self, timeout: float = 5) -> None:
+        """Poll until SyncPreviewModal is gone from the DOM."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.engram-sync-preview-modal'))"
+            )
+            if present is False:
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError(
+            f"SyncPreviewModal still mounted after {timeout}s on CDP port {self.port}"
+        )
+
+    async def get_modal_header_text(self) -> str:
+        """Read the first .engram-sync-preview-header text in the open modal."""
+        result = await self.evaluate(
+            """
+            (() => {
+                const h = document.querySelector(
+                    '.engram-sync-preview-modal .engram-sync-preview-header'
+                );
+                return h ? h.textContent : '';
+            })()
+            """
+        )
+        return result or ""
+
+    async def pick_modal_option(self, label: str) -> None:
+        """Click a SyncPreviewModal option button by its visible label.
+
+        For destructive choices the modal switches to the confirm view —
+        call click_modal_confirm() afterward to resolve.
+        """
+        escaped = json.dumps(label)
+        clicked = await self.evaluate(
+            f"""
+            (() => {{
+                const labels = document.querySelectorAll(
+                    '.engram-sync-preview-modal .engram-sync-preview-option-label'
+                );
+                for (const span of labels) {{
+                    if (span.textContent.trim() === {escaped}) {{
+                        const btn = span.closest('button');
+                        if (btn) {{ btn.click(); return true; }}
+                    }}
+                }}
+                return false;
+            }})()
+            """
+        )
+        if clicked is not True:
+            raise CdpError(f"Modal option '{label}' not found")
+
+    async def click_modal_confirm(self) -> None:
+        """Click the destructive-action confirm button (.mod-warning)."""
+        clicked = await self.evaluate(
+            """
+            (() => {
+                const btn = document.querySelector(
+                    '.engram-sync-preview-modal .mod-warning'
+                );
+                if (btn) { btn.click(); return true; }
+                return false;
+            })()
+            """
+        )
+        if clicked is not True:
+            raise CdpError("Modal confirm button not present")
+
+    async def install_choice_spy(self) -> None:
+        """Wrap plugin.runSyncFromChoice so tests can read the resolved choice.
+
+        Replaces runSyncFromChoice with a wrapper that records the last
+        argument on plugin.__lastSyncChoice. Original behavior is preserved.
+        """
+        await self.evaluate(
+            f"""
+            (() => {{
+                const p = {PLUGIN_PATH};
+                if (p.__origRunSyncFromChoice) return 'already-installed';
+                p.__origRunSyncFromChoice = p.runSyncFromChoice.bind(p);
+                p.__lastSyncChoice = null;
+                p.runSyncFromChoice = async (choice) => {{
+                    p.__lastSyncChoice = choice;
+                    return p.__origRunSyncFromChoice(choice);
+                }};
+                return 'installed';
+            }})()
+            """
+        )
+
+    async def uninstall_choice_spy(self) -> None:
+        """Remove the spy installed by install_choice_spy()."""
+        await self.evaluate(
+            f"""
+            (() => {{
+                const p = {PLUGIN_PATH};
+                if (!p.__origRunSyncFromChoice) return 'not-installed';
+                p.runSyncFromChoice = p.__origRunSyncFromChoice;
+                delete p.__origRunSyncFromChoice;
+                delete p.__lastSyncChoice;
+                return 'removed';
+            }})()
+            """
+        )
+
+    async def get_last_sync_choice(self) -> str | None:
+        """Read the choice recorded by install_choice_spy(), if any."""
+        return await self.evaluate(f"{PLUGIN_PATH}.__lastSyncChoice")
+
+    async def reload_plugin(self) -> None:
+        """Disable and re-enable engram-vault-sync to simulate plugin reload."""
+        await self.evaluate(
+            'app.plugins.disablePlugin("engram-vault-sync").then(() => "off")',
+            await_promise=True,
+        )
+        await self.evaluate(
+            'app.plugins.enablePlugin("engram-vault-sync").then(() => "on")',
+            await_promise=True,
+        )
+        await self.wait_for_plugin_ready(timeout=15)
+
     async def trigger_full_sync(self) -> dict:
         """Call syncEngine.fullSync() and return {pulled, pushed}."""
         result = await self.evaluate(
