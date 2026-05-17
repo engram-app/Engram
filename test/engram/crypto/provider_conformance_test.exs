@@ -132,4 +132,16 @@ defmodule Engram.Crypto.ProviderConformanceTest do
       assert {:ok, ^dek} = unquote(provider).unwrap_dek_no_fallback(wrapped, ctx)
     end
   end
+
+  describe "cross-provider identify_from_blob/1 round-trip" do
+    test "every provider produces a blob that identify_from_blob maps back to itself" do
+      stub_aws_kms_roundtrip()
+
+      for provider <- @providers do
+        dek = provider.generate_dek()
+        {:ok, blob} = provider.wrap_dek(dek, %{user_id: 1})
+        assert {:ok, ^provider} = Engram.Crypto.KeyProvider.identify_from_blob(blob)
+      end
+    end
+  end
 end
