@@ -237,6 +237,22 @@ class CdpClient:
         result = await self.evaluate(f"{PLUGIN_PATH}.isLiveConnected()")
         return result is True
 
+    async def wait_for_stream_connected(self, timeout: float = 10) -> None:
+        """Poll until the WebSocket channel reports connected.
+
+        Use at the top of tests that rely on live propagation — the channel
+        can take a beat to (re)connect after fixture setup or after a
+        preceding test reset state.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if await self.check_stream_connected():
+                return
+            await asyncio.sleep(0.5)
+        raise TimeoutError(
+            f"Stream not connected after {timeout}s on CDP port {self.port}"
+        )
+
 
     async def set_conflict_resolution(self, mode: str) -> None:
         """Set the plugin's conflictResolution setting.

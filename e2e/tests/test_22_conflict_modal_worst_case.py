@@ -189,17 +189,8 @@ async def test_conflict_modal_merge_resolution(
             f"Expected merged content, got: {b_content[:200]}"
         )
 
-        # Force push past echo suppression (known issue — touch the file)
-        await cdp_b.evaluate(f"""
-            (async function() {{
-                const file = app.vault.getAbstractFileByPath("{path}");
-                const content = await app.vault.read(file);
-                await app.vault.modify(file, content + "\\n");
-                return 'touched';
-            }})()
-        """, await_promise=True)
-
-        # Server should have merged content
+        # Server should have the merged content — applyChange's merge branch
+        # force-pushes (sync.ts pushFile(existing, true)).
         api_sync.wait_for_note_content(path, "Manually merged from both A and B", timeout=10)
     finally:
         await cdp_b.restore_conflict_handler()

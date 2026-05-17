@@ -74,21 +74,11 @@ async def test_three_way_merge_clean(vault_a, vault_b, cdp_a, cdp_b, api_sync):
         f"Section B was unexpectedly modified: {b_content[:300]}"
     )
 
-    # 8. Resume sync, push merged version to server
+    # 8. Resume outgoing sync (clean shutdown — no further pushes expected).
     await cdp_b.resume_outgoing_sync()
 
-    # Force push past echo suppression — touch the file to change its hash
-    await cdp_b.evaluate(f"""
-        (async function() {{
-            const file = app.vault.getAbstractFileByPath("{path}");
-            const content = await app.vault.read(file);
-            await app.vault.modify(file, content + "\\n");
-            return 'touched';
-        }})()
-    """, await_promise=True)
-
-    await cdp_b.trigger_full_sync()
-
-    # 9. Verify server has the merged content
+    # 9. Verify server has the merged content. The plugin's three-way merge
+    #    path force-pushes the merged result inside applyChange (sync.ts
+    #    pushFile(existing, true)), so no manual sync is required.
     api_sync.wait_for_note_content(path, "Edited by A in section A.", timeout=10)
     api_sync.wait_for_note_content(path, "Edited by B in section C.", timeout=10)
