@@ -75,6 +75,66 @@ defmodule Engram.Crypto.ProviderMigration do
     end
   end
 
+  @doc """
+  Migrate every user whose `key_provider` ≠ `target_provider`. Cursor-by-id.
+  Each user runs in its own transaction.
+
+  Returns aggregate counts. `:skipped` includes both already-at-target
+  users and users without an `encrypted_dek` (latter is rare; counted as
+  skipped because the fleet drain semantically completes for them).
+  """
+  @spec migrate_all(provider_atom(), keyword()) :: counts() | {:error, term()}
+  def migrate_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
+    batch_size = Keyword.get(opts, :batch_size, 100)
+    target_name = Atom.to_string(target_provider)
+
+    already_at_target =
+      from(u in User,
+        where: not is_nil(u.encrypted_dek) and u.key_provider == ^target_name,
+        select: count(u.id)
+      )
+      |> Repo.one(skip_tenant_check: true)
+
+    drive_loop(target_provider, 0, batch_size, %{
+      ok: 0,
+      skipped: already_at_target || 0,
+      failed: 0
+    })
+  end
+
+  @doc """
+  Enqueue one `Engram.Workers.MigrateUserProvider` Oban job per below-target
+  user. Idempotent — Oban uniqueness on `[:user_id, :target_provider]`
+  collapses duplicate inserts; the worker re-checks `:skipped` at perform.
+  """
+  @spec enqueue_all(provider_atom(), keyword()) :: %{enqueued: non_neg_integer()}
+  def enqueue_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
+    batch_size = Keyword.get(opts, :batch_size, 500)
+    target_name = Atom.to_string(target_provider)
+    %{enqueued: enqueue_loop(target_provider, target_name, 0, batch_size, 0)}
+  end
+
+  @doc "Provider count breakdown: `%{local: N, aws_kms: M, total: N+M}`."
+  @spec status_counts() :: %{atom() => non_neg_integer()}
+  def status_counts do
+    rows =
+      from(u in User,
+        where: not is_nil(u.encrypted_dek),
+        group_by: u.key_provider,
+        select: {u.key_provider, count(u.id)}
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    base = %{local: 0, aws_kms: 0}
+
+    rows
+    |> Enum.reduce(base, fn {provider, n}, acc ->
+      key = if provider in ["local", "aws_kms"], do: String.to_atom(provider), else: :other
+      Map.update(acc, key, n, &(&1 + n))
+    end)
+    |> then(fn counts -> Map.put(counts, :total, counts.local + counts.aws_kms) end)
+  end
+
   # ── internals ──────────────────────────────────────────────────────
 
   defp do_migrate(user_id, target_provider) do
@@ -194,4 +254,68 @@ defmodule Engram.Crypto.ProviderMigration do
     do: reason.__struct__ |> Module.split() |> List.last()
 
   defp classify_reason(_other), do: "other"
+
+  defp drive_loop(target_provider, last_id, batch_size, acc) do
+    target_name = Atom.to_string(target_provider)
+
+    ids =
+      from(u in User,
+        where: not is_nil(u.encrypted_dek) and u.key_provider != ^target_name,
+        where: u.id > ^last_id,
+        select: u.id,
+        order_by: u.id,
+        limit: ^batch_size
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    case ids do
+      [] ->
+        acc
+
+      _ ->
+        acc =
+          Enum.reduce(ids, acc, fn id, a ->
+            case migrate_user(id, target_provider) do
+              :ok -> Map.update!(a, :ok, &(&1 + 1))
+              :skipped -> Map.update!(a, :skipped, &(&1 + 1))
+              {:error, _} -> Map.update!(a, :failed, &(&1 + 1))
+            end
+          end)
+
+        drive_loop(target_provider, List.last(ids), batch_size, acc)
+    end
+  end
+
+  defp enqueue_loop(target_provider, target_name, last_id, batch_size, total) do
+    ids =
+      from(u in User,
+        where: not is_nil(u.encrypted_dek) and u.key_provider != ^target_name,
+        where: u.id > ^last_id,
+        select: u.id,
+        order_by: u.id,
+        limit: ^batch_size
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    case ids do
+      [] ->
+        total
+
+      _ ->
+        jobs =
+          Enum.map(ids, fn id ->
+            Engram.Workers.MigrateUserProvider.new(%{
+              "user_id" => id,
+              "target_provider" => target_name
+            })
+          end)
+
+        {:ok, _} =
+          Ecto.Multi.new()
+          |> Oban.insert_all(:migrate_provider_jobs, jobs)
+          |> Repo.transaction()
+
+        enqueue_loop(target_provider, target_name, List.last(ids), batch_size, total + length(jobs))
+    end
+  end
 end

@@ -216,4 +216,71 @@ defmodule Engram.Crypto.ProviderMigrationTest do
       assert reloaded.key_provider == "aws_kms"
     end
   end
+
+  describe "migrate_all/2" do
+    test "drains every user not at target into the target provider" do
+      stub_kms_roundtrip()
+      u1 = user_with_local_dek!()
+      u2 = user_with_local_dek!()
+
+      # u3 starts on KMS — must be skipped.
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      u3 = insert(:user)
+      {:ok, _} = Crypto.ensure_user_dek(u3)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.Local)
+
+      assert %{ok: ok_count, skipped: skipped_count, failed: 0} =
+               ProviderMigration.migrate_all(:aws_kms, batch_size: 10)
+
+      # u1 + u2 should rewrap.
+      assert ok_count >= 2
+
+      # u3 contributes to :skipped. Other already-aws_kms users from prior
+      # tests in this DB sandbox may also contribute.
+      assert skipped_count >= 1
+
+      assert "aws_kms" =
+               Repo.one!(from(u in User, where: u.id == ^u1.id, select: u.key_provider),
+                 skip_tenant_check: true
+               )
+
+      assert "aws_kms" =
+               Repo.one!(from(u in User, where: u.id == ^u2.id, select: u.key_provider),
+                 skip_tenant_check: true
+               )
+    end
+  end
+
+  describe "enqueue_all/2" do
+    test "inserts one Oban job per below-target user" do
+      _u1 = user_with_local_dek!()
+      _u2 = user_with_local_dek!()
+
+      assert %{enqueued: n} = ProviderMigration.enqueue_all(:aws_kms, batch_size: 10)
+      assert n >= 2
+
+      jobs =
+        Oban.Job
+        |> Repo.all(skip_tenant_check: true)
+        |> Enum.filter(&(&1.worker == "Engram.Workers.MigrateUserProvider"))
+
+      assert length(jobs) >= 2
+
+      Enum.each(jobs, fn job ->
+        assert %{"target_provider" => "aws_kms", "user_id" => uid} = job.args
+        assert is_integer(uid)
+      end)
+    end
+  end
+
+  describe "status_counts/0" do
+    test "returns counts grouped by users.key_provider" do
+      _ = user_with_local_dek!()
+      counts = ProviderMigration.status_counts()
+      assert is_map(counts)
+      assert counts[:local] >= 1
+      assert Map.has_key?(counts, :total)
+      assert counts.total == (counts[:local] || 0) + (counts[:aws_kms] || 0)
+    end
+  end
 end
