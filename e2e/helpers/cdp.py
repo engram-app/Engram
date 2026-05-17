@@ -289,20 +289,33 @@ class CdpClient:
             raise CdpError(f"Modal option '{label}' not found")
 
     async def click_modal_confirm(self) -> None:
-        """Click the destructive-action confirm button (.mod-warning)."""
+        """Type "delete" and click the confirm button for a destructive choice.
+
+        SyncPreviewModal's confirm view requires the user to type "delete"
+        before the confirm button enables (sync-preview-modal.ts
+        renderConfirm). Drive both steps here so callers stay
+        UX-independent.
+        """
         clicked = await self.evaluate(
             """
             (() => {
-                const btn = document.querySelector(
-                    '.engram-sync-preview-modal .mod-warning'
+                const input = document.querySelector(
+                    '.engram-sync-preview-modal .engram-sync-preview-confirm-input'
                 );
-                if (btn) { btn.click(); return true; }
-                return false;
+                const btn = document.querySelector(
+                    '.engram-sync-preview-modal .engram-sync-preview-confirm-btn'
+                );
+                if (!input || !btn) return false;
+                input.value = 'delete';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                if (btn.disabled) return false;
+                btn.click();
+                return true;
             })()
             """
         )
         if clicked is not True:
-            raise CdpError("Modal confirm button not present")
+            raise CdpError("Modal confirm button not present or still disabled")
 
     async def install_choice_spy(self, swallow: bool = False) -> None:
         """Wrap plugin.runSyncFromChoice so tests can read the resolved choice.
