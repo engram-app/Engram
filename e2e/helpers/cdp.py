@@ -120,6 +120,88 @@ class CdpClient:
             f"Plugin not ready after {timeout}s on CDP port {self.port}"
         )
 
+    async def wait_for_vault_registered(self, timeout: float = 15) -> None:
+        """Poll until plugin.settings.vaultId is populated.
+
+        After plugin.onload registers the vault via /vaults/register, the
+        engine has a vaultId — required for computeSyncFingerprint, which
+        markSyncGateAccepted depends on. Returns silently on success.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                vault_id = await self.evaluate(
+                    f"{PLUGIN_PATH}.settings && {PLUGIN_PATH}.settings.vaultId"
+                )
+                if vault_id:
+                    logger.info(
+                        "Vault registered on CDP port %d: %s", self.port, vault_id
+                    )
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+        raise TimeoutError(
+            f"Vault not registered after {timeout}s on CDP port {self.port}"
+        )
+
+    async def accept_sync_gate(self) -> None:
+        """Simulate the user accepting the sync-preview modal.
+
+        Drives the same code path as a real click in SyncPreviewModal:
+        markSyncGateAccepted() persists the fingerprint and flips
+        syncBlocked=false; the open modal is then dismissed via Escape so
+        the awaiting startup flow resolves with "cancel" (a no-op now that
+        the gate has been accepted out-of-band).
+
+        Idempotent — safe to call when no modal is open.
+        """
+        # markSyncGateAccepted requires a vault to be registered (it hashes
+        # apiKey + vaultId). Wait briefly so first-launch tests don't race
+        # the plugin's startup register call.
+        await self.wait_for_vault_registered()
+        await self.evaluate(
+            f"{PLUGIN_PATH}.markSyncGateAccepted().then(() => 'ok')",
+            await_promise=True,
+        )
+        # Resolve any open modal — modals listen for Escape and resolve
+        # their awaitChoice() promise with "cancel". With the gate already
+        # accepted, runSyncFromChoice("cancel") is a no-op.
+        await self.evaluate(
+            """
+            (() => {
+                const modals = document.querySelectorAll('.modal-container .modal');
+                for (const m of modals) {
+                    m.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape', bubbles: true,
+                    }));
+                }
+                return modals.length;
+            })()
+            """
+        )
+        logger.info("Sync gate accepted on CDP port %d", self.port)
+
+    async def reset_sync_gate(self) -> None:
+        """Put the engine back into gate-closed state (for modal-flow tests).
+
+        Clears the saved fingerprint and re-blocks the engine so the next
+        startup or saveSettings will reopen SyncPreviewModal. Mirrors the
+        production "change vault" path which resets the gate to force a
+        new direction choice.
+        """
+        await self.evaluate(
+            f"""
+            (() => {{
+                const p = {PLUGIN_PATH};
+                p.syncGateAcceptedFor = null;
+                p.syncEngine.setSyncBlocked(true);
+                return 'reset';
+            }})()
+            """
+        )
+        logger.info("Sync gate reset on CDP port %d", self.port)
+
     async def trigger_full_sync(self) -> dict:
         """Call syncEngine.fullSync() and return {pulled, pushed}."""
         result = await self.evaluate(

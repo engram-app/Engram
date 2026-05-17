@@ -320,6 +320,14 @@ class ObsidianInstance:
         # Wait for syncEngine.ready
         await cdp.wait_for_plugin_ready(timeout=30)
 
+        # First launch fires SyncPreviewModal because the sync gate has no
+        # accepted fingerprint yet. The modal is part of real onboarding
+        # UX; tests don't drive it manually unless they explicitly target
+        # the modal flow (those tests call cdp.reset_sync_gate() afterward).
+        # Accept the gate now so the engine starts in production steady-state:
+        # ready, unblocked, no modal.
+        await cdp.accept_sync_gate()
+
     def _enable_plugin_via_cdp(self) -> None:
         """Sync wrapper — calls _enable_plugin_async via asyncio.run().
 
