@@ -62,16 +62,9 @@ async def test_push_409_handled(vault_a, cdp_a, api_sync):
 
     auto_merged = "edited by server" in a_content
     if auto_merged:
-        # Auto-merge succeeded — force push past echo suppression
-        await cdp_a.evaluate(f"""
-            (async function() {{
-                const file = app.vault.getAbstractFileByPath("{path}");
-                const content = await app.vault.read(file);
-                await app.vault.modify(file, content + "\\n");
-                return 'touched';
-            }})()
-        """, await_promise=True)
-        await asyncio.sleep(0.3)
+        # Three-way merge inside applyChange force-pushes (sync.ts
+        # pushFile(existing, true)), so both edits should land on the
+        # server without any manual touch.
         api_sync.wait_for_note_content(path, "edited by A", timeout=10)
         api_sync.wait_for_note_content(path, "edited by server", timeout=10)
     else:
