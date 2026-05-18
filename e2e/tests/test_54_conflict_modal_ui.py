@@ -50,7 +50,7 @@ from __future__ import annotations
 import pytest
 
 from helpers.conflict import restore_after_conflict, setup_conflict_for_a
-from helpers.vault import read_note
+from helpers.vault import read_note, wait_for_content
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +253,9 @@ async def test_manual_merge_editor_then_accept(vault_a, vault_b, cdp_a, cdp_b):
         await cdp_a.click_conflict_accept()
         await cdp_a.wait_for_conflict_modal_closed()
 
-        content = read_note(vault_a, path)
+        # Use wait_for_content instead of read_note: the modal closes (DOM
+        # removal) before Obsidian's async vault.modify() flushes to disk.
+        content = wait_for_content(vault_a, path, "hand-edited by test_54", timeout=10)
         assert "hand-edited by test_54" in content, (
             f"Expected hand-edited content in vault; got: {content[:200]!r}"
         )

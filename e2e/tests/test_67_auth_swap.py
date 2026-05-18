@@ -52,6 +52,8 @@ async def test_swap_to_invalid_key_then_back(cdp_a, sync_user, vault_a, api_sync
             f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
             f"  p.settings.apiKey = {BOGUS_KEY!r};"
             f"  await p.saveSettings();"
+            f"  p.authProvider = null;"
+            f"  p.api.setAuthProvider(null);"
             f"}})()",
             await_promise=True,
         )

@@ -915,12 +915,13 @@ class CdpClient:
         )
 
     async def set_merge_editor(self, content: str) -> None:
-        """Set the merge editor textarea value and fire input event."""
+        """Set the merge editor textarea value and fire input + change events."""
         await self.evaluate(
             f"(() => {{const t = document.querySelector("
             f"'.engram-conflict-modal .engram-conflict-merge-editor'); "
             f"t.value = {json.dumps(content)}; "
-            f"t.dispatchEvent(new Event('input', {{bubbles: true}})); }})()"
+            f"t.dispatchEvent(new Event('input', {{bubbles: true}})); "
+            f"t.dispatchEvent(new Event('change', {{bubbles: true}})); }})()"
         )
 
     async def click_conflict_accept(self) -> None:
