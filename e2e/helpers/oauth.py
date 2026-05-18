@@ -149,7 +149,9 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
             }}
         }}
         plugin.setupNoteStream();
-        await plugin.markSyncGateAccepted();
+        if (typeof plugin.markSyncGateAccepted === 'function') {{
+            await plugin.markSyncGateAccepted();
+        }}
         return 'oauth configured';
     }})()
     """
@@ -188,7 +190,9 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
             }}
         }}
         plugin.setupNoteStream();
-        await plugin.markSyncGateAccepted();
+        if (typeof plugin.markSyncGateAccepted === 'function') {{
+            await plugin.markSyncGateAccepted();
+        }}
         return 'auth restored';
     }})()
     """

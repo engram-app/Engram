@@ -145,6 +145,19 @@ class CdpClient:
             f"Vault not registered after {timeout}s on CDP port {self.port}"
         )
 
+    async def has_sync_gate(self) -> bool:
+        """True when the loaded plugin exposes the SyncPreviewModal gate API.
+
+        Older plugin builds (pre-SyncPreviewModal) lack markSyncGateAccepted /
+        setSyncBlocked entirely. The harness must stay backwards-compatible
+        with whatever plugin SHA the cross-repo trigger ships, so every
+        gate helper short-circuits when this returns False.
+        """
+        result = await self.evaluate(
+            f"typeof {PLUGIN_PATH}.markSyncGateAccepted === 'function'"
+        )
+        return result is True
+
     async def accept_sync_gate(self) -> None:
         """Simulate the user accepting the sync-preview modal.
 
@@ -154,8 +167,12 @@ class CdpClient:
         the awaiting startup flow resolves with "cancel" (a no-op now that
         the gate has been accepted out-of-band).
 
-        Idempotent — safe to call when no modal is open.
+        Idempotent — safe to call when no modal is open. No-op against
+        plugin builds that predate the sync gate.
         """
+        if not await self.has_sync_gate():
+            logger.info("Sync gate not present on plugin; skipping accept")
+            return
         # markSyncGateAccepted requires a vault to be registered (it hashes
         # apiKey + vaultId). Wait briefly so first-launch tests don't race
         # the plugin's startup register call.
@@ -188,8 +205,10 @@ class CdpClient:
         Clears the saved fingerprint and re-blocks the engine so the next
         startup or saveSettings will reopen SyncPreviewModal. Mirrors the
         production "change vault" path which resets the gate to force a
-        new direction choice.
+        new direction choice. No-op against gate-less plugin builds.
         """
+        if not await self.has_sync_gate():
+            return
         await self.evaluate(
             f"""
             (() => {{
@@ -203,7 +222,9 @@ class CdpClient:
         logger.info("Sync gate reset on CDP port %d", self.port)
 
     async def is_sync_blocked(self) -> bool:
-        """Read the engine's syncBlocked flag."""
+        """Read the engine's syncBlocked flag. False when plugin lacks gate."""
+        if not await self.has_sync_gate():
+            return False
         return await self.evaluate(f"{ENGINE_PATH}.isSyncBlocked()") is True
 
     async def open_sync_preview_modal(self) -> None:
