@@ -8,6 +8,33 @@
 
 **Tech Stack:** Python 3.11 + pytest-asyncio, Chrome DevTools Protocol via `helpers/cdp.py` (`CdpClient`), Obsidian AppImage + Xvfb (`helpers/obsidian.py`), `helpers/api.py` `ApiClient` for server-side assertions, `helpers/vault.py` for filesystem reads/writes.
 
+## Selector corrections (applied during Task 1 — apply everywhere)
+
+Task 1's selector-verification gate uncovered systematic mismatches between the plan's draft selectors and actual plugin source classes. The `cdp.py` helpers in commit `9735baa` use the corrected selectors below. **Any raw `document.querySelector(...)` call in a downstream test file must use the right-hand column, not whatever the plan's task body shows.** Prefer calling the helper method whenever possible.
+
+| Plan draft selector | Real plugin source | File |
+|---|---|---|
+| `.engram-search-result` (+ `.title` / `.folder` / `.snippet`) | `.engram-search-result-item` (+ `-title` / `-path` / `-snippet`) | `src/search-modal.ts` |
+| `[data-view-mode]` | active toggle button has `.is-active` | `src/conflict-modal.ts` |
+| `.engram-view-toggle` | `.engram-conflict-view-toggle` | `src/conflict-modal.ts` |
+| `.engram-all-local` / `-remote` | text-match inside `.engram-conflict-bulk` | `src/conflict-modal.ts` |
+| `.engram-hunk` | `.engram-conflict-hunk` | `src/conflict-modal.ts` |
+| `[data-side]` on hunk button | text-match "Use local"/"Use remote" | `src/conflict-modal.ts` |
+| `textarea.engram-merge-editor` | `.engram-conflict-merge-editor` | `src/conflict-modal.ts` |
+| `.engram-accept` / `.engram-skip` | text "Apply merge"/"Skip" inside `.engram-conflict-actions` | `src/conflict-modal.ts` |
+| `input.engram-destructive-confirm` | `.engram-sync-preview-confirm-input` | `src/sync-preview-modal.ts` |
+| `.engram-destructive-submit` | `.engram-sync-preview-confirm-btn` | `src/sync-preview-modal.ts` |
+| `.engram-issue-group` (+ `data-category` / `data-count`) | `.engram-sync-center-group` (no data attrs) | `src/sync-center-render.ts` |
+| `.engram-issue[data-path=…]` | `.engram-sync-center-issue-row` (path is text inside `.engram-sync-center-issue-path`) | `src/sync-center-render.ts` |
+| `.engram-ignored-item` (+ `.engram-restore`) | `.engram-sync-center-issue-row` shared structure, "Restore" by button text | `src/sync-center-render.ts` |
+| `.engram-activity-entry` (+ `data-action` / `-path` / `-status`) | `.engram-sync-center-activity-row` (children `.engram-sync-center-activity-action` / `-path`) | `src/sync-center-render.ts` |
+| `.engram-clear-activity` | Obsidian `Setting.addButton` — locate via `.setting-item-name` text "Activity" | `src/sync-center-render.ts` |
+| `.engram-status-bar-item` | `.engram-status-bar-clickable` | `src/main.ts` |
+
+**Mandatory rule for every downstream task:** before commit, grep the plugin source for every CSS class you reference. If a class is missing, prefer **adding it to the plugin source as a co-PR** (semantic data attributes like `data-path` are healthier than text-match scrapes) over writing brittle text-based selectors. Document any plugin-side companion PR in the test PR description.
+
+---
+
 ## Conventions (apply to every task)
 
 - All tests live under `/home/open-claw/documents/code-projects/engram/e2e/tests/`.
