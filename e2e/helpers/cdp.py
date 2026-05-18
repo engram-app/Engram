@@ -744,3 +744,461 @@ class CdpClient:
         """
         result = await self.evaluate(js, await_promise=True)
         logger.info("Remote logs flushed on CDP port %d: %s", self.port, result)
+
+    # ------------------------------------------------------------------
+    # Step 1: SearchModal helpers
+    # ------------------------------------------------------------------
+
+    async def open_search_modal(self) -> None:
+        """Run the `search` command — opens SearchModal."""
+        await self.evaluate(
+            "app.commands.executeCommandById('engram-vault-sync:search')"
+        )
+
+    async def wait_for_search_modal(self, timeout: float = 5) -> None:
+        """Block until the search modal mounts."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.engram-search-modal "
+                "input.engram-search-input'))"
+            )
+            if present:
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError("SearchModal did not mount")
+
+    async def type_search_query(self, query: str) -> None:
+        """Fill the SearchModal input and dispatch input event."""
+        await self.evaluate(
+            f"(() => {{const i = document.querySelector("
+            f"'.engram-search-modal input.engram-search-input'); "
+            f"i.value = {json.dumps(query)}; "
+            f"i.dispatchEvent(new Event('input', {{bubbles: true}})); }})()"
+        )
+
+    async def get_search_results(self) -> list[dict]:
+        """Snapshot rendered results as [{title, folder, snippet}].
+
+        NOTE: source classes are .engram-search-result-title,
+        .engram-search-result-path, .engram-search-result-snippet
+        on .engram-search-result-item elements.
+        Plan used .engram-search-result / .title / .folder / .snippet
+        which do not exist in the source — corrected here.
+        """
+        return await self.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.engram-search-modal .engram-search-result-item')).map("
+            "el => ({title: el.querySelector('.engram-search-result-title')?.textContent, "
+            "folder: el.querySelector('.engram-search-result-path')?.textContent, "
+            "snippet: el.querySelector('.engram-search-result-snippet')?.textContent}))"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 2: SearchView (sidebar) helpers
+    # ------------------------------------------------------------------
+
+    async def open_search_sidebar(self) -> None:
+        """Run the open-search-sidebar command."""
+        await self.evaluate(
+            "app.commands.executeCommandById("
+            "'engram-vault-sync:open-search-sidebar')"
+        )
+
+    async def wait_for_search_view(self, timeout: float = 5) -> None:
+        """Block until the SearchView leaf is mounted."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.workspace-leaf-content"
+                "[data-type=\"engram-search-view\"]'))"
+            )
+            if present:
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError("SearchView did not mount")
+
+    # ------------------------------------------------------------------
+    # Step 3: ConflictModal interaction helpers
+    # ------------------------------------------------------------------
+    #
+    # SELECTOR CONCERNS (see report):
+    #   - get_conflict_view_mode: plan queried '[data-view-mode]' which does
+    #     not exist in source. We query the active button inside
+    #     .engram-conflict-view-toggle instead.
+    #   - toggle_conflict_view: plan used .engram-view-toggle (missing);
+    #     corrected to .engram-conflict-view-toggle.
+    #   - click_all_local / click_all_remote: plan used .engram-all-local /
+    #     .engram-all-remote (missing); corrected to text-based button search
+    #     inside .engram-conflict-bulk.
+    #   - pick_conflict_hunk: plan used .engram-hunk (missing) and
+    #     [data-side=...] (missing); corrected to .engram-conflict-hunk and
+    #     button text "Use local" / "Use remote".
+    #   - set_merge_editor: plan used textarea.engram-merge-editor (missing);
+    #     corrected to .engram-conflict-merge-editor.
+    #   - click_conflict_accept: plan used .engram-accept (missing);
+    #     corrected to button text "Apply merge" inside .engram-conflict-actions.
+    #   - click_conflict_skip: plan used .engram-skip (missing);
+    #     corrected to button text "Skip" inside .engram-conflict-actions.
+
+    async def get_conflict_view_mode(self) -> str:
+        """Return 'unified' or 'side-by-side' based on the active toggle button.
+
+        Reads the active button text inside .engram-conflict-view-toggle.
+        Source has no data-view-mode attribute — plan selector was speculative.
+        """
+        return await self.evaluate(
+            "(() => {"
+            "const toggle = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-view-toggle');"
+            "if (!toggle) return null;"
+            "const active = toggle.querySelector('button.is-active');"
+            "if (!active) return null;"
+            "const t = active.textContent.trim().toLowerCase();"
+            "return t === 'side-by-side' ? 'side-by-side' : 'unified';"
+            "})()"
+        )
+
+    async def toggle_conflict_view(self) -> None:
+        """Click the non-active view button in .engram-conflict-view-toggle."""
+        await self.evaluate(
+            "(() => {"
+            "const toggle = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-view-toggle');"
+            "if (!toggle) return;"
+            "const inactive = Array.from(toggle.querySelectorAll('button'))"
+            ".find(b => !b.classList.contains('is-active'));"
+            "if (inactive) inactive.click();"
+            "})()"
+        )
+
+    async def click_all_local(self) -> None:
+        """Click the 'All local' bulk button inside .engram-conflict-bulk."""
+        await self.evaluate(
+            "(() => {"
+            "const bulk = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-bulk');"
+            "if (!bulk) return;"
+            "Array.from(bulk.querySelectorAll('button'))"
+            ".find(b => b.textContent.trim() === 'All local')?.click();"
+            "})()"
+        )
+
+    async def click_all_remote(self) -> None:
+        """Click the 'All remote' bulk button inside .engram-conflict-bulk."""
+        await self.evaluate(
+            "(() => {"
+            "const bulk = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-bulk');"
+            "if (!bulk) return;"
+            "Array.from(bulk.querySelectorAll('button'))"
+            ".find(b => b.textContent.trim() === 'All remote')?.click();"
+            "})()"
+        )
+
+    async def pick_conflict_hunk(self, index: int, side: str) -> None:
+        """Click 'Use local' or 'Use remote' in a hunk by index.
+
+        side ∈ {'local', 'remote'}. Source uses button text 'Use local' /
+        'Use remote' inside .engram-conflict-hunk-controls — no data-side.
+        """
+        label = "Use local" if side == "local" else "Use remote"
+        await self.evaluate(
+            f"(() => {{"
+            f"const hunk = document.querySelectorAll("
+            f"'.engram-conflict-modal .engram-conflict-hunk')[{index}];"
+            f"if (!hunk) return;"
+            f"const label = {json.dumps(label)};"
+            f"Array.from(hunk.querySelectorAll('.engram-conflict-hunk-controls button'))"
+            f".find(b => b.textContent.trim() === label)?.click();"
+            f"}})()"
+        )
+
+    async def set_merge_editor(self, content: str) -> None:
+        """Set the merge editor textarea value and fire input event."""
+        await self.evaluate(
+            f"(() => {{const t = document.querySelector("
+            f"'.engram-conflict-modal .engram-conflict-merge-editor'); "
+            f"t.value = {json.dumps(content)}; "
+            f"t.dispatchEvent(new Event('input', {{bubbles: true}})); }})()"
+        )
+
+    async def click_conflict_accept(self) -> None:
+        """Click 'Apply merge' in the conflict modal actions footer."""
+        await self.evaluate(
+            "(() => {"
+            "const footer = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-actions');"
+            "if (!footer) return;"
+            "Array.from(footer.querySelectorAll('button'))"
+            ".find(b => b.textContent.trim() === 'Apply merge')?.click();"
+            "})()"
+        )
+
+    async def click_conflict_skip(self) -> None:
+        """Click 'Skip' in the conflict modal actions footer."""
+        await self.evaluate(
+            "(() => {"
+            "const footer = document.querySelector("
+            "'.engram-conflict-modal .engram-conflict-actions');"
+            "if (!footer) return;"
+            "Array.from(footer.querySelectorAll('button'))"
+            ".find(b => b.textContent.trim() === 'Skip')?.click();"
+            "})()"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 4: SyncPreviewModal destructive confirm helpers
+    # ------------------------------------------------------------------
+    #
+    # SELECTOR CONCERNS (see report):
+    #   - Plan used input.engram-destructive-confirm and
+    #     .engram-destructive-submit — neither exists in source.
+    #     Source uses .engram-sync-preview-confirm-input and
+    #     .engram-sync-preview-confirm-btn — corrected here.
+
+    async def type_destructive_confirm(self, text: str = "delete") -> None:
+        """Type into the destructive-confirm input and fire input event."""
+        await self.evaluate(
+            f"(() => {{const i = document.querySelector("
+            f"'.engram-sync-preview-modal .engram-sync-preview-confirm-input'); "
+            f"i.value = {json.dumps(text)}; "
+            f"i.dispatchEvent(new Event('input', {{bubbles: true}})); }})()"
+        )
+
+    async def destructive_submit_enabled(self) -> bool:
+        """Return True when the destructive confirm button is enabled."""
+        return await self.evaluate(
+            "(() => {const b = document.querySelector("
+            "'.engram-sync-preview-modal .engram-sync-preview-confirm-btn'); "
+            "return Boolean(b) && !b.disabled; })()"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 5: Sync Center DOM helpers
+    # ------------------------------------------------------------------
+    #
+    # SELECTOR CONCERNS (see report):
+    #   - Plan used many selectors (.engram-issue-group, .engram-issue,
+    #     data-category, data-count, data-path, data-action, data-status,
+    #     .engram-ignored-item, .engram-restore, .engram-activity-entry,
+    #     .engram-clear-activity) that do not exist in source.
+    #   - Source uses: .engram-sync-center-group, .engram-sync-center-issue-row,
+    #     .engram-sync-center-activity-row, .engram-sync-center-group-head
+    #     (text contains category label + count), button text "Open"/"Ignore"
+    #     /"Restore", .engram-sync-center-activity-action, etc.
+    #   - Data attributes (data-category, data-count, data-path, data-action,
+    #     data-status) are ABSENT from the plugin source — helpers below use
+    #     structural/text queries instead. Tests that depend on .dataset will
+    #     need the plugin to add these attributes.
+
+    async def open_sync_center(self) -> None:
+        """Run the open-sync-center command."""
+        await self.evaluate(
+            "app.commands.executeCommandById("
+            "'engram-vault-sync:open-sync-center')"
+        )
+
+    async def get_issue_groups(self) -> list[dict]:
+        """Return [{category, count, items: [{path, actions:[...]}]}].
+
+        Falls back to structural parsing since source has no data-category /
+        data-count / data-path attributes. category is taken from the h4
+        heading text; count from issues in the list; path from the
+        .engram-sync-center-issue-path div text.
+        """
+        return await self.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.engram-sync-center .engram-sync-center-group')).map(g => ({"
+            "category: g.querySelector('.engram-sync-center-group-head')?.firstChild"
+            "?.textContent?.trim() || '',"
+            "count: g.querySelectorAll('.engram-sync-center-issue-row').length,"
+            "items: Array.from(g.querySelectorAll('.engram-sync-center-issue-row')).map(i => ({"
+            "path: i.querySelector('.engram-sync-center-issue-path')?.textContent?.trim() || '',"
+            "actions: Array.from(i.querySelectorAll('.engram-sync-center-issue-actions button'))"
+            ".map(b => b.textContent.trim())}))"
+            "}))"
+        )
+
+    async def click_issue_action(self, path: str, action: str) -> None:
+        """Click an action button ('Open' or 'Ignore') for an issue row by path.
+
+        Matches rows by .engram-sync-center-issue-path text content since
+        data-path attribute is absent from source.
+        """
+        await self.evaluate(
+            f"(() => {{"
+            f"const rows = document.querySelectorAll("
+            f"'.engram-sync-center .engram-sync-center-issue-row');"
+            f"for (const row of rows) {{"
+            f"const pathEl = row.querySelector('.engram-sync-center-issue-path');"
+            f"if (pathEl?.textContent?.trim() !== {json.dumps(path)}) continue;"
+            f"const btn = Array.from(row.querySelectorAll("
+            f"'.engram-sync-center-issue-actions button'))"
+            f".find(b => b.textContent.trim() === {json.dumps(action)});"
+            f"if (btn) {{ btn.click(); return; }}"
+            f"}}"
+            f"}})()"
+        )
+
+    async def get_ignored_files(self) -> list[str]:
+        """Return paths of all ignored files from the Ignored section.
+
+        Reads .engram-sync-center-issue-path text from the Ignored section's
+        issue rows. Source has no .engram-ignored-item class.
+        """
+        return await self.evaluate(
+            "(() => {"
+            "const sections = document.querySelectorAll("
+            "'.engram-sync-center .engram-sync-center-section');"
+            "for (const s of sections) {"
+            "const h = s.querySelector('.setting-item-name');"
+            "if (!h || !h.textContent.includes('Ignored')) continue;"
+            "return Array.from(s.querySelectorAll('.engram-sync-center-issue-path'))"
+            ".map(el => el.textContent.trim());"
+            "}"
+            "return [];"
+            "})()"
+        )
+
+    async def click_restore_ignored(self, path: str) -> None:
+        """Click 'Restore' for an ignored file row matching path."""
+        await self.evaluate(
+            f"(() => {{"
+            f"const rows = document.querySelectorAll("
+            f"'.engram-sync-center .engram-sync-center-issue-row');"
+            f"for (const row of rows) {{"
+            f"const pathEl = row.querySelector('.engram-sync-center-issue-path');"
+            f"if (pathEl?.textContent?.trim() !== {json.dumps(path)}) continue;"
+            f"const btn = Array.from(row.querySelectorAll("
+            f"'.engram-sync-center-issue-actions button'))"
+            f".find(b => b.textContent.trim() === 'Restore');"
+            f"if (btn) {{ btn.click(); return; }}"
+            f"}}"
+            f"}})()"
+        )
+
+    async def get_activity_entries(self) -> list[dict]:
+        """Return [{action, path, status}] from the activity list.
+
+        Source has no data-action / data-path / data-status attributes —
+        reads .engram-sync-center-activity-action, -path text content and
+        infers status from the row's CSS class (is-ok, is-error, is-skipped).
+        """
+        return await self.evaluate(
+            "Array.from(document.querySelectorAll("
+            "'.engram-sync-center .engram-sync-center-activity-row')).map(el => ({"
+            "action: el.querySelector('.engram-sync-center-activity-action')"
+            "?.textContent?.trim() || '',"
+            "path: el.querySelector('.engram-sync-center-activity-path')"
+            "?.textContent?.trim() || '',"
+            "status: el.classList.contains('is-ok') ? 'ok' "
+            ": el.classList.contains('is-error') ? 'error' "
+            ": el.classList.contains('is-skipped') ? 'skipped' : ''}))"
+        )
+
+    async def click_clear_activity(self) -> None:
+        """Click the 'Clear' button in the Activity section heading.
+
+        The button is injected by Obsidian's Setting.addButton API — no
+        stable custom class. We find it by looking for a button with text
+        'Clear' inside the Activity section's setting-item container.
+        """
+        await self.evaluate(
+            "(() => {"
+            "const sections = document.querySelectorAll("
+            "'.engram-sync-center .engram-sync-center-section');"
+            "for (const s of sections) {"
+            "const h = s.querySelector('.setting-item-name');"
+            "if (!h || !h.textContent.includes('Activity')) continue;"
+            "const btn = Array.from(s.querySelectorAll('.setting-item-control button'))"
+            ".find(b => b.textContent.trim() === 'Clear');"
+            "if (btn) { btn.click(); return; }"
+            "}"
+            "})()"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 6: Settings / command / status-bar / ribbon helpers
+    # ------------------------------------------------------------------
+    #
+    # SELECTOR CONCERNS (see report):
+    #   - Plan used .engram-status-bar-item — source uses
+    #     .engram-status-bar-clickable — corrected here.
+
+    async def open_settings_tab(self, tab: str) -> None:
+        """Open plugin settings and navigate to a sub-tab.
+
+        tab ∈ {'cloud','self-hosted','sync-center','advanced'}
+        """
+        await self.evaluate(
+            "app.commands.executeCommandById("
+            "'app:open-settings'); app.setting.openTabById("
+            f"'engram-vault-sync'); app.setting.activeTab.selectSubtab("
+            f"{json.dumps(tab)})"
+        )
+
+    async def run_command(self, command_id: str) -> None:
+        """Execute a plugin command. Prepends plugin prefix if bare id given."""
+        full = (
+            command_id
+            if ":" in command_id
+            else f"engram-vault-sync:{command_id}"
+        )
+        await self.evaluate(
+            f"app.commands.executeCommandById({json.dumps(full)})"
+        )
+
+    async def click_status_bar(self) -> None:
+        """Click the Engram status bar item."""
+        await self.evaluate(
+            "document.querySelector('.status-bar "
+            ".engram-status-bar-clickable').click()"
+        )
+
+    async def get_status_bar_text(self) -> str:
+        """Read the Engram status bar item text."""
+        return await self.evaluate(
+            "document.querySelector('.status-bar "
+            ".engram-status-bar-clickable')?.textContent || ''"
+        )
+
+    async def click_ribbon(self) -> None:
+        """Click the Engram ribbon icon (aria-label contains 'Engram')."""
+        await self.evaluate(
+            "Array.from(document.querySelectorAll('.side-dock-ribbon-action'))"
+            ".find(el => el.getAttribute('aria-label')?.includes('Engram'))"
+            ".click()"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 7: has_* skip-gate helpers
+    # ------------------------------------------------------------------
+
+    async def has_search_modal(self) -> bool:
+        """True when the plugin exposes the 'search' command."""
+        return await self.evaluate(
+            "Boolean(app.commands.findCommand("
+            "'engram-vault-sync:search'))"
+        )
+
+    async def has_sync_center(self) -> bool:
+        """True when the plugin exposes the 'open-sync-center' command."""
+        return await self.evaluate(
+            "Boolean(app.commands.findCommand("
+            "'engram-vault-sync:open-sync-center'))"
+        )
+
+    async def has_command(self, command_id: str) -> bool:
+        """True when the plugin exposes the given command id."""
+        return await self.evaluate(
+            f"Boolean(app.commands.findCommand("
+            f"'engram-vault-sync:{command_id}'))"
+        )
+
+    async def has_ribbon(self) -> bool:
+        """True when an Engram ribbon icon is present in the sidebar."""
+        return await self.evaluate(
+            "Array.from(document.querySelectorAll('.side-dock-ribbon-action'))"
+            ".some(el => el.getAttribute('aria-label')?.includes('Engram'))"
+        )
