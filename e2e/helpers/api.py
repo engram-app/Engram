@@ -311,3 +311,14 @@ class ApiClient:
         self._raise_for_status(resp)
         return resp.json().get("folders", [])
 
+    def search(self, query: str, folder: str | None = None) -> list[dict]:
+        """POST /search. Returns list of result dicts with keys: path, title, folder, snippet, score."""
+        body: dict = {"query": query}
+        if folder:
+            body["folder"] = folder
+        resp = self.session.post(
+            f"{self.base_url}/search", json=body, timeout=15
+        )
+        self._raise_for_status(resp)
+        return resp.json().get("results", [])
+
