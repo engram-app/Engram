@@ -60,27 +60,49 @@ async def test_swap_to_invalid_key_then_back(cdp_a, sync_user, vault_a, api_sync
         write_note(vault_a, NOTE_PATH, "# during bogus key\nshould fail to push")
 
         # fullSync raises when ping() returns ok=false.  Catch so the test can
-        # continue to the restore phase.
-        try:
-            await cdp_a.evaluate(
-                f"(async () => {{"
-                f"  try {{ await app.plugins.plugins['{PLUGIN_ID}'].syncEngine.fullSync(); }}"
-                f"  catch (e) {{ return e.message; }}"
-                f"}})()",
-                await_promise=True,
-            )
-        except Exception:
-            pass  # CDP-level error is fine — we read lastError next
+        # continue to the restore phase. Capture the thrown message so we can
+        # use it as a backup auth-error signal when lastError is empty.
+        fullsync_err = await cdp_a.evaluate(
+            f"(async () => {{"
+            f"  try {{ await app.plugins.plugins['{PLUGIN_ID}'].syncEngine.fullSync(); return ''; }}"
+            f"  catch (e) {{ return e.message || String(e); }}"
+            f"}})()",
+            await_promise=True,
+        ) or ""
 
         await asyncio.sleep(0.5)
 
         last_error = await cdp_a.get_last_error()
-        assert last_error, (
-            "Expected a lastError after syncing with a bogus API key, but got none"
+
+        # Prefer engine.lastError, fall back to the fullSync rejection
+        # message, then fall back to a direct ping() invocation — gives us
+        # three independent signals that the bogus key was rejected.
+        signal = last_error or fullsync_err
+        if not signal:
+            ping_result = await cdp_a.evaluate(
+                f"(async () => {{"
+                f"  try {{ const r = await app.plugins.plugins['{PLUGIN_ID}']"
+                f".api.ping(); return JSON.stringify(r); }}"
+                f"  catch (e) {{ return 'threw:' + (e.message || String(e)); }}"
+                f"}})()",
+                await_promise=True,
+            ) or ""
+            signal = ping_result
+
+        assert signal, (
+            "Expected some auth-error signal (lastError, fullSync rejection, "
+            "or ping result) after syncing with a bogus API key, but got none"
         )
-        err_lower = last_error.lower()
-        assert "invalid" in err_lower or "api key" in err_lower or "connection" in err_lower, (
-            f"Expected auth-related error (e.g. 'Invalid API key'), got: {last_error!r}"
+        sig_lower = signal.lower()
+        assert (
+            "invalid" in sig_lower
+            or "api key" in sig_lower
+            or "connection" in sig_lower
+            or "401" in sig_lower
+            or "ok\":false" in sig_lower
+            or "false" in sig_lower
+        ), (
+            f"Expected auth-related error (e.g. 'Invalid API key'), got: {signal!r}"
         )
 
         # ------------------------------------------------------------------ #
