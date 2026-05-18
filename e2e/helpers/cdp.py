@@ -1221,3 +1221,78 @@ class CdpClient:
             "Array.from(document.querySelectorAll('.side-dock-ribbon-action'))"
             ".some(el => el.getAttribute('aria-label')?.includes('Engram'))"
         )
+
+    # ------------------------------------------------------------------
+    # Step 11: SyncProgressModal helpers
+    # ------------------------------------------------------------------
+    #
+    # SELECTOR CORRECTIONS vs plan draft:
+    #   - Plan used `.engram-phase`; source uses `.engram-progress-phase`
+    #     (sync-progress-modal.ts line 50: cls: "engram-progress-phase").
+    #   - Plan used `progress` element; source has no <progress> tag.
+    #     The bar is a div.engram-progress-bar-inner with inline style.width.
+    #     get_progress_percent() parses the width percentage from that style.
+    #   - Plan used `.engram-bg-btn`; the button has no CSS class in source.
+    #     click_progress_background() matches by text "Run in background"
+    #     inside .engram-progress-buttons.
+
+    async def get_progress_phase(self) -> str | None:
+        """Read the phase label text from the SyncProgressModal.
+
+        Returns None when the modal is not mounted.  Source class is
+        .engram-progress-phase (plan draft used .engram-phase — corrected).
+        """
+        return await self.evaluate(
+            "document.querySelector("
+            "'.engram-sync-progress-modal .engram-progress-phase')?.textContent"
+        )
+
+    async def get_progress_percent(self) -> int | None:
+        """Return the progress bar fill as an integer percentage (0–100).
+
+        Reads the inline style.width from div.engram-progress-bar-inner.
+        The modal uses a CSS-width div, not a <progress> element — plan draft
+        used ``progress[value]`` which does not exist in source.
+        Returns None when the modal is not mounted or width is not set.
+        """
+        return await self.evaluate(
+            "(() => {"
+            "const bar = document.querySelector("
+            "'.engram-sync-progress-modal .engram-progress-bar-inner');"
+            "if (!bar) return null;"
+            "const w = bar.style.width;"
+            "if (!w || !w.endsWith('%')) return null;"
+            "return Math.round(parseFloat(w));"
+            "})()"
+        )
+
+    async def click_progress_background(self) -> None:
+        """Click the 'Run in background' button to dismiss the progress modal.
+
+        The button has no CSS class in source; we locate it by text content
+        inside .engram-progress-buttons.  The plan draft used .engram-bg-btn
+        which does not exist — corrected to text-match.
+        """
+        await self.evaluate(
+            "(() => {"
+            "const btns = document.querySelectorAll("
+            "'.engram-sync-progress-modal .engram-progress-buttons button');"
+            "const btn = Array.from(btns)"
+            ".find(b => b.textContent.trim() === 'Run in background');"
+            "if (btn) btn.click();"
+            "})()"
+        )
+
+    async def wait_for_progress_modal_closed(self, timeout: float = 10) -> None:
+        """Poll until .engram-sync-progress-modal is gone from the DOM."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.engram-sync-progress-modal'))"
+            )
+            if not present:
+                return
+            await asyncio.sleep(0.1)
+        raise TimeoutError(
+            f"SyncProgressModal still mounted after {timeout}s on CDP port {self.port}"
+        )
