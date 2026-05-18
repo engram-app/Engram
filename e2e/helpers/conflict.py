@@ -124,6 +124,22 @@ async def setup_conflict_for_a(
     if base is None:
         base = f"# base\nseed for {path}\n"
 
+    # 0. Defensive: dismiss any leftover conflict modal from a prior aborted
+    #    run.  pytest-rerunfailures retries the same test in the same browser
+    #    process, so a previous attempt's open modal would block the new pull
+    #    (resolveConflict is single-flight per file but a stale modal hides
+    #    test failures behind a 180 s timeout).
+    await cdp_a.evaluate(
+        "(() => { "
+        "const m = document.querySelector("
+        "'.engram-conflict-modal .engram-conflict-actions'); "
+        "if (!m) return; "
+        "const skip = Array.from(m.querySelectorAll('button'))"
+        ".find(b => b.textContent.trim() === 'Skip'); "
+        "skip?.click(); "
+        "})()"
+    )
+
     # 1. A writes the base content and syncs — establishes syncedHash on A
     #    and base content on the server.
     write_note(vault_a, path, base)
@@ -146,10 +162,25 @@ async def setup_conflict_for_a(
 
     # 6. Resume A's outgoing sync, then pull — divergence is detected and
     #    ConflictModal opens.
+    #
+    # CRITICAL: do NOT await pull()'s promise here.  In 'modal' mode pull()
+    # invokes resolveConflict() which awaits onConflict() — i.e. user
+    # interaction with the modal we're trying to surface.  Awaiting the pull
+    # would deadlock the seed: the seed waits for pull to resolve, pull waits
+    # for the modal click, no test code has run yet to click.
+    #
+    # Fire-and-forget: dispatch pull() and rely on the modal-mount poll below
+    # to know when the seed has reached the user-interaction point.
     await cdp_a.resume_outgoing_sync()
-    await cdp_a.trigger_pull()
+    # No await_promise — dispatch pull() and return immediately so the seed
+    # can poll for the modal that pull() is about to surface.
+    await cdp_a.evaluate(
+        "void app.plugins.plugins['engram-vault-sync']"
+        ".syncEngine.pull(); 'dispatched'"
+    )
 
-    # Wait for ConflictModal to mount (async — may arrive via SSE or pull response).
+    # Wait for ConflictModal to mount (pull dispatches resolveConflict which
+    # opens the modal asynchronously).
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         present = await cdp_a.evaluate(
