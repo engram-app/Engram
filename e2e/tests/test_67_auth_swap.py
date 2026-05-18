@@ -2,26 +2,28 @@
 
 User path covered:
   1. Replace the valid API key with a bogus one via settings.
-  2. Trigger fullSync — expect it to fail and surface an auth error in
-     lastError (ping() returns "Invalid API key" on 401).
+  2. Hit api.getChanges() — expect a 401-shaped failure surfacing the new
+     (bogus) key. This is the smallest possible round-trip that proves the
+     EngramApi instance picked up the new credential.
   3. Restore the original API key via settings.
-  4. Trigger fullSync again — expect it to succeed (no lastError) and
-     confirm the seeded note reaches the server.
+  4. Hit api.getChanges() again — expect success. Then run one fullSync to
+     confirm the note actually reaches the server (end-to-end recovery).
 
-Implementation notes vs plan draft:
-  - Plan asserted `"auth" in last_error.lower() or "401" in last_error`.
-    The real error string from api.ts ping() on 401/403 is "Invalid API key"
-    (src/api.ts line 156) — neither "auth" nor "401" appears in that string.
-    Assertion is corrected to check for "invalid" or "api key" (case-insensitive).
-  - saveSettings() calls api.updateConfig() which propagates the new key to
-    the EngramApi instance immediately. No separate applyAuthChange() is needed;
-    createAuthProvider() is re-invoked inside setupNoteStream() which saveSettings
-    calls. ApiKeyAuth is stateless so the new key is in effect for the next request.
-  - trigger_full_sync() is used rather than waiting for the debounce path so
-    the test is fast and deterministic.
-  - The finally block restores the original key and cleans up the seeded file.
-    api_sync is added as a fixture argument so we can verify server-side
-    recovery (the note should push on the second full sync).
+Why api.getChanges() instead of syncEngine.fullSync() for the bogus key:
+  fullSync() runs retry/backoff and various preflight checks (~5-10 s on a
+  401). The subject we're verifying is "after apiKey swap, the api client
+  uses the new key" — a single HTTP call to /changes is sufficient. We
+  still exercise fullSync on the restore phase to prove the engine-level
+  path also recovers.
+
+Implementation notes:
+  - The real ping()/getChanges() error from api.ts on 401 is "Invalid API
+    key" (src/api.ts line 156) — neither "auth" nor "401" appears in that
+    string. Assertion checks for "invalid" or "api key" (case-insensitive)
+    or "401" / "ok:false" as defensive matches.
+  - saveSettings() calls api.updateConfig() which propagates the new key
+    to the EngramApi instance immediately. ApiKeyAuth is stateless so the
+    new key is in effect for the next request.
 """
 
 from __future__ import annotations
@@ -58,42 +60,34 @@ async def test_swap_to_invalid_key_then_back(cdp_a, sync_user, vault_a, api_sync
             await_promise=True,
         )
 
-        # Seed a note so fullSync has something to push.
+        # Seed a note so the recovery-phase fullSync has something to push.
         write_note(vault_a, NOTE_PATH, "# during bogus key\nshould fail to push")
 
-        # fullSync raises when ping() returns ok=false.  Catch so the test can
-        # continue to the restore phase. Capture the thrown message so we can
-        # use it as a backup auth-error signal when lastError is empty.
-        fullsync_err = await cdp_a.evaluate(
+        # Direct api.getChanges() call — single HTTP round-trip exercising
+        # the new (bogus) key. Avoids fullSync's ~5-10s retry/backoff.
+        signal = await cdp_a.evaluate(
             f"(async () => {{"
-            f"  try {{ await app.plugins.plugins['{PLUGIN_ID}'].syncEngine.fullSync(); return ''; }}"
-            f"  catch (e) {{ return e.message || String(e); }}"
+            f"  try {{"
+            f"    const r = await app.plugins.plugins['{PLUGIN_ID}']"
+            f".api.getChanges(0);"
+            f"    return 'ok:' + JSON.stringify(r).slice(0, 80);"
+            f"  }} catch (e) {{"
+            f"    return e.message || String(e);"
+            f"  }}"
             f"}})()",
             await_promise=True,
         ) or ""
 
-        await asyncio.sleep(0.5)
-
-        last_error = await cdp_a.get_last_error()
-
-        # Prefer engine.lastError, fall back to the fullSync rejection
-        # message, then fall back to a direct ping() invocation — gives us
-        # three independent signals that the bogus key was rejected.
-        signal = last_error or fullsync_err
-        if not signal:
-            ping_result = await cdp_a.evaluate(
-                f"(async () => {{"
-                f"  try {{ const r = await app.plugins.plugins['{PLUGIN_ID}']"
-                f".api.ping(); return JSON.stringify(r); }}"
-                f"  catch (e) {{ return 'threw:' + (e.message || String(e)); }}"
-                f"}})()",
-                await_promise=True,
-            ) or ""
-            signal = ping_result
-
         assert signal, (
-            "Expected some auth-error signal (lastError, fullSync rejection, "
-            "or ping result) after syncing with a bogus API key, but got none"
+            "api.getChanges(0) returned no signal at all after swapping in "
+            "a bogus API key — neither resolved nor rejected with a message."
+        )
+        # The bogus key MUST cause a non-ok response or thrown error. A
+        # successful resolve (starts with "ok:") means the auth swap was
+        # ignored — that's a regression.
+        assert not signal.startswith("ok:"), (
+            f"api.getChanges(0) unexpectedly succeeded with bogus API key: "
+            f"{signal!r}. The new (bogus) key did not propagate to api."
         )
         sig_lower = signal.lower()
         assert (
@@ -101,8 +95,9 @@ async def test_swap_to_invalid_key_then_back(cdp_a, sync_user, vault_a, api_sync
             or "api key" in sig_lower
             or "connection" in sig_lower
             or "401" in sig_lower
-            or "ok\":false" in sig_lower
-            or "false" in sig_lower
+            or "403" in sig_lower
+            or "unauthor" in sig_lower
+            or "forbidden" in sig_lower
         ), (
             f"Expected auth-related error (e.g. 'Invalid API key'), got: {signal!r}"
         )

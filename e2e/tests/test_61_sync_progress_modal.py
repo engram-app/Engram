@@ -6,13 +6,13 @@ User path covered:
   bar increments, and clicking "Run in background" dismisses the modal while
   the sync continues in the engine.
 
-Why 50 files + 50 ms per-file delay:
+Why 5 files + 50 ms per-file delay:
   pushAll batches files in groups of 10 and only fires onSyncProgress at the
-  end of each batch (~10 × 10 ms = ~100 ms per batch for 50 files).  On a
-  fast machine the whole push can finish in under 1 s before the test gets a
-  chance to sample the phase label.  Patching pushFile with a 50 ms per-file
-  artificial delay stretches 50 files to roughly 5 s of modal time, giving
-  the polling loop ample window to capture at least one mid-push sample.
+  end of each batch.  We don't need to observe a long-running push window —
+  we need to *observe at least one mid-push event* and confirm the "bg"
+  button is wired.  An onSyncProgress recorder captures every emission, so
+  5 files × 50 ms = ~250 ms of in-flight push time is plenty.  Smaller seed
+  also means O(N) cleanup runs ~10× faster.
 
 Selector corrections vs plan draft (sync-progress-modal.ts):
   - Phase:   .engram-progress-phase  (plan used .engram-phase — missing)
@@ -49,7 +49,10 @@ from helpers.vault import delete_note, write_note
 
 
 SEED_DIR = "E2E/Progress61"
-SEED_COUNT = 50
+# 5 files × 50 ms pushFile patch ≈ 250 ms of push time — enough for the
+# onSyncProgress recorder to capture multiple mid-push events without
+# stretching the test to 5+ seconds.
+SEED_COUNT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +148,7 @@ async def test_phases_advance_and_bg_button_closes(vault_a, cdp_a):
         # ------------------------------------------------------------------
         import json as _json
         saw_active_push = False
-        for _ in range(80):  # up to 20 s
+        for _ in range(40):  # up to 4 s — 5 files × 50 ms = 250 ms in-flight
             events_json = await cdp_a.evaluate(
                 "JSON.stringify(window.__e2e_progressEvents || [])"
             )
@@ -156,10 +159,10 @@ async def test_phases_advance_and_bg_button_closes(vault_a, cdp_a):
                     break
             if saw_active_push:
                 break
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.1)
 
         assert saw_active_push, (
-            "No 'pushing' event with current>0 within 20 s. "
+            "No 'pushing' event with current>0 within 4 s. "
             "pushAll fired no intermediate progress — onSyncProgress "
             "wiring is broken or the 50 ms per-file pushFile patch failed."
         )

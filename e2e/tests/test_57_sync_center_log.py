@@ -116,7 +116,7 @@ async def test_activity_log_records_push_then_clears(vault_a, cdp_a, api_sync):
 
         # Confirm the push reached the server (the helper awaits pushFile, so
         # this should be immediate — the wait_for_note is belt-and-braces).
-        api_sync.wait_for_note(path, timeout=10)
+        api_sync.wait_for_note(path, timeout=5)
 
         # ── 3. Open Sync Center and assert push entry present ────────────────
         await cdp_a.open_sync_center()
@@ -182,7 +182,7 @@ async def test_restore_ignored_resyncs_file(vault_a, cdp_a, api_sync):
         await cdp_a.push_file_now(path, "# restore test")
         wrote = True
         # Belt-and-braces confirmation that the note reached the server.
-        api_sync.wait_for_note(path, timeout=10)
+        api_sync.wait_for_note(path, timeout=5)
 
         # ── 2. CDP pivot: add to ignoredFiles, persist, refresh Sync Center ──
         await _cdp_ignore_file(cdp_a, path)
@@ -191,7 +191,7 @@ async def test_restore_ignored_resyncs_file(vault_a, cdp_a, api_sync):
 
         # ── 3. Delete from server (simulates out-of-sync ignored state) ──────
         api_sync.delete_note(path)
-        api_sync.wait_for_note_gone(path, timeout=10)
+        api_sync.wait_for_note_gone(path, timeout=5)
 
         # ── 4. Confirm note is absent from server ────────────────────────────
         assert api_sync.get_note(path) is None, (
@@ -225,7 +225,7 @@ async def test_restore_ignored_resyncs_file(vault_a, cdp_a, api_sync):
         await cdp_a.trigger_full_sync()
 
         # ── 7. Confirm note is back on server ────────────────────────────────
-        note = api_sync.wait_for_note(path, timeout=15)
+        note = api_sync.wait_for_note(path, timeout=5)
         assert note is not None, (
             f"Note {path!r} should be on server after Restore + fullSync"
         )

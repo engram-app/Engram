@@ -790,25 +790,31 @@ class CdpClient:
         result = await self.evaluate(js, await_promise=True)
         logger.info("Remote logging enabled on CDP port %d: %s", self.port, result)
 
-    async def flush_remote_logs(self) -> None:
+    async def flush_remote_logs(self, wait_ms: int = 600) -> None:
         """Force-flush remote logs by simulating document hidden state.
 
         The plugin flushes rlog on visibilitychange→hidden. We temporarily
         override visibilityState on the document instance, dispatch the
         event, then delete the override to restore the prototype getter.
+
+        ``wait_ms`` controls how long to wait inside the renderer for the
+        POST /logs request to complete. Default 600 ms covers a typical
+        local round-trip; bump it on slow CI shapes. The previous default
+        of 3000 ms was overkill — most flushes complete in well under
+        500 ms.
         """
-        js = """
-        (async function() {
-            Object.defineProperty(document, 'visibilityState', {
+        js = f"""
+        (async function() {{
+            Object.defineProperty(document, 'visibilityState', {{
                 value: 'hidden', configurable: true
-            });
+            }});
             document.dispatchEvent(new Event('visibilitychange'));
             // Remove instance override to restore prototype getter
             delete document.visibilityState;
             // Wait for the async flush HTTP request to complete
-            await new Promise(r => setTimeout(r, 3000));
+            await new Promise(r => setTimeout(r, {int(wait_ms)}));
             return 'flushed';
-        })()
+        }})()
         """
         result = await self.evaluate(js, await_promise=True)
         logger.info("Remote logs flushed on CDP port %d: %s", self.port, result)

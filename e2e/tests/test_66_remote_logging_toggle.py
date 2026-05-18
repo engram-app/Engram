@@ -54,9 +54,9 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
     )
 
     try:
-        # Enable remote logging and give the engine a moment to register it.
+        # Enable remote logging. enable_remote_logging() awaits saveSettings
+        # which is enough — no extra sleep needed.
         await cdp_a.enable_remote_logging()
-        await asyncio.sleep(0.3)
 
         # ------------------------------------------------------------------ #
         # Phase 1: generate entries BEFORE disabling — verify they reach the
@@ -70,22 +70,23 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
             "E2E/Logging66/before.md",
             f"# {before_marker}\nbefore content",
         )
-        # Force flush (simulate page hide) and wait for the HTTP POST to /logs.
+        # Force flush (simulate page hide). flush_remote_logs() already
+        # waits 600 ms internally for the POST /logs round-trip, then we
+        # briefly poll the server. We do NOT retry-flush inside the loop:
+        # the flush already happened, and a real 5 s server-side latency
+        # is a separate bug worth surfacing as a fail.
         await cdp_a.flush_remote_logs()
-        await asyncio.sleep(1)
 
-        # Wait for the before-marker entries to arrive on the server (up to 15 s).
         before_logs: list = []
-        deadline_before = asyncio.get_event_loop().time() + 15
+        deadline_before = asyncio.get_event_loop().time() + 5
         while asyncio.get_event_loop().time() < deadline_before:
             before_logs = api_sync.list_logs(limit=200, query="E2E/Logging66/before.md")
             if before_logs:
                 break
-            await cdp_a.flush_remote_logs()
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.25)
 
         assert before_logs, (
-            "No pre-disable log entries reached the server within 15 s after "
+            "No pre-disable log entries reached the server within 5 s after "
             "push_file_now + flush_remote_logs. This means rlog().info(...) "
             "calls inside pushFile() either didn't fire (engine code change) "
             "or the visibilitychange flush handler isn't POSTing to /logs. "
@@ -103,8 +104,8 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
             f"}})()",
             await_promise=True,
         )
-        # saveSettings() calls rlog().setEnabled(false) synchronously in onSettingsSave.
-        await asyncio.sleep(0.3)
+        # saveSettings() calls rlog().setEnabled(false) synchronously in
+        # onSettingsSave — no settle sleep required.
 
         # ------------------------------------------------------------------ #
         # Phase 3: generate entries AFTER disabling — they should NOT arrive.
@@ -118,8 +119,9 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
         )
         await cdp_a.trigger_full_sync()
         # Attempt a flush — should be a no-op because rlog is disabled.
+        # flush_remote_logs() waits 600 ms internally; that's enough time
+        # for any rogue POST to land before we query the server.
         await cdp_a.flush_remote_logs()
-        await asyncio.sleep(2)
 
         # Check that no after-disable marker entries reached the server.
         # We match on the path string "E2E/Logging66/after.md" in log messages,

@@ -84,9 +84,11 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             }})()
             """
         )
-        # Wait for the settings modal to appear.
+        # Wait for the settings modal to appear. app.setting.open() and
+        # openTabById() are synchronous in Obsidian — a 3 s ceiling is
+        # already 30× the typical render time.
         settings_open = False
-        for _ in range(100):  # 10 s
+        for _ in range(30):  # 3 s
             modal_open = await cdp_a.evaluate(
                 "Boolean(document.querySelector('.modal-container .modal.mod-settings'))"
             )
@@ -95,7 +97,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
                 break
             await asyncio.sleep(0.1)
         assert settings_open, (
-            "Obsidian settings modal did not open within 10 s. "
+            "Obsidian settings modal did not open within 3 s. "
             "app.setting.open() + openTabById() should be synchronous; "
             "if the modal is missing, Obsidian's setting registry may have "
             "stopped accepting the engram tab id."
@@ -119,40 +121,26 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             f"data-tab='advanced' may not exist in this build. Got: {clicked_tab!r}"
         )
 
-        # Wait for the .engram-status-warning row to appear (renderIgnoreWarnings
-        # detects the vault folder and renders the warning on tab render).
-        # Give the vault index time to catch up with the filesystem write;
-        # if it's slow, redisplay the tab to retrigger the scanner.
+        # Wait for the .engram-status-warning row to appear
+        # (renderIgnoreWarnings detects the vault folder and renders the
+        # warning on tab render). The scanner is synchronous render — if
+        # it didn't fire within 5 s it's broken. No redisplay retries:
+        # those masked real regressions previously.
         warning_visible = False
-        for attempt in range(3):  # 3 redisplay attempts × 15 s each = 45 s total
-            for _ in range(75):
-                warning_visible = await cdp_a.evaluate(
-                    "Boolean(document.querySelector('.engram-status-warning'))"
-                )
-                if warning_visible:
-                    break
-                await asyncio.sleep(0.2)
+        deadline = asyncio.get_event_loop().time() + 5
+        while asyncio.get_event_loop().time() < deadline:
+            warning_visible = await cdp_a.evaluate(
+                "Boolean(document.querySelector('.engram-status-warning'))"
+            )
             if warning_visible:
                 break
-            # Retrigger the tab render — vault index may not have caught up
-            # the first time.
-            await cdp_a.evaluate(
-                """
-                (() => {
-                    const btn = document.querySelector(
-                        '.modal-container .modal.mod-settings [data-tab="advanced"]'
-                    );
-                    if (btn) btn.click();
-                })()
-                """
-            )
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
         assert warning_visible, (
-            "node_modules/ warning row (.engram-status-warning) did not appear "
-            "after 45 s and 3 tab redisplays. Either the problem-dir scanner "
-            "stopped detecting node_modules/, or renderIgnoreWarnings no "
-            "longer emits .engram-status-warning. Inspect settings.ts "
-            "renderIgnoreWarnings() against current source."
+            "node_modules/ warning row (.engram-status-warning) did not "
+            "appear within 5 s of opening the Advanced tab. Either the "
+            "problem-dir scanner stopped detecting node_modules/, or "
+            "renderIgnoreWarnings no longer emits .engram-status-warning. "
+            "Inspect settings.ts renderIgnoreWarnings() against current source."
         )
 
         # Click "Add to ignores" inside the warning row for node_modules/.
