@@ -1670,14 +1670,20 @@ jobs:
           echo "FastRaid deploy verified — both engram containers running ${VERSION}"
 
   # Auto-open a PR in engram-app/engram-infra bumping the staging-fastraid
-  # image tags to the just-deployed version. This is the third leg of the
-  # TF-via-daemon control plane: release → /deploy (live container bumped)
-  # → infra PR → eventual TF apply (state catches up via daemon's /tf-apply).
+  # image tag(s) to the just-deployed version. Third leg of the TF-via-
+  # daemon control plane: release → /deploy (live container bumped) →
+  # infra PR → TF apply via daemon (state catches up).
   #
-  # Once the TF apply pipeline is end-to-end live, the deploy-fastraid job
-  # above can be retired and TF apply becomes the sole image-bump path.
-  # Until then, both paths coexist: /deploy bumps the live container, this
-  # job bumps the TF source of truth so they don't drift.
+  # As of 2026-05-19 the full chain is live: engram-deployer 0.1.7 on
+  # FastRaid with /tf-apply + /tf-plan + engram-infra's tf-apply.yml +
+  # tf-plan.yml + docker_container.engram_saas in TF state (PR #30).
+  # The /tf-plan bot upserts a plan comment on every push; /tf-apply
+  # runs only on merge to main. `/deploy` is still the live-mover.
+  #
+  # Future: once selfhost lands under TF (Path E.3b), the regex below
+  # picks up `engram_selfhost_image_tag` too and the bump covers both.
+  # Eventually /deploy can be retired entirely and TF apply becomes
+  # the sole image-bump path.
   bump-infra-tfvars:
     needs: deploy-fastraid
     if: |
@@ -1743,10 +1749,12 @@ jobs:
         run: |
           # Python rewrite anchored on the variable block names — robust
           # against other `default = ` lines being added later in the file.
-          # Matches BOTH engram_saas_image_tag and engram_selfhost_image_tag
-          # since they share the same image and always move together; if a
-          # canary pattern is added later, drop the |selfhost branch and
-          # add a separate workflow for selfhost promotion.
+          # Matches engram_saas_image_tag today and engram_selfhost_image_tag
+          # once selfhost is imported into TF (Path E.3b). saas and selfhost
+          # share the same image so the bump always moves them together;
+          # accepting either 1 or 2 matches lets this work before AND after
+          # the selfhost import. Hard-fail on 0 or 3+ (variables.tf shape
+          # changed — investigate).
           python3 - <<'PY'
           import os
           import re
@@ -1759,13 +1767,13 @@ jobs:
               re.DOTALL,
           )
           new, count = pattern.subn(rf'\g<1>"{version}"', text)
-          if count != 2:
+          if count not in (1, 2):
               raise SystemExit(
-                  f"expected 2 variable blocks to update, got {count}; "
+                  f"expected 1 or 2 variable blocks to update, got {count}; "
                   "variables.tf shape changed — adjust the regex"
               )
           open(path, "w").write(new)
-          print(f"rewrote {count} blocks to {version}")
+          print(f"rewrote {count} block(s) to {version}")
           PY
 
           echo "::group::variables.tf after rewrite"
@@ -1789,17 +1797,13 @@ jobs:
 
             Source commit: ${{ github.repository }}@${{ github.sha }}
 
-            Bumps both:
-            - `engram_saas_image_tag`
-            - `engram_selfhost_image_tag`
-
-            from current default to **${{ steps.version.outputs.version }}**.
+            Bumps `engram_saas_image_tag` (and `engram_selfhost_image_tag` once selfhost is imported into TF via Path E.3b) from current default to **${{ steps.version.outputs.version }}**.
 
             ## What this triggers
 
-            On merge, `.github/workflows/tf-apply.yml` POSTs the merge SHA to engram-deployer's `/tf-apply` endpoint on FastRaid. The daemon runs `terraform apply` against the local Docker socket, recreating both engram containers with the new image.
+            On merge, `.github/workflows/tf-apply.yml` POSTs the merge SHA to engram-deployer's `/tf-apply` endpoint on FastRaid. The daemon runs `terraform apply` against the local Docker socket, recreating the engram-saas container with the new image. `/tf-plan` upserts a plan comment as part of the PR review gate (live since 2026-05-18).
 
-            Until the TF apply pipeline is end-to-end live, this PR is informational — the `/deploy` POST from the source release already moved the live containers. This PR just brings TF state into sync.
+            The `/deploy` POST from the source release already moved the live container. This PR brings TF state into sync — expect plan output to be a single `~ image` field change on `docker_container.engram_saas`.
 
             ## Review
 
