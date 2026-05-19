@@ -130,7 +130,7 @@ defmodule EngramWeb.NotesController do
 
         json(conn, %{
           changes: Enum.map(changes, &change_json/1),
-          server_time: DateTime.utc_now(:second) |> DateTime.to_iso8601()
+          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
         })
 
       {:error, _} ->

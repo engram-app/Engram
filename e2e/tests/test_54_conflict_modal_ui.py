@@ -138,19 +138,14 @@ async def test_all_local_then_accept_writes_local(vault_a, vault_b, cdp_a, cdp_b
         await restore_after_conflict(vault_a, vault_b, cdp_a, cdp_b, path)
 
 
-# DEBUG: parametrize known-flaky test 5x to surface the flake reliably in one
-# CI run. Revert once root cause is identified from snapshot dumps.
-@pytest.mark.parametrize("flake_attempt", range(5))
 @pytest.mark.asyncio
-async def test_all_remote_then_accept_writes_remote(
-    vault_a, vault_b, cdp_a, cdp_b, flake_attempt
-):
+async def test_all_remote_then_accept_writes_remote(vault_a, vault_b, cdp_a, cdp_b):
     """'All remote' bulk button pre-selects every hunk; accept writes remote content.
 
     After clicking 'All remote' and 'Apply merge', the vault file on A must
     contain the remote text and NOT contain the local-only text.
     """
-    path = f"E2E/Conflict54/AllRemote-{flake_attempt}.md"
+    path = "E2E/Conflict54/AllRemote.md"
     local = "# H1\nlocal-A content\n"
     remote = "# H1\nremote-B content\n"
     await setup_conflict_for_a(

@@ -86,7 +86,7 @@ defmodule EngramWeb.AttachmentsController do
                 deleted: c.deleted_at != nil
               }
             end),
-          server_time: DateTime.utc_now(:second) |> DateTime.to_iso8601()
+          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
         })
 
       {:error, _} ->

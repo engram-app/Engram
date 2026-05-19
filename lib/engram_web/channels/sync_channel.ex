@@ -221,7 +221,7 @@ defmodule EngramWeb.SyncChannel do
 
             reply = %{
               "changes" => serialized,
-              "server_time" => DateTime.utc_now(:second) |> DateTime.to_iso8601()
+              "server_time" => DateTime.utc_now() |> DateTime.to_iso8601()
             }
 
             {:reply, {:ok, reply}, socket}
