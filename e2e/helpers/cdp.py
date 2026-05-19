@@ -130,13 +130,19 @@ class CdpClient:
         and nothing in the plugin actively re-registers until the next
         ``saveSettings`` fires. Passive polling never recovers from that
         state, so this helper actively calls ``plugin.registerVault()``
-        (private at compile time, public at runtime) once on entry when
-        vaultId is null, then polls for the result. Idempotent — the
-        plugin's own guard at registerVault() line 497 short-circuits when
-        vaultId is already set.
+        (private at compile time, public at runtime) when vaultId is null,
+        then polls for the result. Idempotent — the plugin's own guard at
+        registerVault() line 497 short-circuits when vaultId is already set.
+
+        Captures the registerVault result (true/false/error reason) into the
+        TimeoutError so a failed registration surfaces the *cause* (402,
+        network failure, etc.) instead of just "Vault not registered after
+        15s" — silent registerVault failures used to repro as a passive
+        timeout with no signal of what went wrong.
         """
         deadline = time.monotonic() + timeout
         triggered = False
+        last_result: object = None
         while time.monotonic() < deadline:
             try:
                 vault_id = await self.evaluate(
@@ -149,25 +155,24 @@ class CdpClient:
                     return
                 if not triggered:
                     triggered = True
-                    # Drive registerVault directly. The .catch swallows the
-                    # promise rejection so a transient backend failure does
-                    # not crash the CDP call — the next loop iteration
-                    # observes the (still-null) vaultId and gives the timeout
-                    # an honest chance to expire.
-                    await self.evaluate(
-                        f"{PLUGIN_PATH}.registerVault().catch(() => null)",
+                    last_result = await self.evaluate(
+                        f"{PLUGIN_PATH}.registerVault()"
+                        f".then(r => ['ok', r]).catch(e => "
+                        f"['err', String(e?.message || e), e?.status ?? null])",
                         await_promise=True,
                     )
                     logger.info(
-                        "vaultId was null on CDP port %d — invoked registerVault()",
+                        "vaultId was null on CDP port %d — registerVault() → %r",
                         self.port,
+                        last_result,
                     )
                     continue
             except Exception:
                 pass
             await asyncio.sleep(0.5)
         raise TimeoutError(
-            f"Vault not registered after {timeout}s on CDP port {self.port}"
+            f"Vault not registered after {timeout}s on CDP port {self.port} "
+            f"(registerVault() returned {last_result!r})"
         )
 
     async def has_sync_gate(self) -> bool:
