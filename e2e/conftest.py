@@ -95,14 +95,24 @@ if _WORKER > 0:
     CONFIG_PREFIX = f"{CONFIG_PREFIX}-w{_WORKER}"
 
 
+# Per-run namespace. GITHUB_RUN_ID is unique per CI run; "local" outside CI.
+# Embedded in every e2e-* email so cleanup can scope its sweep to just this
+# run instead of nuking sibling runs' users mid-flight (issue #160).
+_RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
+
+
 # ---------------------------------------------------------------------------
 # Unique timestamp for this test run
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def ts():
-    """Per-worker unique timestamp so two workers never pick the same email."""
-    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}w{_WORKER}"
+    """Per-worker, per-run unique suffix for e2e-* emails.
+
+    Format: ``{YYYYMMDDHHMMSSffffff}r{RUN_ID}w{WORKER}`` — the ``r{RUN_ID}``
+    segment scopes cleanup to this CI run (see issue #160).
+    """
+    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}r{_RUN_ID}w{_WORKER}"
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +131,10 @@ def auth_provider():
     """
     provider = get_auth_provider(API_URL)
     if _WORKER == 0:
-        provider.cleanup_all_e2e_users()
+        # Scope sweep to THIS run's namespace — never touch sibling runs'
+        # users. Orphans from crashed runs are reaped out-of-band by
+        # .github/workflows/clerk-orphans.yml (issue #160).
+        provider.cleanup_all_e2e_users(run_id=_RUN_ID)
     return provider
 
 
@@ -325,6 +338,67 @@ def vault_c(obsidian_c):
 # ---------------------------------------------------------------------------
 # Plugin-surface assertion (replaces per-test has_* skip guards)
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+async def _track_apikey_wipe(request):
+    """After each test, log if apiKey on cdp_a went empty in mem or disk.
+
+    PR #162 surfaced a flake where test_66/69/70 hit `apiKeyLen: 0` on
+    both memory AND disk — meaning a PRIOR test wrote ``apiKey: ""`` via
+    saveSettings. Memory-only diagnostic can't identify the wiper.
+    This hook probes apiKey at teardown and logs WHICH test transitioned
+    it from non-empty → empty. Adds ~30 ms / test that uses cdp_a.
+
+    Skips tests that don't use cdp_a (api_only, etc.).
+    """
+    yield
+    if "cdp_a" not in request.fixturenames:
+        return
+    try:
+        cdp_a_val = request.getfixturevalue("cdp_a")
+    except (pytest.FixtureLookupError, Exception):
+        return
+    try:
+        state = await cdp_a_val.evaluate(
+            """
+            (async () => {
+                const p = app.plugins.plugins['engram-vault-sync'];
+                const memK = (p.settings?.apiKey || '');
+                const memR = (p.settings?.refreshToken || '');
+                let diskK = '', diskR = '';
+                try {
+                    const data = await p.loadData() || {};
+                    const ds = data.settings || {};
+                    diskK = ds.apiKey || '';
+                    diskR = ds.refreshToken || '';
+                } catch (_) {}
+                return {
+                    memApiKeyLen: memK.length,
+                    memRefreshTokenLen: memR.length,
+                    diskApiKeyLen: diskK.length,
+                    diskRefreshTokenLen: diskR.length,
+                };
+            })()
+            """,
+            await_promise=True,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "apikey-wipe probe failed for %s: %s", request.node.nodeid, e
+        )
+        return
+    if not isinstance(state, dict):
+        return
+    mem_k = state.get("memApiKeyLen", 0)
+    disk_k = state.get("diskApiKeyLen", 0)
+    mem_r = state.get("memRefreshTokenLen", 0)
+    if mem_k == 0 and disk_k == 0 and mem_r == 0:
+        logging.getLogger(__name__).error(
+            "APIKEY-WIPE detected after %s — mem=%d/%d disk=%d/%d",
+            request.node.nodeid, mem_k, mem_r, disk_k,
+            state.get("diskRefreshTokenLen", 0),
+        )
+
 
 @pytest.fixture(scope="session", autouse=True)
 async def _assert_plugin_surfaces(cdp_a):

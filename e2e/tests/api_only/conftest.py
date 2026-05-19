@@ -28,3 +28,9 @@ async def _assert_plugin_surfaces():
     only fires for tests that actually drive Obsidian.
     """
     return
+
+
+@pytest.fixture(autouse=True)
+async def _track_apikey_wipe():
+    """Override the parent conftest's apiKey-wipe probe — api_only has no cdp_a."""
+    yield

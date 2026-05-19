@@ -1,0 +1,44 @@
+name: Clerk Orphan Reaper
+
+# Out-of-band cleanup for stale e2e-* Clerk users left behind by crashed
+# CI runs. The pytest fixture now scopes its sweep to the current run id
+# (issue #160), so users from a run that was cancelled / OOM-killed before
+# its session_cleanup fired would otherwise accumulate forever. This cron
+# mops them up — with a 1h age filter to avoid racing in-flight runs.
+
+on:
+  schedule:
+    # Every hour on the half-hour (offset from the top to avoid colliding
+    # with the burst of scheduled jobs at :00).
+    - cron: "30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clerk-orphans
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            e2e/scripts/cleanup_clerk_users.py
+
+      - name: Ensure requests is available
+        run: python3 -m pip install --user --quiet "requests>=2.31"
+
+      - name: Reap orphan e2e Clerk users older than 1h
+        env:
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
+            echo "E2E_CLERK_SECRET_KEY not set — skipping." >&2
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h

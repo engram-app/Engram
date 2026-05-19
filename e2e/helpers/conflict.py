@@ -141,8 +141,11 @@ async def setup_conflict_for_a(
     )
 
     # 1. A writes the base content and syncs — establishes syncedHash on A
-    #    and base content on the server.
-    write_note(vault_a, path, base)
+    #    and base content on the server. Use vault_write (Obsidian's vault
+    #    API) instead of write_note so the file is in getFiles() before
+    #    fullSync iterates — raw filesystem writes are picked up only when
+    #    the watcher eventually fires, which races against trigger_full_sync.
+    await cdp_a.vault_write(path, base)
     await cdp_a.trigger_full_sync()
 
     # 2. B pulls so it also records the same base in its syncState. Not strictly
@@ -153,11 +156,22 @@ async def setup_conflict_for_a(
     # 3. Pause A's outgoing sync so the local divergent write stays off-server.
     await cdp_a.pause_outgoing_sync()
 
+    # 3b. Pause A's incoming WebSocket events so the broadcast from step 5
+    #     (B's push) cannot race pull() under resolveConflict's single-flight
+    #     gate. Without this, the WS path and the pull path both try to open
+    #     ConflictModal for the same `path`; under specific edit-range
+    #     geometries the interleaving silently auto-resolves and neither
+    #     mounts the modal — the test_54 PerHunk flake on PR #162.
+    await cdp_a.pause_incoming_sync()
+
     # 4. A writes local divergence (now: localHash != lastSyncedHash → modified).
-    write_note(vault_a, path, local)
+    #    vault_write ensures pull() in step 6 reads the local content from the
+    #    same path Obsidian's index knows about. handleModify is a no-op while
+    #    paused, so no push leaks out.
+    await cdp_a.vault_write(path, local)
 
     # 5. B writes remote divergence and syncs so the server carries B's version.
-    write_note(vault_b, path, remote)
+    await cdp_b.vault_write(path, remote)
     await cdp_b.trigger_full_sync()
 
     # 6. Resume A's outgoing sync, then pull — divergence is detected and
@@ -170,7 +184,8 @@ async def setup_conflict_for_a(
     # for the modal click, no test code has run yet to click.
     #
     # Fire-and-forget: dispatch pull() and rely on the modal-mount poll below
-    # to know when the seed has reached the user-interaction point.
+    # to know when the seed has reached the user-interaction point. Incoming
+    # WS handling stays paused — pull is the only conflict-detection path.
     await cdp_a.resume_outgoing_sync()
     # No await_promise — dispatch pull() and return immediately so the seed
     # can poll for the modal that pull() is about to surface.
@@ -187,10 +202,48 @@ async def setup_conflict_for_a(
             "Boolean(document.querySelector('.engram-conflict-modal'))"
         )
         if present:
+            # Modal up. Restore WS handler so the rest of the test (and
+            # restore_after_conflict) observes normal events again.
+            await cdp_a.resume_incoming_sync()
             return
         await asyncio.sleep(0.2)
+
+    # Modal never mounted. Capture the engine's view of the world before
+    # raising so the next flake has actionable evidence. Mirrors the
+    # wait_for_vault_registered diagnostic pattern from PR #159.
+    state = await cdp_a.evaluate(
+        f"""
+        (() => {{
+            const p = app.plugins.plugins['engram-vault-sync'];
+            const se = p.syncEngine;
+            const ss = se.syncState.get({path!r});
+            const bs = p.baseStore?.get?.({path!r});
+            return JSON.stringify({{
+                conflictResolution: p.settings.conflictResolution,
+                syncBlocked: se.syncBlocked,
+                recentlyPushed: se.isRecentlyPushed?.({path!r}) ?? null,
+                pushing: se.pushing?.has?.({path!r}) ?? null,
+                syncState: ss ? {{
+                    hash: ss.hash,
+                    version: ss.version,
+                    hashLen: (ss.hash || '').length,
+                }} : null,
+                baseStorePresent: !!bs,
+                baseLen: bs ? (bs.content || '').length : null,
+                incomingPaused: !!se._origHandleStreamEvent,
+                outgoingPaused: !!se._origHandleModify,
+            }});
+        }})()
+        """
+    )
+    # Best-effort restore so we don't poison downstream cleanup paths.
+    try:
+        await cdp_a.resume_incoming_sync()
+    except Exception:
+        pass
     raise TimeoutError(
-        f"ConflictModal never opened for path '{path}' within 10 s"
+        f"ConflictModal never opened for path '{path}' within 10 s; "
+        f"engine state at timeout: {state}"
     )
 
 
