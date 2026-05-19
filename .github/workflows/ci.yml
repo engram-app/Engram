@@ -1645,6 +1645,14 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: engram-infra
           ref: main
+          # peter-evans/create-pull-request@v6 sets its own Authorization
+          # header on push; persist-credentials=true would leave the
+          # checkout's basic-auth extraheader in git config, and the
+          # second header triggers GitHub's "Duplicate header: Authorization"
+          # 400 (observed on first real bot run during the 2026-05-19
+          # cutover). The create-pull-request step still uses the same
+          # app-token via its `token:` input.
+          persist-credentials: false
 
       - name: Rewrite image_tag defaults in variables.tf
         id: rewrite
