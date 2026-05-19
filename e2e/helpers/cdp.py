@@ -180,6 +180,39 @@ class CdpClient:
                         }})()
                         """
                     )
+                    # ── On-disk state ──────────────────────────────────────
+                    # If memory says apiKeyLen=0 but disk says apiKey is
+                    # present, a stale plugin instance is reading wiped
+                    # state. If both empty, something actively wiped disk.
+                    # Distinguishes "plugin reload lost it" from "state
+                    # actively cleared" — critical for tracing apiKey-wipe
+                    # flakes across the test sequence.
+                    diag["disk_state"] = await self.evaluate(
+                        f"""
+                        (async () => {{
+                            try {{
+                                const data = await {PLUGIN_PATH}.loadData() || {{}};
+                                const ds = data.settings || {{}};
+                                const k = ds.apiKey || '';
+                                const r = ds.refreshToken || '';
+                                return {{
+                                    diskApiKeyLen: k.length,
+                                    diskApiKeyPrefix: k.slice(0, 8),
+                                    diskRefreshTokenLen: r.length,
+                                    diskAuthMethod: ds.authMethod || null,
+                                    diskVaultId: ds.vaultId || null,
+                                    diskClientId: ds.clientId || null,
+                                    diskKeysPresent: Object.keys(ds).sort(),
+                                    syncGateAcceptedFor:
+                                        data.syncGateAcceptedFor || null,
+                                }};
+                            }} catch (e) {{
+                                return {{ error: String(e?.message || e) }};
+                            }}
+                        }})()
+                        """,
+                        await_promise=True,
+                    )
                     # ── Backend reachability (no-auth) ──────────────────────
                     diag["health"] = await self.evaluate(
                         f"{PLUGIN_PATH}.api.health()"
@@ -228,6 +261,7 @@ class CdpClient:
         ]
         for k in (
             "plugin_state",
+            "disk_state",
             "health",
             "me",
             "plugin_registerVault",
