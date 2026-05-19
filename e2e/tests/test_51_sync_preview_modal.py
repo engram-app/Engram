@@ -34,18 +34,6 @@ from helpers.vault import write_note
 SEED_DIR = "E2E/Modal"
 
 
-@pytest.fixture(autouse=True)
-async def _require_sync_gate(cdp_a):
-    """Skip the whole module when the loaded plugin predates SyncPreviewModal.
-
-    Backend CI runs this suite against whichever plugin SHA the cross-repo
-    trigger ships. Pre-PR-61 plugin builds have no gate API, so every
-    test_51 case would explode in setup. Detect once, skip cleanly.
-    """
-    if not await cdp_a.has_sync_gate():
-        pytest.skip("Plugin lacks SyncPreviewModal — gate API not present")
-
-
 async def _dismiss_via_escape(cdp) -> None:
     """Dispatch Escape until every modal layer is gone.
 

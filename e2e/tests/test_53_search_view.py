@@ -29,15 +29,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-async def _require_sidebar(cdp_a):
-    """Skip the whole module when the loaded plugin predates SearchView."""
-    if not await cdp_a.has_command("open-search-sidebar"):
-        pytest.skip(
-            "Plugin lacks open-search-sidebar command — skipping test_53"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -61,14 +52,7 @@ async def test_command_opens_sidebar(cdp_a):
 
 @pytest.mark.asyncio
 async def test_ribbon_opens_sidebar(cdp_a):
-    """Ribbon icon (aria-label contains 'Engram') opens the SearchView sidebar.
-
-    Skips gracefully when the ribbon icon is not registered in the loaded
-    plugin build (legitimate capability gate — pre-ribbon plugin builds).
-    """
-    if not await cdp_a.has_ribbon():
-        pytest.skip("Ribbon icon not registered in this plugin build")
-
+    """Ribbon icon (aria-label contains 'Engram') opens the SearchView sidebar."""
     await cdp_a.click_ribbon()
     await cdp_a.wait_for_search_view()
 

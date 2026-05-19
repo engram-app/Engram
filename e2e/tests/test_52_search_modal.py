@@ -27,13 +27,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-async def _require_search(cdp_a):
-    """Skip the whole module when the loaded plugin predates SearchModal."""
-    if not await cdp_a.has_search_modal():
-        pytest.skip("Plugin lacks Semantic search command — skipping test_52")
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

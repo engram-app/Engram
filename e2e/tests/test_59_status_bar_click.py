@@ -31,17 +31,6 @@ from helpers.vault import write_note
 
 
 # ---------------------------------------------------------------------------
-# Skip gate — skip both tests when the plugin lacks the SyncPreviewModal API
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-async def _require_gate(cdp_a):
-    if not await cdp_a.has_sync_gate():
-        pytest.skip("Plugin lacks SyncPreviewModal gate API")
-
-
-# ---------------------------------------------------------------------------
 # test_click_blocked_opens_modal
 # ---------------------------------------------------------------------------
 

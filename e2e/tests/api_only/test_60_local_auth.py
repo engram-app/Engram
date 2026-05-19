@@ -16,6 +16,7 @@ Tests:
 
 import os
 import time
+import uuid
 
 import pytest
 import requests
@@ -68,8 +69,16 @@ http = _RetryClient()
 
 
 def unique_email(label: str) -> str:
-    """Generate a unique email to avoid collisions across test runs."""
-    return f"e2e-local-{label}-{int(time.time())}@test.com"
+    """Generate a unique email per call.
+
+    Earlier versions used ``int(time.time())`` (second precision) which
+    collides when two tests run within the same second — e.g. both
+    ``TestRefresh`` setup methods would hit the same address and the
+    second registration returned 422 (duplicate). Adding a uuid4 suffix
+    guarantees uniqueness across rapid-fire calls without sacrificing
+    the human-readable label prefix.
+    """
+    return f"e2e-local-{label}-{int(time.time())}-{uuid.uuid4().hex[:8]}@test.com"
 
 
 PASSWORD = "E2eTestPass!99"

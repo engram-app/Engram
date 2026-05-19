@@ -24,9 +24,11 @@ Implementation notes vs plan draft:
   - isRecentlyPushed() is a public method (src/sync.ts line 815) that exposes
     the recentlyPushed Map state; we verify it is set before the synthetic event
     so the test knows the suppression window is actually active.
-  - The suppression window is 5 s; we wait 6 s for the expiry check to give
-    a 1-second margin and add an extra second before the late-window assertion.
-    CI is slow — 7 s total wait for the expiry is intentional.
+  - The production cooldown is 5 s but tests don't need to sleep for it —
+    ``accelerate_echo_expiry()`` rearms the pending ``setTimeout`` with a
+    short delay so the real clear path still runs but the test waits ~hundreds
+    of ms, not 7 s.  Saves wall time and stops "is the runner slow today?"
+    becoming a confounder.
   - handleStreamEvent is async; we await it inside evaluate() so the CDP call
     returns only after the method resolves.
 
@@ -48,20 +50,6 @@ from helpers.vault import delete_note
 PLUGIN_ID = "engram-vault-sync"
 _P = f"app.plugins.plugins['{PLUGIN_ID}']"
 _ENGINE = f"{_P}.syncEngine"
-
-
-@pytest.fixture(autouse=True)
-async def _require_echo_suppression(cdp_a):
-    """Skip when the loaded build lacks the echo-suppression API."""
-    has_api = await cdp_a.evaluate(
-        f"typeof {_ENGINE}.isRecentlyPushed === 'function' && "
-        f"typeof {_ENGINE}.handleStreamEvent === 'function'"
-    )
-    if not has_api:
-        pytest.skip(
-            "SyncEngine lacks isRecentlyPushed() or handleStreamEvent() — "
-            "echo-suppression API not present in this build."
-        )
 
 
 @pytest.mark.asyncio
@@ -139,18 +127,29 @@ async def test_echo_suppressed_within_cooldown(vault_a, cdp_a):
         )
 
         # ------------------------------------------------------------------ #
-        # Wait for the suppression window to expire (~5 s + margin).         #
+        # Drive the suppression window to expire deterministically.  We      #
+        # rearm the pending ``setTimeout`` to a short delay instead of       #
+        # sleeping for the full ECHO_COOLDOWN_MS — same clear code path,     #
+        # fraction of the wall time, no "is CI slow today?" race.            #
         # ------------------------------------------------------------------ #
-        await asyncio.sleep(7)
+        await cdp_a.accelerate_echo_expiry(path, ms=200)
 
-        # Verify the window has expired.
-        still_suppressed = await cdp_a.evaluate(
-            f"{_ENGINE}.isRecentlyPushed({path!r})"
-        )
+        # Poll until the timer fires (production setTimeout callback runs,
+        # `recentlyPushed.delete(path)` executes).  Bounded so a stuck timer
+        # still fails loudly instead of hanging.
+        deadline = asyncio.get_event_loop().time() + 5
+        still_suppressed = True
+        while asyncio.get_event_loop().time() < deadline:
+            still_suppressed = await cdp_a.evaluate(
+                f"{_ENGINE}.isRecentlyPushed({path!r})"
+            )
+            if not still_suppressed:
+                break
+            await asyncio.sleep(0.05)
         assert not still_suppressed, (
-            "recentlyPushed entry was NOT cleared after 7 seconds — "
-            "ECHO_COOLDOWN_MS timer may not be firing.  Check setTimeout in "
-            "SyncEngine.markRecentlyPushed (src/sync.ts)."
+            "recentlyPushed entry was NOT cleared after the shortened timer "
+            "fired — markRecentlyPushed's setTimeout callback is not running "
+            "the delete branch.  Check src/sync.ts markRecentlyPushed."
         )
 
         # Fire the same event again — now outside the window, applyChange should run.

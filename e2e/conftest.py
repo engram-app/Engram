@@ -323,6 +323,66 @@ def vault_c(obsidian_c):
 
 
 # ---------------------------------------------------------------------------
+# Plugin-surface assertion (replaces per-test has_* skip guards)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+async def _assert_plugin_surfaces(cdp_a):
+    """Hard-fail once if the plugin under test lacks required surfaces.
+
+    Previously every Sync-Center / SyncPreview / search / command-palette /
+    echo-suppression test carried its own ``pytest.skip`` autouse guard that
+    asked CDP for a single ``typeof`` or ``has_command`` check.  Those guards
+    were written for the era when CI shipped multiple plugin SHAs side-by-side
+    and tests had to tolerate older builds. The plugin has been stable for
+    months — every checked surface now ships in every build — so the guards
+    became dead code that silently skipped tests when something WAS broken
+    (e.g. a build that failed to expose a command would just disappear from
+    the suite instead of failing).
+
+    Single bulk probe runs once per session. If anything is missing the suite
+    fails loudly with the offending names listed, which is the signal we
+    actually want.  Add new entries here, not in individual test files.
+    """
+    await cdp_a.wait_for_plugin_ready(timeout=30)
+    missing = await cdp_a.evaluate(
+        """
+        (() => {
+            const p = app.plugins.plugins['engram-vault-sync'];
+            const cmds = [
+                'sync-now', 'push-all', 'pull-all', 'show-sync-log',
+                'search', 'open-search-sidebar', 'open-sync-center',
+            ];
+            const missing = [];
+            if (typeof p.markSyncGateAccepted !== 'function') missing.push('markSyncGateAccepted');
+            if (typeof p.registerVault !== 'function') missing.push('plugin.registerVault');
+            if (typeof p.api?.registerVault !== 'function') missing.push('api.registerVault');
+            if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
+            if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
+            if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
+            if (typeof p.settings?.conflictResolution === 'undefined') missing.push('settings.conflictResolution');
+            for (const id of cmds) {
+                if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
+                    missing.push(`command:${id}`);
+                }
+            }
+            const ribbon = Array.from(document.querySelectorAll('.side-dock-ribbon-action'))
+                .some(el => el.getAttribute('aria-label')?.includes('Engram'));
+            if (!ribbon) missing.push('ribbon');
+            return missing;
+        })()
+        """
+    )
+    if missing:
+        pytest.fail(
+            "Plugin under test is missing required surfaces: "
+            + ", ".join(missing)
+            + ". Either the build is broken or the plugin lost a feature these "
+              "tests rely on. Update src/, not the test."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Session-wide cleanup (runs AFTER all tests)
 # ---------------------------------------------------------------------------
 

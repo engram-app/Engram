@@ -151,9 +151,17 @@ jobs:
             docker-compose.ci.yml docker-compose.ci-local.yml \
             .github/workflows/ci.yml \
             | sha256sum | cut -d' ' -f1)
-          # E2E hash mixes plugin SHA so that a plugin-only change invalidates
-          # the integration cache without touching the pure-backend cache.
-          E2E_HASH=$(printf '%s:%s' "$BACKEND_HASH" "$PLUGIN_SHA" | sha256sum | cut -d' ' -f1)
+          # The e2e harness tree (helpers, fixtures, tests). Including it in
+          # the e2e hash means an e2e-only change (test fix, helper tweak)
+          # invalidates the e2e cache and forces e2e-clerk to actually run
+          # — without this, an e2e fix could ride the previous green's
+          # cache and never execute its own change. Excluded from
+          # BACKEND_HASH so backend jobs aren't re-run for pure-e2e edits.
+          E2E_TREE_HASH=$(git ls-tree -r HEAD -- e2e | sha256sum | cut -d' ' -f1)
+          # E2E hash mixes backend + plugin SHA + e2e tree so a plugin-only
+          # or e2e-only change invalidates the integration cache without
+          # touching the pure-backend cache.
+          E2E_HASH=$(printf '%s:%s:%s' "$BACKEND_HASH" "$PLUGIN_SHA" "$E2E_TREE_HASH" | sha256sum | cut -d' ' -f1)
           echo "backend-hash=$BACKEND_HASH" >> "$GITHUB_OUTPUT"
           echo "e2e-hash=$E2E_HASH" >> "$GITHUB_OUTPUT"
           echo "Backend fingerprint: $BACKEND_HASH"

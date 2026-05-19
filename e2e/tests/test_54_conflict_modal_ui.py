@@ -59,25 +59,6 @@ from helpers.vault import read_note, wait_for_content
 
 
 @pytest.fixture(autouse=True)
-async def _require_conflict_modal(cdp_a):
-    """Skip the whole module when ConflictModal is not in the loaded plugin.
-
-    The modal was added before 1.3.x but the test needs both the modal DOM
-    structure AND the ``conflictResolution`` setting.  Detect presence via the
-    expected modal selector appearing after a fabricated command; fall back to
-    checking for the setting key.
-    """
-    has_setting = await cdp_a.evaluate(
-        "Boolean(app.plugins.plugins['engram-vault-sync']"
-        "?.settings?.conflictResolution !== undefined)"
-    )
-    if not has_setting:
-        pytest.skip(
-            "Plugin lacks conflictResolution setting — ConflictModal not available"
-        )
-
-
-@pytest.fixture(autouse=True)
 async def _set_modal_mode(cdp_a):
     """Switch conflict resolution to 'modal' for every test; restore on exit."""
     await cdp_a.set_conflict_resolution("modal")

@@ -41,8 +41,6 @@ import pytest
 @pytest.mark.asyncio
 async def test_sync_now_advances_last_sync(cdp_a):
     """sync-now: lastSync timestamp changes after the command completes."""
-    if not await cdp_a.has_command("sync-now"):
-        pytest.skip("Plugin lacks sync-now command")
     before = await cdp_a.get_last_sync()
     await cdp_a.run_command("sync-now")
     # fullSync is async — give it up to 10 s to finish
@@ -65,9 +63,6 @@ async def test_sync_now_advances_last_sync(cdp_a):
 @pytest.mark.asyncio
 async def test_push_all_invokes_handler(cdp_a):
     """push-all: pushAll() on SyncEngine is called at least once."""
-    if not await cdp_a.has_command("push-all"):
-        pytest.skip("Plugin lacks push-all command")
-
     # Install spy — capture original so we can restore exactly.
     # Wrap in IIFE so `const` declarations don't leak into the shared
     # renderer execution context (would clash on re-runs / sequential evals).
@@ -112,9 +107,6 @@ async def test_push_all_invokes_handler(cdp_a):
 @pytest.mark.asyncio
 async def test_pull_all_invokes_handler(cdp_a):
     """pull-all: pullAll() on SyncEngine is called at least once."""
-    if not await cdp_a.has_command("pull-all"):
-        pytest.skip("Plugin lacks pull-all command")
-
     # Install spy — capture original so we can restore exactly.
     # IIFE wrap avoids `const` leaks in the shared renderer execution context.
     await cdp_a.evaluate(
@@ -156,9 +148,6 @@ async def test_pull_all_invokes_handler(cdp_a):
 @pytest.mark.asyncio
 async def test_show_sync_log_mounts(cdp_a):
     """show-sync-log: .engram-sync-log-modal appears in the DOM."""
-    if not await cdp_a.has_command("show-sync-log"):
-        pytest.skip("Plugin lacks show-sync-log command")
-
     try:
         await cdp_a.run_command("show-sync-log")
         # Modal renders synchronously but give a small grace period

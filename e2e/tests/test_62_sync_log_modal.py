@@ -39,18 +39,6 @@ SEED_PATH = "E2E/SyncLog62/push-entry-test.md"
 
 
 # ---------------------------------------------------------------------------
-# Skip gate
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-async def _require_show_sync_log(cdp_a):
-    """Skip when the plugin build does not expose the 'show-sync-log' command."""
-    has_cmd = await cdp_a.has_command("show-sync-log")
-    if not has_cmd:
-        pytest.skip("Plugin lacks show-sync-log command — SyncLogModal not present")
-
-
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------

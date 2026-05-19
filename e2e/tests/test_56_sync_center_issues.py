@@ -34,13 +34,6 @@ NOTE_PATH = f"{SEED_DIR}/TooLarge.md"
 _11MB_CONTENT = "# Too-Large Note\n" + ("x" * (11 * 1024 * 1024))
 
 
-@pytest.fixture(autouse=True)
-async def _require_sync_center(cdp_a):
-    """Skip the whole module when the loaded plugin predates Sync Center."""
-    if not await cdp_a.has_sync_center():
-        pytest.skip("Plugin lacks open-sync-center command — skipping")
-
-
 async def _wait_for_issue(cdp, path: str, timeout: float = 20) -> list[dict]:
     """Poll get_issue_groups() until an issue for `path` appears.
 

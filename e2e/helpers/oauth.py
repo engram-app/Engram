@@ -132,10 +132,16 @@ async def swap_to_oauth(cdp, tokens: dict) -> str:
     vault_id = json.dumps(str(tokens["vault_id"]))
     user_email = json.dumps(tokens.get("user_email", ""))
 
+    # IMPORTANT: do NOT blank apiKey. createAuthProvider() at main.ts:541
+    # checks refreshToken FIRST and returns OAuthAuth regardless of apiKey
+    # state, so setting refreshToken is sufficient to swap. Blanking apiKey
+    # used to corrupt disk state via saveSettings() — if restore_auth then
+    # threw mid-execution, the apiKey was lost forever and every subsequent
+    # swap_to_oauth on the same worker captured the empty apiKey as
+    # "original", cascading 401s for the rest of the suite.
     js = f"""
     (async function() {{
         const plugin = {_P};
-        plugin.settings.apiKey = '';
         plugin.settings.refreshToken = {refresh_token};
         plugin.settings.vaultId = {vault_id};
         plugin.settings.userEmail = {user_email};

@@ -30,13 +30,6 @@ from helpers.vault import delete_note
 SEED_DIR = "E2E/Activity57"
 
 
-@pytest.fixture(autouse=True)
-async def _require_sync_center(cdp_a):
-    """Skip the whole module when the loaded plugin predates Sync Center."""
-    if not await cdp_a.has_sync_center():
-        pytest.skip("Plugin lacks open-sync-center command — skipping")
-
-
 # ---------------------------------------------------------------------------
 # Helper: poll activity entries until a matching entry appears
 # ---------------------------------------------------------------------------

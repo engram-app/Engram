@@ -53,19 +53,6 @@ _ENGINE = f"{_P}.syncEngine"
 _STALE_THRESHOLD_S = 3600
 
 
-@pytest.fixture(autouse=True)
-async def _require_stale_api(cdp_a):
-    """Skip when syncState is not a Map (unexpected engine shape)."""
-    is_map = await cdp_a.evaluate(
-        f"{_ENGINE}.syncState instanceof Map"
-    )
-    if not is_map:
-        pytest.skip(
-            "syncEngine.syncState is not a Map — engine shape changed, "
-            "test needs updating."
-        )
-
-
 @pytest.mark.asyncio
 async def test_stale_local_accepts_remote(vault_a, cdp_a, api_sync):
     """Stale local file (>1 h older than server copy, no sync hash) is overwritten

@@ -30,13 +30,6 @@ SHARED_LOCAL = f"{SEED_DIR}/Shared-local.md"
 SHARED_REMOTE = f"{SEED_DIR}/Shared-remote.md"
 
 
-@pytest.fixture(autouse=True)
-async def _require_gate(cdp_a):
-    """Skip the whole module when the loaded plugin predates SyncPreviewModal."""
-    if not await cdp_a.has_sync_gate():
-        pytest.skip("Plugin lacks SyncPreviewModal — gate API not present")
-
-
 async def _dismiss_via_escape(cdp) -> None:
     """Dispatch Escape until no modal remains.
 
@@ -136,11 +129,6 @@ async def divergent_seed(vault_a, cdp_a, api_sync):
     install_choice_spy(swallow=True)), so we pay the seed cost once and
     save ~6 s per-suite-run vs reseeding per test.
     """
-    if not await cdp_a.has_sync_gate():
-        # Module's autouse skip-gate will fire on each test; nothing to
-        # set up here.
-        yield (SHARED_LOCAL, SHARED_REMOTE)
-        return
     await _seed_divergent(cdp_a, vault_a, api_sync, SHARED_LOCAL, SHARED_REMOTE)
     try:
         yield (SHARED_LOCAL, SHARED_REMOTE)

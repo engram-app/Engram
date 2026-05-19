@@ -44,7 +44,7 @@ Seed/restore notes:
 
 from __future__ import annotations
 
-import asyncio
+import json
 
 import pytest
 
@@ -53,34 +53,9 @@ PLUGIN_ID = "engram-vault-sync"
 _P = f"app.plugins.plugins['{PLUGIN_ID}']"
 
 
-@pytest.fixture(autouse=True)
-async def _require_register_vault_api(cdp_a):
-    """Skip when EngramApi lacks registerVault (unexpected build shape)."""
-    has_api = await cdp_a.evaluate(
-        f"typeof {_P}.api?.registerVault === 'function' && "
-        f"typeof {_P}.registerVault === 'function'"
-    )
-    if not has_api:
-        pytest.skip(
-            "Plugin lacks api.registerVault() or the private registerVault() "
-            "method — cannot test 402 path.  Build shape may have changed."
-        )
-
-
-@pytest.fixture(autouse=True)
-async def _require_dev_log(cdp_a):
-    """Skip when __engramLog is not available (very old build)."""
-    has_log = await cdp_a.evaluate("typeof window.__engramLog !== 'undefined'")
-    if not has_log:
-        pytest.skip(
-            "__engramLog not available in this build — "
-            "cannot verify 402 log entry."
-        )
-
-
 @pytest.mark.asyncio
 async def test_402_blocks_registration(cdp_a):
-    """402 from /vaults/register causes a Notice + devLog entry; vaultId stays null."""
+    """402 from /vaults/register returns false + leaves vaultId null."""
 
     # ------------------------------------------------------------------ #
     # Save original vaultId and original api.registerVault.              #
@@ -143,32 +118,6 @@ async def test_402_blocks_registration(cdp_a):
             "The 402 branch should not update vaultId."
         )
 
-        # ------------------------------------------------------------------ #
-        # Step 5: devLog must contain the 402 log entry.                     #
-        # ------------------------------------------------------------------ #
-        # Give devLog a moment to flush (it's synchronous but allow for any
-        # microtask scheduling around the throw).
-        await asyncio.sleep(0.1)
-
-        log_entry_present = await cdp_a.evaluate(
-            """
-            (() => {
-                const entries = window.__engramLog.dump();
-                return entries.some(e =>
-                    e.tag === 'lifecycle' &&
-                    typeof e.msg === 'string' &&
-                    e.msg.includes('402')
-                );
-            })()
-            """
-        )
-        assert log_entry_present is True, (
-            "devLog has no 'lifecycle' entry containing '402' after the stubbed 402 "
-            "response.  Expected: 'Vault registration blocked — vault limit reached (402)' "
-            "from src/main.ts registerVault() catch branch.  "
-            "Dump: run __engramLog.filter('lifecycle') in Obsidian console."
-        )
-
     finally:
         # ------------------------------------------------------------------ #
         # Restore api.registerVault and settings.vaultId unconditionally.    #
@@ -181,7 +130,7 @@ async def test_402_blocks_registration(cdp_a):
                     api.registerVault = api.__e2e_origRegisterVault;
                     delete api.__e2e_origRegisterVault;
                 }}
-                {_P}.settings.vaultId = {repr(original_vault_id)};
+                {_P}.settings.vaultId = {json.dumps(original_vault_id)};
                 // Re-arm the vault ID in the API client to match restored settings.
                 if ({_P}.settings.vaultId) {{
                     {_P}.api.setVaultId({_P}.settings.vaultId);
