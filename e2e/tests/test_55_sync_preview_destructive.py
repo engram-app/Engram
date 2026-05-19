@@ -38,12 +38,13 @@ async def _require_gate(cdp_a):
 
 
 async def _dismiss_via_escape(cdp) -> None:
-    """Dispatch Escape on any open modal — resolves awaitChoice as 'cancel'."""
-    await cdp.evaluate(
-        "document.querySelectorAll('.modal-container .modal').forEach("
-        "m => m.dispatchEvent(new KeyboardEvent('keydown', "
-        "{key: 'Escape', bubbles: true})))"
-    )
+    """Dispatch Escape until no modal remains.
+
+    SyncPreviewModal's destructive view is stacked on top of the option-pick
+    view — a single Escape only collapses the confirm view. Use the helper's
+    bounded retry loop so we peel every layer off without timing guesswork.
+    """
+    await cdp.dismiss_modals()
 
 
 async def _seed_divergent(
@@ -192,9 +193,10 @@ async def test_destructive_submit_locked_until_typed(
         )
 
         # Cancel via Escape — gate must stay closed (no sync dispatched)
-        # and the seed must persist for the next test.
+        # and the seed must persist for the next test. `dismiss_modals` polls
+        # until the DOM is fully empty, so no extra `wait_for_modal_closed`
+        # call is needed.
         await _dismiss_via_escape(cdp_a)
-        await cdp_a.wait_for_modal_closed()
         assert await cdp_a.is_sync_blocked(), (
             "Sync gate must remain blocked after cancel via Escape"
         )

@@ -47,12 +47,12 @@ async def _require_sync_gate(cdp_a):
 
 
 async def _dismiss_via_escape(cdp) -> None:
-    """Dispatch Escape on any open modal — resolves awaitChoice as 'cancel'."""
-    await cdp.evaluate(
-        "document.querySelectorAll('.modal-container .modal').forEach("
-        "m => m.dispatchEvent(new KeyboardEvent('keydown', "
-        "{key: 'Escape', bubbles: true})))"
-    )
+    """Dispatch Escape until every modal layer is gone.
+
+    Delegates to `cdp.dismiss_modals()` which polls + retries — robust against
+    stacked modal views where a single Escape only collapses one layer.
+    """
+    await cdp.dismiss_modals()
 
 
 async def _seed_local_only(cdp, vault, path: str, content: str) -> None:
@@ -93,7 +93,6 @@ async def test_modal_appears_on_first_sync(vault_a, cdp_a):
         assert await cdp_a.is_sync_blocked()
 
         await _dismiss_via_escape(cdp_a)
-        await cdp_a.wait_for_modal_closed()
     finally:
         await _restore_clean(cdp_a, vault_a, path)
 
@@ -153,7 +152,6 @@ async def test_cancel_keeps_gate_closed(vault_a, cdp_a):
         await cdp_a.wait_for_sync_preview_modal()
 
         await _dismiss_via_escape(cdp_a)
-        await cdp_a.wait_for_modal_closed()
 
         assert await cdp_a.is_sync_blocked(), (
             "Sync gate must stay closed after a cancel"
@@ -225,7 +223,6 @@ async def test_vault_switch_reopens_modal(vault_a, cdp_a):
         )
 
         await _dismiss_via_escape(cdp_a)
-        await cdp_a.wait_for_modal_closed()
     finally:
         await cdp_a.evaluate(
             "app.plugins.plugins['engram-vault-sync'].settings.vaultId = "

@@ -255,6 +255,36 @@ class CdpClient:
             f"SyncPreviewModal not mounted after {timeout}s on CDP port {self.port}"
         )
 
+    async def dismiss_modals(
+        self, max_attempts: int = 20, poll: float = 0.1
+    ) -> None:
+        """Dispatch Escape repeatedly until no modal remains in the DOM.
+
+        Obsidian's stacked-modal views (e.g. SyncPreviewModal's destructive
+        confirm view layered on top of the option-pick view) consume one
+        Escape per layer — a single Escape collapses the confirm view back to
+        the option-pick view but the outer modal stays mounted. Looping
+        Escape-and-check is the deterministic dismiss: it bounds in
+        ``max_attempts × poll`` wall time and exits the moment the DOM is
+        actually empty, no animation guesswork needed.
+        """
+        for _ in range(max_attempts):
+            present = await self.evaluate(
+                "Boolean(document.querySelector('.modal-container .modal'))"
+            )
+            if present is False:
+                return
+            await self.evaluate(
+                "document.querySelectorAll('.modal-container .modal').forEach("
+                "m => m.dispatchEvent(new KeyboardEvent('keydown', "
+                "{key: 'Escape', bubbles: true})))"
+            )
+            await asyncio.sleep(poll)
+        raise TimeoutError(
+            f"Modal still mounted after {max_attempts} Escape attempts "
+            f"on CDP port {self.port}"
+        )
+
     async def wait_for_modal_closed(self, timeout: float = 5) -> None:
         """Poll until SyncPreviewModal is gone from the DOM."""
         deadline = time.monotonic() + timeout
