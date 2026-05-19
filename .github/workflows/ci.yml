@@ -1,8 +1,5 @@
 name: CI
 
-# Cache-buster: PR #159 verification — second forced run.
-# The fingerprint job hashes ci.yml so changing this comment
-# invalidates backend-hash + e2e-hash and forces a real run.
 on:
   push:
     # Only fire on conventional branch prefixes + main. Prevents a fork-PR

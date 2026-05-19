@@ -156,10 +156,14 @@ async def _swap_to_oauth(cdp, tokens: dict) -> None:
     vault_id = json.dumps(str(tokens["vault_id"]))
     user_email = json.dumps(tokens.get("user_email", ""))
 
+    # IMPORTANT: do NOT blank apiKey. createAuthProvider() at main.ts:541
+    # picks refreshToken first, so setting refreshToken is enough — keeping
+    # apiKey populated leaves a safety net on disk if restore_auth crashes
+    # mid-flight. (Without this, a single restore failure cascades 401s
+    # through every later test on the same worker.)
     js = f"""
     (async function() {{
         const plugin = {_P};
-        plugin.settings.apiKey = '';
         plugin.settings.refreshToken = {refresh_token};
         plugin.settings.vaultId = {vault_id};
         plugin.settings.userEmail = {user_email};
