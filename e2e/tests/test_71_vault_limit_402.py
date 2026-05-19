@@ -44,6 +44,8 @@ Seed/restore notes:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 
@@ -128,7 +130,7 @@ async def test_402_blocks_registration(cdp_a):
                     api.registerVault = api.__e2e_origRegisterVault;
                     delete api.__e2e_origRegisterVault;
                 }}
-                {_P}.settings.vaultId = {repr(original_vault_id)};
+                {_P}.settings.vaultId = {json.dumps(original_vault_id)};
                 // Re-arm the vault ID in the API client to match restored settings.
                 if ({_P}.settings.vaultId) {{
                     {_P}.api.setVaultId({_P}.settings.vaultId);
