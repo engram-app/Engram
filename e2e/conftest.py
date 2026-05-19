@@ -95,14 +95,24 @@ if _WORKER > 0:
     CONFIG_PREFIX = f"{CONFIG_PREFIX}-w{_WORKER}"
 
 
+# Per-run namespace. GITHUB_RUN_ID is unique per CI run; "local" outside CI.
+# Embedded in every e2e-* email so cleanup can scope its sweep to just this
+# run instead of nuking sibling runs' users mid-flight (issue #160).
+_RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
+
+
 # ---------------------------------------------------------------------------
 # Unique timestamp for this test run
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def ts():
-    """Per-worker unique timestamp so two workers never pick the same email."""
-    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}w{_WORKER}"
+    """Per-worker, per-run unique suffix for e2e-* emails.
+
+    Format: ``{YYYYMMDDHHMMSSffffff}r{RUN_ID}w{WORKER}`` — the ``r{RUN_ID}``
+    segment scopes cleanup to this CI run (see issue #160).
+    """
+    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}r{_RUN_ID}w{_WORKER}"
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +131,10 @@ def auth_provider():
     """
     provider = get_auth_provider(API_URL)
     if _WORKER == 0:
-        provider.cleanup_all_e2e_users()
+        # Scope sweep to THIS run's namespace — never touch sibling runs'
+        # users. Orphans from crashed runs are reaped out-of-band by
+        # .github/workflows/clerk-orphans.yml (issue #160).
+        provider.cleanup_all_e2e_users(run_id=_RUN_ID)
     return provider
 
 

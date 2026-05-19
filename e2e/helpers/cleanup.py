@@ -95,15 +95,26 @@ def cleanup_clerk_users(clerk_client, clerk_user_ids: list[str]) -> None:
 _E2E_EMAIL_PREFIXES = ("e2e-sync-", "e2e-iso-", "e2e-vault-iso-", "e2e-oauth-", "e2e-clerk-")
 
 
-def cleanup_all_e2e_clerk_users(clerk_client) -> int:
-    """Find and delete ALL e2e-* users in the Clerk instance.
+def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
+    """Find and delete e2e-* users in the Clerk instance.
 
-    This is the nuclear option — it doesn't rely on fixture-tracked IDs,
-    so it catches orphans left by crashed fixtures or failed test runs.
+    By default scopes the sweep to ``run_id`` — only emails containing
+    ``r{run_id}`` are deleted. This prevents the cross-run cascade
+    documented in issue #160: a CI run's worker-0 fixture used to nuke
+    every e2e-* user, including ones being actively used by sibling CI
+    runs, causing HTTP 401 storms in those runs.
+
+    Passing ``run_id=None`` restores the legacy nuclear behavior — useful
+    only from the standalone reaper script (``scripts/cleanup_clerk_users.py``)
+    which adds its own ``--older-than`` time-based safety filter.
+
     Returns the number of users deleted.
     """
     deleted = 0
     offset = 0
+    # Anchor on the trailing ``w`` so that run id "123" never substring-matches
+    # into another run's "r12345w0" segment. Worker suffix is always present.
+    run_marker = f"r{run_id}w" if run_id else None
     while True:
         try:
             batch = clerk_client.list_users(limit=100, offset=offset)
@@ -114,17 +125,22 @@ def cleanup_all_e2e_clerk_users(clerk_client) -> int:
             break
         for user in batch:
             emails = [ea["email_address"] for ea in user.get("email_addresses", [])]
-            if any(e.startswith(pfx) for e in emails for pfx in _E2E_EMAIL_PREFIXES):
-                try:
-                    clerk_client.delete_user(user["id"])
-                    deleted += 1
-                except Exception as exc:
-                    logger.warning("Failed to delete Clerk user %s: %s", user["id"], exc)
+            is_e2e = any(e.startswith(pfx) for e in emails for pfx in _E2E_EMAIL_PREFIXES)
+            if not is_e2e:
+                continue
+            if run_marker is not None and not any(run_marker in e for e in emails):
+                continue
+            try:
+                clerk_client.delete_user(user["id"])
+                deleted += 1
+            except Exception as exc:
+                logger.warning("Failed to delete Clerk user %s: %s", user["id"], exc)
         if len(batch) < 100:
             break
         offset += 100
     if deleted:
-        logger.info("Cleaned up %d orphaned e2e Clerk users", deleted)
+        scope = f"run {run_id}" if run_id else "ALL runs"
+        logger.info("Cleaned up %d orphaned e2e Clerk users (%s)", deleted, scope)
     return deleted
 
 
