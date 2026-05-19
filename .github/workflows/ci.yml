@@ -57,8 +57,8 @@ env:
 jobs:
   # Fingerprint: content-hash of every source path that affects test
   # results. If the same hash already produced a green CI run, downstream
-  # test jobs AND the image prebuild skip entirely — deploy-fastraid (on
-  # main) runs against the already-validated tree.
+  # test jobs AND the image prebuild skip entirely — build-and-publish-image
+  # (on main) runs against the already-validated tree.
   #
   # The merge-to-main commit produced by a squash merge has the same
   # `git ls-tree` output as the PR's head commit — same content, same
@@ -1430,8 +1430,15 @@ jobs:
             -f description="E2E tests passed (cached fingerprint match)" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-  deploy-fastraid:
-    # Deploy when EITHER (a) full CI just succeeded OR (b) BOTH fingerprints
+  # Build + push the release image to GHCR. Container swap on FastRaid
+  # happens downstream: `bump-infra-tfvars` opens a PR in
+  # engram-app/engram-infra bumping `engram_saas_image_tag`; merge of
+  # that PR triggers `tf-apply.yml` which POSTs the daemon's `/tf-apply`
+  # endpoint → `terraform apply` recreates the container on the new tag.
+  # `tf-apply` is now the SOLE image-mover; the legacy `/deploy` endpoint
+  # on engram-deployer is kept live as break-glass only (not called from CI).
+  build-and-publish-image:
+    # Build when EITHER (a) full CI just succeeded OR (b) BOTH fingerprints
     # already proved green for this content. Both must be cached, because
     # backend-only validation is insufficient — we also need the (backend,
     # plugin) integration to be known green. Branch protection should still
@@ -1447,7 +1454,6 @@ jobs:
     permissions:
       packages: write
       contents: read
-      id-token: write   # required by actions/github-script to mint OIDC JWTs for engram-deployer
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -1567,128 +1573,25 @@ jobs:
             mv /tmp/buildx-cache-new /tmp/buildx-cache
           fi
 
-      # ── Pull-based deploy via engram-deployer on FastRaid ────────────────
-      # Replaces the old "SSH as root + run a shell script" pattern. Runner
-      # mints a per-job OIDC JWT (aud=engram-deploy) and POSTs to the
-      # daemon, which validates the signature against GitHub's JWKS, pins
-      # repository/ref/workflow_ref, and runs the deploy locally on
-      # FastRaid. Runner holds zero long-lived credentials.
-      #
-      # Requires repo secret DEPLOYER_CERT_PEM (capture from FastRaid post
-      # plugin install: `openssl x509 -in /boot/config/plugins/
-      # engram-deployer/cert.pem`). Cert is self-signed ed25519, 10-year
-      # validity — won't churn.
-      - name: Mint GitHub OIDC token (aud=engram-deploy)
-        id: oidc
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const token = await core.getIDToken('engram-deploy');
-            core.setSecret(token);
-            core.setOutput('token', token);
-
-      - name: Write pinned deployer cert
-        env:
-          DEPLOYER_CERT_PEM: ${{ secrets.DEPLOYER_CERT_PEM }}
-        run: |
-          if [ -z "$DEPLOYER_CERT_PEM" ]; then
-            echo "ERROR: DEPLOYER_CERT_PEM secret not set" >&2
-            echo "Capture from FastRaid: ssh root@10.0.20.214 'cat /boot/config/plugins/engram-deployer/cert.pem'" >&2
-            exit 1
-          fi
-          printf '%s\n' "$DEPLOYER_CERT_PEM" > ${RUNNER_TEMP}/deployer-cert.pem
-          # Sanity-check it parses as a cert before we use it for TLS.
-          openssl x509 -in ${RUNNER_TEMP}/deployer-cert.pem -noout -subject -fingerprint -sha256
-
-      - name: Deploy via engram-deployer
-        env:
-          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SHA_SHORT="${{ steps.version.outputs.sha_short }}"
-
-          # tee lets us stream events to the CI log AND capture the body
-          # for terminal-line status parsing.
-          set -o pipefail
-          curl -sS -X POST \
-            --cacert ${RUNNER_TEMP}/deployer-cert.pem \
-            --max-time 600 \
-            -H "Authorization: Bearer ${OIDC_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"version\":\"${VERSION}\",\"sha\":\"${SHA_SHORT}\"}" \
-            https://10.0.20.214:8443/deploy \
-            | tee ${RUNNER_TEMP}/deploy-stream.ndjson
-
-          # Last non-empty line is the DeployResult.
-          RESULT=$(grep -v '^$' ${RUNNER_TEMP}/deploy-stream.ndjson | tail -n 1)
-          STATUS=$(printf '%s' "$RESULT" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("status",""))')
-
-          if [ "$STATUS" != "ok" ]; then
-            echo ""
-            echo "::error::Deploy failed; terminal line:"
-            echo "$RESULT"
-            exit 1
-          fi
-          echo "Deploy reported ok by engram-deployer"
-
-      - name: Verify deployment from CI runner
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # Two containers, two ports. Both must report the new version.
-          declare -A TARGETS=(
-            [engram-saas]=8000
-            [engram-selfhost]=8001
-          )
-
-          for name in "${!TARGETS[@]}"; do
-            port="${TARGETS[$name]}"
-            echo "==> Verifying ${name} on port ${port}"
-
-            ok=false
-            for i in $(seq 1 15); do
-              HEALTH=$(curl -sf "http://10.0.20.214:${port}/api/health" 2>/dev/null || true)
-              if [ -n "$HEALTH" ]; then
-                RUNNING=$(echo "$HEALTH" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
-                if [ "$RUNNING" = "$VERSION" ]; then
-                  echo "${name}: ${VERSION} is healthy"
-                  ok=true
-                  break
-                else
-                  echo "${name}: version mismatch (expected ${VERSION}, got ${RUNNING:-no response})"
-                fi
-              fi
-              sleep 2
-            done
-
-            if [ "$ok" != "true" ]; then
-              echo "ERROR: FastRaid deploy failed — ${name} not running ${VERSION} after 30s"
-              exit 1
-            fi
-          done
-
-          echo "FastRaid deploy verified — both engram containers running ${VERSION}"
-
   # Auto-open a PR in engram-app/engram-infra bumping the staging-fastraid
-  # image tag(s) to the just-deployed version. Third leg of the TF-via-
-  # daemon control plane: release → /deploy (live container bumped) →
-  # infra PR → TF apply via daemon (state catches up).
+  # image tag(s) to the just-published version. Second leg of the
+  # TF-via-daemon control plane: release → infra PR → TF apply via
+  # daemon recreates the container on the new tag.
   #
-  # As of 2026-05-19 the full chain is live: engram-deployer 0.1.7 on
-  # FastRaid with /tf-apply + /tf-plan + engram-infra's tf-apply.yml +
-  # tf-plan.yml + docker_container.engram_saas in TF state (PR #30).
-  # The /tf-plan bot upserts a plan comment on every push; /tf-apply
-  # runs only on merge to main. `/deploy` is still the live-mover.
+  # tf-apply is the SOLE image-mover. The legacy `/deploy` endpoint on
+  # engram-deployer stays live on FastRaid as break-glass only; CI no
+  # longer calls it. Health verification of the post-apply container
+  # lives in engram-infra's `tf-apply.yml` (same workflow as the apply,
+  # so a verification failure marks the same job red).
   #
-  # Future: once selfhost lands under TF (Path E.3b), the regex below
-  # picks up `engram_selfhost_image_tag` too and the bump covers both.
-  # Eventually /deploy can be retired entirely and TF apply becomes
-  # the sole image-bump path.
+  # Future: once selfhost lands under TF (Path E.3b / Phase C of the
+  # cutover plan), the regex below picks up `engram_selfhost_image_tag`
+  # too and the bump covers both containers.
   bump-infra-tfvars:
-    needs: deploy-fastraid
+    needs: build-and-publish-image
     if: |
       always()
-      && needs.deploy-fastraid.result == 'success'
+      && needs.build-and-publish-image.result == 'success'
       && github.ref == 'refs/heads/main'
       && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -1718,11 +1621,11 @@ jobs:
       - name: Re-extract version (job-isolated)
         id: version
         run: |
-          # deploy-fastraid produces VERSION as a job output, but jobs can
-          # only pass outputs through `needs.<job>.outputs.*` — which means
-          # the source job has to declare them upstream. Easier to re-read
-          # mix.exs here; we know the deploy already succeeded with this
-          # exact version.
+          # build-and-publish-image produces VERSION as a job output, but
+          # jobs can only pass outputs through `needs.<job>.outputs.*` —
+          # which means the source job has to declare them upstream.
+          # Easier to re-read mix.exs here; we know the build already
+          # succeeded with this exact version.
           git clone --depth 1 https://github.com/${{ github.repository }} repo
           cd repo
           git fetch --depth 1 origin ${{ github.sha }}
@@ -1757,11 +1660,10 @@ jobs:
           # the selfhost import. Hard-fail on 0 or 3+ (variables.tf shape
           # changed — investigate).
           #
-          # If variables.tf is absent (Path E.3 was reverted 2026-05-19 due
-          # to /deploy SHA-churn; will return once engram PR #157 makes
-          # tf-apply the sole image-mover) emit `bumped=false` and exit
-          # clean. The bump step downstream is gated on `bumped=true` so
-          # this job becomes a no-op until TF state catches up.
+          # If variables.tf is absent (e.g. after a Phase-A-style revert)
+          # emit `bumped=false` and exit clean. The bump step downstream is
+          # gated on `bumped=true` so this job becomes a no-op until TF
+          # state catches up.
           python3 - <<'PY'
           import os
           import re
@@ -1823,7 +1725,7 @@ jobs:
 
             On merge, `.github/workflows/tf-apply.yml` POSTs the merge SHA to engram-deployer's `/tf-apply` endpoint on FastRaid. The daemon runs `terraform apply` against the local Docker socket, recreating the engram-saas container with the new image. `/tf-plan` upserts a plan comment as part of the PR review gate (live since 2026-05-18).
 
-            The `/deploy` POST from the source release already moved the live container. This PR brings TF state into sync — expect plan output to be a single `~ image` field change on `docker_container.engram_saas`.
+            `tf-apply` is the SOLE image-mover (the legacy `/deploy` endpoint stays live as break-glass only; CI no longer calls it). Expect plan output to be a single `~ image` field change on `docker_container.engram_saas` plus the post-apply health-verify step on the new tag.
 
             ## Review
 
