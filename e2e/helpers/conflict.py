@@ -141,8 +141,11 @@ async def setup_conflict_for_a(
     )
 
     # 1. A writes the base content and syncs — establishes syncedHash on A
-    #    and base content on the server.
-    write_note(vault_a, path, base)
+    #    and base content on the server. Use vault_write (Obsidian's vault
+    #    API) instead of write_note so the file is in getFiles() before
+    #    fullSync iterates — raw filesystem writes are picked up only when
+    #    the watcher eventually fires, which races against trigger_full_sync.
+    await cdp_a.vault_write(path, base)
     await cdp_a.trigger_full_sync()
 
     # 2. B pulls so it also records the same base in its syncState. Not strictly
@@ -162,10 +165,13 @@ async def setup_conflict_for_a(
     await cdp_a.pause_incoming_sync()
 
     # 4. A writes local divergence (now: localHash != lastSyncedHash → modified).
-    write_note(vault_a, path, local)
+    #    vault_write ensures pull() in step 6 reads the local content from the
+    #    same path Obsidian's index knows about. handleModify is a no-op while
+    #    paused, so no push leaks out.
+    await cdp_a.vault_write(path, local)
 
     # 5. B writes remote divergence and syncs so the server carries B's version.
-    write_note(vault_b, path, remote)
+    await cdp_b.vault_write(path, remote)
     await cdp_b.trigger_full_sync()
 
     # 6. Resume A's outgoing sync, then pull — divergence is detected and

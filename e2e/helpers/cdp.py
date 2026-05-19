@@ -785,6 +785,41 @@ class CdpClient:
         result = await self.evaluate(js)
         logger.info("Outgoing sync resumed on CDP port %d: %s", self.port, result)
 
+    async def vault_write(self, path: str, content: str) -> None:
+        """Write a file via Obsidian's vault API so the index sees it synchronously.
+
+        Plain filesystem writes (helpers.vault.write_note) are picked up only
+        when Obsidian's file watcher fires — async, racy. Code paths that need
+        the file to be in ``app.vault.getFiles()`` immediately (e.g. the
+        ``setup_conflict_for_a`` seed's step-1 trigger_full_sync) must use
+        this helper instead.
+
+        Creates parent folders as needed. Idempotent: modifies if the file
+        already exists, otherwise creates.
+        """
+        escaped_path = json.dumps(path)
+        escaped_content = json.dumps(content)
+        await self.evaluate(
+            f"""
+            (async () => {{
+                const existing = app.vault.getFileByPath({escaped_path});
+                if (existing) {{
+                    await app.vault.modify(existing, {escaped_content});
+                    return;
+                }}
+                const slash = {escaped_path}.lastIndexOf('/');
+                if (slash > 0) {{
+                    const dir = {escaped_path}.slice(0, slash);
+                    if (!app.vault.getAbstractFileByPath(dir)) {{
+                        try {{ await app.vault.createFolder(dir); }} catch (_) {{}}
+                    }}
+                }}
+                await app.vault.create({escaped_path}, {escaped_content});
+            }})()
+            """,
+            await_promise=True,
+        )
+
     async def pause_incoming_sync(self) -> None:
         """Silence incoming WebSocket events by replacing handleStreamEvent.
 
