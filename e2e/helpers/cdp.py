@@ -121,13 +121,22 @@ class CdpClient:
         )
 
     async def wait_for_vault_registered(self, timeout: float = 15) -> None:
-        """Poll until plugin.settings.vaultId is populated.
+        """Ensure plugin.settings.vaultId is populated, triggering re-register if not.
 
-        After plugin.onload registers the vault via /vaults/register, the
-        engine has a vaultId — required for computeSyncFingerprint, which
-        markSyncGateAccepted depends on. Returns silently on success.
+        After plugin.onload registers the vault via /vaults/register the engine
+        has a vaultId — required for computeSyncFingerprint, which
+        markSyncGateAccepted depends on. Mid-suite the vaultId can be cleared
+        by the channel's ``onVaultDeleted`` handler (src/main.ts ~line 680),
+        and nothing in the plugin actively re-registers until the next
+        ``saveSettings`` fires. Passive polling never recovers from that
+        state, so this helper actively calls ``plugin.registerVault()``
+        (private at compile time, public at runtime) once on entry when
+        vaultId is null, then polls for the result. Idempotent — the
+        plugin's own guard at registerVault() line 497 short-circuits when
+        vaultId is already set.
         """
         deadline = time.monotonic() + timeout
+        triggered = False
         while time.monotonic() < deadline:
             try:
                 vault_id = await self.evaluate(
@@ -138,6 +147,22 @@ class CdpClient:
                         "Vault registered on CDP port %d: %s", self.port, vault_id
                     )
                     return
+                if not triggered:
+                    triggered = True
+                    # Drive registerVault directly. The .catch swallows the
+                    # promise rejection so a transient backend failure does
+                    # not crash the CDP call — the next loop iteration
+                    # observes the (still-null) vaultId and gives the timeout
+                    # an honest chance to expire.
+                    await self.evaluate(
+                        f"{PLUGIN_PATH}.registerVault().catch(() => null)",
+                        await_promise=True,
+                    )
+                    logger.info(
+                        "vaultId was null on CDP port %d — invoked registerVault()",
+                        self.port,
+                    )
+                    continue
             except Exception:
                 pass
             await asyncio.sleep(0.5)
@@ -531,6 +556,40 @@ class CdpClient:
     async def get_last_sync(self) -> str | None:
         """Read the lastSync timestamp string."""
         return await self.evaluate(f"{ENGINE_PATH}.lastSync")
+
+    async def accelerate_echo_expiry(self, path: str, ms: int = 200) -> None:
+        """Replace the pending recentlyPushed timer for ``path`` with a short one.
+
+        ``markRecentlyPushed`` arms a ``setTimeout(ECHO_COOLDOWN_MS=5000)`` to
+        clear the entry. Tests that just want to drive the expiry branch should
+        not sleep for the full production cooldown — shorten the timer so the
+        same clear path runs in tens of ms.
+
+        The timer-fires-and-clears mechanism is preserved (we install a real
+        ``setTimeout``, not a synchronous ``delete``), so assertions on
+        ``isRecentlyPushed`` going False still exercise the production code path.
+        Raises CdpError when no timer is armed for ``path``.
+        """
+        escaped = json.dumps(path)
+        result = await self.evaluate(
+            f"""
+            (() => {{
+                const m = {ENGINE_PATH}.recentlyPushed;
+                const t = m.get({escaped});
+                if (t === undefined) return 'no-timer';
+                window.clearTimeout(t);
+                const newT = window.setTimeout(
+                    () => m.delete({escaped}), {int(ms)}
+                );
+                m.set({escaped}, newT);
+                return 'rearmed';
+            }})()
+            """
+        )
+        if result != "rearmed":
+            raise CdpError(
+                f"accelerate_echo_expiry: no recentlyPushed timer for {path!r}"
+            )
 
     async def check_stream_connected(self) -> bool:
         """Check if the plugin's real-time stream (WebSocket channel) is connected."""
