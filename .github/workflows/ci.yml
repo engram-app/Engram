@@ -1744,6 +1744,7 @@ jobs:
           ref: main
 
       - name: Rewrite image_tag defaults in variables.tf
+        id: rewrite
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -1755,12 +1756,26 @@ jobs:
           # accepting either 1 or 2 matches lets this work before AND after
           # the selfhost import. Hard-fail on 0 or 3+ (variables.tf shape
           # changed — investigate).
+          #
+          # If variables.tf is absent (Path E.3 was reverted 2026-05-19 due
+          # to /deploy SHA-churn; will return once engram PR #157 makes
+          # tf-apply the sole image-mover) emit `bumped=false` and exit
+          # clean. The bump step downstream is gated on `bumped=true` so
+          # this job becomes a no-op until TF state catches up.
           python3 - <<'PY'
           import os
           import re
 
           path = "engram-infra/main/envs/staging-fastraid/variables.tf"
           version = os.environ["VERSION"]
+          gh_output = os.environ["GITHUB_OUTPUT"]
+
+          if not os.path.exists(path):
+              print(f"::notice::{path} not present — Path E.3 not yet re-imported; bump skipped")
+              with open(gh_output, "a") as f:
+                  f.write("bumped=false\n")
+              raise SystemExit(0)
+
           text = open(path).read()
           pattern = re.compile(
               r'(variable\s+"engram_(?:saas|selfhost)_image_tag"[^}]*?default\s*=\s*)"[^"]+"',
@@ -1773,14 +1788,19 @@ jobs:
                   "variables.tf shape changed — adjust the regex"
               )
           open(path, "w").write(new)
+          with open(gh_output, "a") as f:
+              f.write("bumped=true\n")
           print(f"rewrote {count} block(s) to {version}")
           PY
 
-          echo "::group::variables.tf after rewrite"
-          cat engram-infra/main/envs/staging-fastraid/variables.tf
-          echo "::endgroup::"
+          if [ -f engram-infra/main/envs/staging-fastraid/variables.tf ]; then
+            echo "::group::variables.tf after rewrite"
+            cat engram-infra/main/envs/staging-fastraid/variables.tf
+            echo "::endgroup::"
+          fi
 
       - name: Open / update PR in engram-infra
+        if: steps.rewrite.outputs.bumped == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           path: engram-infra
