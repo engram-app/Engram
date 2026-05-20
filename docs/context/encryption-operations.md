@@ -179,17 +179,18 @@ The master key (`ENCRYPTION_MASTER_KEY`) wraps every user's per-user DEK. Rotati
 
 ### Rotation procedure
 
-1. **Set both env vars + bump version** on running app:
+1. **Set rotation env vars** on running app:
 
    ```
-   ENCRYPTION_MASTER_KEY=<NEW>                  # the new key
-   ENCRYPTION_MASTER_KEY_PREVIOUS=<OLD>          # the prior key
-   ENCRYPTION_MASTER_KEY_VERSION=<TARGET>        # bump (e.g. 1 → 2)
+   ENCRYPTION_MASTER_KEY=<NEW>                   # the new key
+   ENCRYPTION_MASTER_KEY_PREVIOUS=<OLD>           # the prior key
+   ENCRYPTION_MASTER_KEY_VERSION=<TARGET>         # bump (e.g. 1 → 2)
+   BOOT_CANARY_ENABLED=false                      # bypass guard for the window
    ```
 
-   Restart the app. Boot canary will FAIL because the latest canary row is wrapped under `<OLD>` and current is now `<NEW>`. **This is expected before step 2 runs** — the canary is the leading edge.
+   Restart the app. Without `BOOT_CANARY_ENABLED=false`, boot would FAIL because the latest canary row is wrapped under `<OLD>` and current is now `<NEW>` (and `BootCanary.verify!/0` calls `unwrap_dek_no_fallback/2`, which refuses to consult `_PREVIOUS`). The env override skips `BootCanaryGuard` entirely so the app comes up.
 
-   To bring up the app during rotation, set `:engram, :boot_canary_enabled` to `false` (env override) for the duration. Re-enable as soon as step 4 completes.
+   For SaaS the rotation env lives in SOPS+TF; the canonical wiring is `engram-infra/main/envs/staging-fastraid/env.tf` + `engram-infra/secrets/staging-fastraid.enc.yaml`. Stack the rotation env onto the same engram-infra PR that bumps the image so one tf-apply destroys+creates with both new image AND rotation env. See `engram-infra/docs/context/sops-pattern.md` § "Master-key rotation flow (T3.5)" for the PR sequence.
 
    M4 gate behavior: with VERSION bumped to N, every user at `dek_version < N` is rotation-eligible; `_PREVIOUS` rescues their reads while rotation is in-flight.
 
@@ -216,17 +217,20 @@ The master key (`ENCRYPTION_MASTER_KEY`) wraps every user's per-user DEK. Rotati
    /app/bin/engram rpc 'Engram.Crypto.MasterRotation.rotate_canary()'
    ```
 
-   Restart the app — boot canary will now succeed. Re-enable boot_canary_enabled if you disabled it.
+   Restart the app — boot canary will now succeed. The next step removes `BOOT_CANARY_ENABLED=false` so the guard re-engages.
 
-5. **Drop `_PREVIOUS`**:
+5. **Drop `_PREVIOUS` + boot-canary override**:
 
    ```
    ENCRYPTION_MASTER_KEY=<NEW>
-   # ENCRYPTION_MASTER_KEY_PREVIOUS unset
    ENCRYPTION_MASTER_KEY_VERSION=<TARGET>
+   # ENCRYPTION_MASTER_KEY_PREVIOUS unset
+   # BOOT_CANARY_ENABLED unset (or any value other than literal "false")
    ```
 
-   Restart. Boot canary verifies. M4 telemetry `[:engram, :crypto, :previous_fallback_hit]` should be zero — if not, some user's wrap was missed. Investigate before proceeding.
+   For SaaS this is a separate engram-infra PR removing `BOOT_CANARY_ENABLED` and `ENCRYPTION_MASTER_KEY_PREVIOUS` from `env.tf` + SOPS file, **keeping `ENCRYPTION_MASTER_KEY_VERSION=<TARGET>` permanent** (default falls back to "1"; removing while users are stamped at higher versions causes M4 fallback inconsistency).
+
+   Restart. Boot canary verifies under NEW master + canary row. Container booting healthy = victory; the boot canary would have crashed it if anything is wrong. M4 telemetry `[:engram, :crypto, :previous_fallback_hit]` should be zero — if not, some user's wrap was missed. Investigate before proceeding.
 
 ### Telemetry to watch
 
