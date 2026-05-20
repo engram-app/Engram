@@ -1,6 +1,8 @@
 # AWS KMS Provider Integration — Phase 1 Gotchas
 
 > Non-obvious discoveries from Phase 1 (PR #110). Prevents rediscovery in Phase 2 (BootCanary polymorphism) and Phase 3 (ProviderMigration).
+>
+> **Status update 2026-05-20:** Phase 2 quietly shipped — `Engram.Crypto.BootCanary.verify!/0` calls `Resolver.provider()` + `provider.boot_check/0` + `provider.unwrap_dek_no_fallback/2`. `MasterRotation` uses `Resolver.provider_for/1`. Only Phase 3 (cross-provider migration state machine) remains pending. Staging cutover docs in workspace plan `ok-i-think-we-shimmying-duckling.md`.
 
 ## Architecture — Three Layers
 
@@ -176,10 +178,10 @@ From `KeyProvider.AwsKms.unwrap_dek/2`:
 ### Ships
 - Provider + behaviour + Mox seam + conformance suite + `Config.validate!/0` extension + `runtime.exs` opt-in arm + `identify_from_blob/1` primitive.
 
-### Does NOT Ship
-- BootCanary polymorphism (Phase 2) — still hardcoded to Local on boot.
+### Does NOT Ship (at PR #110 — see status update at top)
+- ~~BootCanary polymorphism (Phase 2)~~ — shipped post PR #110; see status update.
 - ProviderMigration state machine (Phase 3).
-- Fly secrets / IAM policy creation (Phase 4 cutover).
-- Changes to `Engram.Crypto.get_dek/1` read paths — still read-only from Local.
+- Fly secrets / IAM policy creation (Phase 4 cutover for prod). Staging cutover lives in the workspace plan, not here.
+- Changes to `Engram.Crypto.get_dek/1` read paths — still read-only from configured provider; no cross-provider blob routing.
 
-Key impl detail: All DEK operations (get/wrap/unwrap) still use the configured provider, but the migration machinery to change provider per-user doesn't exist yet.
+Key impl detail: All DEK operations (get/wrap/unwrap) use the configured provider, but the migration machinery to change provider per-user doesn't exist yet — staging cutover therefore wipes the DB rather than migrating.
