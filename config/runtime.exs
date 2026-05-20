@@ -204,6 +204,18 @@ if config_env() != :test do
       String.to_integer(System.get_env("ENCRYPTION_MASTER_KEY_VERSION", "1")),
     dek_cache_ttl_ms: String.to_integer(System.get_env("DEK_CACHE_TTL_MS", "3600000"))
 
+  # T3.5 master-key rotation needs the boot canary disabled during the
+  # window between bumping ENCRYPTION_MASTER_KEY and running
+  # `Engram.Crypto.MasterRotation.rotate_canary/0` (the canary row is
+  # still wrapped under the OLD key and `unwrap_dek_no_fallback/2`
+  # refuses to consult `_PREVIOUS`). Operator sets BOOT_CANARY_ENABLED=false
+  # in the SOPS-managed env, restarts, runs rotation, then removes the
+  # env var. See backend/docs/context/encryption-operations.md
+  # "Tier-3 / T3.5 — Master-key rotation runbook".
+  if System.get_env("BOOT_CANARY_ENABLED") == "false" do
+    config :engram, :boot_canary_enabled, false
+  end
+
   if key_provider_module == Engram.Crypto.KeyProvider.AwsKms do
     config :engram,
       aws_kms_client: Engram.AwsKms.ExAws,
