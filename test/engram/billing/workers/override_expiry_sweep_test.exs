@@ -64,5 +64,65 @@ defmodule Engram.Billing.Workers.OverrideExpirySweepTest do
 
       assert_received {[:engram, :billing, :overrides, :expired], _ref, %{count: 1}, %{}}
     end
+
+    test "emits count=0 telemetry on empty table" do
+      :telemetry_test.attach_event_handlers(self(), [
+        [:engram, :billing, :overrides, :expired]
+      ])
+
+      assert :ok = perform_job(OverrideExpirySweep, %{})
+
+      assert_received {[:engram, :billing, :overrides, :expired], _ref, %{count: 0}, %{}}
+    end
+
+    test "is idempotent — second run with no new expired rows deletes 0" do
+      user = insert(:user)
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+      future = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+
+      insert_override(user, past)
+      survivor = insert_override(insert(:user), future)
+
+      :telemetry_test.attach_event_handlers(self(), [
+        [:engram, :billing, :overrides, :expired]
+      ])
+
+      assert :ok = perform_job(OverrideExpirySweep, %{})
+      assert_received {[:engram, :billing, :overrides, :expired], _ref, %{count: 1}, %{}}
+
+      assert :ok = perform_job(OverrideExpirySweep, %{})
+      assert_received {[:engram, :billing, :overrides, :expired], _ref, %{count: 0}, %{}}
+
+      assert Repo.get(UserLimitOverride, survivor.id)
+    end
+
+    test "handles mixed past + future + NULL in a single sweep" do
+      now = DateTime.utc_now(:second)
+      past = DateTime.add(now, -3600, :second)
+      future = DateTime.add(now, 3600, :second)
+
+      expired = insert_override(insert(:user), past)
+      future_row = insert_override(insert(:user), future)
+
+      permanent =
+        Repo.insert!(%UserLimitOverride{
+          user_id: insert(:user).id,
+          key: "notes_cap",
+          value: %{"v" => 100},
+          reason: "test",
+          set_by: "test"
+        })
+
+      :telemetry_test.attach_event_handlers(self(), [
+        [:engram, :billing, :overrides, :expired]
+      ])
+
+      assert :ok = perform_job(OverrideExpirySweep, %{})
+      assert_received {[:engram, :billing, :overrides, :expired], _ref, %{count: 1}, %{}}
+
+      refute Repo.get(UserLimitOverride, expired.id)
+      assert Repo.get(UserLimitOverride, future_row.id)
+      assert Repo.get(UserLimitOverride, permanent.id)
+    end
   end
 end

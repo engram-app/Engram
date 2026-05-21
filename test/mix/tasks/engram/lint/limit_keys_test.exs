@@ -95,6 +95,59 @@ defmodule Mix.Tasks.Engram.Lint.LimitKeysTest do
 
       assert scan(src) == []
     end
+
+    test "`# lint:limit_keys ignore` suppresses :unknown_atom (negative-path tests)" do
+      src = """
+      defmodule X do
+        def f(user) do
+          # lint:limit_keys ignore
+          Engram.Billing.effective_limit(user, :bogus_key)
+        end
+      end
+      """
+
+      assert scan(src) == []
+    end
+
+    test "`# lint:limit_keys ignore` suppresses :string_key" do
+      src = """
+      defmodule X do
+        def f(user) do
+          # lint:limit_keys ignore
+          Engram.Billing.effective_limit(user, "vaults_cap")
+        end
+      end
+      """
+
+      assert scan(src) == []
+    end
+
+    test "`# lint:limit_keys ignore` suppresses :dynamic_key" do
+      src = """
+      defmodule X do
+        def f(user, key) do
+          # lint:limit_keys ignore
+          Engram.Billing.effective_limit(user, key)
+        end
+      end
+      """
+
+      assert scan(src) == []
+    end
+
+    test "ignore annotation must be on the immediately preceding line" do
+      src = """
+      defmodule X do
+        def f(user) do
+          # lint:limit_keys ignore
+          IO.puts("intervening line")
+          Engram.Billing.effective_limit(user, :bogus_key)
+        end
+      end
+      """
+
+      assert [{_, _, :effective_limit, :unknown_atom, :bogus_key}] = scan(src)
+    end
   end
 
   describe "self-scan against engram codebase" do
