@@ -136,6 +136,14 @@ def main():
     non_e2e = len(all_users) - len(e2e_users)
     logger.info("E2E test users: %d | Real users: %d", len(e2e_users), non_e2e)
 
+    # TEMP DEBUG: dump non-e2e emails so we can see why the "real" bucket
+    # is so large. Remove once the leak is identified.
+    if os.environ.get("REAPER_DEBUG_REAL_EMAILS") == "1":
+        for u in all_users:
+            if not is_e2e_user(u):
+                emails = [ea.get("email_address", "") for ea in u.get("email_addresses", [])]
+                logger.info("REAL: %s", ", ".join(emails))
+
     if args.older_than is not None:
         now = datetime.now(timezone.utc)
         before = len(e2e_users)

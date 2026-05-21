@@ -39,6 +39,7 @@ jobs:
       - name: Reap orphan e2e Clerk users older than 1h
         env:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          REAPER_DEBUG_REAL_EMAILS: "1"
         run: |
           if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
             echo "E2E_CLERK_SECRET_KEY not set — skipping." >&2
