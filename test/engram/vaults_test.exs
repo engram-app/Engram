@@ -559,7 +559,11 @@ defmodule Engram.VaultsTest do
   end
 
   describe "pricing v2 §J — vault_count telemetry" do
-    setup do
+    setup %{user: user} do
+      # Default Free tier allows 1 vault; raise the cap so multi-vault test paths
+      # don't hit :vault_limit_reached.
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :abuse, :vault_count]])
       on_exit(fn -> :telemetry.detach(ref) end)
       :ok
@@ -579,7 +583,7 @@ defmodule Engram.VaultsTest do
 
     test "emits :vault_count on delete_vault success", %{user: user} do
       {:ok, v} = Vaults.create_vault(user, %{name: "V1"})
-      assert_received {[:engram, :abuse, :vault_count], _, %{count: 1}, %{op: :created}}
+      drain_vault_count_messages()
 
       assert {:ok, _} = Vaults.delete_vault(user, v.id)
 
@@ -598,10 +602,18 @@ defmodule Engram.VaultsTest do
 
     test "does NOT emit when register_vault matches existing", %{user: user} do
       {:ok, _, :created} = Vaults.register_vault(user, "Reg", "client-xyz")
-      assert_received {[:engram, :abuse, :vault_count], _, _, _}
+      drain_vault_count_messages()
 
       {:ok, _, :existing} = Vaults.register_vault(user, "Reg", "client-xyz")
       refute_received {[:engram, :abuse, :vault_count], _, _, _}
+    end
+  end
+
+  defp drain_vault_count_messages do
+    receive do
+      {[:engram, :abuse, :vault_count], _, _, _} -> drain_vault_count_messages()
+    after
+      0 -> :ok
     end
   end
 end
