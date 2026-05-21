@@ -124,6 +124,17 @@ auth_provider =
 
 config :engram, :auth_provider, auth_provider
 
+# Email transactional provider (pricing v2 §C). Default: NoOp for self-host;
+# Resend when RESEND_API_KEY is set.
+if api_key = System.get_env("RESEND_API_KEY") do
+  config :engram, :email_provider, Engram.Email.Resend
+  config :engram, :resend_api_key, api_key
+end
+
+if email_from = System.get_env("EMAIL_FROM") do
+  config :engram, :email_from, email_from
+end
+
 # Rate limit override for CI E2E tests (only effective when CI=true).
 # Production deploys never set CI=true, so this is unreachable in prod.
 if override = System.get_env("RATE_LIMIT_AUTH_OVERRIDE") do

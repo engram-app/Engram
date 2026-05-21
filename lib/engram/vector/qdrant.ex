@@ -160,6 +160,24 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Delete every point owned by `user_id` across all of their vaults. Used by
+  the §C inactivity soft-delete path — single Qdrant call regardless of
+  vault count.
+  """
+  def delete_by_user(col \\ nil, user_id) do
+    col = col || collection()
+
+    filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
+    opts = [json: %{filter: filter}] ++ req_opts()
+
+    case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Delete all points for a given user+vault combination (vault-level cleanup).
   """
   def delete_by_vault(col \\ nil, user_id, vault_id) do

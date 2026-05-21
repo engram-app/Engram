@@ -56,7 +56,8 @@ config :engram, Oban,
      crontab: [
        {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
        {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
-       {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep}
+       {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
+       {"30 3 * * *", Engram.Workers.InactivityCleanup}
      ]}
   ]
 
@@ -71,6 +72,7 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [
     :attachment_id,
+    :body_size,
     :category,
     :column,
     :event_id,

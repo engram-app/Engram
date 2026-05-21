@@ -95,6 +95,10 @@ config :engram, :paddle_pro_price_id, "pri_pro_test"
 config :engram, :paddle_env, "sandbox"
 config :engram, :paddle_client, Engram.Paddle.ClientMock
 
+# Email — tests configure with a Mox; default to NoOp for tests that don't
+# care about email delivery.
+config :engram, :email_provider, Engram.Email.NoOp
+
 # Default to local auth provider in tests
 config :engram, :auth_provider, :local
 

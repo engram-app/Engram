@@ -16,6 +16,9 @@ defmodule Engram.Storage do
   @callback exists?(key :: String.t()) ::
               boolean()
 
+  @callback delete_prefix(prefix :: String.t()) ::
+              {:ok, non_neg_integer()} | {:error, term()}
+
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 

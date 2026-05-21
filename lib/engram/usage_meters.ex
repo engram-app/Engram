@@ -18,6 +18,7 @@ defmodule Engram.UsageMeters do
     @primary_key {:user_id, :id, autogenerate: false}
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
+      field :last_active_at, :utc_datetime_usec
       field :updated_at, :utc_datetime_usec
     end
   end
@@ -67,4 +68,34 @@ defmodule Engram.UsageMeters do
   end
 
   def estimate_tokens(_), do: 0
+
+  # ── Activity tracking (pricing v2 §C) ─────────────────────────
+
+  @spec last_active_at(integer()) :: DateTime.t() | nil
+  def last_active_at(user_id) when is_integer(user_id) do
+    Repo.one(
+      from(m in Meter, where: m.user_id == ^user_id, select: m.last_active_at),
+      skip_tenant_check: true
+    )
+  end
+
+  @doc """
+  Stamps `last_active_at = now()` for the user. Lazy-inits the row.
+  Called from the auth pipeline plug (debounced to once per hour).
+  """
+  @spec bump_last_active(integer()) :: :ok
+  def bump_last_active(user_id) when is_integer(user_id) do
+    now = DateTime.utc_now()
+
+    {_, _} =
+      Repo.insert_all(
+        Meter,
+        [%{user_id: user_id, last_active_at: now, updated_at: now}],
+        on_conflict: [set: [last_active_at: now, updated_at: now]],
+        conflict_target: :user_id,
+        skip_tenant_check: true
+      )
+
+    :ok
+  end
 end

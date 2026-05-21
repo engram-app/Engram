@@ -56,4 +56,19 @@ defmodule Engram.Storage.InMemory do
     ensure_table()
     :ets.member(@table, key)
   end
+
+  @impl true
+  def delete_prefix(prefix) do
+    ensure_table()
+
+    keys =
+      :ets.foldl(
+        fn {k, _}, acc -> if String.starts_with?(k, prefix), do: [k | acc], else: acc end,
+        [],
+        @table
+      )
+
+    Enum.each(keys, &:ets.delete(@table, &1))
+    {:ok, length(keys)}
+  end
 end

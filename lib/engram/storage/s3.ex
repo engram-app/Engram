@@ -37,6 +37,27 @@ defmodule Engram.Storage.S3 do
   end
 
   @impl true
+  def delete_prefix(prefix) when is_binary(prefix) and prefix != "" do
+    case ExAws.S3.list_objects(bucket(), prefix: prefix) |> ExAws.request() do
+      {:ok, %{body: %{contents: contents}}} ->
+        keys = Enum.map(contents, & &1.key)
+        delete_many(keys)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp delete_many([]), do: {:ok, 0}
+
+  defp delete_many(keys) do
+    case ExAws.S3.delete_multiple_objects(bucket(), keys) |> ExAws.request() do
+      {:ok, _} -> {:ok, length(keys)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def exists?(key) do
     case ExAws.S3.head_object(bucket(), key) |> ExAws.request() do
       {:ok, _} ->
