@@ -55,7 +55,8 @@ config :engram, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
-       {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker}
+       {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
+       {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep}
      ]}
   ]
 

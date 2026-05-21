@@ -1031,6 +1031,9 @@ jobs:
       - name: Credo (strict)
         run: mix credo --strict
 
+      - name: Limit-keys lint
+        run: mix engram.lint.limit_keys
+
       - name: Sobelow
         run: mix sobelow --exit low
 
