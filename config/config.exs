@@ -57,7 +57,8 @@ config :engram, Oban,
        {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
        {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
-       {"30 3 * * *", Engram.Workers.InactivityCleanup}
+       {"30 3 * * *", Engram.Workers.InactivityCleanup},
+       {"0 4 * * *", Engram.Workers.OriginAbuseSweep}
      ]}
   ]
 
@@ -73,6 +74,7 @@ config :logger, :default_formatter,
   metadata: [
     :attachment_id,
     :body_size,
+    :cap,
     :category,
     :clerk_user_id,
     :column,

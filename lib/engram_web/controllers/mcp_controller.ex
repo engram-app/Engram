@@ -5,6 +5,7 @@ defmodule EngramWeb.McpController do
   """
   use EngramWeb, :controller
 
+  alias Engram.Abuse.OriginStats
   alias Engram.ConversationMeter
   alias Engram.MCP.Tools
 
@@ -50,6 +51,8 @@ defmodule EngramWeb.McpController do
     case Tools.get(name) do
       {:ok, tool} ->
         user = conn.assigns.current_user
+        # §E — record origin fingerprint for daily-rollup aggregation.
+        _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent"))
 
         case ConversationMeter.tick(user.id) do
           {:rate_limited, reason} ->
@@ -175,5 +178,12 @@ defmodule EngramWeb.McpController do
       "id" => id,
       "error" => %{"code" => code, "message" => message}
     })
+  end
+
+  defp get_req_header_first(conn, key) do
+    case Plug.Conn.get_req_header(conn, key) do
+      [v | _] -> v
+      [] -> nil
+    end
   end
 end
