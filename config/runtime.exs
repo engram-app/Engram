@@ -205,6 +205,21 @@ if config_env() != :test do
     end
 
   config :engram, :limits_enforced, limits_enforced
+
+  # Plan limit overrides from env vars. Each ENGRAM_<TIER>_<KEY> is parsed at
+  # boot. Bad values raise a fail-fast boot error per EnvLimits.parse!/3.
+  # Test env: tests set :plan_overrides directly via Application.put_env;
+  # do not override here.
+  plan_overrides =
+    for {tier, key, env_name} <- Engram.Billing.LimitKeys.env_var_names(),
+        raw = System.get_env(env_name),
+        raw != nil,
+        into: %{} do
+      typed = Engram.Billing.EnvLimits.parse!(raw, Engram.Billing.LimitKeys.type(key), env_name)
+      {{tier, key}, typed}
+    end
+
+  config :engram, :plan_overrides, plan_overrides
 end
 
 # Current Terms of Service version. Must match the version exported by

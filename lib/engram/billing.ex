@@ -50,15 +50,15 @@ defmodule Engram.Billing do
   defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
 
   defp do_effective_limit(user, key) do
-    case override_value(user.id, to_string(key)) do
-      nil ->
-        case plan_value(user, to_string(key)) do
-          nil -> LimitKeys.default_for(key, tier_or_free(user))
-          val -> val
-        end
+    user_tier = tier_or_free(user)
+    string_key = to_string(key)
 
-      val ->
-        val
+    with :miss <- user_override_lookup(user.id, string_key),
+         :miss <- env_override_lookup(user_tier, key),
+         :miss <- plan_lookup(user, string_key) do
+      LimitKeys.default_for(key, user_tier)
+    else
+      {:hit, v} -> v
     end
   end
 
@@ -98,31 +98,39 @@ defmodule Engram.Billing do
 
   # ── Private Limit Helpers ─────────────────────────────────────────
 
-  defp override_value(user_id, key) do
+  defp user_override_lookup(user_id, string_key) do
     Repo.one(
       from(o in UserOverride,
         where: o.user_id == ^user_id,
-        select: fragment("?->?", o.overrides, ^key)
+        select: fragment("?->?", o.overrides, ^string_key)
       ),
       skip_tenant_check: true
     )
-    |> decode_json_value()
+    |> wrap_lookup()
   end
 
-  defp plan_value(%{plan_id: nil}, _key), do: nil
+  defp env_override_lookup(tier, key) do
+    case Application.get_env(:engram, :plan_overrides, %{}) |> Map.fetch({tier, key}) do
+      {:ok, v} -> {:hit, v}
+      :error -> :miss
+    end
+  end
 
-  defp plan_value(%{plan_id: plan_id}, key) do
+  defp plan_lookup(%{plan_id: nil}, _string_key), do: :miss
+
+  defp plan_lookup(%{plan_id: id}, string_key) do
     Repo.one(
       from(p in Plan,
-        where: p.id == ^plan_id,
-        select: fragment("?->?", p.limits, ^key)
+        where: p.id == ^id,
+        select: fragment("?->?", p.limits, ^string_key)
       ),
       skip_tenant_check: true
     )
-    |> decode_json_value()
+    |> wrap_lookup()
   end
 
-  defp decode_json_value(value), do: value
+  defp wrap_lookup(nil), do: :miss
+  defp wrap_lookup(v), do: {:hit, v}
 
   # ── Tier & Status Queries ──────────────────────────────────────
 

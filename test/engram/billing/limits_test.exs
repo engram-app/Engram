@@ -246,4 +246,40 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.effective_limit(user, :vaults_cap) == 5
     end
   end
+
+  describe "env-var override layer (layer 2)" do
+    setup do
+      original = Application.get_env(:engram, :plan_overrides)
+      on_exit(fn -> Application.put_env(:engram, :plan_overrides, original || %{}) end)
+      :ok
+    end
+
+    test "env override wins over plan default" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      Application.put_env(:engram, :plan_overrides, %{{:free, :vaults_cap} => 99})
+
+      assert Billing.effective_limit(user, :vaults_cap) == 99
+    end
+
+    test "user override wins over env override" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+      insert_override(user.id, %{"vaults_cap" => 7})
+
+      Application.put_env(:engram, :plan_overrides, %{{:free, :vaults_cap} => 99})
+
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+    end
+
+    test "env override falls through when key not set" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      Application.put_env(:engram, :plan_overrides, %{{:free, :notes_cap} => 12_345})
+
+      assert Billing.effective_limit(user, :vaults_cap) == 5
+    end
+  end
 end
