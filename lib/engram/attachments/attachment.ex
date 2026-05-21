@@ -2,8 +2,6 @@ defmodule Engram.Attachments.Attachment do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @max_attachment_bytes 5 * 1024 * 1024
-
   @type t :: %__MODULE__{}
 
   schema "attachments" do
@@ -66,12 +64,9 @@ defmodule Engram.Attachments.Attachment do
       :path_hmac
     ])
     |> validate_inclusion(:encryption_version, [1])
-    |> validate_number(:size_bytes, less_than_or_equal_to: @max_attachment_bytes)
     |> validate_required(:content_nonce)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
       name: :attachments_user_id_vault_id_path_hmac_index
     )
   end
-
-  def max_attachment_bytes, do: @max_attachment_bytes
 end

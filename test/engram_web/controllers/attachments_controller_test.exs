@@ -164,8 +164,16 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert json_response(conn, 400)
     end
 
-    test "rejects oversized attachment (> 5MB)", %{conn: conn} do
-      huge = Base.encode64(:crypto.strong_rand_bytes(5 * 1024 * 1024 + 1))
+    test "rejects oversized attachment against per-plan max_file_bytes (§G)",
+         %{conn: conn, user: user} do
+      # Pin a 1 MB per-file cap for this user; upload 1 MB + 1 byte.
+      insert(:user_limit_override,
+        user: user,
+        key: "max_file_bytes",
+        value: %{"v" => 1_048_576}
+      )
+
+      huge = Base.encode64(:crypto.strong_rand_bytes(1_048_576 + 1))
 
       conn =
         post(conn, "/api/attachments", %{
@@ -176,6 +184,9 @@ defmodule EngramWeb.AttachmentsControllerTest do
         })
 
       assert conn.status == 413
+      body = json_response(conn, 413)
+      assert body["error"] == "attachment exceeds size limit"
+      assert body["limit"] == 1_048_576
     end
 
     test "returns 401 without auth", %{conn: conn} do

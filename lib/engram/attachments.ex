@@ -11,6 +11,7 @@ defmodule Engram.Attachments do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.PathSanitizer
@@ -29,7 +30,7 @@ defmodule Engram.Attachments do
     explicit_mime = attrs["mime_type"] || attrs[:mime_type]
 
     with {:ok, plaintext} <- decode_base64(content_b64),
-         :ok <- validate_size(plaintext),
+         :ok <- validate_size(plaintext, user),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       path_hmac = Crypto.hmac_field(filter_key, path)
@@ -311,10 +312,14 @@ defmodule Engram.Attachments do
 
   # -- Private helpers --
 
-  defp validate_size(binary) do
-    if byte_size(binary) > Attachment.max_attachment_bytes(),
-      do: {:error, :too_large},
-      else: :ok
+  # Pricing v2 §G — per-plan max_file_bytes via `Engram.Billing`. When
+  # limits aren't enforced (self-host without Paddle), `effective_limit`
+  # returns `:unlimited` and uploads are unbounded — operator's call.
+  defp validate_size(binary, user) do
+    case Billing.effective_limit(user, :max_file_bytes) do
+      n when is_integer(n) and byte_size(binary) > n -> {:error, {:too_large, n}}
+      _ -> :ok
+    end
   end
 
   defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do

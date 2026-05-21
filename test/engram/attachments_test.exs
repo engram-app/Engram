@@ -60,10 +60,17 @@ defmodule Engram.AttachmentsTest do
       assert att.size_bytes == byte_size("test image content")
     end
 
-    test "rejects attachment over max size", %{user: user, vault: vault} do
-      oversized = Base.encode64(:binary.copy("x", 6 * 1024 * 1024))
+    test "rejects attachment over per-plan max_file_bytes (§G)",
+         %{user: user, vault: vault} do
+      Engram.Factory.insert(:user_limit_override,
+        user: user,
+        key: "max_file_bytes",
+        value: %{"v" => 1_048_576}
+      )
 
-      assert {:error, :too_large} =
+      oversized = Base.encode64(:binary.copy("x", 1_048_576 + 1))
+
+      assert {:error, {:too_large, 1_048_576}} =
                Attachments.upsert_attachment(user, vault, %{
                  "path" => @path,
                  "content_base64" => oversized

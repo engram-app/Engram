@@ -38,8 +38,10 @@ defmodule EngramWeb.AttachmentsController do
       {:error, :missing_content} ->
         conn |> put_status(422) |> json(%{error: "content_base64 is required"})
 
-      {:error, :too_large} ->
-        conn |> put_status(413) |> json(%{error: "attachment exceeds size limit"})
+      {:error, {:too_large, limit}} ->
+        conn
+        |> put_status(413)
+        |> json(%{error: "attachment exceeds size limit", limit: limit})
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
