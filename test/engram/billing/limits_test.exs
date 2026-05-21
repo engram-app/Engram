@@ -69,6 +69,7 @@ defmodule Engram.Billing.LimitsTest do
       user = user_without_plan()
 
       assert_raise Engram.Billing.UnknownLimitKey, fn ->
+        # lint:limit_keys ignore
         Billing.effective_limit(user, :nonexistent_feature)
       end
     end
@@ -179,6 +180,7 @@ defmodule Engram.Billing.LimitsTest do
       user = user_without_plan()
 
       assert_raise Engram.Billing.UnknownLimitKey, fn ->
+        # lint:limit_keys ignore
         Billing.effective_limit(user, "notes_cap")
       end
     end
@@ -187,6 +189,7 @@ defmodule Engram.Billing.LimitsTest do
       user = user_without_plan()
 
       assert_raise Engram.Billing.UnknownLimitKey, fn ->
+        # lint:limit_keys ignore
         Billing.effective_limit(user, :bogus_key)
       end
     end
@@ -233,6 +236,7 @@ defmodule Engram.Billing.LimitsTest do
       user = user_without_plan()
 
       assert_raise Engram.Billing.UnknownLimitKey, fn ->
+        # lint:limit_keys ignore
         Billing.effective_limit(user, :bogus_key)
       end
     end
