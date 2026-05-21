@@ -38,10 +38,6 @@ defmodule Mix.Tasks.Engram.Lint.NoClientOnlyRateLimits do
     inactivity_warn_60_days:
       "TODO follow-up: InactivityCleanup hardcodes 60d/80d/90d windows; migrate to LimitKeys",
     inactivity_delete_days: "TODO follow-up: same as inactivity_warn_60_days",
-    # Attachment lifetime quota — TODO follow-up. AttachmentController.create/2
-    # must call Billing.check_limit(user, :attachment_bytes_cap, current_total).
-    attachment_bytes_cap:
-      "TODO follow-up: AttachmentController.create/2 needs per-user lifetime quota check",
     # Device-auth caps — TODO follow-up. DeviceAuthController already enforces
     # vaults_cap; needs explicit concurrent_devices + cooldown checks.
     concurrent_devices: "TODO follow-up: DeviceAuthController needs per-user device count check",

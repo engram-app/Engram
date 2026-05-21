@@ -43,6 +43,11 @@ defmodule EngramWeb.AttachmentsController do
         |> put_status(413)
         |> json(%{error: "attachment exceeds size limit", limit: limit})
 
+      {:error, {:storage_cap_reached, used, limit}} ->
+        conn
+        |> put_status(402)
+        |> json(%{error: "storage_cap_reached", used: used, limit: limit})
+
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
 

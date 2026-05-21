@@ -164,6 +164,67 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert json_response(conn, 400)
     end
 
+    test "rejects upload that exceeds per-plan attachment_bytes_cap (§G)",
+         %{conn: conn, user: user} do
+      # 2 MB total quota; 1.5 MB already used; uploading 800 KB more → over.
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 2 * 1_048_576}
+      )
+
+      first = Base.encode64(:crypto.strong_rand_bytes(1_500_000))
+
+      conn1 =
+        post(conn, "/api/attachments", %{
+          path: "first.png",
+          content_base64: first,
+          mtime: 1.0
+        })
+
+      assert json_response(conn1, 200)
+
+      second = Base.encode64(:crypto.strong_rand_bytes(800_000))
+
+      conn2 =
+        post(conn, "/api/attachments", %{
+          path: "second.png",
+          content_base64: second,
+          mtime: 2.0
+        })
+
+      body = json_response(conn2, 402)
+      assert body["error"] == "storage_cap_reached"
+      assert body["limit"] == 2 * 1_048_576
+      assert body["used"] == 1_500_000
+    end
+
+    test "upsert subtracts existing path's size from the lifetime total (§G)",
+         %{conn: conn, user: user} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 2 * 1_048_576}
+      )
+
+      big = Base.encode64(:crypto.strong_rand_bytes(1_500_000))
+      small = Base.encode64(:crypto.strong_rand_bytes(500_000))
+
+      # Upload 1.5 MB at the cap-near.
+      assert %{} =
+               post(conn, "/api/attachments", %{path: "f.png", content_base64: big, mtime: 1.0})
+               |> json_response(200)
+
+      # Replace same path with 500 KB — delta is negative, must succeed.
+      assert %{} =
+               post(conn, "/api/attachments", %{
+                 path: "f.png",
+                 content_base64: small,
+                 mtime: 2.0
+               })
+               |> json_response(200)
+    end
+
     test "rejects oversized attachment against per-plan max_file_bytes (§G)",
          %{conn: conn, user: user} do
       # Pin a 1 MB per-file cap for this user; upload 1 MB + 1 byte.
