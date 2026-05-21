@@ -2,11 +2,32 @@ defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
 
   alias Engram.Attachments
+  alias Engram.Storage.MimeWhitelist
 
   def upload(conn, params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
+    path = params["path"] || params[:path]
+    explicit_mime = params["mime_type"] || params[:mime_type]
+    effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
+    case MimeWhitelist.check(effective_mime, path) do
+      {:error, {:mime_not_allowed, mime}} ->
+        conn
+        |> put_status(415)
+        |> json(%{error: "mime_not_allowed", mime_type: mime})
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn
+        |> put_status(415)
+        |> json(%{error: "extension_not_allowed", extension: ext})
+
+      :ok ->
+        do_upload(conn, user, vault, params)
+    end
+  end
+
+  defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
       {:ok, att} ->
         json(conn, %{attachment: serialize_metadata(att)})

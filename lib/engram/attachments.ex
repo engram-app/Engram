@@ -16,6 +16,7 @@ defmodule Engram.Attachments do
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Storage.MimeWhitelist
 
   @doc """
   Upserts an attachment. Decodes base64 content, detects MIME type, computes hash.
@@ -317,7 +318,7 @@ defmodule Engram.Attachments do
   end
 
   defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do
-    mime = explicit_mime || detect_mime(path)
+    mime = explicit_mime || MimeWhitelist.detect_mime(path)
     key = Storage.key(user.id, vault.id, path)
 
     with {:ok, dek} <- Crypto.get_dek(user),
@@ -383,31 +384,6 @@ defmodule Engram.Attachments do
     case Base.decode64(b64) do
       {:ok, binary} -> {:ok, binary}
       :error -> {:error, :invalid_base64}
-    end
-  end
-
-  defp detect_mime(path) do
-    case Path.extname(path) |> String.downcase() do
-      ".png" -> "image/png"
-      ".jpg" -> "image/jpeg"
-      ".jpeg" -> "image/jpeg"
-      ".gif" -> "image/gif"
-      ".webp" -> "image/webp"
-      ".svg" -> "image/svg+xml"
-      ".pdf" -> "application/pdf"
-      ".mp3" -> "audio/mpeg"
-      ".mp4" -> "video/mp4"
-      ".wav" -> "audio/wav"
-      ".txt" -> "text/plain"
-      ".md" -> "text/markdown"
-      ".json" -> "application/json"
-      ".css" -> "text/css"
-      ".js" -> "application/javascript"
-      ".html" -> "text/html"
-      ".zip" -> "application/zip"
-      ".tar" -> "application/x-tar"
-      ".gz" -> "application/gzip"
-      _ -> "application/octet-stream"
     end
   end
 

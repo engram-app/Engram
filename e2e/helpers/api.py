@@ -164,16 +164,19 @@ class ApiClient:
         )
         return resp.status_code
 
-    def upload_attachment(self, path: str, data: bytes) -> int:
+    def upload_attachment(self, path: str, data: bytes, mime_type: str | None = None) -> int:
         """POST /attachments. Returns HTTP status code."""
         import base64
+        payload = {
+            "path": path,
+            "content_base64": base64.b64encode(data).decode(),
+            "mtime": time.time(),
+        }
+        if mime_type is not None:
+            payload["mime_type"] = mime_type
         resp = self.session.post(
             f"{self.base_url}/attachments",
-            json={
-                "path": path,
-                "content_base64": base64.b64encode(data).decode(),
-                "mtime": time.time(),
-            },
+            json=payload,
             timeout=10,
         )
         return resp.status_code

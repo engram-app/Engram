@@ -52,7 +52,9 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert att["mime_type"] == "application/pdf"
     end
 
-    test "defaults to application/octet-stream for unknown extension", %{conn: conn} do
+    test "rejects unknown extension with 415 (defaults to non-allowlisted octet-stream)", %{
+      conn: conn
+    } do
       conn =
         post(conn, "/api/attachments", %{
           path: "files/data.xyz",
@@ -60,8 +62,39 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 1_000.0
         })
 
-      assert %{"attachment" => att} = json_response(conn, 200)
-      assert att["mime_type"] == "application/octet-stream"
+      assert json_response(conn, 415) == %{
+               "error" => "mime_not_allowed",
+               "mime_type" => "application/octet-stream"
+             }
+    end
+
+    test "rejects .exe extension even with whitelisted MIME claim (belt-and-braces)", %{
+      conn: conn
+    } do
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "tools/trojan.exe",
+          content_base64: @sample_base64,
+          mime_type: "image/png",
+          mtime: 1_000.0
+        })
+
+      assert json_response(conn, 415) == %{
+               "error" => "extension_not_allowed",
+               "extension" => ".exe"
+             }
+    end
+
+    test "rejects application/x-msdownload MIME", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "tools/installer",
+          content_base64: @sample_base64,
+          mime_type: "application/x-msdownload",
+          mtime: 1_000.0
+        })
+
+      assert %{"error" => "mime_not_allowed"} = json_response(conn, 415)
     end
 
     test "allows explicit MIME type override", %{conn: conn} do
@@ -135,7 +168,8 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       conn =
         post(conn, "/api/attachments", %{
-          path: "huge.bin",
+          # png so MIME whitelist passes; size limit is the gate under test
+          path: "huge.png",
           content_base64: huge,
           mtime: 1_000.0
         })

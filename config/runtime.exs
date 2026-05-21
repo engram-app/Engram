@@ -192,6 +192,26 @@ if System.get_env("REALTIME_SYNC_GATE_ENABLED") in ["1", "true"] do
   config :engram, :realtime_sync_gate_enabled, true
 end
 
+# Pricing v2 §H — attachment MIME / extension whitelist self-host knobs.
+# Default: gate is ON. Operators who want to allow executables (e.g.
+# distributing an internal tool from a self-hosted vault) set
+# ATTACHMENT_MIME_BYPASS=true. To extend the allowlist with a couple of
+# extra MIMEs without disabling the gate, use
+# ATTACHMENT_MIME_ALLOWLIST_EXTRA=mime1,mime2.
+if System.get_env("ATTACHMENT_MIME_BYPASS") in ["1", "true"] do
+  config :engram, :attachment_mime_bypass, true
+end
+
+if extras = System.get_env("ATTACHMENT_MIME_ALLOWLIST_EXTRA") do
+  list =
+    extras
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+
+  if list != [], do: config(:engram, :attachment_mime_allowlist_extra, list)
+end
+
 # Paddle billing (Merchant-of-Record). Secret/server keys are required only
 # when actually calling the Paddle API; the public client_token + price_ids
 # are required for the frontend overlay. PADDLE_ENV chooses sandbox vs prod.

@@ -25,10 +25,11 @@ async def test_storage_endpoint(api_sync):
     initial_used = baseline["used_bytes"]
     initial_count = baseline["file_count"]
 
-    # Upload a small attachment
+    # Upload a small attachment. Use .png so the MIME whitelist (pricing-v2
+    # §H) accepts it; this test cares about byte accounting, not MIME.
     data = b"x" * 1024  # 1KB
     status = api_sync.upload_attachment(
-        f"E2E/attachments/storage40-{int(time.time())}.bin",
+        f"E2E/attachments/storage40-{int(time.time())}.png",
         data,
     )
     assert status in (200, 201), f"Upload should succeed, got {status}"
