@@ -282,4 +282,44 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.effective_limit(user, :vaults_cap) == 5
     end
   end
+
+  describe "boolean false honored at every layer" do
+    setup do
+      original = Application.get_env(:engram, :plan_overrides)
+      on_exit(fn -> Application.put_env(:engram, :plan_overrides, original || %{}) end)
+      :ok
+    end
+
+    test "false from user override wins (not treated as missing)" do
+      plan = insert_plan(%{"reranker_enabled" => true})
+      user = user_with_plan(plan)
+      insert_override(user.id, %{"reranker_enabled" => false})
+
+      assert Billing.effective_limit(user, :reranker_enabled) == false
+    end
+
+    test "false from env override wins (not treated as missing)" do
+      plan = insert_plan(%{"reranker_enabled" => true})
+      user = user_with_plan(plan)
+
+      Application.put_env(:engram, :plan_overrides, %{{:free, :reranker_enabled} => false})
+
+      assert Billing.effective_limit(user, :reranker_enabled) == false
+    end
+
+    test "false from plan wins (not treated as missing)" do
+      plan = insert_plan(%{"reranker_enabled" => false})
+      user = user_with_plan(plan)
+
+      assert Billing.effective_limit(user, :reranker_enabled) == false
+    end
+
+    test "false from catalog default wins" do
+      # Empty plan + free tier → catalog default = false for :reranker_enabled
+      plan = insert_plan(%{})
+      user = user_with_plan(plan)
+
+      assert Billing.effective_limit(user, :reranker_enabled) == false
+    end
+  end
 end
