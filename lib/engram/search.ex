@@ -20,6 +20,15 @@ defmodule Engram.Search do
 
   defp reranker_active?, do: reranker() != Engram.Rerankers.None
 
+  # Pricing-v2 §G — rerank is a Pro-only feature. Even when an operator
+  # has globally configured Jina, Free + Starter users get the passthrough
+  # path (no extra candidate fetch, no Jina HTTP call). This is the
+  # server-side enforcement that lets the lint task remove
+  # `reranker_enabled` from its `@opt_outs`.
+  defp reranker_active_for?(user) do
+    reranker_active?() and Engram.Billing.check_feature(user, :reranker_enabled) == :ok
+  end
+
   defp query_embed_model, do: Application.get_env(:engram, :query_embed_model)
 
   defp embed_for_search(query) do
@@ -60,8 +69,9 @@ defmodule Engram.Search do
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
 
-    # Fetch more candidates when reranking is active
-    fetch_limit = if reranker_active?(), do: max(limit * 4, @min_candidates), else: limit
+    # Fetch more candidates when reranking is active for THIS user (per-plan).
+    rerank_for_user? = reranker_active_for?(user)
+    fetch_limit = if rerank_for_user?, do: max(limit * 4, @min_candidates), else: limit
 
     case translate_phase_b_filters(user, folder, tags) do
       {:ok, phase_b_kw} ->
@@ -80,7 +90,8 @@ defmodule Engram.Search do
                    vaults_by_id,
                    collection()
                  ) do
-            reranker().rerank(query, decrypted, limit)
+            rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
+            rerank_module.rerank(query, decrypted, limit)
           end
         end
 

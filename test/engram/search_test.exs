@@ -179,6 +179,13 @@ defmodule Engram.SearchTest do
       Application.put_env(:engram, :reranker, Engram.Rerankers.Jina)
       Application.put_env(:engram, :jina_url, "http://localhost:#{jina_bypass.port}")
 
+      # Grant reranker_enabled — pricing-v2 §G now gates rerank per-plan.
+      insert(:user_limit_override,
+        user: user,
+        key: "reranker_enabled",
+        value: %{"v" => true}
+      )
+
       on_exit(fn ->
         Application.put_env(:engram, :reranker, Engram.Rerankers.None)
         Application.delete_env(:engram, :jina_url)
@@ -248,6 +255,72 @@ defmodule Engram.SearchTest do
       assert length(results) == 2
       # Result 3 should be first (highest reranker score)
       assert hd(results).source_path == "test/note3.md"
+    end
+
+    test "skips rerank for Free user even when reranker is globally configured (§G)",
+         %{bypass: bypass, user: user, vault: vault} do
+      # Globally configure a Jina reranker — but DO NOT grant the user the
+      # reranker_enabled feature flag. Pricing-v2 §G demands per-plan gating
+      # on the server, not just client-side opt-in.
+      jina_bypass = Bypass.open()
+      Application.put_env(:engram, :reranker, Engram.Rerankers.Jina)
+      Application.put_env(:engram, :jina_url, "http://localhost:#{jina_bypass.port}")
+
+      on_exit(fn ->
+        Application.put_env(:engram, :reranker, Engram.Rerankers.None)
+        Application.delete_env(:engram, :jina_url)
+      end)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Free user → reranker_enabled=false → fetch_limit should equal the
+      # requested limit (2), NOT 4× / @min_candidates. Verifies that Qdrant
+      # isn't being asked for the rerank-sized candidate set.
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        assert decoded["limit"] == 2
+
+        qid = "uuid-free"
+
+        {:ok, enc} =
+          Engram.Crypto.encrypt_qdrant_payload(
+            %{text: "Plain", title: "Plain", heading_path: "Plain"},
+            user,
+            "engram_notes",
+            qid
+          )
+
+        result = %{
+          "id" => qid,
+          "score" => 0.5,
+          "payload" => %{
+            "text" => enc.text,
+            "title" => enc.title,
+            "heading_path" => enc.heading_path,
+            "text_nonce" => enc.text_nonce,
+            "title_nonce" => enc.title_nonce,
+            "heading_path_nonce" => enc.heading_path_nonce,
+            "aad_version" => enc.aad_version,
+            "source_path" => "test/free.md",
+            "tags" => [],
+            "user_id" => to_string(user.id),
+            "vault_id" => to_string(vault.id)
+          }
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => [result]}))
+      end)
+
+      # Jina MUST NOT be called for a Free user — Bypass.expect_once would
+      # fail if the bypass receives a request; here we use Bypass.stub with
+      # no expectation, and the test inherently fails Mox/Bypass if Jina is
+      # hit (jina_bypass has no expect set up).
+      assert {:ok, [result]} = Search.search(user, vault, "test query", limit: 2)
+      assert result.source_path == "test/free.md"
     end
 
     test "uses query embed model when configured", %{bypass: bypass, user: user, vault: vault} do

@@ -20,7 +20,7 @@ Closes pricing-v2 §G's audit criterion: walk every `LimitKeys` catalog key and 
 | `ai_queries_per_conversation` | 50 | `Engram.ConversationMeter.maybe_rotate_conversation/3` |
 | `ai_queries_per_day` | nil (Free unmetered via conv cap) | `Engram.ConversationMeter.query_day_cap_exceeded?/2` |
 | `conversation_window_minutes` | 30 | `Engram.ConversationMeter.maybe_rotate_conversation/3` |
-| `reranker_enabled` | false | ⏳ opt-out (`SearchController` needs reranker-path gate) |
+| `reranker_enabled` | false | `Engram.Search.do_search/4` — per-user check via `Billing.check_feature/2`; Free/Starter route through `Engram.Rerankers.None` even when Jina is globally configured |
 | `api_write_enabled` | false | ⏳ opt-out (write controllers need plan gate) |
 | `api_rps_cap` | 0 | ⏳ opt-out (RateLimit plug should pull per-plan cap) |
 | `inactivity_warn_60_days` | true | ⏳ opt-out — `InactivityCleanup` cron uses `Billing.tier/1` rather than reading the key directly |
@@ -36,7 +36,7 @@ The lint task allows a catalog key to skip server-side enforcement IFF it is lis
 
 Each ⏳ opt-out above is a follow-up PR. Suggested order, smallest-first:
 
-1. **`reranker_enabled`** — search controller adds a single guard before invoking the reranker. ~10 LOC.
+1. ~~**`reranker_enabled`**~~ — ✅ SHIPPED (see audit table above). `Engram.Search.reranker_active_for?/1` gates per-user via `Billing.check_feature/2`.
 2. **`api_write_enabled`** — flag check in the existing API key auth path. ~15 LOC.
 3. **`api_rps_cap`** — `EngramWeb.Plugs.RateLimit` reads per-plan cap from `LimitKeys` instead of a hardcoded ceiling. ~30 LOC.
 4. **`max_file_bytes`** — `AttachmentController.create/2` checks `byte_size(file)` against the per-plan cap. ~10 LOC.
