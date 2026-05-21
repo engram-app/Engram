@@ -80,6 +80,25 @@ defmodule Engram.AccountsTest do
       assert created.email == "brand_new@test.com"
     end
 
+    test "populates normalized_email via EmailNormalizer (gmail alias collapse)" do
+      assert {:ok, created} =
+               Accounts.find_or_create_by_external_id("clerk_alias", %{
+                 email: "Me.Foo+spam@gmail.com"
+               })
+
+      assert created.email == "Me.Foo+spam@gmail.com"
+      assert created.normalized_email == "mefoo@gmail.com"
+    end
+
+    test "populates normalized_email for non-aliasing domain (lowercase only)" do
+      assert {:ok, created} =
+               Accounts.find_or_create_by_external_id("clerk_business", %{
+                 email: "User.Name@Acme.Co"
+               })
+
+      assert created.normalized_email == "user.name@acme.co"
+    end
+
     test "returns existing user even if email changed in provider" do
       user = insert(:user, email: "old@test.com")
 
@@ -96,6 +115,16 @@ defmodule Engram.AccountsTest do
       assert found.id == user.id
       # external_id lookup takes precedence — email is NOT updated
       assert found.email == "old@test.com"
+    end
+  end
+
+  describe "create_user_with_password/2 — normalized_email" do
+    test "populates normalized_email via EmailNormalizer" do
+      assert {:ok, user} =
+               Accounts.create_user_with_password("Me.Foo+x@gmail.com", "passw0rd!")
+
+      assert user.email == "me.foo+x@gmail.com"
+      assert user.normalized_email == "mefoo@gmail.com"
     end
   end
 

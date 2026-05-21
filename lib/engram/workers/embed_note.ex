@@ -70,8 +70,39 @@ defmodule Engram.Workers.EmbedNote do
             {:discard, :user_deleted}
 
           :ok ->
-            run_embed(note, old_path_hmac_b64)
+            case phone_gate(note.user_id) do
+              :ok ->
+                run_embed(note, old_path_hmac_b64)
+
+              {:snooze, secs} ->
+                {:snooze, secs}
+            end
         end
+    end
+  end
+
+  # Pricing v2 §A — block embeds for unverified-phone users when the gate is
+  # enabled. Default false so self-host and pre-launch cloud are unaffected.
+  defp phone_gate(user_id) do
+    if Application.get_env(:engram, :require_phone_for_embed, false) do
+      case Accounts.get_user(user_id) do
+        %{phone_verified_at: nil} ->
+          :telemetry.execute(
+            [:engram, :abuse, :embed_blocked_no_phone],
+            %{count: 1},
+            %{user_id: user_id}
+          )
+
+          {:snooze, 3600}
+
+        %{} ->
+          :ok
+
+        nil ->
+          :ok
+      end
+    else
+      :ok
     end
   end
 

@@ -59,6 +59,7 @@ defmodule EngramWeb.Router do
     pipe_through :api
 
     post "/paddle", WebhookController, :paddle
+    post "/clerk", WebhookController, :clerk
   end
 
   # OAuth 2.1 discovery documents — RFC 8414 + RFC 9728. Public, no auth.

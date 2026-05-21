@@ -154,6 +154,23 @@ if auth_provider == :clerk do
     end
 
   config :engram, :clerk_publishable_key, clerk_pub_key
+
+  # Backend API key (sk_*) — required to revoke duplicate signups detected by
+  # pricing v2 §A. Webhook secret (whsec_*) verifies inbound svix signatures.
+  if secret_key = System.get_env("CLERK_SECRET_KEY") do
+    config :engram, :clerk_secret_key, String.trim(secret_key)
+  end
+
+  if wh_secret = System.get_env("CLERK_WEBHOOK_SECRET") do
+    config :engram, :clerk_webhook_secret, String.trim(wh_secret)
+  end
+end
+
+# Pricing v2 §A — phone-verification gate on EmbedNote worker. Default off so
+# self-host and pre-launch cloud aren't affected. Cloud ops flips to "true"
+# when ready to enforce.
+if System.get_env("REQUIRE_PHONE_FOR_EMBED") in ["1", "true"] do
+  config :engram, :require_phone_for_embed, true
 end
 
 # Paddle billing (Merchant-of-Record). Secret/server keys are required only

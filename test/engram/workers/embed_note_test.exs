@@ -261,4 +261,40 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert length(jobs) == 1
     end
   end
+
+  describe "perform/1 — phone-verification gate (pricing v2 §A)" do
+    setup do
+      prev = Application.get_env(:engram, :require_phone_for_embed)
+      Application.put_env(:engram, :require_phone_for_embed, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :require_phone_for_embed),
+          else: Application.put_env(:engram, :require_phone_for_embed, prev)
+      end)
+
+      :ok
+    end
+
+    test "snoozes job when require_phone_for_embed=true and phone unverified",
+         %{note: note} do
+      assert {:snooze, 3600} = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    test "proceeds when phone_verified_at is set",
+         %{bypass: bypass, note: note, user: user} do
+      user
+      |> Ecto.Changeset.change(%{phone_verified_at: DateTime.utc_now()})
+      |> Repo.update!(skip_tenant_check: true)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+  end
 end

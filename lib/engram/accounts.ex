@@ -6,6 +6,7 @@ defmodule Engram.Accounts do
   import Ecto.Query
   alias Bcrypt
   alias Engram.Accounts.{ApiKey, User}
+  alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
   alias Engram.Repo
 
@@ -23,6 +24,20 @@ defmodule Engram.Accounts do
   """
   def find_by_external_id(external_id) do
     case Repo.one(from(u in User, where: u.external_id == ^external_id), skip_tenant_check: true) do
+      %User{} = user -> {:ok, user}
+      nil -> {:error, :user_not_found}
+    end
+  end
+
+  @doc """
+  Looks up a user by their pre-computed `normalized_email`. Returns
+  `{:error, :user_not_found}` when no row exists. Used by the Clerk webhook
+  handler to reject signup duplicates (pricing v2 §A).
+  """
+  def find_by_normalized_email(normalized_email) when is_binary(normalized_email) do
+    case Repo.one(from(u in User, where: u.normalized_email == ^normalized_email),
+           skip_tenant_check: true
+         ) do
       %User{} = user -> {:ok, user}
       nil -> {:error, :user_not_found}
     end
@@ -49,9 +64,16 @@ defmodule Engram.Accounts do
 
           nil ->
             %User{}
-            |> Ecto.Changeset.change(%{external_id: external_id, email: email})
+            |> Ecto.Changeset.change(%{
+              external_id: external_id,
+              email: email,
+              normalized_email: EmailNormalizer.normalize(email)
+            })
             |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
             |> Ecto.Changeset.unique_constraint(:external_id, name: :users_clerk_id_index)
+            |> Ecto.Changeset.unique_constraint(:normalized_email,
+              name: :users_normalized_email_index
+            )
             |> Repo.insert(skip_tenant_check: true)
             |> case do
               {:ok, user} ->
@@ -78,7 +100,8 @@ defmodule Engram.Accounts do
 
   def create_user_with_password(email, password)
       when byte_size(password) >= 8 and byte_size(password) <= @max_password_bytes do
-    normalized_email = email |> String.trim() |> String.downcase()
+    cleaned_email = email |> String.trim() |> String.downcase()
+    normalized = EmailNormalizer.normalize(email)
     external_id = Ecto.UUID.generate()
     password_hash = Bcrypt.hash_pwd_salt(password)
 
@@ -93,13 +116,17 @@ defmodule Engram.Accounts do
         role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
 
         case %User{
-               email: normalized_email,
+               email: cleaned_email,
+               normalized_email: normalized,
                external_id: external_id,
                password_hash: password_hash,
                role: role
              }
              |> Ecto.Changeset.change()
              |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
+             |> Ecto.Changeset.unique_constraint(:normalized_email,
+               name: :users_normalized_email_index
+             )
              |> Repo.insert(skip_tenant_check: true) do
           {:ok, user} -> user
           {:error, changeset} -> Repo.rollback(changeset)

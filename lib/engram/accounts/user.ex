@@ -9,6 +9,7 @@ defmodule Engram.Accounts.User do
 
   schema "users" do
     field :email, :string
+    field :normalized_email, :string
     field :external_id, :string
     field :password_hash, :string, redact: true
     field :role, :string, default: "member"
@@ -17,6 +18,7 @@ defmodule Engram.Accounts.User do
     field :dek_version, :integer, default: 1, redact: true
     field :key_provider, :string, default: "local", redact: true
     field :dek_rotation_locked_at, :utc_datetime_usec
+    field :phone_verified_at, :utc_datetime_usec
 
     belongs_to :plan, Engram.Billing.Plan
     has_many :notes, Engram.Notes.Note
