@@ -22,7 +22,7 @@ Closes pricing-v2 §G's audit criterion: walk every `LimitKeys` catalog key and 
 | `conversation_window_minutes` | 30 | `Engram.ConversationMeter.maybe_rotate_conversation/3` |
 | `reranker_enabled` | false | `Engram.Search.do_search/4` — per-user check via `Billing.check_feature/2`; Free/Starter route through `Engram.Rerankers.None` even when Jina is globally configured |
 | `api_write_enabled` | false | `EngramWeb.Plugs.RequireApiWriteEnabled` on the vault-scoped pipeline — gates non-GET requests when authed via API key (JWT path exempt). POST `/api/search` exempt as a read-via-POST. 402 with `api_write_not_available` |
-| `api_rps_cap` | 0 | ⏳ opt-out (RateLimit plug should pull per-plan cap) |
+| `api_rps_cap` | 0 | `EngramWeb.Plugs.RequireApiRpsBudget` on user-scoped + vault-scoped pipelines — Hammer-backed, 1-sec window keyed on `api_rps:user_id`. JWT path exempt. 429 with `api_rps_exceeded`. Free=0 → instant 429 |
 | `inactivity_warn_60_days` | true | ⏳ opt-out — `InactivityCleanup` cron uses `Billing.tier/1` rather than reading the key directly |
 | `inactivity_delete_days` | 90 | ⏳ opt-out — same as above |
 | `cross_vault_search` | false | ⏳ opt-out (legacy UX flag) |
@@ -38,7 +38,7 @@ Each ⏳ opt-out above is a follow-up PR. Suggested order, smallest-first:
 
 1. ~~**`reranker_enabled`**~~ — ✅ SHIPPED. `Engram.Search.reranker_active_for?/1` gates per-user via `Billing.check_feature/2`.
 2. ~~**`api_write_enabled`**~~ — ✅ SHIPPED. `EngramWeb.Plugs.RequireApiWriteEnabled` on vault pipeline; API-key-only with JWT exemption + `/api/search` carve-out.
-3. **`api_rps_cap`** — `EngramWeb.Plugs.RateLimit` reads per-plan cap from `LimitKeys` instead of a hardcoded ceiling. ~30 LOC.
+3. ~~**`api_rps_cap`**~~ — ✅ SHIPPED. `EngramWeb.Plugs.RequireApiRpsBudget` on user-scoped + vault-scoped pipelines; API-key-only; Hammer-backed 1-sec window.
 4. **`max_file_bytes`** — `AttachmentController.create/2` checks `byte_size(file)` against the per-plan cap. ~10 LOC.
 5. **`attachment_bytes_cap`** — `AttachmentController.create/2` sums existing per-user attachment bytes and checks the new file against the cap. ~30 LOC, requires a `count_user_attachment_bytes/1` helper.
 6. **`inactivity_warn_60_days` + `inactivity_delete_days`** — migrate `InactivityCleanup` cron to read the catalog so per-user overrides take effect. ~40 LOC.

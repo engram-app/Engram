@@ -6,6 +6,7 @@ defmodule EngramWeb.DeviceAuthControllerTest do
   defp create_authed_conn(%{conn: conn}) do
     user = insert(:user)
     {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test")
+    grant_api_write!(user)
     authed_conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
 
     %{conn: conn, authed_conn: authed_conn, user: user}

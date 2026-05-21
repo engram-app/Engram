@@ -38,21 +38,34 @@ defmodule EngramWeb.ConnCase do
   end
 
   @doc """
-  Grants the user the `api_write_enabled` feature via a
-  `user_limit_overrides` row. Use in setup blocks for tests that exercise
-  API-key write paths — pricing v2 §G gates non-GET requests on this flag
-  when the request is authed via API key, so any test minting a key for a
-  write-side controller must represent a paid user.
+  Grants the user paid-tier API access via `user_limit_overrides` rows:
+  `api_write_enabled=true` and a generous `api_rps_cap=1000`. Use in
+  setup blocks for tests that exercise API-key write paths — pricing v2
+  §G gates non-GET requests on the write flag AND every API-key request
+  on the RPS cap when authed via API key, so any test minting a key for
+  controller use must represent a paid user.
 
   Returns `user` unchanged for pipe-friendliness.
   """
   def grant_api_write!(%Engram.Accounts.User{} = user) do
-    Engram.Factory.insert(:user_limit_override,
-      user: user,
-      key: "api_write_enabled",
-      value: %{"v" => true}
-    )
-
+    upsert_override!(user, "api_write_enabled", true)
+    upsert_override!(user, "api_rps_cap", 1_000)
     user
+  end
+
+  # Idempotent insert — the helper may be called multiple times against the
+  # same user when a test exercises more than one `create_api_key` flow.
+  defp upsert_override!(user, key, value) do
+    case Engram.Repo.get_by(Engram.Billing.UserLimitOverride, user_id: user.id, key: key) do
+      nil ->
+        Engram.Factory.insert(:user_limit_override,
+          user: user,
+          key: key,
+          value: %{"v" => value}
+        )
+
+      _existing ->
+        :noop
+    end
   end
 end

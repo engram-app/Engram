@@ -11,6 +11,7 @@ defmodule EngramWeb.VaultsControllerTest do
     # Give the user unlimited vaults for most tests
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
+    grant_api_write!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
   end
@@ -68,6 +69,8 @@ defmodule EngramWeb.VaultsControllerTest do
       )
 
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
+      # Re-grant API access after wiping all overrides above.
+      grant_api_write!(user)
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
@@ -162,6 +165,8 @@ defmodule EngramWeb.VaultsControllerTest do
       )
 
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
+      # Re-grant API access after wiping all overrides above.
+      grant_api_write!(user)
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 

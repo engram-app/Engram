@@ -28,6 +28,7 @@ defmodule EngramWeb.AuthControllerTest do
 
   defp api_key_authed(conn, user) do
     {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "auth-test-key")
+    grant_api_write!(user)
     put_req_header(conn, "authorization", "Bearer #{raw_key}")
   end
 
@@ -51,11 +52,16 @@ defmodule EngramWeb.AuthControllerTest do
       assert is_integer(id)
     end
 
-    test "created key can authenticate vault-scoped requests", %{conn: conn} do
+    test "created key can authenticate vault-scoped requests", %{conn: conn, user: user} do
       %{"key" => new_key} =
         conn
         |> post("/api/api-keys", %{name: "usable-key"})
         |> json_response(200)
+
+      # Newly-minted API keys for Free users hit api_rps_cap=0 — grant the
+      # paid-tier overrides so this test exercises the auth flow, not the
+      # gate.
+      grant_api_write!(user)
 
       conn2 =
         build_conn()
@@ -89,11 +95,13 @@ defmodule EngramWeb.AuthControllerTest do
       user = insert(:user)
       insert(:vault, user: user, is_default: true)
       {:ok, _raw, _} = Engram.Accounts.create_api_key(user, "setup-key")
+      grant_api_write!(user)
       %{conn: jwt_authed(conn, user), user: user}
     end
 
     test "lists keys belonging to the current user", %{conn: conn, user: user} do
       {:ok, _, _} = Engram.Accounts.create_api_key(user, "second-key")
+      grant_api_write!(user)
 
       conn = get(conn, "/api/api-keys")
       assert %{"keys" => keys} = json_response(conn, 200)
@@ -114,6 +122,7 @@ defmodule EngramWeb.AuthControllerTest do
     test "does not return keys from other users", %{conn: conn} do
       other = insert(:user)
       {:ok, _, _} = Engram.Accounts.create_api_key(other, "other-key")
+      grant_api_write!(other)
 
       conn = get(conn, "/api/api-keys")
       %{"keys" => keys} = json_response(conn, 200)
@@ -145,6 +154,7 @@ defmodule EngramWeb.AuthControllerTest do
       user = insert(:user)
       insert(:vault, user: user, is_default: true)
       {:ok, _raw, target_key} = Engram.Accounts.create_api_key(user, "to-be-revoked")
+      grant_api_write!(user)
       %{conn: jwt_authed(conn, user), user: user, target_key_id: target_key.id}
     end
 

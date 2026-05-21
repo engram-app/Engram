@@ -16,6 +16,7 @@ defmodule EngramWeb.OnboardingControllerTest do
 
     user = insert(:user)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
+    grant_api_write!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
   end

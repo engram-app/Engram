@@ -123,7 +123,12 @@ defmodule EngramWeb.Router do
 
   # User-scoped authenticated endpoints (no vault context needed)
   scope "/api", EngramWeb do
-    pipe_through [:api, EngramWeb.Plugs.Auth, EngramWeb.Plugs.RotationLockCheck]
+    pipe_through [
+      :api,
+      EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.RotationLockCheck,
+      EngramWeb.Plugs.RequireApiRpsBudget
+    ]
 
     # User info
     get "/user/storage", StorageController, :index
@@ -191,6 +196,7 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireOnboarding,
       EngramWeb.Plugs.BumpActivity,
+      EngramWeb.Plugs.RequireApiRpsBudget,
       EngramWeb.Plugs.RequireApiWriteEnabled,
       EngramWeb.Plugs.VaultPlug
     ]

@@ -6,6 +6,7 @@ defmodule EngramWeb.EmbedStatusControllerTest do
       user = insert(:user)
       insert(:vault, user: user, is_default: true)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+      grant_api_write!(user)
       conn = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
       # 2 indexed, 1 pending (nil), 1 stale
@@ -25,6 +26,7 @@ defmodule EngramWeb.EmbedStatusControllerTest do
       user = insert(:user)
       insert(:vault, user: user, is_default: true)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+      grant_api_write!(user)
       conn = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
       insert(:note, user: user, content_hash: "aaa", embed_hash: "aaa")
