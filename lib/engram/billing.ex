@@ -10,7 +10,7 @@ defmodule Engram.Billing do
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.Plan
   alias Engram.Billing.Subscription
-  alias Engram.Billing.UserOverride
+  alias Engram.Billing.UserLimitOverride
   alias Engram.Repo
 
   defmodule UnknownLimitKey do
@@ -91,10 +91,15 @@ defmodule Engram.Billing do
   # ── Private Limit Helpers ─────────────────────────────────────────
 
   defp user_override_lookup(user_id, string_key) do
+    now = DateTime.utc_now()
+
     Repo.one(
-      from(o in UserOverride,
-        where: o.user_id == ^user_id,
-        select: fragment("?->?", o.overrides, ^string_key)
+      from(o in UserLimitOverride,
+        where:
+          o.user_id == ^user_id and
+            o.key == ^string_key and
+            (is_nil(o.expires_at) or o.expires_at > ^now),
+        select: fragment("?->'v'", o.value)
       ),
       skip_tenant_check: true
     )

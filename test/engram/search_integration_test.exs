@@ -9,7 +9,7 @@ defmodule Engram.SearchIntegrationTest do
     Engram.Crypto.DekCache.invalidate_all()
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "SearchIntegration"})
 
     # Use a test-isolated Qdrant collection so we can drop it after.

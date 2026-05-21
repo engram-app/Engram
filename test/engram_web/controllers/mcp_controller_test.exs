@@ -544,7 +544,7 @@ defmodule EngramWeb.McpControllerTest do
       vault_a = insert(:vault, user: user, is_default: true, name: "Vault A")
 
       # Override limit so user can have 2 vaults
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Vault B"})
 
       {:ok, api_key, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-key")

@@ -9,7 +9,7 @@ defmodule EngramWeb.VaultsControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     # Give the user unlimited vaults for most tests
-    insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
@@ -32,7 +32,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "does not include vaults of other users", %{conn: conn, user: user} do
       other_user = insert(:user)
-      insert(:user_override, user: other_user, overrides: %{"vaults_cap" => 5})
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => 5})
       {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other Vault"})
       {:ok, _my_vault} = Vaults.create_vault(user, %{name: "My Vault"})
 
@@ -63,8 +63,11 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "returns 402 when vault limit reached", %{conn: conn, user: user} do
       # Override to limit of 1
-      Engram.Repo.delete_all(from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id)
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 1})
+      Engram.Repo.delete_all(
+        from o in Engram.Billing.UserLimitOverride, where: o.user_id == ^user.id
+      )
+
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
@@ -96,7 +99,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
     test "returns 404 for another user's vault", %{conn: conn} do
       other_user = insert(:user)
-      insert(:user_override, user: other_user, overrides: %{"vaults_cap" => 5})
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => 5})
       {:ok, other_vault} = Vaults.create_vault(other_user, %{name: "Other"})
 
       conn = get(conn, "/api/vaults/#{other_vault.id}")
@@ -154,8 +157,11 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 402 when vault limit reached", %{conn: conn, user: user} do
-      Engram.Repo.delete_all(from o in Engram.Billing.UserOverride, where: o.user_id == ^user.id)
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 1})
+      Engram.Repo.delete_all(
+        from o in Engram.Billing.UserLimitOverride, where: o.user_id == ^user.id
+      )
+
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 

@@ -8,8 +8,8 @@ defmodule Engram.NotesTest do
     other_user = insert(:user)
 
     # Allow unlimited vaults so create_vault doesn't hit the billing limit
-    insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
-    insert(:user_override, user: other_user, overrides: %{"vaults_cap" => -1})
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+    insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
 
     # Phase B reads derive a filter key from the user's DEK. Provision DEK
     # upfront so test users carry encrypted_dek in-struct without a reload.
@@ -186,7 +186,7 @@ defmodule Engram.NotesTest do
 
     test "returns error for missing path", %{vault: vault} do
       user = insert(:user)
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
 
       assert {:error, changeset} =
                Notes.upsert_note(user, vault, %{"content" => "# Hello", "mtime" => 1_000.0})

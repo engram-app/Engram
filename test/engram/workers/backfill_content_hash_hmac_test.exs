@@ -14,7 +14,7 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
   setup do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
-    insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "BackfillTest"})
 
     %{user: user, vault: vault}

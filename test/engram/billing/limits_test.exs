@@ -3,7 +3,6 @@ defmodule Engram.Billing.LimitsTest do
 
   alias Engram.Billing
   alias Engram.Billing.Plan
-  alias Engram.Billing.UserOverride
   alias Engram.Repo
 
   # ── Helpers ──────────────────────────────────────────────────────
@@ -12,8 +11,16 @@ defmodule Engram.Billing.LimitsTest do
     Repo.insert!(%Plan{name: "plan_#{System.unique_integer([:positive])}", limits: limits})
   end
 
-  defp insert_override(user_id, overrides) do
-    Repo.insert!(%UserOverride{user_id: user_id, overrides: overrides, reason: "test"})
+  defp insert_override(user_id, overrides_map) when is_map(overrides_map) do
+    for {key, value} <- overrides_map do
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user_id,
+        key: to_string(key),
+        value: %{"v" => value},
+        reason: "test",
+        set_by: "test"
+      })
+    end
   end
 
   defp user_with_plan(plan) do
@@ -320,6 +327,59 @@ defmodule Engram.Billing.LimitsTest do
       user = user_with_plan(plan)
 
       assert Billing.effective_limit(user, :reranker_enabled) == false
+    end
+  end
+
+  describe "expired user_limit_overrides ignored" do
+    test "row with expires_at < now is not returned" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "vaults_cap",
+        value: %{"v" => 999},
+        reason: "expired test",
+        set_by: "test",
+        expires_at: past
+      })
+
+      assert Billing.effective_limit(user, :vaults_cap) == 5
+    end
+
+    test "row with expires_at IN FUTURE is returned" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      future = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "vaults_cap",
+        value: %{"v" => 999},
+        reason: "future test",
+        set_by: "test",
+        expires_at: future
+      })
+
+      assert Billing.effective_limit(user, :vaults_cap) == 999
+    end
+
+    test "row with expires_at IS NULL is returned (permanent)" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "vaults_cap",
+        value: %{"v" => 999},
+        reason: "permanent",
+        set_by: "test"
+      })
+
+      assert Billing.effective_limit(user, :vaults_cap) == 999
     end
   end
 end

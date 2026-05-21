@@ -107,7 +107,7 @@ defmodule EngramWeb.SyncChannelTest do
     end
 
     test "restricted key cannot join unauthorized vault", %{user: user, vault: vault} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Vault B"})
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-chan2")
 

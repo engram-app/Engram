@@ -116,11 +116,13 @@ defmodule Engram.Factory do
     }
   end
 
-  def user_override_factory do
-    %Engram.Billing.UserOverride{
+  def user_limit_override_factory do
+    %Engram.Billing.UserLimitOverride{
       user: build(:user),
-      overrides: %{},
-      reason: "test override"
+      key: "notes_cap",
+      value: %{"v" => 1000},
+      reason: "test override",
+      set_by: "test"
     }
   end
 

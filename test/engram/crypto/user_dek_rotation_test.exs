@@ -371,7 +371,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   describe "rotate_user/1 — production-path bug regression" do
     setup %{user: user} do
       # Grant unlimited vaults so create_vault doesn't hit the billing limit.
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
       {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "ProdVault"})
       {:ok, user: user, vault: vault}
     end

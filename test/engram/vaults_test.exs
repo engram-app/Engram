@@ -35,7 +35,7 @@ defmodule Engram.VaultsTest do
 
       # Give the second user unlimited vaults via user_overrides or just test default (1) blocks
       # Override the limit so we can insert a second vault
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 5})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
 
       assert {:ok, vault2} = Vaults.create_vault(user, %{name: "Second"})
       assert vault2.is_default == false
@@ -48,7 +48,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "unlimited override (-1) allows any number of vaults", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
@@ -56,7 +56,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "specific override enforces that exact limit", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 2})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 2})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
@@ -68,14 +68,14 @@ defmodule Engram.VaultsTest do
       assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Second"})
 
       # Lift the limit via per-user override
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 5})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
     end
 
     test "deduplicates slug collision with numeric suffix", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Notes"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Notes"})
@@ -85,7 +85,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "slug with triple collision gets -3 suffix", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, _} = Vaults.create_vault(user, %{name: "Notes"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Notes"})
@@ -144,7 +144,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "existing check ignores deleted vaults", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, vault, :created} = Vaults.register_vault(user, "My Vault", "client-1")
       Vaults.delete_vault(user, vault.id)
@@ -177,7 +177,7 @@ defmodule Engram.VaultsTest do
 
   describe "list_vaults/1" do
     test "returns all non-deleted vaults for user", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "A"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "B"})
@@ -189,7 +189,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "excludes soft-deleted vaults", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Keep"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Delete"})
@@ -215,7 +215,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns vaults ordered by inserted_at ascending", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Alpha"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Beta"})
@@ -250,7 +250,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for soft-deleted vault", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, vault} = Vaults.create_vault(user, %{name: "Gone"})
       Vaults.delete_vault(user, vault.id)
@@ -298,7 +298,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "setting is_default clears other defaults", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
@@ -331,7 +331,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "promotes next vault to default when default is deleted", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
@@ -344,7 +344,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "does not promote when non-default vault is deleted", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "First"})
       {:ok, v2} = Vaults.create_vault(user, %{name: "Second"})
@@ -514,7 +514,7 @@ defmodule Engram.VaultsTest do
     # tests flaked. These tests pin that the id tiebreaker is always respected.
 
     test "orders deterministically when created_at ties", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       same_time = DateTime.utc_now(:second)
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "vault-order-a"})
@@ -535,7 +535,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "id tiebreaker holds for three vaults at the same timestamp", %{user: user} do
-      insert(:user_override, user: user, overrides: %{"vaults_cap" => 10})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       same_time = DateTime.utc_now(:second)
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "alpha"})
