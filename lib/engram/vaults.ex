@@ -27,7 +27,7 @@ defmodule Engram.Vaults do
       Repo.with_tenant(user.id, fn ->
         current_count = count_vaults(user.id)
 
-        case Billing.check_limit(user, "max_vaults", current_count) do
+        case Billing.check_limit(user, :vaults_cap, current_count) do
           {:error, :limit_reached} ->
             {:error, :vault_limit_reached}
 
@@ -81,7 +81,7 @@ defmodule Engram.Vaults do
             nil ->
               current_count = count_vaults(user.id)
 
-              case Billing.check_limit(user, "max_vaults", current_count) do
+              case Billing.check_limit(user, :vaults_cap, current_count) do
                 {:error, :limit_reached} ->
                   {:error, :vault_limit_reached}
 

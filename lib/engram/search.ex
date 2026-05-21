@@ -46,7 +46,7 @@ defmodule Engram.Search do
     cross_vault = Keyword.get(opts, :cross_vault, false)
 
     if cross_vault do
-      case Engram.Billing.check_feature(user, "cross_vault_search") do
+      case Engram.Billing.check_feature(user, :cross_vault_search) do
         :ok -> do_search(user, nil, query, opts)
         {:error, _} = err -> err
       end

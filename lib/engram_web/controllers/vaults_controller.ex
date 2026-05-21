@@ -24,7 +24,7 @@ defmodule EngramWeb.VaultsController do
         |> json(%{vault: vault_json(vault, user)})
 
       {:error, :vault_limit_reached} ->
-        limit = Billing.effective_limit(user, "max_vaults")
+        limit = Billing.effective_limit(user, :vaults_cap)
 
         conn
         |> put_status(402)
@@ -122,7 +122,7 @@ defmodule EngramWeb.VaultsController do
           json(conn, vault_json(vault, user) |> Map.put(:status, "existing"))
 
         {:error, :vault_limit_reached} ->
-          limit = Billing.effective_limit(user, "max_vaults")
+          limit = Billing.effective_limit(user, :vaults_cap)
 
           conn
           |> put_status(402)

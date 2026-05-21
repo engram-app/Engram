@@ -7,17 +7,19 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
+  alias Engram.Billing.LimitKeys
   alias Engram.Billing.Plan
   alias Engram.Billing.Subscription
   alias Engram.Billing.UserOverride
   alias Engram.Repo
 
-  @default_limits %{
-    "max_vaults" => 1,
-    "max_storage_bytes" => 104_857_600,
-    "cross_vault_search" => false,
-    "vault_scoped_keys" => false
-  }
+  defmodule UnknownLimitKey do
+    @moduledoc "Raised when a limit lookup uses an unknown atom or a string key."
+    defexception [:key]
+
+    def message(%{key: k}),
+      do: "unknown limit key: #{inspect(k)} (atoms only, must be in LimitKeys.all/0)"
+  end
 
   # ── Limits ────────────────────────────────────────────────────────
 
@@ -27,20 +29,37 @@ defmodule Engram.Billing do
   Resolution order:
     1. user_overrides[key]
     2. plans[user.plan_id].limits[key]
-    3. @default_limits[key]
+    3. LimitKeys.default_for(key, tier)
 
   Uses explicit nil-checking (not ||) so that `false` values are honoured.
+  Raises `Engram.Billing.UnknownLimitKey` for string keys or atoms not in
+  `LimitKeys.all/0`.
   """
-  def effective_limit(user, key) do
-    case override_value(user.id, key) do
+  def effective_limit(user, key) when is_atom(key) do
+    unless LimitKeys.defined?(key), do: raise(UnknownLimitKey, key: key)
+    do_effective_limit(user, key)
+  end
+
+  def effective_limit(_user, key), do: raise(UnknownLimitKey, key: key)
+
+  defp do_effective_limit(user, key) do
+    case override_value(user.id, to_string(key)) do
       nil ->
-        case plan_value(user, key) do
-          nil -> Map.get(@default_limits, key)
+        case plan_value(user, to_string(key)) do
+          nil -> LimitKeys.default_for(key, tier_or_free(user))
           val -> val
         end
 
       val ->
         val
+    end
+  end
+
+  # Temporary helper — replaced in Task 10 once tier/1 returns :free directly.
+  defp tier_or_free(user) do
+    case tier(user) do
+      :none -> :free
+      other -> other
     end
   end
 
