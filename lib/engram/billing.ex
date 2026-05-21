@@ -37,10 +37,17 @@ defmodule Engram.Billing do
   """
   def effective_limit(user, key) when is_atom(key) do
     unless LimitKeys.defined?(key), do: raise(UnknownLimitKey, key: key)
-    do_effective_limit(user, key)
+
+    if enforced?() do
+      do_effective_limit(user, key)
+    else
+      :unlimited
+    end
   end
 
   def effective_limit(_user, key), do: raise(UnknownLimitKey, key: key)
+
+  defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
 
   defp do_effective_limit(user, key) do
     case override_value(user.id, to_string(key)) do
@@ -69,6 +76,8 @@ defmodule Engram.Billing do
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
+      :unlimited -> :ok
+      nil -> :ok
       -1 -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
@@ -80,10 +89,10 @@ defmodule Engram.Billing do
   Returns {:error, :feature_not_available} otherwise.
   """
   def check_feature(user, key) do
-    if effective_limit(user, key) do
-      :ok
-    else
-      {:error, :feature_not_available}
+    case effective_limit(user, key) do
+      :unlimited -> :ok
+      true -> :ok
+      _ -> {:error, :feature_not_available}
     end
   end
 

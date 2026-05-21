@@ -191,4 +191,59 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.effective_limit(user, :vaults_cap) == 7
     end
   end
+
+  describe "bypass (self-host) — :limits_enforced=false" do
+    setup do
+      original = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, original) end)
+      :ok
+    end
+
+    test "effective_limit returns :unlimited regardless of plan or override" do
+      plan = insert_plan(%{"vaults_cap" => 1})
+      user = user_with_plan(plan)
+      insert_override(user.id, %{"vaults_cap" => 2})
+
+      assert Billing.effective_limit(user, :vaults_cap) == :unlimited
+    end
+
+    test "check_limit returns :ok for any count" do
+      plan = insert_plan(%{"vaults_cap" => 1})
+      user = user_with_plan(plan)
+
+      assert Billing.check_limit(user, :vaults_cap, 99_999) == :ok
+    end
+
+    test "check_feature returns :ok even when plan disables it" do
+      plan = insert_plan(%{"reranker_enabled" => false})
+      user = user_with_plan(plan)
+
+      assert Billing.check_feature(user, :reranker_enabled) == :ok
+    end
+
+    test "still raises UnknownLimitKey on bad atom (catalog guard fires before bypass)" do
+      user = user_without_plan()
+
+      assert_raise Engram.Billing.UnknownLimitKey, fn ->
+        Billing.effective_limit(user, :bogus_key)
+      end
+    end
+  end
+
+  describe "default (SaaS) — :limits_enforced=true" do
+    setup do
+      original = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, true)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, original) end)
+      :ok
+    end
+
+    test "effective_limit runs normal 4-layer resolution" do
+      plan = insert_plan(%{"vaults_cap" => 5})
+      user = user_with_plan(plan)
+
+      assert Billing.effective_limit(user, :vaults_cap) == 5
+    end
+  end
 end
