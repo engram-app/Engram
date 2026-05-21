@@ -47,13 +47,32 @@ defmodule Engram.Vaults do
             |> Vault.changeset(vault_attrs)
             |> Repo.insert()
             |> case do
-              {:ok, v} -> {:ok, decrypt_vault_if_needed(v, user)}
-              other -> other
+              {:ok, v} ->
+                emit_vault_count(user.id, :created)
+                {:ok, decrypt_vault_if_needed(v, user)}
+
+              other ->
+                other
             end
         end
       end)
       |> unwrap_transaction()
     end
+  end
+
+  # Pricing v2 §J — telemetry-only per-account vault count. Emitted on every
+  # vault create/delete so a downstream aggregator can spot Pro-as-team
+  # accounts (15+ vaults) as Team-tier launch candidates.
+  defp emit_vault_count(user_id, op) do
+    count = count_vaults(user_id)
+
+    :telemetry.execute(
+      [:engram, :abuse, :vault_count],
+      %{count: count},
+      %{user_id: user_id, op: op}
+    )
+
+    :ok
   end
 
   # ── Register (idempotent) ───────────────────────────────────────────────────
@@ -101,8 +120,12 @@ defmodule Engram.Vaults do
                   attrs = inject_name_phase_b(attrs, user, vault_id)
 
                   case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs)) do
-                    {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user), :created}
-                    {:error, cs} -> {:error, cs}
+                    {:ok, vault} ->
+                      emit_vault_count(user.id, :created)
+                      {:ok, decrypt_vault_if_needed(vault, user), :created}
+
+                    {:error, cs} ->
+                      {:error, cs}
                   end
               end
           end
@@ -289,6 +312,7 @@ defmodule Engram.Vaults do
           case result do
             {:ok, deleted} ->
               _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
+              emit_vault_count(deleted.user_id, :deleted)
               result
 
             _ ->

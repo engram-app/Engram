@@ -186,6 +186,7 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.DeviceFingerprint,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireOnboarding,
       EngramWeb.Plugs.VaultPlug
