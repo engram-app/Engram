@@ -10,7 +10,7 @@ Closes pricing-v2 §G's audit criterion: walk every `LimitKeys` catalog key and 
 |-----|--------------|-------------------------|
 | `notes_cap` | 10_000 | `Engram.Notes.insert_new_note/5` → `Billing.check_limit/3` → 402 (NEW in this PR) |
 | `vaults_cap` | 1 | `Engram.Vaults.create_vault/2` + `register_vault/3` |
-| `attachment_bytes_cap` | 1 GB | ⏳ opt-out (`AttachmentController.create/2` needs per-user lifetime quota check) |
+| `attachment_bytes_cap` | 1 GB | `Engram.Attachments.validate_storage_cap/3` inside the per-path advisory lock — sums non-deleted bytes via `storage_usage/1`, subtracts existing row size on upsert, rejects with 402 `storage_cap_reached` (body carries `used` + `limit`) |
 | `max_file_bytes` | 10 MB | `Engram.Attachments.validate_size/2` — `Billing.effective_limit(user, :max_file_bytes)` checked against decoded byte_size; 413 with `limit` in body. `StorageController.index/2` exposes the same per-plan number. Schema-level hardcoded 5 MB removed |
 | `lifetime_embed_token_cap` | 20 M | `Engram.Workers.EmbedNote.embed_budget_gate/1` |
 | `concurrent_devices` | 1 | ⏳ opt-out (`DeviceAuthController` needs explicit count check) |
@@ -40,7 +40,7 @@ Each ⏳ opt-out above is a follow-up PR. Suggested order, smallest-first:
 2. ~~**`api_write_enabled`**~~ — ✅ SHIPPED. `EngramWeb.Plugs.RequireApiWriteEnabled` on vault pipeline; API-key-only with JWT exemption + `/api/search` carve-out.
 3. ~~**`api_rps_cap`**~~ — ✅ SHIPPED. `EngramWeb.Plugs.RequireApiRpsBudget` on user-scoped + vault-scoped pipelines; API-key-only; Hammer-backed 1-sec window.
 4. ~~**`max_file_bytes`**~~ — ✅ SHIPPED. `Engram.Attachments.validate_size/2` pulls per-plan cap from `Billing.effective_limit/2`; schema-level hardcoded 5 MB removed; `StorageController` surfaces per-plan ceiling.
-5. **`attachment_bytes_cap`** — `AttachmentController.create/2` sums existing per-user attachment bytes and checks the new file against the cap. ~30 LOC, requires a `count_user_attachment_bytes/1` helper.
+5. ~~**`attachment_bytes_cap`**~~ — ✅ SHIPPED. `Engram.Attachments.validate_storage_cap/3` sums non-deleted bytes (subtracts existing on upsert), 402 `storage_cap_reached` with `used` + `limit` in body.
 6. **`inactivity_warn_60_days` + `inactivity_delete_days`** — migrate `InactivityCleanup` cron to read the catalog so per-user overrides take effect. ~40 LOC.
 7. **`concurrent_devices` + `device_swap_cooldown_hours`** — `DeviceAuthController` checks per-user device count + swap cooldown. ~50 LOC.
 

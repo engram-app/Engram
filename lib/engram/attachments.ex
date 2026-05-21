@@ -69,7 +69,8 @@ defmodule Engram.Attachments do
             %Attachment{id: id} -> id
           end
 
-        with {:ok, key, changeset_attrs, ciphertext} <-
+        with :ok <- validate_storage_cap(user, existing, byte_size(plaintext)),
+             {:ok, key, changeset_attrs, ciphertext} <-
                prepare_upload(
                  user,
                  vault,
@@ -319,6 +320,26 @@ defmodule Engram.Attachments do
     case Billing.effective_limit(user, :max_file_bytes) do
       n when is_integer(n) and byte_size(binary) > n -> {:error, {:too_large, n}}
       _ -> :ok
+    end
+  end
+
+  # Pricing v2 §G — per-plan attachment_bytes_cap (lifetime quota).
+  # Compute the net new total: current sum minus the existing row's
+  # size (if upserting) plus the new payload size. Sum is scoped to
+  # non-deleted rows via storage_usage/1. Runs inside the per-path
+  # advisory lock for consistency with the writer's view of `existing`.
+  defp validate_storage_cap(user, existing, new_size) do
+    case Billing.effective_limit(user, :attachment_bytes_cap) do
+      n when is_integer(n) ->
+        {:ok, %{used_bytes: current}} = storage_usage(user)
+        prior = if existing, do: existing.size_bytes, else: 0
+
+        if current - prior + new_size > n,
+          do: {:error, {:storage_cap_reached, current, n}},
+          else: :ok
+
+      _ ->
+        :ok
     end
   end
 
