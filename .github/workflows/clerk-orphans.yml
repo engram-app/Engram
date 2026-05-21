@@ -44,4 +44,4 @@ jobs:
             echo "E2E_CLERK_SECRET_KEY not set — skipping." >&2
             exit 0
           fi
-          python3 e2e/scripts/cleanup_clerk_users.py --older-than 5m
+          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h
