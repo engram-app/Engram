@@ -28,6 +28,14 @@ defmodule EngramWeb.NotesController do
           |> put_status(422)
           |> json(%{errors: format_errors(changeset)})
 
+        {:error, :notes_cap_reached} ->
+          # Pricing v2 §G — Free notes_cap (and Starter at higher ceiling)
+          # enforced server-side. 402 Payment Required signals plan limit
+          # to the client; UX can prompt upgrade.
+          conn
+          |> put_status(402)
+          |> json(%{error: "notes_cap_reached", upgrade_required: true})
+
         {:error, reason} ->
           require Logger
 

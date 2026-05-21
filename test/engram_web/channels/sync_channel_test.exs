@@ -88,6 +88,37 @@ defmodule EngramWeb.SyncChannelTest do
       assert {:error, %{reason: "invalid_topic"}} =
                subscribe_and_join(socket, EngramWeb.SyncChannel, "sync:#{user.id}")
     end
+
+    # Pricing v2 §G — Free's realtime_sync_enabled is false; bypass the
+    # ChannelCase helper that grants the override and confirm reject.
+    # The gate is env-flag-gated so we flip it on for this test only.
+    test "rejects Free user without realtime_sync override (gate on)" do
+      prev = Application.get_env(:engram, :realtime_sync_gate_enabled)
+      Application.put_env(:engram, :realtime_sync_gate_enabled, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :realtime_sync_gate_enabled),
+          else: Application.put_env(:engram, :realtime_sync_gate_enabled, prev)
+      end)
+
+      free_user = insert(:user)
+      {:ok, free_user} = Engram.Crypto.ensure_user_dek(free_user)
+      vault = insert(:vault, user: free_user, is_default: true)
+
+      socket =
+        Phoenix.ChannelTest.socket(EngramWeb.UserSocket, "user_#{free_user.id}", %{
+          current_user: free_user,
+          current_api_key: nil
+        })
+
+      assert {:error, %{reason: "channel_forbidden_on_plan"}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.SyncChannel,
+                 "sync:#{free_user.id}:#{vault.id}"
+               )
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -257,4 +257,30 @@ defmodule EngramWeb.NotesControllerTest do
       assert json_response(conn, 400)
     end
   end
+
+  # Pricing v2 §G — server-side notes_cap enforcement
+  describe "POST /notes — notes_cap enforcement (pricing v2 §G)" do
+    test "returns 402 when user is at notes_cap", %{conn: conn, user: user} do
+      # Lower the cap so the test doesn't need to insert 10k notes
+      insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 2})
+
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1.0})
+      post(conn, "/api/notes", %{path: "B.md", content: "# B", mtime: 2.0})
+
+      conn3 = post(conn, "/api/notes", %{path: "C.md", content: "# C", mtime: 3.0})
+
+      assert %{"error" => "notes_cap_reached", "upgrade_required" => true} =
+               json_response(conn3, 402)
+    end
+
+    test "permits updates to existing notes after cap is hit", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
+
+      post(conn, "/api/notes", %{path: "A.md", content: "# A v1", mtime: 1.0})
+
+      # Updating A is fine — only NEW notes are gated
+      conn2 = post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0})
+      assert %{"note" => _} = json_response(conn2, 200)
+    end
+  end
 end

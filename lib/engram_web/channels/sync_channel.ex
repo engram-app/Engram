@@ -11,6 +11,7 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
+  alias Engram.Billing
   alias Engram.Crypto.RotationGate
   alias Engram.{Notes, Vaults}
   alias EngramWeb.Presence
@@ -23,36 +24,55 @@ defmodule EngramWeb.SyncChannel do
   def join("sync:" <> ids, params, socket) do
     user = socket.assigns.current_user
 
+    # Pricing v2 §G — Free's realtime_sync_enabled is false. Gate is
+    # enforced when :realtime_sync_gate_enabled config is true (set on
+    # launch day; default false so pre-v2-launch Free users keep syncing).
+    if gate_enabled?() and
+         Billing.effective_limit(user, :realtime_sync_enabled) == false do
+      {:error, %{reason: "channel_forbidden_on_plan"}}
+    else
+      do_join(ids, params, socket, user)
+    end
+  end
+
+  defp gate_enabled?, do: Application.get_env(:engram, :realtime_sync_gate_enabled, false)
+
+  defp do_join(ids, params, socket, user) do
     case String.split(ids, ":") do
       [user_id_str, vault_id_str] ->
         if to_string(user.id) == user_id_str do
-          case Integer.parse(vault_id_str) do
-            {vault_id, ""} ->
-              case Vaults.get_vault(user, vault_id) do
-                {:ok, vault} ->
-                  case check_api_key_access(socket, vault) do
-                    :ok ->
-                      socket = assign(socket, :vault, vault)
-                      send(self(), {:after_join, params})
-                      {:ok, socket}
-
-                    :forbidden ->
-                      {:error, %{reason: "api_key_vault_forbidden"}}
-                  end
-
-                {:error, _} ->
-                  {:error, %{reason: "vault_not_found"}}
-              end
-
-            _ ->
-              {:error, %{reason: "invalid_vault_id"}}
-          end
+          resolve_vault_and_join(vault_id_str, params, socket, user)
         else
           {:error, %{reason: "unauthorized"}}
         end
 
       _ ->
         {:error, %{reason: "invalid_topic"}}
+    end
+  end
+
+  defp resolve_vault_and_join(vault_id_str, params, socket, user) do
+    case Integer.parse(vault_id_str) do
+      {vault_id, ""} ->
+        case Vaults.get_vault(user, vault_id) do
+          {:ok, vault} -> attach_vault_to_socket(vault, params, socket)
+          {:error, _} -> {:error, %{reason: "vault_not_found"}}
+        end
+
+      _ ->
+        {:error, %{reason: "invalid_vault_id"}}
+    end
+  end
+
+  defp attach_vault_to_socket(vault, params, socket) do
+    case check_api_key_access(socket, vault) do
+      :ok ->
+        socket = assign(socket, :vault, vault)
+        send(self(), {:after_join, params})
+        {:ok, socket}
+
+      :forbidden ->
+        {:error, %{reason: "api_key_vault_forbidden"}}
     end
   end
 

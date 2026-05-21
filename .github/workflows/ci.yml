@@ -1034,6 +1034,9 @@ jobs:
       - name: Limit-keys lint
         run: mix engram.lint.limit_keys
 
+      - name: No-client-only-rate-limits lint
+        run: mix engram.lint.no_client_only_rate_limits
+
       - name: Sobelow
         run: mix sobelow --exit low
 

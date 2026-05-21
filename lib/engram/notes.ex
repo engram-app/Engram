@@ -6,6 +6,7 @@ defmodule Engram.Notes do
 
   import Ecto.Query
 
+  alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
@@ -97,19 +98,37 @@ defmodule Engram.Notes do
   end
 
   defp insert_new_note(base_attrs, user, sanitized_path, folder, tags) do
-    # T3.6 — pre-allocate the row id so the AAD bind string
-    # ("notes:<column>:<id>") can be computed before INSERT.
-    note_id = Crypto.next_row_id(:notes)
+    # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
+    # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
+    # the unlimited case, in which check_limit is a no-op.
+    current_count = count_user_notes(user.id)
 
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
-      phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
-      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+    case Billing.check_limit(user, :notes_cap, current_count) do
+      {:error, :limit_reached} ->
+        {:error, :notes_cap_reached}
 
-      case Repo.insert(changeset) do
-        {:ok, note} -> {:ok, {nil, note}}
-        {:error, changeset} -> {:error, changeset}
-      end
+      :ok ->
+        # T3.6 — pre-allocate the row id so the AAD bind string
+        # ("notes:<column>:<id>") can be computed before INSERT.
+        note_id = Crypto.next_row_id(:notes)
+
+        with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
+          phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
+          changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+          case Repo.insert(changeset) do
+            {:ok, note} -> {:ok, {nil, note}}
+            {:error, changeset} -> {:error, changeset}
+          end
+        end
     end
+  end
+
+  defp count_user_notes(user_id) do
+    Repo.one(
+      from(n in Note, where: n.user_id == ^user_id and is_nil(n.deleted_at), select: count(n.id)),
+      skip_tenant_check: true
+    ) || 0
   end
 
   defp update_existing_note(
