@@ -60,6 +60,12 @@ services:
       STORAGE_HOST: minio
       STORAGE_PORT: "9000"
       STORAGE_REGION: us-east-1
+      # Force plan-limit enforcement in CI. Without this, runtime.exs's
+      # self-host bypass (PADDLE_API_KEY unset → :limits_enforced=false)
+      # would kick in and free-tier limits (e.g. vaults_cap=1) would not
+      # be enforced — breaking e2e tests like test_32 that assert 402 on
+      # over-limit vault creation.
+      ENGRAM_LIMITS_ENFORCED: "true"
     healthcheck:
       # 1s interval (was 3s) so docker compose --wait detects "ready" with
       # finer granularity — BEAM cold boot finishes mid-interval and the

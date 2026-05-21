@@ -181,6 +181,47 @@ end
 # disabled in self-host (no PADDLE_API_KEY → no payment → no wizard).
 config :engram, :billing_enabled, System.get_env("PADDLE_API_KEY") != nil
 
+# Plan limits enforcement toggle.
+# SaaS default: enforce when Paddle is configured.
+# Self-host default: bypass when no Paddle key.
+# Explicit override: ENGRAM_LIMITS_ENFORCED=true|false
+# Test env: config/test.exs hardcodes true; do not override at runtime.
+if config_env() != :test do
+  limits_enforced =
+    case System.get_env("ENGRAM_LIMITS_ENFORCED") do
+      "true" ->
+        true
+
+      "false" ->
+        false
+
+      nil ->
+        System.get_env("PADDLE_API_KEY") != nil
+
+      other ->
+        raise """
+        ENGRAM_LIMITS_ENFORCED must be 'true', 'false', or unset (got #{inspect(other)}).
+        """
+    end
+
+  config :engram, :limits_enforced, limits_enforced
+
+  # Plan limit overrides from env vars. Each ENGRAM_<TIER>_<KEY> is parsed at
+  # boot. Bad values raise a fail-fast boot error per EnvLimits.parse!/3.
+  # Test env: tests set :plan_overrides directly via Application.put_env;
+  # do not override here.
+  plan_overrides =
+    for {tier, key, env_name} <- Engram.Billing.LimitKeys.env_var_names(),
+        raw = System.get_env(env_name),
+        raw != nil,
+        into: %{} do
+      typed = Engram.Billing.EnvLimits.parse!(raw, Engram.Billing.LimitKeys.type(key), env_name)
+      {{tier, key}, typed}
+    end
+
+  config :engram, :plan_overrides, plan_overrides
+end
+
 # Current Terms of Service version. Must match the version exported by
 # frontend/src/legal/terms-of-service.tsx. Bumping this re-prompts every
 # user on next request via the RequireOnboarding plug.

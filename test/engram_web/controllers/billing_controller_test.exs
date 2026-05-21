@@ -14,7 +14,7 @@ defmodule EngramWeb.BillingControllerTest do
     test "returns inactive status for new user with no subscription", %{conn: conn} do
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
-      assert body["tier"] == "none"
+      assert body["tier"] == "free"
       assert body["active"] == false
       assert body["trial_days_remaining"] == 0
       assert body["subscription"] == nil

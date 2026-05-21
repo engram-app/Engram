@@ -11,26 +11,21 @@
 # and so on) as they will fail if something goes wrong.
 
 alias Engram.Repo
-alias Engram.Billing.Plan
+alias Engram.Billing.{LimitKeys, Plan}
 
-for {name, limits} <- [
-      {"free",
-       %{
-         "max_vaults" => 1,
-         "max_storage_bytes" => 104_857_600,
-         "cross_vault_search" => false,
-         "vault_scoped_keys" => false
-       }},
-      {"pro",
-       %{
-         "max_vaults" => -1,
-         "max_storage_bytes" => 1_073_741_824,
-         "cross_vault_search" => true,
-         "vault_scoped_keys" => true
-       }}
-    ] do
-  case Repo.get_by(Plan, name: name) do
-    nil -> Repo.insert!(%Plan{name: name, limits: limits})
-    existing -> Repo.update!(Plan.changeset(existing, %{limits: limits}))
-  end
+# Seed the three pricing tiers from LimitKeys catalog. Idempotent —
+# on_conflict replaces the limits JSONB so re-running ecto.setup drives
+# the matrix back to catalog defaults. To change a tier's limits in
+# production, edit LimitKeys + cut a release; deploy runs seeds.
+for tier <- LimitKeys.tiers() do
+  limits =
+    for key <- LimitKeys.all(), into: %{} do
+      {to_string(key), LimitKeys.default_for(key, tier)}
+    end
+
+  Repo.insert!(
+    %Plan{name: to_string(tier), limits: limits},
+    on_conflict: {:replace, [:limits, :updated_at]},
+    conflict_target: :name
+  )
 end

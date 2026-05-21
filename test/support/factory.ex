@@ -109,7 +109,7 @@ defmodule Engram.Factory do
     %Engram.Billing.Plan{
       name: sequence(:plan_name, &"plan_#{&1}"),
       limits: %{
-        "max_vaults" => 1,
+        "vaults_cap" => 1,
         "cross_vault_search" => false,
         "vault_scoped_keys" => false
       }

@@ -7,17 +7,19 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
+  alias Engram.Billing.LimitKeys
   alias Engram.Billing.Plan
   alias Engram.Billing.Subscription
   alias Engram.Billing.UserOverride
   alias Engram.Repo
 
-  @default_limits %{
-    "max_vaults" => 1,
-    "max_storage_bytes" => 104_857_600,
-    "cross_vault_search" => false,
-    "vault_scoped_keys" => false
-  }
+  defmodule UnknownLimitKey do
+    @moduledoc "Raised when a limit lookup uses an unknown atom or a string key."
+    defexception [:key]
+
+    def message(%{key: k}),
+      do: "unknown limit key: #{inspect(k)} (atoms only, must be in LimitKeys.all/0)"
+  end
 
   # ── Limits ────────────────────────────────────────────────────────
 
@@ -27,20 +29,36 @@ defmodule Engram.Billing do
   Resolution order:
     1. user_overrides[key]
     2. plans[user.plan_id].limits[key]
-    3. @default_limits[key]
+    3. LimitKeys.default_for(key, tier)
 
   Uses explicit nil-checking (not ||) so that `false` values are honoured.
+  Raises `Engram.Billing.UnknownLimitKey` for string keys or atoms not in
+  `LimitKeys.all/0`.
   """
-  def effective_limit(user, key) do
-    case override_value(user.id, key) do
-      nil ->
-        case plan_value(user, key) do
-          nil -> Map.get(@default_limits, key)
-          val -> val
-        end
+  def effective_limit(user, key) when is_atom(key) do
+    unless LimitKeys.defined?(key), do: raise(UnknownLimitKey, key: key)
 
-      val ->
-        val
+    if enforced?() do
+      do_effective_limit(user, key)
+    else
+      :unlimited
+    end
+  end
+
+  def effective_limit(_user, key), do: raise(UnknownLimitKey, key: key)
+
+  defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
+
+  defp do_effective_limit(user, key) do
+    user_tier = tier(user)
+    string_key = to_string(key)
+
+    with :miss <- user_override_lookup(user.id, string_key),
+         :miss <- env_override_lookup(user_tier, key),
+         :miss <- plan_lookup(user, string_key) do
+      LimitKeys.default_for(key, user_tier)
+    else
+      {:hit, v} -> v
     end
   end
 
@@ -50,6 +68,8 @@ defmodule Engram.Billing do
   """
   def check_limit(user, key, current_count) do
     case effective_limit(user, key) do
+      :unlimited -> :ok
+      nil -> :ok
       -1 -> :ok
       limit when is_integer(limit) and current_count < limit -> :ok
       _ -> {:error, :limit_reached}
@@ -61,46 +81,54 @@ defmodule Engram.Billing do
   Returns {:error, :feature_not_available} otherwise.
   """
   def check_feature(user, key) do
-    if effective_limit(user, key) do
-      :ok
-    else
-      {:error, :feature_not_available}
+    case effective_limit(user, key) do
+      :unlimited -> :ok
+      true -> :ok
+      _ -> {:error, :feature_not_available}
     end
   end
 
   # ── Private Limit Helpers ─────────────────────────────────────────
 
-  defp override_value(user_id, key) do
+  defp user_override_lookup(user_id, string_key) do
     Repo.one(
       from(o in UserOverride,
         where: o.user_id == ^user_id,
-        select: fragment("?->?", o.overrides, ^key)
+        select: fragment("?->?", o.overrides, ^string_key)
       ),
       skip_tenant_check: true
     )
-    |> decode_json_value()
+    |> wrap_lookup()
   end
 
-  defp plan_value(%{plan_id: nil}, _key), do: nil
+  defp env_override_lookup(tier, key) do
+    case Application.get_env(:engram, :plan_overrides, %{}) |> Map.fetch({tier, key}) do
+      {:ok, v} -> {:hit, v}
+      :error -> :miss
+    end
+  end
 
-  defp plan_value(%{plan_id: plan_id}, key) do
+  defp plan_lookup(%{plan_id: nil}, _string_key), do: :miss
+
+  defp plan_lookup(%{plan_id: id}, string_key) do
     Repo.one(
       from(p in Plan,
-        where: p.id == ^plan_id,
-        select: fragment("?->?", p.limits, ^key)
+        where: p.id == ^id,
+        select: fragment("?->?", p.limits, ^string_key)
       ),
       skip_tenant_check: true
     )
-    |> decode_json_value()
+    |> wrap_lookup()
   end
 
-  defp decode_json_value(value), do: value
+  defp wrap_lookup(nil), do: :miss
+  defp wrap_lookup(v), do: {:hit, v}
 
   # ── Tier & Status Queries ──────────────────────────────────────
 
   @doc """
   Returns the user's effective tier as an atom.
-  Users without a subscription (or with a canceled one) are :none.
+  Users without a subscription (or with a canceled one) are :free.
   """
   def tier(user) do
     case get_subscription(user) do
@@ -108,7 +136,7 @@ defmodule Engram.Billing do
         String.to_existing_atom(tier)
 
       _ ->
-        :none
+        :free
     end
   end
 

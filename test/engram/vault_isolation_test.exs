@@ -9,7 +9,7 @@ defmodule Engram.VaultIsolationTest do
 
   setup do
     user = insert(:user)
-    insert(:user_override, user: user, overrides: %{"max_vaults" => -1})
+    insert(:user_override, user: user, overrides: %{"vaults_cap" => -1})
 
     # Phase B reads derive a filter key from the user's DEK — provision upfront.
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)

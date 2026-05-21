@@ -9,9 +9,9 @@ defmodule Engram.BillingTest do
   setup :verify_on_exit!
 
   describe "tier/1" do
-    test "returns :none for user with no subscription" do
+    test "returns :free for user with no subscription" do
       user = insert(:user)
-      assert Billing.tier(user) == :none
+      assert Billing.tier(user) == :free
     end
 
     test "returns tier atom for user with active subscription" do
@@ -26,10 +26,10 @@ defmodule Engram.BillingTest do
       assert Billing.tier(user) == :starter
     end
 
-    test "returns :none for user with canceled subscription" do
+    test "returns :free for user with canceled subscription" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "starter", status: "canceled")
-      assert Billing.tier(user) == :none
+      assert Billing.tier(user) == :free
     end
   end
 

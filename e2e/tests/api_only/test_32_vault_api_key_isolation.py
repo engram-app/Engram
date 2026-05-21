@@ -40,12 +40,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def _set_vault_limit(user_id: int, limit: int) -> None:
-    """Insert/update a user_overrides row to set max_vaults via docker exec SQL."""
+    """Insert/update a user_overrides row to set vaults_cap via docker exec SQL."""
     sql = (
         f"INSERT INTO user_overrides (user_id, overrides, reason, created_at, updated_at) "
-        f"VALUES ({user_id}, '{{\"max_vaults\": {limit}}}', 'e2e-test', NOW(), NOW()) "
+        f"VALUES ({user_id}, '{{\"vaults_cap\": {limit}}}', 'e2e-test', NOW(), NOW()) "
         f"ON CONFLICT (user_id) DO UPDATE SET overrides = "
-        f"jsonb_set(user_overrides.overrides, '{{max_vaults}}', '{limit}'), updated_at = NOW()"
+        f"jsonb_set(user_overrides.overrides, '{{vaults_cap}}', '{limit}'), updated_at = NOW()"
     )
     result = subprocess.run(
         ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
@@ -84,7 +84,7 @@ def vault_setup():
     """Create a Clerk user with two vaults for multi-vault isolation testing.
 
     Workflow:
-    1. Create Clerk user (default: max_vaults=1)
+    1. Create Clerk user (default: vaults_cap=1)
     2. Create vault A (succeeds — first vault)
     3. Verify vault B blocked by limit (402)
     4. Lift limit via user_overrides SQL
