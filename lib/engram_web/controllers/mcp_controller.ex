@@ -5,6 +5,7 @@ defmodule EngramWeb.McpController do
   """
   use EngramWeb, :controller
 
+  alias Engram.ConversationMeter
   alias Engram.MCP.Tools
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
@@ -50,13 +51,22 @@ defmodule EngramWeb.McpController do
       {:ok, tool} ->
         user = conn.assigns.current_user
 
-        case resolve_mcp_vault(user, args, conn) do
-          {:error, msg} ->
-            {:ok,
-             %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+        case ConversationMeter.tick(user.id) do
+          {:rate_limited, reason} ->
+            {:error, -32_005, "rate_limited: #{reason}"}
 
-          {:ok, vault} ->
-            call_tool(tool, user, vault, args)
+          :ok ->
+            case resolve_mcp_vault(user, args, conn) do
+              {:error, msg} ->
+                {:ok,
+                 %{
+                   "content" => [%{"type" => "text", "text" => "Error: #{msg}"}],
+                   "isError" => true
+                 }}
+
+              {:ok, vault} ->
+                call_tool(tool, user, vault, args)
+            end
         end
 
       :error ->

@@ -19,6 +19,12 @@ defmodule Engram.UsageMeters do
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
       field :last_active_at, :utc_datetime_usec
+      field :active_conversation_started_at, :utc_datetime_usec
+      field :active_conversation_query_count, :integer, default: 0
+      field :conversations_today, :integer, default: 0
+      field :conversations_day_key, :date
+      field :queries_today, :integer, default: 0
+      field :queries_day_key, :date
       field :updated_at, :utc_datetime_usec
     end
   end
