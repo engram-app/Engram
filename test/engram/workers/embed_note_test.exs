@@ -297,4 +297,64 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
   end
+
+  describe "perform/1 — lifetime embed-token budget (pricing v2 §B)" do
+    setup do
+      # Users without a Subscription default to :free tier (Billing.tier/1).
+      # Free's lifetime_embed_token_cap = 20M per LimitKeys catalog.
+      prev = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :limits_enforced),
+          else: Application.put_env(:engram, :limits_enforced, prev)
+      end)
+
+      :ok
+    end
+
+    test "discards job when lifetime_embed_token_cap is exhausted", %{user: user, note: note} do
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+
+      assert {:cancel, _reason} = perform_job(EmbedNote, %{note_id: note.id})
+
+      # No Voyage call should have happened (no Mock expect declared).
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 20_000_000
+    end
+
+    test "proceeds and increments the counter on success",
+         %{bypass: bypass, user: user, note: note} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) > 0
+    end
+
+    test "user override raises the cap above the default",
+         %{bypass: bypass, user: user, note: note} do
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "lifetime_embed_token_cap",
+        value: %{"v" => 100_000_000}
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+  end
 end

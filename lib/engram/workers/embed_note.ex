@@ -25,11 +25,13 @@ defmodule Engram.Workers.EmbedNote do
   import Ecto.Query
 
   alias Engram.Accounts
+  alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.UsageMeters
   alias Engram.Vaults.Vault
 
   require Logger
@@ -72,7 +74,20 @@ defmodule Engram.Workers.EmbedNote do
           :ok ->
             case phone_gate(note.user_id) do
               :ok ->
-                run_embed(note, old_path_hmac_b64)
+                case embed_budget_gate(note) do
+                  :ok ->
+                    case run_embed(note, old_path_hmac_b64) do
+                      :ok ->
+                        _ = record_embed_tokens(note)
+                        :ok
+
+                      other ->
+                        other
+                    end
+
+                  {:cancel, reason} ->
+                    {:cancel, reason}
+                end
 
               {:snooze, secs} ->
                 {:snooze, secs}
@@ -105,6 +120,51 @@ defmodule Engram.Workers.EmbedNote do
       :ok
     end
   end
+
+  # Pricing v2 §B — block embeds when the user has exhausted their lifetime
+  # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
+  # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
+  defp embed_budget_gate(%Note{user_id: user_id} = note) do
+    user = Accounts.get_user!(user_id)
+    current = UsageMeters.lifetime_embed_tokens(user_id)
+    estimated = estimate_note_tokens(note)
+
+    case Billing.check_limit(user, :lifetime_embed_token_cap, current + estimated - 1) do
+      :ok ->
+        :ok
+
+      {:error, :limit_reached} ->
+        :telemetry.execute(
+          [:engram, :abuse, :embed_budget_exhausted],
+          %{count: 1, lifetime_tokens: current},
+          %{user_id: user_id}
+        )
+
+        Logger.warning("EmbedNote rejected — lifetime embed-token cap reached",
+          user_id: user_id,
+          reason_label: :embed_budget_exhausted
+        )
+
+        {:cancel, :embed_budget_exhausted}
+    end
+  end
+
+  defp record_embed_tokens(%Note{user_id: user_id} = note) do
+    case estimate_note_tokens(note) do
+      0 -> :ok
+      tokens -> UsageMeters.add_embed_tokens(user_id, tokens)
+    end
+  end
+
+  # Token estimate uses the ciphertext byte size. AES-GCM adds a 16-byte
+  # auth tag so we over-count by ~4 tokens per note, which keeps the cap
+  # conservative. Real `usage.total_tokens` from the Voyage response is a
+  # follow-up.
+  defp estimate_note_tokens(%Note{content_ciphertext: ct}) when is_binary(ct) do
+    UsageMeters.estimate_tokens(ct)
+  end
+
+  defp estimate_note_tokens(_), do: 0
 
   defp run_embed(note, old_path_hmac_b64) do
     user = Accounts.get_user!(note.user_id)
