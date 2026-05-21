@@ -10,7 +10,9 @@ defmodule EngramWeb.MultiTenantTest do
     insert(:vault, user: user1, is_default: true)
     insert(:vault, user: user2, is_default: true)
     {:ok, key1, _} = Engram.Accounts.create_api_key(user1, "user1-key")
+    grant_api_write!(user1)
     {:ok, key2, _} = Engram.Accounts.create_api_key(user2, "user2-key")
+    grant_api_write!(user2)
 
     conn1 = put_req_header(conn, "authorization", "Bearer #{key1}")
     conn2 = put_req_header(conn, "authorization", "Bearer #{key2}")

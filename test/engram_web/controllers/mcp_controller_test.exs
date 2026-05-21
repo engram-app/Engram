@@ -12,6 +12,7 @@ defmodule EngramWeb.McpControllerTest do
     # decrypts back to "Test Vault" — not random factory bytes.
     {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test Vault"})
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
     # Seed some notes for read tool tests
@@ -548,6 +549,7 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, vault_b} = Engram.Vaults.create_vault(user, %{name: "Vault B"})
 
       {:ok, api_key, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-key")
+      grant_api_write!(user)
 
       # Restrict key to vault_a only
       Engram.Repo.insert_all("api_key_vaults", [

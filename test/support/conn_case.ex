@@ -36,4 +36,23 @@ defmodule EngramWeb.ConnCase do
     Engram.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Grants the user the `api_write_enabled` feature via a
+  `user_limit_overrides` row. Use in setup blocks for tests that exercise
+  API-key write paths — pricing v2 §G gates non-GET requests on this flag
+  when the request is authed via API key, so any test minting a key for a
+  write-side controller must represent a paid user.
+
+  Returns `user` unchanged for pipe-friendliness.
+  """
+  def grant_api_write!(%Engram.Accounts.User{} = user) do
+    Engram.Factory.insert(:user_limit_override,
+      user: user,
+      key: "api_write_enabled",
+      value: %{"v" => true}
+    )
+
+    user
+  end
 end

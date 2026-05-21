@@ -15,6 +15,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
     user = insert(:user)
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user}
   end
@@ -345,6 +346,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       user_b = insert(:user)
       insert(:vault, user: user_b, is_default: true)
       {:ok, api_key_b, _} = Engram.Accounts.create_api_key(user_b, "b-key")
+      grant_api_write!(user_b)
 
       conn_b =
         build_conn()
@@ -365,6 +367,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       user_b = insert(:user)
       insert(:vault, user: user_b, is_default: true)
       {:ok, api_key_b, _} = Engram.Accounts.create_api_key(user_b, "b-key")
+      grant_api_write!(user_b)
 
       conn_b =
         build_conn()

@@ -49,8 +49,6 @@ defmodule Mix.Tasks.Engram.Lint.NoClientOnlyRateLimits do
     concurrent_devices: "TODO follow-up: DeviceAuthController needs per-user device count check",
     device_swap_cooldown_hours:
       "TODO follow-up: DeviceAuthController needs cooldown check on revoke + re-add",
-    # Feature flag — API write controllers must reject write when Free.
-    api_write_enabled: "TODO follow-up: write controllers must gate on this flag",
     # API RPS cap — TODO follow-up. RateLimit plug currently uses a flat
     # per-user ceiling; should pull api_rps_cap per-plan.
     api_rps_cap: "TODO follow-up: RateLimit plug should pull per-plan cap from LimitKeys"

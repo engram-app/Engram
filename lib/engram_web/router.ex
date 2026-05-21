@@ -191,6 +191,7 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireOnboarding,
       EngramWeb.Plugs.BumpActivity,
+      EngramWeb.Plugs.RequireApiWriteEnabled,
       EngramWeb.Plugs.VaultPlug
     ]
 
