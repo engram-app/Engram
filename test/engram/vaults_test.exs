@@ -569,35 +569,40 @@ defmodule Engram.VaultsTest do
       :ok
     end
 
+    # `:telemetry_test.attach_event_handlers` attaches a global handler that
+    # routes to self(); concurrent async tests firing :vault_count also land
+    # in this test's mailbox. Pin user_id in every pattern so we only match
+    # our own user's events.
     test "emits :vault_count on create_vault success", %{user: user} do
+      user_id = user.id
       assert {:ok, _} = Vaults.create_vault(user, %{name: "V1"})
 
       assert_received {[:engram, :abuse, :vault_count], _ref, %{count: 1},
-                       %{user_id: uid, op: :created}}
-
-      assert uid == user.id
+                       %{user_id: ^user_id, op: :created}}
 
       assert {:ok, _} = Vaults.create_vault(user, %{name: "V2"})
-      assert_received {[:engram, :abuse, :vault_count], _, %{count: 2}, %{op: :created}}
+
+      assert_received {[:engram, :abuse, :vault_count], _, %{count: 2},
+                       %{user_id: ^user_id, op: :created}}
     end
 
     test "emits :vault_count on delete_vault success", %{user: user} do
+      user_id = user.id
       {:ok, v} = Vaults.create_vault(user, %{name: "V1"})
       drain_vault_count_messages()
 
       assert {:ok, _} = Vaults.delete_vault(user, v.id)
 
       assert_received {[:engram, :abuse, :vault_count], _ref, %{count: 0},
-                       %{user_id: uid, op: :deleted}}
-
-      assert uid == user.id
+                       %{user_id: ^user_id, op: :deleted}}
     end
 
     test "emits :vault_count on register_vault when newly created", %{user: user} do
+      user_id = user.id
       assert {:ok, _, :created} = Vaults.register_vault(user, "Reg", "client-xyz")
 
       assert_received {[:engram, :abuse, :vault_count], _, %{count: 1},
-                       %{user_id: _, op: :created}}
+                       %{user_id: ^user_id, op: :created}}
     end
   end
 
