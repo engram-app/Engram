@@ -22,6 +22,8 @@ defmodule Engram.Accounts.User do
     field :deleted_at, :utc_datetime_usec
     field :inactivity_warning_60_at, :utc_datetime_usec
     field :inactivity_warning_80_at, :utc_datetime_usec
+    field :founder_code_redeemed_at, :utc_datetime_usec
+    field :og_grandfather_redeemed_at, :utc_datetime_usec
 
     belongs_to :plan, Engram.Billing.Plan
     has_many :notes, Engram.Notes.Note
