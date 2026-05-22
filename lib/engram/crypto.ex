@@ -9,7 +9,8 @@ defmodule Engram.Crypto do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
-  alias Engram.Crypto.{DekCache, Envelope, KeyProvider.Resolver}
+  alias Engram.Crypto.{DekCache, Envelope, KeyProvider}
+  alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Repo
 
   require Logger
@@ -180,24 +181,66 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       :miss ->
-        provider = Resolver.provider_for(user_id)
-        # T3.5 / M4 — pass user.dek_version + master_key_version so the
-        # provider can gate the `_PREVIOUS` fallback (audit M4).
-        ctx = %{
-          user_id: user_id,
-          dek_version: dek_version,
-          master_key_version: Engram.Crypto.Config.master_key_version()
-        }
+        # Phase 3 — dispatch unwrap by blob tag, not by Resolver.provider/0.
+        # Lets mixed-state fleets read seamlessly during Local↔KMS backfill
+        # windows. Writes still follow Resolver (see ensure_user_dek/1).
+        case KeyProvider.identify_from_blob(blob) do
+          {:ok, source_provider} ->
+            # T3.5 / M4 — pass user.dek_version + master_key_version so the
+            # provider can gate the `_PREVIOUS` fallback (audit M4).
+            ctx = %{
+              user_id: user_id,
+              dek_version: dek_version,
+              master_key_version: Engram.Crypto.Config.master_key_version()
+            }
 
-        case provider.unwrap_dek(blob, ctx) do
-          {:ok, dek} ->
-            DekCache.put(user_id, dek)
-            {:ok, dek}
+            case source_provider.unwrap_dek(blob, ctx) do
+              {:ok, dek} ->
+                DekCache.put(user_id, dek)
+                maybe_enqueue_lazy_migration(user_id, source_provider)
+                {:ok, dek}
 
-          {:error, _} = err ->
-            err
+              {:error, _} = err ->
+                err
+            end
+
+          {:error, :unrecognised_blob} ->
+            {:error, :unrecognised_blob}
         end
     end
+  end
+
+  # Phase 3 — fire-and-forget lazy migration. Never blocks the read path,
+  # never raises. Oban uniqueness `[:user_id, :target_provider]` collapses
+  # duplicate enqueues against the active backfill drain.
+  defp maybe_enqueue_lazy_migration(user_id, source_provider) do
+    configured = Resolver.provider()
+
+    if source_provider != configured do
+      target_atom =
+        case configured do
+          Engram.Crypto.KeyProvider.Local -> :local
+          Engram.Crypto.KeyProvider.AwsKms -> :aws_kms
+          _ -> nil
+        end
+
+      if target_atom do
+        try do
+          _ =
+            %{"user_id" => user_id, "target_provider" => Atom.to_string(target_atom)}
+            |> Engram.Workers.MigrateUserProvider.new()
+            |> Oban.insert()
+
+          :ok
+        rescue
+          _ -> :ok
+        catch
+          _, _ -> :ok
+        end
+      end
+    end
+
+    :ok
   end
 
   # T3.3 / M9 — mark every caller process that touches a plaintext DEK as

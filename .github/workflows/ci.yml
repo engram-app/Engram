@@ -9,6 +9,7 @@ on:
       - main
       - "bump/**"
       - "chore/**"
+      - "dependabot/**"
       - "docs/**"
       - "feat/**"
       - "fix/**"
@@ -51,8 +52,14 @@ env:
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
   # with a secret via `fly secrets set ENCRYPTION_MASTER_KEY=...`.
+  #
+  # The `||` fallback covers Dependabot PRs, which by GitHub policy don't receive
+  # workflow secrets. Without it, `secrets.CI_ENCRYPTION_MASTER_KEY` evaluates to
+  # empty string and Phoenix boot crashes with "ENCRYPTION_MASTER_KEY is required
+  # when KEY_PROVIDER=local". The fallback is a known constant — no secret value
+  # since the CI DB is recreated per run.
   KEY_PROVIDER: "local"
-  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY }}
+  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'ci-dependabot-fallback-key-ephemeral-only-not-secret' }}
 
 jobs:
   # Fingerprint: content-hash of every source path that affects test
@@ -81,6 +88,13 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
+        # Dependabot PRs don't receive workflow secrets by GitHub policy,
+        # so create-github-app-token errors with "private-key must be set
+        # to a non-empty string". Skip this step on Dependabot — the
+        # plugin SHA resolution below falls back to unauthenticated calls
+        # against the public Engram-obsidian repo, which works fine for
+        # Dependabot's low PR volume.
+        if: github.actor != 'dependabot[bot]'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
@@ -107,7 +121,15 @@ jobs:
           # Uses curl (not gh CLI) — the engram-isolated runners don't ship gh
           # on the default PATH for the fingerprint runner image.
           API="https://api.github.com/repos/engram-app/Engram-obsidian"
-          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+          # GH_TOKEN is empty on Dependabot PRs (App-token step skipped).
+          # Engram-obsidian is public, so unauthenticated GET works; only
+          # downside is lower rate limit, which doesn't matter for the
+          # weekly Dependabot wave.
+          if [ -n "$GH_TOKEN" ]; then
+            AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+          else
+            AUTH=(-H "Accept: application/vnd.github+json")
+          fi
 
           resolve_sha() {
             curl -fsS "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
@@ -311,13 +333,16 @@ jobs:
           key: ${{ steps.keys.outputs.build-test }}
           restore-keys: mix-build-test-${{ steps.beam.outputs.tag }}-
 
-      - name: Fetch deps (if missing)
-        run: |
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get
-          else
-            echo "deps/ restored from cache"
-          fi
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — the cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (e.g. after a mix.lock change). Use
+        # the cache step's `cache-hit` output, which is 'true' only
+        # on exact match; restore-keys partial hits set it to ''.
+        # On a partial hit, `mix deps.get` reconciles the lockfile
+        # against the restored deps/ and fetches the delta.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get
 
       - name: Compile :dev
         env:
@@ -335,7 +360,9 @@ jobs:
           mix compile --warnings-as-errors
 
   version-check:
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    # Skip on Dependabot PRs — they can't bump app version, and the `ci`
+    # aggregate already treats `skipped` as OK for version-check.
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -355,9 +382,14 @@ jobs:
 
   e2e-clerk:
     needs: [fingerprint, prebuild-ci-image]
-    # e2e-clerk is the plugin↔backend contract test. Skip only when this
-    # exact (backend, plugin) pair has already passed.
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true'
+    # e2e-clerk is the plugin↔backend contract test. Skip when:
+    #   - the exact (backend, plugin) pair has already passed (cache hit), OR
+    #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
+    #     provide to Dependabot; the contract-test value is marginal for dep
+    #     bumps and the same coverage runs when we merge into main).
+    # `ci` aggregate updated below to allow this job's `skipped` result on
+    # Dependabot PRs.
+    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -782,7 +814,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ci-debug-${{ github.sha }}
           path: ci-artifacts/
@@ -897,6 +929,7 @@ jobs:
       # matches exactly what was just compiled — `mix test` reuses the
       # BEAM files instead of recompiling.
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -912,13 +945,14 @@ jobs:
           restore-keys: |
             mix-build-test-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
-      - name: Verify or fetch deps
-        run: |
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get --only test
-          else
-            echo "deps/ restored from cache"
-          fi
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get --only test
 
       - name: Run Elixir unit tests
         env:
@@ -973,6 +1007,7 @@ jobs:
       # below. The Compile step then becomes a fast --warnings-as-errors
       # re-validation (no --force; cache was built warnings-clean).
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -988,13 +1023,14 @@ jobs:
           restore-keys: |
             mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
-      - name: Verify or fetch deps
-        run: |
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get
-          else
-            echo "deps/ restored from cache"
-          fi
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get
 
       - name: Cache Dialyzer PLT
         uses: actions/cache@v5
@@ -1040,6 +1076,78 @@ jobs:
       - name: Sobelow
         run: mix sobelow --exit low
 
+      - name: Hex CVE audit (mix_audit)
+        # Backstops gaps in GitHub's Advisory DB coverage of Hex.
+        # Dependabot only surfaces what's in the Advisory DB; mix_audit
+        # also scans the upstream mirror-of-advisories list, catching
+        # disclosed Hex CVEs before they propagate to GitHub.
+        #
+        # Severity policy:
+        #   - high / critical  → ::error::, FAILS the build (blocks merge)
+        #   - low / moderate   → ::warning::, surfaces as a PR annotation
+        #     but does NOT block (so smaller findings don't sit silently
+        #     in the JSON output we never read).
+        #
+        # Ignored advisories (re-evaluate on each dep bump):
+        #   - GHSA-rhv4-8758-jx7v (decimal): fixed in 3.0.0; breaking
+        #     major bump deferred to the next planned dep-bump pass.
+        #   - GHSA-g2wm-735q-3f56 (cowlib): no patched version from
+        #     upstream as of 2026-05-22; cookie-request-header injection.
+        run: |
+          # Write to a file rather than capturing via $() so we can show
+          # both stdout and stderr if mix_audit produces something
+          # unexpected. The empty-stdout failure mode was previously
+          # invisible because $(...) swallowed everything.
+          set +e
+          mix deps.audit \
+            --format=json \
+            --ignore-advisory-ids GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56 \
+            > /tmp/audit.json 2> /tmp/audit.err
+          MIX_EXIT=$?
+          set -e
+
+          echo "mix exit code: $MIX_EXIT"
+          echo "stdout bytes: $(wc -c < /tmp/audit.json)"
+          if [ -s /tmp/audit.err ]; then
+            echo "--- stderr ---"
+            cat /tmp/audit.err
+            echo "--- end stderr ---"
+          fi
+
+          if [ ! -s /tmp/audit.json ]; then
+            echo "::error::mix deps.audit produced no stdout (exit=$MIX_EXIT) — see stderr above"
+            exit 2
+          fi
+
+          python3 <<'PY'
+          import json, sys
+
+          with open("/tmp/audit.json") as f:
+              data = json.load(f)
+          vulns = data.get("vulnerabilities", [])
+
+          blocking = 0
+          for v in vulns:
+              sev = v["advisory"].get("severity", "unknown")
+              pkg = v["dependency"]["package"]
+              ver = v["dependency"]["version"]
+              adv_id = v["advisory"]["id"]
+              title = v["advisory"].get("title", "")
+              level = "error" if sev in ("high", "critical") else "warning"
+              if level == "error":
+                  blocking += 1
+              print(f"::{level} title=Hex CVE ({sev}): {pkg} {ver}::{adv_id} — {title}")
+
+          if blocking:
+              print(f"::error::{blocking} high+ severity Hex CVE(s) — bump the affected dep(s) to patch.")
+              sys.exit(1)
+
+          if vulns:
+              print(f"Hex audit: {len(vulns)} non-blocking finding(s) (low/moderate). See annotations.")
+          else:
+              print("Hex audit: clean.")
+          PY
+
       - name: Dialyzer
         run: |
           mkdir -p priv/plts
@@ -1049,8 +1157,10 @@ jobs:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
-    # Also skip when fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # Also skip when fingerprint already proved green, or when running on a
+    # Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
+    # access; unit-tests + lint cover the meaningful surface).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1144,7 +1254,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ci-local-auth-debug-${{ github.sha }}
           path: ci-artifacts-local/
@@ -1164,8 +1274,9 @@ jobs:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
-    # Also skip when fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # Also skip when fingerprint already proved green, or on Dependabot PRs
+    # (Phoenix webServer needs Clerk secrets Dependabot can't access).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1191,6 +1302,7 @@ jobs:
       # Playwright's webServer config) reuses compiled BEAM files
       # instead of recompiling at boot.
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -1266,15 +1378,19 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
 
-      - name: Setup Elixir deps + DB
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get
+
+      - name: Wait for DB + ecto setup + tailwind
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
         run: |
-          # deps/ already restored from prebuild-mix cache; fetch only if
-          # restore missed (first-ever run for this mix.lock content).
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get
-          fi
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
               echo "DB ready"; break
@@ -1321,7 +1437,7 @@ jobs:
 
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts-${{ github.sha }}
           path: |
@@ -1356,8 +1472,11 @@ jobs:
           fi
 
           # e2e-clerk is the only job that exercises the plugin↔backend contract,
-          # so it must succeed regardless of trigger.
-          if [ "$EC" != "success" ]; then
+          # so it must succeed regardless of trigger — EXCEPT on Dependabot PRs
+          # where it's skipped (GitHub doesn't share Clerk + App secrets with
+          # Dependabot). The contract test runs unskipped when we squash-merge
+          # to main, which is the path of record anyway.
+          if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
             echo "::error::e2e-clerk failed: $EC"
             exit 1
           fi
@@ -1477,6 +1596,14 @@ jobs:
 
       - name: Extract and validate version
         id: version
+        env:
+          # True when both fingerprints already proved green for this content
+          # — i.e. an identical backend tree + plugin SHA has already shipped.
+          # In that state an existing image at the current `mix.exs` version
+          # is expected, not a developer-forgot-to-bump error. This is the
+          # path TF-driven pushes to `.github/CODEOWNERS` (and any other
+          # admin file outside the BACKEND_HASH input set) take.
+          CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
         run: |
           VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -1490,13 +1617,27 @@ jobs:
           # Check whether this version already exists in GHCR.
           #
           # Policy:
-          #   first-attempt + exists  → ERROR (developer forgot to bump version)
-          #   rerun        + exists  → SKIP build, proceed straight to deploy
-          #                            (this is the recovery path when an
-          #                            earlier attempt built+pushed but failed
-          #                            at deploy time — e.g. the IP-allowlist
-          #                            NAT issue, a transient daemon outage)
-          #   first or rerun + missing → BUILD + PUSH + DEPLOY as normal
+          #   first-attempt + exists + NOT cache-hit → ERROR (developer forgot
+          #                                            to bump version)
+          #   first-attempt + exists + cache-hit     → SKIP build, jump to
+          #                                            deploy (TF-driven push
+          #                                            to .github/** or any
+          #                                            file outside the
+          #                                            BACKEND_HASH input set
+          #                                            — content unchanged, so
+          #                                            the existing image IS
+          #                                            the right one and no
+          #                                            version bump is needed)
+          #   rerun + exists                         → SKIP build, jump to
+          #                                            deploy (recovery path
+          #                                            when an earlier attempt
+          #                                            built+pushed but failed
+          #                                            at deploy time — e.g.
+          #                                            IP-allowlist NAT
+          #                                            issue, transient daemon
+          #                                            outage)
+          #   first or rerun + missing               → BUILD + PUSH + DEPLOY
+          #                                            as normal
           #
           # github.run_attempt is 1 on the first push-triggered run, 2+ on
           # any `gh run rerun` invocation. Cleanly distinguishes "operator
@@ -1504,11 +1645,11 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${IMAGE_LC}:${VERSION}" > /dev/null 2>&1; then
-            if [ "${{ github.run_attempt }}" = "1" ]; then
+            if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ]; then
               echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
               exit 1
             fi
-            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}); skipping build, jumping to deploy."
+            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}); skipping build, jumping to deploy."
             IMAGE_EXISTS=true
           fi
 
@@ -1617,7 +1758,7 @@ jobs:
       # if this step 403s.
       - name: Generate engram-infra App installation token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -1651,7 +1792,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: engram-infra
           ref: main
-          # peter-evans/create-pull-request@v6 sets its own Authorization
+          # peter-evans/create-pull-request@v8 sets its own Authorization
           # header on push; persist-credentials=true would leave the
           # checkout's basic-auth extraheader in git config, and the
           # second header triggers GitHub's "Duplicate header: Authorization"
@@ -1716,8 +1857,9 @@ jobs:
           fi
 
       - name: Open / update PR in engram-infra
+        id: open-pr
         if: steps.rewrite.outputs.bumped == 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           path: engram-infra
           token: ${{ steps.app-token.outputs.token }}
@@ -1747,3 +1889,20 @@ jobs:
           labels: |
             automated
             tf-image-bump
+
+      - name: Enable auto-merge on bot PR
+        # Auto-merge queues the PR for merge once required checks
+        # (CODEOWNERS review + status checks) pass. Without this the bot
+        # PR sits open waiting for a human click — that's how the
+        # 2026-05-22 cascade started (4-day-old bot PR carrying stale
+        # template env on engram-infra). Engram-infra has
+        # `allow_auto_merge=true` set in repos.tf so the GraphQL
+        # mutation succeeds. Reuses the existing engram-infra-tf App
+        # token; `pull_requests: write` is already granted for the
+        # create-pull-request step.
+        if: steps.open-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"

@@ -111,8 +111,11 @@ defmodule Engram.Crypto.KeyProvider.AwsKmsTest do
   end
 
   test "wrap_dek requires user_id in ctx" do
+    # apply/3 used to defeat Elixir 1.19+ static pattern-match analysis;
+    # the intent is to verify the function-clause guard at runtime.
     assert_raise FunctionClauseError, fn ->
-      AwsKms.wrap_dek(<<1::256>>, %{})
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      apply(AwsKms, :wrap_dek, [<<1::256>>, %{}])
     end
   end
 
@@ -127,8 +130,11 @@ defmodule Engram.Crypto.KeyProvider.AwsKmsTest do
   end
 
   test "rotate_dek requires user_id in ctx" do
+    # apply/3 used to defeat Elixir 1.19+ static pattern-match analysis;
+    # the intent is to verify the function-clause guard at runtime.
     assert_raise FunctionClauseError, fn ->
-      AwsKms.rotate_dek(<<0xAA, 0x01, 0xDE, 0xAD>>, %{})
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      apply(AwsKms, :rotate_dek, [<<0xAA, 0x01, 0xDE, 0xAD>>, %{}])
     end
   end
 

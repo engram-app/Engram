@@ -105,6 +105,15 @@ defmodule EngramWeb.Telemetry do
         tags: [:status],
         description: "AadRebind per-user duration"
       ),
+      counter("engram.crypto.migrate_provider.user.count",
+        tags: [:target_provider, :status, :reason_label],
+        description: "Phase 3 per-user provider migration outcome (Local↔AwsKms)"
+      ),
+      summary("engram.crypto.migrate_provider.user.duration_us",
+        unit: {:native, :microsecond},
+        tags: [:target_provider, :status],
+        description: "Phase 3 per-user provider migration duration"
+      ),
       counter("engram.crypto.rotate.dek.count",
         tags: [:status, :reason_label],
         description: "UserDekRotation per-DEK outcome (T3.7 per-user DEK rotation)"

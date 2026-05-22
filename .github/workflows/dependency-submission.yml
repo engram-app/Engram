@@ -1,0 +1,56 @@
+name: Dependency submission
+
+# Pushes our Hex dependency graph to GitHub's dependency-submission API
+# so Dependabot can see what Hex packages we actually use. GitHub's static
+# mix.lock parser silently fails on this repo (verified 2026-05-22: the
+# repo's SBOM contains 0 `pkg:hex` packages despite 200+ Hex deps in
+# mix.lock), which is why Dependabot security alerts never surfaced the 8
+# known CVEs that mix_audit caught in PR #220.
+#
+# Why this fixes it: GitHub merges submitted graphs with its (broken)
+# static parsing. Once we submit a complete Hex SBOM, Dependabot's
+# scanner has accurate data and will surface security alerts + open
+# auto-PRs for CVEs we don't already track.
+#
+# Trigger: push to main only. The repository dependency graph reflects
+# the default branch's state — submitting from PR branches would pollute
+# it with unmerged deps and create false-positive alerts. PR-time scanning
+# of *introduced* deps is a separate concern (would use
+# actions/dependency-review-action, not added here).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mix.exs"
+      - "mix.lock"
+      - ".github/workflows/dependency-submission.yml"
+  schedule:
+    # Weekly refresh so the graph stays accurate even when main is quiet
+    # (e.g. catches a transitive bump from a Hex retire/replace event
+    # outside our own commits). Saturday 03:00 UTC — off-peak.
+    - cron: "0 3 * * 6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  submit:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch deps
+        # The action's own `install-deps: true` runs `mix deps.get`, but
+        # we run it here as a separate step so the action's failure mode
+        # (transient hex.pm timeout, etc.) is easier to diagnose.
+        run: mix deps.get
+
+      - name: Submit Hex SBOM to GitHub
+        uses: erlef/mix-dependency-submission@v1
+        with:
+          # install-deps=true ensures a complete transitive graph.
+          # Without it, only direct deps appear — and most CVEs live in
+          # transitive deps (cowboy_telemetry, mime, etc.).
+          install-deps: true

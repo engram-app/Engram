@@ -4,4 +4,4 @@
 # Solo-maintainer policy: Todd owns every path. Required by the
 # `protect-main` ruleset's `require_code_owner_review = true` so
 # future contributors must request his review.
-* @open-claw
+* @Rasbandit

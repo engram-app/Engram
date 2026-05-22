@@ -83,23 +83,28 @@ else
 fi
 
 # ── Multiple runner instances ────────────────────────────────────────────
-# For parallel CI jobs, register additional runner instances on this machine.
-# Each runner is an independent agent process with its own work directory.
+# Current topology: 7 generic, org-scoped runner agents on this host
+# (runner-1 … runner-7). All advertise the same label set and drain the
+# same `[self-hosted, linux, x64, isolated]` pool — any runner can pick
+# up any workflow across any repo in the engram-app org. No purpose-named
+# or per-repo runners.
+#
+# Each runner is an independent agent process with its own work directory
+# (~/actions-runner-N). To add another instance, increment N and:
 #
 # Setup (run as open-claw, not root):
-#   mkdir ~/actions-runner-engram-2
-#   cd ~/actions-runner-engram-2
+#   N=8
+#   mkdir ~/actions-runner-$N && cd ~/actions-runner-$N
 #   curl -o actions-runner-linux-x64.tar.gz -L \
 #     https://github.com/actions/runner/releases/download/v2.323.0/actions-runner-linux-x64-2.323.0.tar.gz
 #   tar xzf actions-runner-linux-x64.tar.gz
-#   ./config.sh --url https://github.com/engram-app/Engram \
-#     --labels self-hosted,engram --name engram-runner-2
+#   ./config.sh --url https://github.com/engram-app \
+#     --labels isolated --name runner-$N
 #   sudo ./svc.sh install && sudo ./svc.sh start
 #
-# Existing runners:
-#   ~/actions-runner-engram     (primary — CI + E2E)
-#   ~/actions-runner-plugin     (plugin repo CI)
-#   ~/actions-runner-engram-2   (parallel job capacity)
+# `self-hosted`, `linux`, `x64` are added automatically by the runner agent;
+# only `isolated` needs to be passed via --labels. Registering at the org
+# URL (not a repo URL) is what lets any repo in engram-app schedule onto it.
 
 # ── Obsidian AppImage (download + pre-extract latest) ────────────────────
 # Obsidian's --appimage-extract-and-run re-extracts squashfs on every launch
