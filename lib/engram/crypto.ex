@@ -226,9 +226,12 @@ defmodule Engram.Crypto do
 
       if target_atom do
         try do
-          %{"user_id" => user_id, "target_provider" => Atom.to_string(target_atom)}
-          |> Engram.Workers.MigrateUserProvider.new()
-          |> Oban.insert()
+          _ =
+            %{"user_id" => user_id, "target_provider" => Atom.to_string(target_atom)}
+            |> Engram.Workers.MigrateUserProvider.new()
+            |> Oban.insert()
+
+          :ok
         rescue
           _ -> :ok
         catch
