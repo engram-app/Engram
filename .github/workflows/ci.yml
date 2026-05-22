@@ -1477,6 +1477,14 @@ jobs:
 
       - name: Extract and validate version
         id: version
+        env:
+          # True when both fingerprints already proved green for this content
+          # — i.e. an identical backend tree + plugin SHA has already shipped.
+          # In that state an existing image at the current `mix.exs` version
+          # is expected, not a developer-forgot-to-bump error. This is the
+          # path TF-driven pushes to `.github/CODEOWNERS` (and any other
+          # admin file outside the BACKEND_HASH input set) take.
+          CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
         run: |
           VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -1490,13 +1498,27 @@ jobs:
           # Check whether this version already exists in GHCR.
           #
           # Policy:
-          #   first-attempt + exists  → ERROR (developer forgot to bump version)
-          #   rerun        + exists  → SKIP build, proceed straight to deploy
-          #                            (this is the recovery path when an
-          #                            earlier attempt built+pushed but failed
-          #                            at deploy time — e.g. the IP-allowlist
-          #                            NAT issue, a transient daemon outage)
-          #   first or rerun + missing → BUILD + PUSH + DEPLOY as normal
+          #   first-attempt + exists + NOT cache-hit → ERROR (developer forgot
+          #                                            to bump version)
+          #   first-attempt + exists + cache-hit     → SKIP build, jump to
+          #                                            deploy (TF-driven push
+          #                                            to .github/** or any
+          #                                            file outside the
+          #                                            BACKEND_HASH input set
+          #                                            — content unchanged, so
+          #                                            the existing image IS
+          #                                            the right one and no
+          #                                            version bump is needed)
+          #   rerun + exists                         → SKIP build, jump to
+          #                                            deploy (recovery path
+          #                                            when an earlier attempt
+          #                                            built+pushed but failed
+          #                                            at deploy time — e.g.
+          #                                            IP-allowlist NAT
+          #                                            issue, transient daemon
+          #                                            outage)
+          #   first or rerun + missing               → BUILD + PUSH + DEPLOY
+          #                                            as normal
           #
           # github.run_attempt is 1 on the first push-triggered run, 2+ on
           # any `gh run rerun` invocation. Cleanly distinguishes "operator
@@ -1504,11 +1526,11 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${IMAGE_LC}:${VERSION}" > /dev/null 2>&1; then
-            if [ "${{ github.run_attempt }}" = "1" ]; then
+            if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ]; then
               echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
               exit 1
             fi
-            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}); skipping build, jumping to deploy."
+            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}); skipping build, jumping to deploy."
             IMAGE_EXISTS=true
           fi
 
