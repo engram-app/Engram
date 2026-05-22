@@ -814,7 +814,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ci-debug-${{ github.sha }}
           path: ci-artifacts/
@@ -1254,7 +1254,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ci-local-auth-debug-${{ github.sha }}
           path: ci-artifacts-local/
@@ -1437,7 +1437,7 @@ jobs:
 
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts-${{ github.sha }}
           path: |
@@ -1758,7 +1758,7 @@ jobs:
       # if this step 403s.
       - name: Generate engram-infra App installation token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -1792,7 +1792,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: engram-infra
           ref: main
-          # peter-evans/create-pull-request@v6 sets its own Authorization
+          # peter-evans/create-pull-request@v8 sets its own Authorization
           # header on push; persist-credentials=true would leave the
           # checkout's basic-auth extraheader in git config, and the
           # second header triggers GitHub's "Duplicate header: Authorization"
@@ -1858,7 +1858,7 @@ jobs:
 
       - name: Open / update PR in engram-infra
         if: steps.rewrite.outputs.bumped == 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           path: engram-infra
           token: ${{ steps.app-token.outputs.token }}
