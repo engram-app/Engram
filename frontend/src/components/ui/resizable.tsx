@@ -31,8 +31,8 @@ function ResizableHandle({
       data-slot="resizable-handle"
       className={cn(
         "group/handle relative flex w-1 items-center justify-center bg-border transition-colors hover:bg-primary/40 active:bg-primary focus-visible:bg-primary/60 focus-visible:outline-hidden cursor-col-resize",
-        "aria-[orientation=vertical]:h-1 aria-[orientation=vertical]:w-full aria-[orientation=vertical]:cursor-row-resize",
-        "[&[aria-orientation=vertical]>div]:rotate-90",
+        "aria-[orientation=horizontal]:h-1 aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:cursor-row-resize",
+        "[&[aria-orientation=horizontal]>div]:rotate-90",
         className,
       )}
       {...props}
