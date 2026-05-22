@@ -1,0 +1,44 @@
+# Dependabot auto-merge — managed by engram-infra/main/github/dependabot_automerge.tf.
+# DO NOT EDIT IN-REPO; changes will be overwritten on next tf apply.
+#
+# Auto-merges low-risk Dependabot PRs once required CI status checks pass:
+#   - All `version-update:semver-patch` bumps
+#   - `direct:development` minor/patch bumps
+#   - All `github_actions` ecosystem bumps (patch + minor + major)
+#
+# Major bumps to runtime deps are intentionally NOT auto-merged — they
+# sit open for human review. CODEOWNERS bypass for the Dependabot App
+# is configured in the org-level branch ruleset (engram-infra rulesets.tf).
+#
+# Branch protection requires CI to be green before `gh pr merge --auto`
+# fires, so this is safe even if Dependabot proposes a bad bump — the
+# repo's test suite is the merge gate.
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444713e90b7 # v2.2.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for low-risk bumps
+        if: >
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          (steps.meta.outputs.dependency-type == 'direct:development' &&
+           steps.meta.outputs.update-type == 'version-update:semver-minor') ||
+          steps.meta.outputs.package-ecosystem == 'github_actions'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
