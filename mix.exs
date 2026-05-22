@@ -89,7 +89,7 @@ defmodule Engram.MixProject do
       {:hackney, "~> 1.20"},
 
       # Rate limiting
-      {:hammer, "~> 6.2"},
+      {:hammer, "~> 7.4"},
 
       # Telemetry & logging
       {:telemetry_metrics, "~> 1.0"},
