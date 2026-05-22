@@ -4,8 +4,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import type { ImperativePanelHandle } from 'react-resizable-panels'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { useDefaultLayout, usePanelRef } from 'react-resizable-panels'
 import { Link, NavLink, Outlet } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
@@ -47,12 +47,19 @@ function HeaderLink({ to, label }: { to: string; label: string }) {
   )
 }
 
+const LAYOUT_PANEL_IDS = ['sidebar', 'main', 'right-sidebar']
+
 function DesktopLayout() {
-  const leftRef = useRef<ImperativePanelHandle>(null)
-  const rightRef = useRef<ImperativePanelHandle>(null)
+  const leftRef = usePanelRef()
+  const rightRef = usePanelRef()
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const { content: rightContent, collapsed: rightCollapsed, setCollapsed: setRightCollapsed } =
     useRightSidebar()
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'engram:app-layout',
+    panelIds: LAYOUT_PANEL_IDS,
+    storage: typeof window === 'undefined' ? undefined : window.localStorage,
+  })
 
   const toggleLeft = () => {
     const p = leftRef.current
@@ -98,21 +105,20 @@ function DesktopLayout() {
       </header>
 
       <ResizablePanelGroup
-        direction="horizontal"
-        autoSaveId="engram:app-layout"
+        orientation="horizontal"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
         className="flex-1"
       >
         <ResizablePanel
           id="sidebar"
-          order={1}
-          ref={leftRef}
+          panelRef={leftRef}
           defaultSize={18}
           minSize={12}
           maxSize={40}
           collapsible
           collapsedSize={0}
-          onCollapse={() => setLeftCollapsed(true)}
-          onExpand={() => setLeftCollapsed(false)}
+          onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}
           className="border-r border-border bg-card"
         >
           <FolderTreeProvider>
@@ -137,7 +143,7 @@ function DesktopLayout() {
           </FolderTreeProvider>
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel id="main" order={2} defaultSize={60} minSize={30}>
+        <ResizablePanel id="main" defaultSize={60} minSize={30}>
           <main className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground">
             {leftCollapsed && (
               <Button
@@ -169,15 +175,13 @@ function DesktopLayout() {
         <ResizableHandle withHandle />
         <ResizablePanel
           id="right-sidebar"
-          order={3}
-          ref={rightRef}
+          panelRef={rightRef}
           defaultSize={22}
           minSize={12}
           maxSize={40}
           collapsible
           collapsedSize={0}
-          onCollapse={() => setRightCollapsed(true)}
-          onExpand={() => setRightCollapsed(false)}
+          onResize={(size) => setRightCollapsed(size.asPercentage === 0)}
           className="border-l border-border bg-card"
         >
           <div className="flex h-full flex-col">
