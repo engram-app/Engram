@@ -52,8 +52,14 @@ env:
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
   # with a secret via `fly secrets set ENCRYPTION_MASTER_KEY=...`.
+  #
+  # The `||` fallback covers Dependabot PRs, which by GitHub policy don't receive
+  # workflow secrets. Without it, `secrets.CI_ENCRYPTION_MASTER_KEY` evaluates to
+  # empty string and Phoenix boot crashes with "ENCRYPTION_MASTER_KEY is required
+  # when KEY_PROVIDER=local". The fallback is a known constant — no secret value
+  # since the CI DB is recreated per run.
   KEY_PROVIDER: "local"
-  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY }}
+  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'ci-dependabot-fallback-key-ephemeral-only-not-secret' }}
 
 jobs:
   # Fingerprint: content-hash of every source path that affects test
@@ -376,9 +382,14 @@ jobs:
 
   e2e-clerk:
     needs: [fingerprint, prebuild-ci-image]
-    # e2e-clerk is the plugin↔backend contract test. Skip only when this
-    # exact (backend, plugin) pair has already passed.
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true'
+    # e2e-clerk is the plugin↔backend contract test. Skip when:
+    #   - the exact (backend, plugin) pair has already passed (cache hit), OR
+    #   - this is a Dependabot PR (needs Clerk + App secrets that GitHub doesn't
+    #     provide to Dependabot; the contract-test value is marginal for dep
+    #     bumps and the same coverage runs when we merge into main).
+    # `ci` aggregate updated below to allow this job's `skipped` result on
+    # Dependabot PRs.
+    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1146,8 +1157,10 @@ jobs:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
-    # Also skip when fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # Also skip when fingerprint already proved green, or when running on a
+    # Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
+    # access; unit-tests + lint cover the meaningful surface).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1261,8 +1274,9 @@ jobs:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
-    # Also skip when fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # Also skip when fingerprint already proved green, or on Dependabot PRs
+    # (Phoenix webServer needs Clerk secrets Dependabot can't access).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1458,8 +1472,11 @@ jobs:
           fi
 
           # e2e-clerk is the only job that exercises the plugin↔backend contract,
-          # so it must succeed regardless of trigger.
-          if [ "$EC" != "success" ]; then
+          # so it must succeed regardless of trigger — EXCEPT on Dependabot PRs
+          # where it's skipped (GitHub doesn't share Clerk + App secrets with
+          # Dependabot). The contract test runs unskipped when we squash-merge
+          # to main, which is the path of record anyway.
+          if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
             echo "::error::e2e-clerk failed: $EC"
             exit 1
           fi
