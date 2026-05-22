@@ -1041,6 +1041,57 @@ jobs:
       - name: Sobelow
         run: mix sobelow --exit low
 
+      - name: Hex CVE audit (mix_audit)
+        # Backstops gaps in GitHub's Advisory DB coverage of Hex.
+        # Dependabot only surfaces what's in the Advisory DB; mix_audit
+        # also scans the upstream mirror-of-advisories list, catching
+        # disclosed Hex CVEs before they propagate to GitHub.
+        #
+        # Severity policy:
+        #   - high / critical  → ::error::, FAILS the build (blocks merge)
+        #   - low / moderate   → ::warning::, surfaces as a PR annotation
+        #     but does NOT block (so smaller findings don't sit silently
+        #     in the JSON output we never read).
+        #
+        # Ignored advisories (re-evaluate on each dep bump):
+        #   - GHSA-rhv4-8758-jx7v (decimal): fixed in 3.0.0; breaking
+        #     major bump deferred to the next planned dep-bump pass.
+        #   - GHSA-g2wm-735q-3f56 (cowlib): no patched version from
+        #     upstream as of 2026-05-22; cookie-request-header injection.
+        run: |
+          AUDIT_JSON=$(mix deps.audit \
+            --format=json \
+            --ignore-advisory-ids GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56 \
+            || true)
+
+          echo "$AUDIT_JSON" | python3 <<'PY'
+          import json, sys
+
+          data = json.load(sys.stdin)
+          vulns = data.get("vulnerabilities", [])
+
+          blocking = 0
+          for v in vulns:
+              sev = v["advisory"].get("severity", "unknown")
+              pkg = v["dependency"]["package"]
+              ver = v["dependency"]["version"]
+              adv_id = v["advisory"]["id"]
+              title = v["advisory"].get("title", "")
+              level = "error" if sev in ("high", "critical") else "warning"
+              if level == "error":
+                  blocking += 1
+              print(f"::{level} title=Hex CVE ({sev}): {pkg} {ver}::{adv_id} — {title}")
+
+          if blocking:
+              print(f"::error::{blocking} high+ severity Hex CVE(s) — bump the affected dep(s) to patch.")
+              sys.exit(1)
+
+          if vulns:
+              print(f"Hex audit: {len(vulns)} non-blocking finding(s) (low/moderate). See annotations.")
+          else:
+              print("Hex audit: clean.")
+          PY
+
       - name: Dialyzer
         run: |
           mkdir -p priv/plts

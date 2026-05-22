@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.188",
+      version: "0.5.189",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -111,6 +111,7 @@ defmodule Engram.MixProject do
       # Quality tooling (dev/test only — never loaded in prod release)
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false}
     ]
   end
