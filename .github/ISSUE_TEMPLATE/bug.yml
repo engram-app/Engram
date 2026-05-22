@@ -1,0 +1,34 @@
+name: Bug
+description: Something is broken or behaving incorrectly.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where did this bug surface? (file path, log, dashboard, user report, etc.)
+      placeholder: e.g. backend/lib/engram/sync.ex, Sentry alert ID, CI run #...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What is happening, what should happen, and any reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How will we know this is fixed? Concrete, checkable criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Related issues, PRs, docs, memory entries.
+    validations:
+      required: false

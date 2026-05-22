@@ -1,0 +1,33 @@
+name: Enhancement
+description: A new feature, improvement, or scoped piece of work.
+title: "[enhancement] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where did this come from? (spec doc, retro, user feedback, prior issue, memory entry)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What is the change, why does it matter, what is the rough shape.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How will we know this is done? Concrete, checkable criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Related issues, PRs, specs, plans, memory entries.
+    validations:
+      required: false

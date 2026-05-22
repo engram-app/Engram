@@ -1,0 +1,33 @@
+name: Decision
+description: A product or technical decision needing input before work proceeds.
+title: "[decision] "
+labels: ["decision", "needs-decision"]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where did this decision point surface? (spec, retro, blocker on issue/PR, memory entry)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What is being decided, what are the options, what are the trade-offs.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: What does "decided" look like? (option chosen + recorded where)
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Related issues, PRs, docs, memory entries.
+    validations:
+      required: false

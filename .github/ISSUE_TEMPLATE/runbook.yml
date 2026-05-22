@@ -1,0 +1,33 @@
+name: Runbook
+description: An operational runbook or step-by-step procedure to author or update.
+title: "[runbook] "
+labels: ["runbook"]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where did this need surface? (incident, on-call gap, audit finding, missing doc)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What operation does this cover, who runs it, what is currently missing.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: What does the finished runbook need to contain? Where does it live?
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Related issues, PRs, docs, memory entries.
+    validations:
+      required: false
