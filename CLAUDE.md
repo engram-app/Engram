@@ -4,6 +4,10 @@
 
 Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS-only at launch: Starter $5/mo, Pro $10/mo. Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md`; billing integration details in `docs/context/paddle-integration.md`.
 
+## Issue Tracker
+
+TODOs and open issues live in GitHub Issues for this repo — `gh issue list` to view, `gh issue create` to file. Don't track work in CLAUDE.md, docs/, or ad-hoc TODO.md files.
+
 ## Architecture
 
 Engram is a single Elixir/Phoenix OTP application — search, MCP server, note storage, indexing, and real-time sync hub. Notes come in from the Obsidian plugin (or REST API) and are stored in PostgreSQL, parsed, embedded, and indexed into Qdrant. Real-time sync uses Phoenix Channels over WebSocket.
