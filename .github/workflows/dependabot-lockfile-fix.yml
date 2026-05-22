@@ -1,0 +1,55 @@
+# Dependabot lockfile fix — managed by engram-infra/main/github/dependabot_lockfile_fix.tf.
+# DO NOT EDIT IN-REPO; changes will be overwritten on next tf apply.
+#
+# Regenerates bun.lock on Dependabot PRs that bump package.json without
+# updating the lockfile. Dependabot's bun ecosystem (as of 2026-05) only
+# writes package.json — bun.lock never changes — so CI's
+# `bun install --frozen-lockfile` fails on every Dependabot PR and the
+# auto-merge gate never opens.
+#
+# Trigger: pull_request_target lets workflows fired by dependabot[bot]
+# get a writable GITHUB_TOKEN (dependabot PRs run with read-only token
+# under plain pull_request). The workflow file is read from the BASE
+# branch, so a PR can't mutate it to escalate privileges.
+#
+# Side-effect: once this workflow pushes a lockfile commit, the PR has
+# a non-dependabot author commit. Dependabot stops auto-rebasing the
+# PR — use `@dependabot recreate` (not `rebase`) if it falls behind
+# main. Acceptable trade-off; weekly bumps land fresh PRs anyway.
+name: Dependabot lockfile fix
+
+on:
+  pull_request_target:
+    paths:
+      - "frontend/package.json"
+      - "frontend/bun.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: [self-hosted, linux, x64, isolated]
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate bun.lock
+        working-directory: frontend
+        run: bun install
+
+      - name: Commit + push if changed
+        working-directory: frontend
+        run: |
+          if git diff --quiet bun.lock; then
+            echo "lockfile already in sync — nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bun.lock
+          git commit -m "chore: regenerate bun.lock for dependabot bump"
+          git push
