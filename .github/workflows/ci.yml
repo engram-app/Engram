@@ -1857,6 +1857,7 @@ jobs:
           fi
 
       - name: Open / update PR in engram-infra
+        id: open-pr
         if: steps.rewrite.outputs.bumped == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
@@ -1888,3 +1889,20 @@ jobs:
           labels: |
             automated
             tf-image-bump
+
+      - name: Enable auto-merge on bot PR
+        # Auto-merge queues the PR for merge once required checks
+        # (CODEOWNERS review + status checks) pass. Without this the bot
+        # PR sits open waiting for a human click — that's how the
+        # 2026-05-22 cascade started (4-day-old bot PR carrying stale
+        # template env on engram-infra). Engram-infra has
+        # `allow_auto_merge=true` set in repos.tf so the GraphQL
+        # mutation succeeds. Reuses the existing engram-infra-tf App
+        # token; `pull_requests: write` is already granted for the
+        # create-pull-request step.
+        if: steps.open-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
