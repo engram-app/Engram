@@ -1,0 +1,101 @@
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  todo-drift:
+    name: TODO drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Forbid TODO*.md files
+        run: |
+          set -euo pipefail
+          # TODOs belong in GitHub Issues, not markdown checklists.
+          # Audit context: 2026-05-22 doc-audit migrated 34 TODOs out of MD scrum-style.
+          # See [[project_doc_audit_migration]] memory + project_workspace_maturity_wave.
+          matches=$(find . -type f \( -name 'TODO.md' -o -name 'TODO-*.md' \) -not -path './.git/*' || true)
+          if [ -n "$matches" ]; then
+            echo "::error::Found TODO*.md files. File TODOs as GitHub Issues instead:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK — no TODO*.md files."
+
+      - name: Forbid checkbox-as-TODO in repo-root markdown
+        run: |
+          set -euo pipefail
+          # Block `^- [ ]` and `^- [x]` checkbox patterns in repo-root markdown
+          # (CLAUDE.md, README.md, etc.). Legitimate checklist locations
+          # (runbooks under docs/context/, plans+specs under docs/superpowers/)
+          # are intentionally not linted — they use checkboxes as a format.
+          mapfile -t files < <(find . -maxdepth 1 -name '*.md' -type f)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "OK — no root markdown files to check."
+            exit 0
+          fi
+          violations=$(grep -lE '^- \[[ x]\]' "${files[@]}" 2>/dev/null || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Found checkbox-as-TODO patterns in root markdown. File issues or move to a runbook/plan instead:"
+            echo "$violations"
+            grep -nE '^- \[[ x]\]' $violations || true
+            exit 1
+          fi
+          echo "OK — no checkbox-as-TODO in root markdown."
+
+  claude-md-staleness:
+    name: CLAUDE.md staleness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan CLAUDE.md files for known-stale facts
+        run: |
+          set -euo pipefail
+          # CLAUDE.md should reflect CURRENT product state. Patterns below are
+          # known-dead facts per workspace memory entries:
+          #   - dead domains  → [[project_domain]]
+          #   - dead pricing  → [[project_pricing_model]] (v2 reanchored $10/$20)
+          #   - dead org refs → [[project_engram_app_org_complete]]
+          # Stripe references are intentionally NOT linted — too noisy
+          # against legitimate "Stripe removed" historical context.
+          mapfile -t files < <(find . -name 'CLAUDE.md' -type f -not -path './.git/*')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "OK — no CLAUDE.md files in repo."
+            exit 0
+          fi
+          echo "Scanning: ${files[*]}"
+
+          patterns=(
+            'engram-sync\.app'
+            'engram\.ras\.band'
+            '\bengram\.com\b'
+            'Starter[^\n]{0,30}\$5\b'
+            'Pro[^\n]{0,30}\$10\b'
+            'Starter[^\n]{0,30}\$6\b'
+            'Pro[^\n]{0,30}\$12\b'
+            'Rasbandit/[Ee]ngram'
+          )
+
+          fail=0
+          for p in "${patterns[@]}"; do
+            hits=$(grep -nPH "$p" "${files[@]}" 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "::error::Stale pattern '${p}' found in CLAUDE.md:"
+              echo "$hits"
+              fail=1
+            fi
+          done
+          if [ $fail -eq 1 ]; then
+            echo
+            echo "Replace with current state per workspace memory:"
+            echo "  - Domains: app.engram.page (saas), engram.ax (selfhost)"
+            echo "  - Pricing: Free / Starter \$10 / Pro \$20 (v2 reanchored)"
+            echo "  - Org:     engram-app/<repo>"
+            exit 1
+          fi
+          echo "OK — no known-stale facts in CLAUDE.md files."

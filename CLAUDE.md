@@ -2,7 +2,7 @@
 
 > **Workspace:** For cross-project work, open `../engram-workspace/` instead. It provides unified context for both plugin and backend.
 
-Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS-only at launch: Starter $5/mo, Pro $10/mo. Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md`; billing integration details in `docs/context/paddle-integration.md`.
+Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $10/mo / Pro $20/mo (v2 reanchored 2026-05-20). Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md` + `docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md`; billing integration details in `docs/context/paddle-integration.md`.
 
 ## Issue Tracker
 
@@ -139,10 +139,11 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 
 | Tier | Price | Features |
 |------|-------|----------|
-| **Starter** | $5/mo ($50/yr) | Text search, MCP, WebSocket sync, 5 devices, 10GB storage |
-| **Pro** | $10/mo ($100/yr) | + unlimited devices, 50GB, 2x rate limit, multimodal (future) |
+| **Free** | $0 | 1 vault, 1 device (12h swap cooldown), 1GB attachments, manual sync, 10k notes, 5 AI conversations/day, MCP enabled, 90-day inactivity auto-delete |
+| **Starter** | $10/mo ($100/yr) | 5 vaults, unlimited devices, 3GB attachments, real-time SSE sync, 50k notes, 500 AI queries/day, API write access |
+| **Pro** | $20/mo ($200/yr) | 15 vaults, unlimited devices, 15GB attachments, real-time sync, unlimited notes, unlimited AI (10k/day fair-use), priority support, higher API rate |
 
-14-day free trial (card required). Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md`.
+Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md` + `../engram-workspace/docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md` for the canonical v2 design.
 
 ## Context Docs
 
