@@ -901,6 +901,7 @@ jobs:
       # matches exactly what was just compiled — `mix test` reuses the
       # BEAM files instead of recompiling.
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -916,13 +917,14 @@ jobs:
           restore-keys: |
             mix-build-test-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
-      - name: Verify or fetch deps
-        run: |
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get --only test
-          else
-            echo "deps/ restored from cache"
-          fi
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get --only test
 
       - name: Run Elixir unit tests
         env:
@@ -977,6 +979,7 @@ jobs:
       # below. The Compile step then becomes a fast --warnings-as-errors
       # re-validation (no --force; cache was built warnings-clean).
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -992,13 +995,14 @@ jobs:
           restore-keys: |
             mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
-      - name: Verify or fetch deps
-        run: |
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get
-          else
-            echo "deps/ restored from cache"
-          fi
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get
 
       - name: Cache Dialyzer PLT
         uses: actions/cache@v5
@@ -1062,15 +1066,36 @@ jobs:
         #   - GHSA-g2wm-735q-3f56 (cowlib): no patched version from
         #     upstream as of 2026-05-22; cookie-request-header injection.
         run: |
-          AUDIT_JSON=$(mix deps.audit \
+          # Write to a file rather than capturing via $() so we can show
+          # both stdout and stderr if mix_audit produces something
+          # unexpected. The empty-stdout failure mode was previously
+          # invisible because $(...) swallowed everything.
+          set +e
+          mix deps.audit \
             --format=json \
             --ignore-advisory-ids GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56 \
-            || true)
+            > /tmp/audit.json 2> /tmp/audit.err
+          MIX_EXIT=$?
+          set -e
 
-          echo "$AUDIT_JSON" | python3 <<'PY'
+          echo "mix exit code: $MIX_EXIT"
+          echo "stdout bytes: $(wc -c < /tmp/audit.json)"
+          if [ -s /tmp/audit.err ]; then
+            echo "--- stderr ---"
+            cat /tmp/audit.err
+            echo "--- end stderr ---"
+          fi
+
+          if [ ! -s /tmp/audit.json ]; then
+            echo "::error::mix deps.audit produced no stdout (exit=$MIX_EXIT) — see stderr above"
+            exit 2
+          fi
+
+          python3 <<'PY'
           import json, sys
 
-          data = json.load(sys.stdin)
+          with open("/tmp/audit.json") as f:
+              data = json.load(f)
           vulns = data.get("vulnerabilities", [])
 
           blocking = 0
@@ -1246,6 +1271,7 @@ jobs:
       # Playwright's webServer config) reuses compiled BEAM files
       # instead of recompiling at boot.
       - name: Restore deps cache
+        id: cache-deps
         uses: actions/cache/restore@v5
         with:
           path: deps
@@ -1321,15 +1347,19 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
 
-      - name: Setup Elixir deps + DB
+      - name: Fetch deps (if missing or lockfile changed)
+        # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
+        # fallback can populate deps/ from a stale cache when the
+        # exact-key match fails (any lockfile change). Use the cache
+        # step's `cache-hit` output, which is 'true' only on exact
+        # match; restore-keys partial hits leave it ''.
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get
+
+      - name: Wait for DB + ecto setup + tailwind
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
         run: |
-          # deps/ already restored from prebuild-mix cache; fetch only if
-          # restore missed (first-ever run for this mix.lock content).
-          if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-            mix deps.get
-          fi
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
               echo "DB ready"; break
