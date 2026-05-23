@@ -15,7 +15,50 @@
 # repo's test suite is the merge gate.
 name: Dependabot auto-merge
 
-on: pull_request
+# Only trigger on PRs that actually touch a package-manager / Actions file
+# Dependabot would open. Non-Dependabot PRs skipped before scheduling, so
+# the workflow no longer appears in every PR's run list as a "skipped"
+# entry. Union across all ecosystems used in the org (npm/bun, mix, go,
+# cargo, python, ruby, php, docker, terraform, github_actions).
+on:
+  pull_request:
+    paths:
+      # JS / Bun
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/bun.lock'
+      - '**/bun.lockb'
+      - '**/yarn.lock'
+      - '**/pnpm-lock.yaml'
+      # Elixir
+      - '**/mix.exs'
+      - '**/mix.lock'
+      # Go
+      - '**/go.mod'
+      - '**/go.sum'
+      # Rust
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      # Python
+      - '**/pyproject.toml'
+      - '**/requirements*.txt'
+      - '**/uv.lock'
+      - '**/poetry.lock'
+      # Ruby
+      - '**/Gemfile'
+      - '**/Gemfile.lock'
+      # PHP
+      - '**/composer.json'
+      - '**/composer.lock'
+      # Containers
+      - '**/Dockerfile*'
+      - '**/docker-compose*.y*ml'
+      # Terraform
+      - '**/*.tf'
+      - '**/.terraform.lock.hcl'
+      # GitHub Actions
+      - '.github/workflows/**'
+      - '.github/actions/**'
 
 permissions:
   contents: write
