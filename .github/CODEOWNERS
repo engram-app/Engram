@@ -1,7 +1,7 @@
 # CODEOWNERS — managed by engram-infra/main/github/codeowners.tf.
 # DO NOT EDIT IN-REPO; changes will be overwritten on next tf apply.
 #
-# Solo-maintainer policy: Todd owns every path. Required by the
-# `protect-main` ruleset's `require_code_owner_review = true` so
-# future contributors must request his review.
+# Informational — `require_code_owner_review` is false on the
+# `protect-main` ruleset, so this is not currently a merge gate.
+# Useful as documentation of ownership and for PR UI hints.
 * @Rasbandit
