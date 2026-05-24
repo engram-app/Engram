@@ -76,7 +76,25 @@ Any AI assistant that speaks MCP can query your vault:
 - **Behaviour-based adapters** — swap embedding backends (Voyage AI / Ollama) without touching search logic
 - **No Redis required** — PubSub via Erlang distribution, caching via ETS
 
-## Quick Start
+## Self-Host
+
+Most operators should follow the **public docs** — they're more complete than this README and stay up-to-date with each release:
+
+- **[Quickstart](https://engram.page/docs/self-host/quickstart/)** — Docker Compose install, fewest steps to a running instance
+- **[Environment Variables](https://engram.page/docs/self-host/environment-variables/)** — full env reference
+- **[Encryption Setup](https://engram.page/docs/self-host/encryption/)** — master-key management, rotation, recovery
+- **[Backup & Restore](https://engram.page/docs/self-host/backup-restore/)** — what to back up, how to restore
+- **[Upgrade Path](https://engram.page/docs/self-host/upgrade/)** — moving between Engram versions safely
+- **[Troubleshooting](https://engram.page/docs/self-host/troubleshooting/)** — Qdrant unreachable, encryption-key errors, port conflicts, MinIO password
+- **[Why Self-Host](https://engram.page/docs/self-host/why-self-host/)** — when self-hosting makes sense
+
+**License:** Engram self-host is **PolyForm Small Business 1.0.0** — free for organizations with ≤ $1M/year in revenue/funding. Larger orgs need a commercial license (`support@engram.page`). See [`LICENSE`](./LICENSE) for the full terms + manual CLA flow for external contributors.
+
+**Security:** see [`SECURITY.md`](./SECURITY.md) for vuln disclosure. Self-host LAN deployments are out of scope of our published SLA — security depends on the operator's network and infra.
+
+The **Development Quick Start** below is for people *contributing to Engram itself* — not for running a production self-host instance.
+
+## Development Quick Start
 
 ### Prerequisites
 
