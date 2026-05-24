@@ -1865,6 +1865,13 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           branch: bot/bump-engram-staging-fastraid
           delete-branch: true
+          # engram-infra's ruleset enforces required_signatures = true.
+          # sign-commits routes the commit through the GraphQL
+          # createCommitOnBranch mutation, which GitHub auto-signs on
+          # behalf of the engram-infra-tf App. Without this the bot's
+          # branch commit is unsigned and the PR blocks at merge time
+          # with "Commits must have verified signatures."
+          sign-commits: true
           commit-message: |
             chore(staging-fastraid): bump engram image to ${{ steps.version.outputs.version }}
 
