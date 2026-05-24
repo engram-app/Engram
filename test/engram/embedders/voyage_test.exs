@@ -73,6 +73,69 @@ defmodule Engram.Embedders.VoyageTest do
     end
   end
 
+  describe "client-side rate limit (VOYAGE_RPM)" do
+    setup do
+      # Per-test bucket key prevents cross-pollination between async tests
+      # sharing the EngramWeb.RateLimiter ETS table.
+      key = "voyage_embed_test_#{:erlang.unique_integer([:positive])}"
+      Application.put_env(:engram, :voyage_throttle_key, key)
+      on_exit(fn -> Application.delete_env(:engram, :voyage_throttle_key) end)
+      :ok
+    end
+
+    test "no throttle when VOYAGE_RPM is unset (default)", %{bypass: bypass} do
+      refute Application.get_env(:engram, :voyage_rpm)
+
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        resp = %{"data" => [%{"embedding" => [0.1]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+    end
+
+    test "returns synthetic 429 once bucket is exhausted, without hitting HTTP", %{bypass: bypass} do
+      Application.put_env(:engram, :voyage_rpm, 1)
+      on_exit(fn -> Application.delete_env(:engram, :voyage_rpm) end)
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        resp = %{"data" => [%{"embedding" => [0.1]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      # First call consumes the only token.
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+
+      # Second call must NOT hit Bypass — synthetic 429 instead.
+      assert {:error, {429, body}} = Voyage.embed_texts(["world"])
+      assert body["detail"] == "client_rate_limited"
+      assert is_integer(body["retry_after_ms"])
+    end
+
+    test "allows calls when bucket has tokens", %{bypass: bypass} do
+      Application.put_env(:engram, :voyage_rpm, 10)
+      on_exit(fn -> Application.delete_env(:engram, :voyage_rpm) end)
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        resp = %{"data" => [%{"embedding" => [0.1]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      assert {:ok, _} = Voyage.embed_texts(["a"])
+      assert {:ok, _} = Voyage.embed_texts(["b"])
+      assert {:ok, _} = Voyage.embed_texts(["c"])
+    end
+  end
+
   describe "embed_texts/2" do
     test "uses model override when provided", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->

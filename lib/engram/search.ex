@@ -32,9 +32,11 @@ defmodule Engram.Search do
   defp query_embed_model, do: Application.get_env(:engram, :query_embed_model)
 
   defp embed_for_search(query) do
+    # `purpose: :query` routes through a separate Voyage rate-limit bucket
+    # so a bulk indexing burst can't starve synchronous user search.
     case query_embed_model() do
-      nil -> embedder().embed_texts([query])
-      model -> embedder().embed_texts([query], model: model)
+      nil -> embedder().embed_texts([query], purpose: :query)
+      model -> embedder().embed_texts([query], model: model, purpose: :query)
     end
   end
 

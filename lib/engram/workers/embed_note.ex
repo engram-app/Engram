@@ -166,6 +166,13 @@ defmodule Engram.Workers.EmbedNote do
 
   defp estimate_note_tokens(_), do: 0
 
+  # Snooze duration after Voyage 429. Env-driven via `EMBED_429_SNOOZE_SECONDS`
+  # (wired in runtime.exs) so we can tune as Voyage RPM allotment grows. 60s is
+  # the right default for free-tier (3 RPM) and a safe ceiling for paid tier.
+  defp snooze_seconds_on_429 do
+    Application.get_env(:engram, :embed_429_snooze_seconds, 60)
+  end
+
   defp run_embed(note, old_path_hmac_b64) do
     user = Accounts.get_user!(note.user_id)
 
@@ -189,6 +196,18 @@ defmodule Engram.Workers.EmbedNote do
               {:ok, _count} ->
                 stamp_embed_hash(note)
                 :ok
+
+              # Voyage 429 — back off without burning an Oban attempt. Voyage's
+              # paid-tier RPM is finite; without this guard five consecutive
+              # rate-limit hits discard the job entirely.
+              {:error, {429, _body}} ->
+                :telemetry.execute(
+                  [:engram, :embed, :rate_limited],
+                  %{count: 1},
+                  %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+                )
+
+                {:snooze, snooze_seconds_on_429()}
 
               {:error, reason} ->
                 {:error, reason}

@@ -11,6 +11,7 @@ defmodule Engram.Application do
     verify_spa_integrity!()
     install_log_redaction_filter()
     EngramWeb.RequestLogger.attach()
+    Engram.Telemetry.ObanDiscardHandler.attach()
 
     children =
       [

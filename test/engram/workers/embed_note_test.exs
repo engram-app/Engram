@@ -110,6 +110,82 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:discard, _} = perform_job(EmbedNote, %{note_id: 999_999})
     end
 
+    # Voyage rate-limit (429) must not burn an Oban attempt. Five 429s in a
+    # row would otherwise discard the job (see handoff
+    # 2026-05-24-embed-rate-limit-defenses.md: 1167 discards from free-tier
+    # 3-RPM bucket).
+    test "snoozes job when Voyage returns 429 rate-limit error", %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts ->
+        {:error, {429, %{"detail" => "rate limit exceeded"}}}
+      end)
+
+      assert {:snooze, 60} = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    # Integration regression: pins the `{:error, {429, _}}` contract
+    # end-to-end through the real Voyage adapter → Indexing → worker.
+    # If a future change wraps the error tuple anywhere in the pipeline
+    # (e.g. `{:error, %{stage: :embed, reason: {429, _}}}`), the snooze
+    # arm in run_embed silently regresses to the discard cascade — the
+    # very incident this whole PR exists to prevent.
+    test "integration: real Voyage HTTP 429 → snooze (no MockEmbedder)",
+         %{bypass: bypass, note: note} do
+      voyage_bypass = Bypass.open()
+
+      prev_embedder = Application.get_env(:engram, :embedder)
+      prev_voyage_url = Application.get_env(:engram, :voyage_url)
+      prev_voyage_key = Application.get_env(:engram, :voyage_api_key)
+
+      Application.put_env(:engram, :embedder, Engram.Embedders.Voyage)
+      Application.put_env(:engram, :voyage_url, "http://localhost:#{voyage_bypass.port}")
+      Application.put_env(:engram, :voyage_api_key, "test-key")
+
+      on_exit(fn ->
+        Application.put_env(:engram, :embedder, prev_embedder)
+
+        if prev_voyage_url,
+          do: Application.put_env(:engram, :voyage_url, prev_voyage_url),
+          else: Application.delete_env(:engram, :voyage_url)
+
+        if prev_voyage_key,
+          do: Application.put_env(:engram, :voyage_api_key, prev_voyage_key),
+          else: Application.delete_env(:engram, :voyage_api_key)
+      end)
+
+      stub_qdrant(bypass)
+
+      # `expect` (not `expect_once`) because Req's default
+      # `retry: :transient, max_retries: 3` retries 429 up to three times
+      # before giving up. Bypass returning 500 on a missing route after the
+      # first call would short-circuit the snooze path.
+      Bypass.expect(voyage_bypass, "POST", "/v1/embeddings", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(429, ~s({"detail":"rate limit exceeded"}))
+      end)
+
+      assert {:snooze, 60} =
+               perform_job(EmbedNote, %{note_id: note.id},
+                 attempt: 1,
+                 max_attempts: 5
+               )
+    end
+
+    test "returns {:error, _} for non-429 embed failures (preserves retry behavior)",
+         %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts ->
+        {:error, {500, %{"detail" => "internal error"}}}
+      end)
+
+      assert {:error, {500, _}} = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
     test "discards job when note is soft-deleted", %{user: user} do
       note = insert(:note, user: user, deleted_at: DateTime.utc_now())
       assert {:discard, _} = perform_job(EmbedNote, %{note_id: note.id})

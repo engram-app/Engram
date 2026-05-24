@@ -21,7 +21,7 @@ defmodule Engram.SearchTest do
   describe "search/4" do
     test "returns results from Qdrant", %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn ["iron panel"] ->
+      |> expect(:embed_texts, fn ["iron panel"], _opts ->
         {:ok, [List.duplicate(0.1, 3)]}
       end)
 
@@ -70,7 +70,7 @@ defmodule Engram.SearchTest do
 
     test "includes vault_id filter in Qdrant request", %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -90,7 +90,7 @@ defmodule Engram.SearchTest do
     test "translates :folder opt into folder_hmac filter (Phase B.2.3)",
          %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       expected_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "Health"))
@@ -119,7 +119,7 @@ defmodule Engram.SearchTest do
     test "translates :tags opt into tags_hmac filter (Phase B.2.3)",
          %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
 
@@ -164,7 +164,7 @@ defmodule Engram.SearchTest do
 
     test "returns error when embedder fails", %{user: user, vault: vault} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:error, :unavailable} end)
+      |> expect(:embed_texts, fn _, _ -> {:error, :unavailable} end)
 
       assert {:error, _} = Search.search(user, vault, "iron panel")
     end
@@ -192,7 +192,7 @@ defmodule Engram.SearchTest do
       end)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -272,7 +272,7 @@ defmodule Engram.SearchTest do
       end)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       # Free user → reranker_enabled=false → fetch_limit should equal the
       # requested limit (2), NOT 4× / @min_candidates. Verifies that Qdrant
@@ -328,7 +328,9 @@ defmodule Engram.SearchTest do
       on_exit(fn -> Application.delete_env(:engram, :query_embed_model) end)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn ["test query"], [model: "voyage-4-lite"] ->
+      |> expect(:embed_texts, fn ["test query"], opts ->
+        assert opts[:model] == "voyage-4-lite"
+        assert opts[:purpose] == :query
         {:ok, [List.duplicate(0.1, 3)]}
       end)
 
@@ -349,7 +351,8 @@ defmodule Engram.SearchTest do
       Application.delete_env(:engram, :query_embed_model)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn ["test query"] ->
+      |> expect(:embed_texts, fn ["test query"], opts ->
+        assert opts[:purpose] == :query
         {:ok, [List.duplicate(0.1, 3)]}
       end)
 
@@ -368,7 +371,7 @@ defmodule Engram.SearchTest do
       vault: vault
     } do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         conn
@@ -398,7 +401,7 @@ defmodule Engram.SearchTest do
       pro_user = insert(:user, plan_id: plan.id)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         conn
@@ -417,7 +420,7 @@ defmodule Engram.SearchTest do
     } do
       # Free plan user — no cross_vault opt — should never hit the billing check
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         conn
@@ -456,7 +459,7 @@ defmodule Engram.SearchTest do
       _ = vault
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       qdrant_result = %{
         "result" => [
@@ -513,7 +516,7 @@ defmodule Engram.SearchTest do
       tampered_text = Base.encode64(<<bxor(first, 1), rest::binary>>)
 
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       qdrant_result = %{
         "result" => [

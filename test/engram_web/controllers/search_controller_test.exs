@@ -29,7 +29,7 @@ defmodule EngramWeb.SearchControllerTest do
       vault: vault
     } do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
@@ -82,7 +82,7 @@ defmodule EngramWeb.SearchControllerTest do
     test "over-fetches chunks so grouping can return the requested number of notes",
          %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
@@ -108,7 +108,7 @@ defmodule EngramWeb.SearchControllerTest do
 
     test "clamps note limit then over-fetches chunks", %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
@@ -136,7 +136,7 @@ defmodule EngramWeb.SearchControllerTest do
 
     test "does not leak internal details on search error", %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         Plug.Conn.send_resp(c, 500, ~s({"status":{"error":"Qdrant internal"}}))
@@ -156,7 +156,7 @@ defmodule EngramWeb.SearchControllerTest do
 
     test "returns empty results list when nothing found", %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         c
@@ -171,7 +171,7 @@ defmodule EngramWeb.SearchControllerTest do
     test "groups repeated chunks from the same note into one result with match_count",
          %{conn: conn, bypass: bypass, user: user} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       # Three top hits all point at the same note plus one different note —
       # before the over-fetch + group_by_note fix, repeated chunks would
@@ -217,7 +217,7 @@ defmodule EngramWeb.SearchControllerTest do
     test "honors the requested note limit when more unique notes are available",
          %{conn: conn, bypass: bypass, user: user} do
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       result = %{
         "result" =>

@@ -58,6 +58,13 @@ defmodule Engram.Logger.RedactFilter do
                     :client_secret_hash
                   ])
 
+  # NOTE: `:reason` is NOT in the sensitive set — many call sites use it
+  # for safe atoms (`:enoent`, `:timeout`, `:no_auth`, `claim_invalid:exp`)
+  # and need it to render. Anywhere that might log a Req/Postgrex error
+  # struct under `:reason` should either avoid metadata or use a different
+  # key. See `Engram.Telemetry.ObanDiscardHandler` for the pattern (it
+  # intentionally drops `:reason` from both message body AND metadata).
+
   @doc """
   Returns the canonical set of metadata keys that get scrubbed.
 

@@ -81,6 +81,30 @@ if config_env() != :test do
     config :engram, :query_embed_model, query_model
   end
 
+  # Voyage 429 → snooze duration (seconds). Tune as Voyage RPM grows: lower
+  # values churn jobs faster once budget is restored; higher values are gentler
+  # on a small bucket. Default 60s suits both free-tier (3 RPM) and paid.
+  if secs = System.get_env("EMBED_429_SNOOZE_SECONDS") do
+    config :engram, :embed_429_snooze_seconds, String.to_integer(secs)
+  end
+
+  # Client-side Voyage rate limit. Unset = no throttle (self-host default).
+  # Set to your Voyage paid-tier RPM (e.g. 2000) to fail fast with a synthetic
+  # 429 before burning real API calls. EmbedNote snoozes on the synthetic 429
+  # just like a real one. Bump this as the Voyage allotment grows.
+  #
+  # `VOYAGE_QUERY_RPM` (optional) gives synchronous user search its own
+  # bucket so a bulk indexing burst can't starve queries. Falls back to
+  # `VOYAGE_RPM` when unset. Recommended: reserve ~20% of total RPM for
+  # queries (set VOYAGE_QUERY_RPM to ~0.2*total and VOYAGE_RPM to ~0.8*total).
+  if rpm = System.get_env("VOYAGE_RPM") do
+    config :engram, :voyage_rpm, String.to_integer(rpm)
+  end
+
+  if query_rpm = System.get_env("VOYAGE_QUERY_RPM") do
+    config :engram, :voyage_query_rpm, String.to_integer(query_rpm)
+  end
+
   if System.get_env("QDRANT_URL") do
     config :engram, :qdrant_url, System.get_env("QDRANT_URL")
   end

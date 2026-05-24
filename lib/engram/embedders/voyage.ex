@@ -2,9 +2,21 @@ defmodule Engram.Embedders.Voyage do
   @moduledoc """
   Voyage AI embedder adapter. Calls the Voyage AI REST API via Req.
   Reads config: VOYAGE_API_KEY, EMBED_MODEL (default voyage-4-large).
+
+  Client-side rate limiting is split by `purpose` (`:query` vs `:index`) so a
+  bulk indexing burst cannot starve synchronous user search. Callers should
+  pass `purpose: :query` for search/RAG paths; everything else (EmbedNote
+  worker, parity validation, future batch jobs) is treated as `:index`.
   """
 
   @behaviour Engram.Embedder
+
+  # Compile-time gate: the test-only `:voyage_throttle_key` config override
+  # (used to give async test cases unique bucket keys) must be structurally
+  # absent in non-test builds. Mirrors `EngramWeb.Plugs.RateLimit`'s
+  # `@is_test_build` pattern at lib/engram_web/plugs/rate_limit.ex:11-12.
+  @build_env Application.compile_env(:engram, :env, :prod)
+  @is_test_build @build_env == :test
 
   @default_url "https://api.voyageai.com"
   @default_model "voyage-4-large"
@@ -22,6 +34,12 @@ defmodule Engram.Embedders.Voyage do
 
   @impl true
   def embed_texts(texts, opts) when is_list(texts) do
+    with :ok <- throttle_check(opts) do
+      do_embed_texts(texts, opts)
+    end
+  end
+
+  defp do_embed_texts(texts, opts) do
     url = Application.get_env(:engram, :voyage_url, @default_url)
     model = Keyword.get(opts, :model, Application.get_env(:engram, :embed_model, @default_model))
 
@@ -54,5 +72,68 @@ defmodule Engram.Embedders.Voyage do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Client-side rate limit. Enabled when `:voyage_rpm` is set (env: VOYAGE_RPM).
+  # When the bucket is empty we synthesize the same `{:error, {429, body}}`
+  # shape Voyage returns on a real rate-limit response, so callers (notably
+  # `Engram.Workers.EmbedNote`) handle both paths identically — the
+  # snooze-on-429 logic fires for either case.
+  #
+  # `retry_after_ms` is included for the synthetic path. Voyage's REAL 429
+  # response signals retry hints via the `Retry-After` HTTP header (in
+  # seconds), NOT a JSON body field. Callers reading `body["retry_after_ms"]`
+  # work only against the synthetic path; for real 429s, read the header.
+  #
+  # Bucket is partitioned by `purpose` (`:query` vs `:index`, default
+  # `:index`) so a bulk indexing burst cannot exhaust the budget used by
+  # synchronous user search. Each gets its own bucket and its own RPM
+  # allowance: `:engram, :voyage_query_rpm` falls back to `:voyage_rpm`
+  # when unset, so operators can flip on the split without re-tuning.
+  defp throttle_check(opts) do
+    purpose = Keyword.get(opts, :purpose, :index)
+
+    case rpm_for(purpose) do
+      nil ->
+        :ok
+
+      rpm when is_integer(rpm) and rpm > 0 ->
+        key = bucket_key(purpose)
+
+        case EngramWeb.RateLimiter.hit(key, 60_000, rpm) do
+          {:allow, _count} ->
+            :ok
+
+          {:deny, retry_after_ms} ->
+            :telemetry.execute(
+              [:engram, :embed, :client_rate_limited],
+              %{count: 1, retry_after_ms: retry_after_ms},
+              %{rpm: rpm, purpose: purpose}
+            )
+
+            {:error,
+             {429, %{"detail" => "client_rate_limited", "retry_after_ms" => retry_after_ms}}}
+        end
+    end
+  end
+
+  defp rpm_for(:query) do
+    Application.get_env(:engram, :voyage_query_rpm) ||
+      Application.get_env(:engram, :voyage_rpm)
+  end
+
+  defp rpm_for(_), do: Application.get_env(:engram, :voyage_rpm)
+
+  # In test builds the bucket key honors `:voyage_throttle_key` so async test
+  # cases can use per-test keys and avoid collisions on the shared ETS limiter
+  # table. In non-test builds the override is structurally absent — operators
+  # cannot point a prod node at an arbitrary bucket key.
+  if @is_test_build do
+    defp bucket_key(purpose) do
+      base = Application.get_env(:engram, :voyage_throttle_key, "voyage_embed")
+      "#{base}:#{purpose}"
+    end
+  else
+    defp bucket_key(purpose), do: "voyage_embed:#{purpose}"
   end
 end
