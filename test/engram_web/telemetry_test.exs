@@ -116,4 +116,47 @@ defmodule EngramWeb.TelemetryTest do
              "ProviderMigration per-user duration must be measured"
     end
   end
+
+  describe "metrics/0 — embed rate-limit observability (PR #289)" do
+    # Same pinning rationale as the crypto block: PR #289 introduced three
+    # telemetry events as defense-in-depth against Voyage rate-limit cascades
+    # (Layer 1 snooze on real 429, Layer 2 synthetic 429 from local throttle,
+    # Layer 3 Oban discard surface). Without Telemetry.Metrics declarations,
+    # any future reporter (PromEx / telemetry_metrics_prometheus / StatsD)
+    # silently ignores them — the "we emit telemetry" defense in PR #289
+    # collapses into "we emit nothing reachable." This block keeps each
+    # event declared so the registration cannot quietly drift.
+
+    setup do
+      names =
+        EngramWeb.Telemetry.metrics()
+        |> Enum.map(fn metric ->
+          metric.name |> Enum.map_join(".", &Atom.to_string/1)
+        end)
+        |> MapSet.new()
+
+      {:ok, names: names}
+    end
+
+    test "registers engram.embed.rate_limited counter (Layer 1 — real Voyage 429)", %{
+      names: names
+    } do
+      assert "engram.embed.rate_limited.count" in names,
+             "Real Voyage 429 (post-network) snoozes must be counted — primary signal that Voyage's actual rate-limit is hitting us"
+    end
+
+    test "registers engram.embed.client_rate_limited counter (Layer 2 — local throttle)", %{
+      names: names
+    } do
+      assert "engram.embed.client_rate_limited.count" in names,
+             "Synthetic 429 from local Hammer throttle must be counted — tag :purpose (:query | :index) is the signal for rebalancing VOYAGE_RPM vs VOYAGE_QUERY_RPM"
+    end
+
+    test "registers engram.oban.discarded counter (Layer 3 — terminal job drops)", %{
+      names: names
+    } do
+      assert "engram.oban.discarded.count" in names,
+             "Oban jobs that exhausted max_attempts must be counted — non-zero is a triage signal"
+    end
+  end
 end

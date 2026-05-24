@@ -170,6 +170,28 @@ defmodule EngramWeb.Telemetry do
         tags: [:gate_path, :op],
         description:
           "T3.7 writes/reads blocked by RotationGate (channel/worker bypass path). Tags: gate_path (:channel | :worker), op (handler/worker name)"
+      ),
+
+      # PR #289 — embed rate-limit defense surfaces.
+      #
+      # Three events emitted by the Voyage rate-limit defense-in-depth layers.
+      # Declared here so a future reporter (PromEx / telemetry_metrics_prometheus
+      # / StatsD / OTel) picks them up without a second PR. Pinned by
+      # `test/engram_web/telemetry_test.exs`.
+      counter("engram.embed.rate_limited.count",
+        tags: [:vault_id],
+        description:
+          "Real Voyage 429 (post-network) — each event = one snoozed EmbedNote job. Layer 1 surface. Non-zero = either real Voyage rate-limit hits OR Layer 2 leaking; use `engram.embed.client_rate_limited.count` to distinguish."
+      ),
+      counter("engram.embed.client_rate_limited.count",
+        tags: [:purpose],
+        description:
+          "Synthetic 429 from local Hammer throttle (Layer 2). Tag `:purpose` (:query | :index) is the signal for rebalancing VOYAGE_RPM vs VOYAGE_QUERY_RPM from facts."
+      ),
+      counter("engram.oban.discarded.count",
+        tags: [:worker, :queue],
+        description:
+          "Jobs that exhausted max_attempts and were dropped by Oban. Layer 3 surface — non-zero is a triage signal."
       )
     ]
   end
