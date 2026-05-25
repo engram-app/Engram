@@ -392,6 +392,27 @@ defmodule Engram.BillingTest do
       {_, q} = with_query_count("plans", fn -> Billing.effective_limit(user, :vaults_cap) end)
       assert q == 1
     end
+
+    test "invalidate/1 reflects a runtime limit change (not just a re-query)",
+         %{plan: plan, user: user} do
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      plan |> Ecto.Changeset.change(limits: %{"vaults_cap" => 99}) |> Repo.update!()
+      # Still cached → stale value until invalidated.
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      PlanCache.invalidate(plan.id)
+      assert Billing.effective_limit(user, :vaults_cap) == 99
+    end
+
+    test "invalidate_all/0 drops every cached plan", %{plan: plan, user: user} do
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      plan |> Ecto.Changeset.change(limits: %{"vaults_cap" => 42}) |> Repo.update!()
+      PlanCache.invalidate_all()
+
+      assert Billing.effective_limit(user, :vaults_cap) == 42
+    end
   end
 
   defp with_subscription_query_count(fun), do: with_query_count("subscriptions", fun)

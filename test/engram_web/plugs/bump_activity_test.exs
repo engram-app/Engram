@@ -4,6 +4,8 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
   import Ecto.Query
   alias Engram.Repo
   alias Engram.UsageMeters
+  alias Engram.UsageMeters.ActivityCache
+  alias Engram.UsageMeters.Meter
   alias EngramWeb.Plugs.BumpActivity
 
   describe "call/2" do
@@ -67,6 +69,30 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
 
       bumped = UsageMeters.last_active_at(user.id)
       assert DateTime.diff(bumped, two_hours_ago, :second) > 7000
+    end
+
+    test "a warm cache holding a stale stamp still bumps and re-warms", %{conn: conn} do
+      user = insert(:user)
+      conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
+
+      # Force both the cache and the DB to look stale (> 1h).
+      two_hours_ago = DateTime.utc_now() |> DateTime.add(-7200, :second)
+      ActivityCache.put(user.id, two_hours_ago)
+
+      Repo.update_all(
+        from(m in Meter, where: m.user_id == ^user.id),
+        [set: [last_active_at: two_hours_ago]],
+        skip_tenant_check: true
+      )
+
+      conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
+
+      bumped = UsageMeters.last_active_at(user.id)
+      assert DateTime.diff(bumped, two_hours_ago, :second) > 7000
+
+      # Cache must be re-warmed to ~now so the next request short-circuits.
+      assert {:ok, cached} = ActivityCache.get(user.id)
+      assert DateTime.diff(DateTime.utc_now(), cached, :second) < 60
     end
   end
 

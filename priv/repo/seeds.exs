@@ -11,7 +11,7 @@
 # and so on) as they will fail if something goes wrong.
 
 alias Engram.Repo
-alias Engram.Billing.{LimitKeys, Plan}
+alias Engram.Billing.{LimitKeys, Plan, PlanCache}
 
 # Seed the three pricing tiers from LimitKeys catalog. Idempotent —
 # on_conflict replaces the limits JSONB so re-running ecto.setup drives
@@ -29,3 +29,8 @@ for tier <- LimitKeys.tiers() do
     conflict_target: :name
   )
 end
+
+# Drop any cached plan limits so a node that's already running (e.g. seeds
+# re-run over a remote console) picks up the new limits instead of serving a
+# stale :persistent_term entry. No-op on a cold boot.
+PlanCache.invalidate_all()

@@ -149,6 +149,25 @@ defmodule Engram.Workers.InactivityCleanupTest do
       refute InMemory.exists?("#{user.id}/vault1/file.png")
     end
 
+    test "cascades the usage_meters row (notes_count counter) on hard-delete" do
+      # The notes_count counter relies on the meter row vanishing with the user
+      # rather than an explicit decrement. Pin that FK cascade so a future
+      # on_delete change can't silently strand the counter.
+      user = insert(:user)
+      Repo.insert!(%Meter{user_id: user.id, notes_count: 5})
+      assert UsageMeters.notes_count(user.id) == 5
+
+      thirty_one_days_ago = DateTime.utc_now() |> DateTime.add(-31 * 86_400, :second)
+
+      user
+      |> Ecto.Changeset.change(%{deleted_at: thirty_one_days_ago})
+      |> Repo.update!(skip_tenant_check: true)
+
+      InactivityCleanup.__sweep_hard__()
+
+      refute Repo.get(Meter, user.id, skip_tenant_check: true)
+    end
+
     test "leaves soft-deleted users <30 days alone" do
       user = insert(:user)
       ten_days_ago = DateTime.utc_now() |> DateTime.add(-10 * 86_400, :second)

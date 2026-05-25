@@ -41,6 +41,20 @@ defmodule Engram.Billing.PlanCache do
     :ok
   end
 
+  @doc """
+  Drops every cached plan. Call after a bulk plan-limit change (e.g. re-running
+  seeds) so the next lookup reloads from the DB. A fresh deploy starts with a
+  cold cache, so this is only needed when limits change without a restart.
+  """
+  @spec invalidate_all() :: :ok
+  def invalidate_all do
+    for {{__MODULE__, _plan_id} = k, _v} <- :persistent_term.get() do
+      :persistent_term.erase(k)
+    end
+
+    :ok
+  end
+
   defp load(plan_id) do
     Repo.one(
       from(p in Plan, where: p.id == ^plan_id, select: p.limits),
