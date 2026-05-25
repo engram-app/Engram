@@ -69,16 +69,19 @@ defmodule EngramWeb.OAuthRegisterController do
 
   defp translate_error({msg, opts}) do
     Enum.reduce(opts, msg, fn {key, value}, acc ->
-      String.replace(acc, "%{#{key}}", stringify(value))
+      placeholder = "%{#{key}}"
+
+      # Only stringify when the placeholder is actually present. A failed cast
+      # (e.g. a JSON string where an array is expected) carries opts like
+      # `type: {:array, :string}` whose message ("is invalid") has no
+      # placeholder — eagerly to_string-ing that tuple is what crashed (500).
+      if String.contains?(acc, placeholder) do
+        String.replace(acc, placeholder, to_string(value))
+      else
+        acc
+      end
     end)
   end
-
-  # Ecto interpolation values are usually strings/atoms/numbers, but a failed
-  # cast (e.g. a JSON string where an array is expected) yields a type tuple
-  # like `{:array, :string}`. to_string/1 raises on those — inspect/1 is safe.
-  defp stringify(value) when is_binary(value), do: value
-  defp stringify(value) when is_atom(value) or is_number(value), do: to_string(value)
-  defp stringify(value), do: inspect(value)
 
   defp join_errors(list) when is_list(list), do: Enum.join(list, "; ")
   defp join_errors(other), do: to_string(other)
