@@ -29,15 +29,16 @@ defmodule Engram.Storage.Database do
   def put(key, binary, _opts \\ []) when is_binary(key) and is_binary(binary) do
     now = DateTime.utc_now(:microsecond)
 
-    Repo.query!(
-      """
-      INSERT INTO storage_objects (storage_key, data, byte_size, inserted_at)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (storage_key)
-      DO UPDATE SET data = EXCLUDED.data, byte_size = EXCLUDED.byte_size
-      """,
-      [key, binary, byte_size(binary), now]
-    )
+    _ =
+      Repo.query!(
+        """
+        INSERT INTO storage_objects (storage_key, data, byte_size, inserted_at)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (storage_key)
+        DO UPDATE SET data = EXCLUDED.data, byte_size = EXCLUDED.byte_size
+        """,
+        [key, binary, byte_size(binary), now]
+      )
 
     :ok
   rescue
@@ -56,7 +57,7 @@ defmodule Engram.Storage.Database do
 
   @impl true
   def delete(key) when is_binary(key) do
-    Repo.query!("DELETE FROM storage_objects WHERE storage_key = $1", [key])
+    _ = Repo.query!("DELETE FROM storage_objects WHERE storage_key = $1", [key])
     :ok
   rescue
     e -> {:error, e}
