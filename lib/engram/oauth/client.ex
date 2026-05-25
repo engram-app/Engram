@@ -51,6 +51,10 @@ defmodule Engram.OAuth.Client do
       message: "must be one of: #{Enum.join(@valid_auth_methods, ", ")}"
     )
     |> validate_length(:client_name, max: 200)
+    # Attacker-controlled on a public, unauthenticated endpoint; both are
+    # persisted and emitted in DCR telemetry, so cap to bound row/metadata size.
+    |> validate_length(:software_id, max: 255)
+    |> validate_length(:software_version, max: 255)
   end
 
   defp ensure_redirect_uris_present(changeset) do

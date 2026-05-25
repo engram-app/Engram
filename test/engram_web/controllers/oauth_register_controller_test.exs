@@ -221,6 +221,28 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["software_version"] == "1.42.0"
     end
 
+    test "rejects overlong software_id", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "software_id" => String.duplicate("a", 256)
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    test "rejects overlong software_version", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "software_version" => String.duplicate("a", 256)
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
     test "emits dcr register telemetry on success", %{conn: conn} do
       ref =
         :telemetry_test.attach_event_handlers(self(), [[:engram, :mcp, :dcr, :register]])
