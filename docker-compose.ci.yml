@@ -48,10 +48,11 @@ services:
       KEY_PROVIDER: ${KEY_PROVIDER:-local}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY must be set (CI workflow injects from secret, local dev sets via .env)}
       ENCRYPTION_MASTER_KEY_PREVIOUS: ${ENCRYPTION_MASTER_KEY_PREVIOUS:-}
-      # S3-compatible attachment storage (MinIO sidecar). STORAGE_BACKEND=s3
-      # is required because runtime.exs defaults to the BYTEA `database` adapter
-      # otherwise — without this, attachments would land in Postgres BYTEA and
-      # the ciphertext-at-rest probe would find no MinIO object.
+      # S3-compatible attachment storage (MinIO sidecar). This stack tests the
+      # S3 path, so STORAGE_BACKEND is pinned to s3 — the e2e ciphertext-at-rest
+      # probe expects a MinIO object. (The bytea `database` backend, #297, is
+      # exercised separately by the storage-database CI job; runtime.exs
+      # defaults to s3.)
       STORAGE_BACKEND: s3
       STORAGE_BUCKET: engram-attachments
       STORAGE_ACCESS_KEY_ID: minioadmin
