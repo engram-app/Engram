@@ -88,6 +88,23 @@ Most operators should follow the **public docs** — they're more complete than 
 - **[Troubleshooting](https://engram.page/docs/self-host/troubleshooting/)** — Qdrant unreachable, encryption-key errors, port conflicts, MinIO password
 - **[Why Self-Host](https://engram.page/docs/self-host/why-self-host/)** — when self-hosting makes sense
 
+### Quickstart (Docker Compose)
+
+The repo root ships a canonical [`docker-compose.yml`](./docker-compose.yml) (app + Postgres + Qdrant + Ollama + MinIO) and [`.env.example`](./.env.example):
+
+```bash
+git clone https://github.com/engram-app/engram
+cd engram
+cp .env.example .env
+# generate the three secrets and paste them into .env:
+#   openssl rand -base64 48   # SECRET_KEY_BASE
+#   openssl rand -base64 48   # JWT_SECRET
+#   openssl rand -base64 32   # ENCRYPTION_MASTER_KEY  (back this up!)
+docker compose up --build     # first build compiles the release (~few min)
+```
+
+The app comes up on `http://localhost:4000` (the only host-exposed port; everything else stays on the private network). Migrations run automatically on boot, and `ollama-init` pulls the default `nomic-embed-text` embedding model on first start.
+
 **License:** Engram self-host is **PolyForm Small Business 1.0.0** — free for organizations with ≤ $1M/year in revenue/funding. Larger orgs need a commercial license (`support@engram.page`). See [`LICENSE`](./LICENSE) for the full terms + manual CLA flow for external contributors.
 
 **Security:** see [`SECURITY.md`](./SECURITY.md) for vuln disclosure. Self-host LAN deployments are out of scope of our published SLA — security depends on the operator's network and infra.

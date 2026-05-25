@@ -41,6 +41,7 @@ plugin/
 priv/static/app/
 
 .env*
+!.env.example
 frontend/.vite/
 .worktrees/
 
