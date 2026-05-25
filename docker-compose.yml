@@ -11,6 +11,12 @@
 # in `environment:` below because it must match the service names on this
 # network — do not move it to .env. Everything a self-hoster actually tunes
 # (secrets, embedding backend, storage creds) lives in .env.
+#
+# Minified stack (no MinIO): set STORAGE_BACKEND=database in .env to store
+# attachments in Postgres bytea, then delete/comment out the `minio` and
+# `minio-init` services below, the `minio_data` volume, the `minio-init`
+# entry under engram's `depends_on:`, and engram's STORAGE_SCHEME/HOST/PORT
+# environment lines. (Suited to modest vaults — see #297.)
 
 services:
   engram:

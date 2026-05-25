@@ -170,7 +170,7 @@ jobs:
             lib priv config test frontend \
             Dockerfile entrypoint.sh \
             mix.exs mix.lock \
-            docker-compose.ci.yml docker-compose.ci-local.yml \
+            docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
             .github/workflows/ci.yml \
             | sha256sum | cut -d' ' -f1)
           # The e2e harness tree (helpers, fixtures, tests). Including it in
@@ -983,6 +983,83 @@ jobs:
         if: always()
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+  storage-database:
+    needs: [fingerprint, prebuild-ci-image]
+    # Minified self-host path (#297): boot the release with STORAGE_BACKEND=database
+    # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
+    # storage adapter via `bin/engram rpc`. This is the only job that exercises
+    # the no-MinIO boot path — the rest of CI runs STORAGE_BACKEND=s3. Skipped on
+    # cross-repo plugin dispatch (can't regress backend) and when the backend
+    # fingerprint already proved green.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    runs-on: [self-hosted, linux, x64, isolated]
+
+    env:
+      CI_PROJECT: engram-ci-db-${{ github.run_id }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+
+    steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Allocate dynamic ports
+        id: ports
+        run: |
+          # Host-port publish is parallel-unsafe on the shared runner VM; pick
+          # free ports per run. (The round-trip uses `compose exec`, not the
+          # host port, but the compose file still publishes one.)
+          get_free_port() { python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"; }
+          echo "engram_port=$(get_free_port)" >> "$GITHUB_OUTPUT"
+          echo "pg_port=$(get_free_port)" >> "$GITHUB_OUTPUT"
+
+      - name: Boot minified stack (bytea storage, no MinIO)
+        env:
+          CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
+          CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
+        run: |
+          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          # --no-build: reuse the image the prebuild-ci-image job already built.
+          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" up -d --no-build --wait
+
+      - name: Round-trip attachment bytes through Postgres
+        run: |
+          # rpc runs on the booted node, so it proves runtime.exs selected the
+          # Database adapter AND the on-boot migration created storage_objects.
+          # Any failed match raises; the sentinel grep is the authoritative gate.
+          OUT=$(docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" exec -T engram \
+            /app/bin/engram rpc '
+              key = "999/1/ci-smoke.bin"
+              data = :crypto.strong_rand_bytes(64)
+              Engram.Storage.Database = Engram.Storage.adapter()
+              :ok = Engram.Storage.adapter().put(key, data)
+              {:ok, ^data} = Engram.Storage.adapter().get(key)
+              true = Engram.Storage.adapter().exists?(key)
+              {:ok, 1} = Engram.Storage.adapter().delete_prefix("999/")
+              {:error, :not_found} = Engram.Storage.adapter().get(key)
+              IO.puts("STORAGE_DATABASE_ROUNDTRIP_OK")
+            ')
+          echo "$OUT"
+          echo "$OUT" | grep -q STORAGE_DATABASE_ROUNDTRIP_OK
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" logs || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker image prune -f 2>/dev/null || true
+          docker volume prune -f 2>/dev/null || true
+
   lint:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
@@ -1453,7 +1530,7 @@ jobs:
 
   ci:
     if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, e2e-clerk, e2e-local, e2e-browser]
+    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Check required jobs
@@ -1461,6 +1538,7 @@ jobs:
           VC="${{ needs.version-check.result }}"
           UT="${{ needs.unit-tests.result }}"
           LN="${{ needs.lint.result }}"
+          SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
           EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
@@ -1484,7 +1562,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-local / e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "e2e-local=$EL" "e2e-browser=$EB"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "storage-database=$SD" "e2e-local=$EL" "e2e-browser=$EB"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"

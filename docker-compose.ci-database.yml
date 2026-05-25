@@ -1,0 +1,59 @@
+# Minified self-host stack for CI (#297) — proves STORAGE_BACKEND=database
+# boots and round-trips attachment bytes through Postgres with NO MinIO.
+#
+# Only engram + postgres: AUTH_PROVIDER defaults to "local" (no Clerk child),
+# and the supervision tree starts no Qdrant/Ollama client, so this is the
+# smallest stack the release can boot in. The `storage-database` CI job runs
+#   bin/engram rpc <put/get/delete round-trip>
+# against this stack to exercise the bytea adapter end-to-end.
+#
+#   ENGRAM_CI_IMAGE=<tag> docker compose -f docker-compose.ci-database.yml \
+#     -p engram-ci-db up -d --no-build --wait
+
+name: engram-ci-db
+
+services:
+  engram:
+    image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${LOCAL_REGISTRY:-docker.io}/node:20-slim
+        BUILDER_IMAGE: ${LOCAL_REGISTRY:-docker.io}/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
+        RUNNER_IMAGE: ${LOCAL_REGISTRY:-docker.io}/debian:bookworm-20241202-slim
+    ports:
+      - "${CI_ENGRAM_PORT:-8110}:4000"
+    environment:
+      SECRET_KEY_BASE: "ci-test-secret-base-not-for-production-at-least-64-bytes-long-enough-for-phoenix"
+      DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
+      JWT_SECRET: ci-test-secret-not-for-production
+      PHX_SERVER: "true"
+      KEY_PROVIDER: ${KEY_PROVIDER:-local}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY must be set (CI workflow injects from secret)}
+      # The whole point of this stack: bytea storage, no MinIO sidecar.
+      STORAGE_BACKEND: database
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/api/health || exit 1"]
+      start_period: 10s
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: ${LOCAL_REGISTRY:-docker.io}/postgres:16-alpine
+    ports:
+      - "${CI_PG_PORT:-5443}:5432"
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: engram
+      POSTGRES_DB: engram
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engram"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    restart: "no"

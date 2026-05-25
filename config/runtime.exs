@@ -24,9 +24,12 @@ config :engram, EngramWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() != :test do
-  # Storage backend — S3-compatible only (A.5, PR #62). The legacy BYTEA
-  # `Storage.Database` adapter is gone; STORAGE_BACKEND is informational and
-  # only "s3" is accepted (default).
+  # Storage backend. Default "s3" is the SaaS/prod path (Fly Tigris) and the
+  # standard self-host path (MinIO). "database" is a self-host-only convenience
+  # (#297) that stores attachment bytes in Postgres `bytea` so a minified stack
+  # can drop MinIO — not for scale (that's why BYTEA was removed for SaaS in
+  # A.5/PR #62); it stores opaque ciphertext in a generic `storage_objects`
+  # table, NOT the old `attachments.content` column.
   case System.get_env("STORAGE_BACKEND", "s3") do
     "s3" ->
       config :engram, :storage, Engram.Storage.S3
@@ -42,11 +45,14 @@ if config_env() != :test do
         host: System.get_env("STORAGE_HOST"),
         port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
 
+    "database" ->
+      config :engram, :storage, Engram.Storage.Database
+
     other ->
       raise """
-      Unknown STORAGE_BACKEND=#{inspect(other)} — only \"s3\" is supported
-      since A.5 (PR #62). The BYTEA Storage.Database adapter was removed
-      along with the `attachments.content` column.
+      Unknown STORAGE_BACKEND=#{inspect(other)} — supported values are
+      "s3" (default; SaaS Tigris / self-host MinIO) and "database"
+      (self-host-only Postgres bytea, #297).
       """
   end
 
