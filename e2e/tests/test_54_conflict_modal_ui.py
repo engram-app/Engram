@@ -47,10 +47,26 @@ Helper substitution note:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from helpers.conflict import restore_after_conflict, setup_conflict_for_a
-from helpers.vault import read_note, wait_for_content
+from helpers.vault import wait_for_content
+
+
+def _unique_path(name: str) -> str:
+    """A fresh conflict-test path per invocation.
+
+    pytest-rerunfailures retries a failed test in the SAME browser process,
+    so a fixed path inherits the prior attempt's syncState/baseStore. That
+    leftover state makes setup_conflict_for_a's base push echo-skip
+    (sync.ts: hash === existing.hash), corrupting the 3-way base premise so
+    pull() auto-merges cleanly and the ConflictModal never opens. A unique
+    path per attempt starts pristine, so the base push always lands and the
+    divergence is a real (non-clean) conflict.
+    """
+    return f"E2E/Conflict54/{name}-{uuid.uuid4().hex[:8]}.md"
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +99,7 @@ async def test_view_toggle_switches_mode(vault_a, vault_b, cdp_a, cdp_b):
         return t === 'side-by-side' ? 'side-by-side' : 'unified';
     i.e. any non-'side-by-side' active-button text maps to 'unified'.
     """
-    path = "E2E/Conflict54/ViewToggle.md"
+    path = _unique_path("ViewToggle")
     await setup_conflict_for_a(
         vault_a, vault_b, cdp_a, cdp_b, path,
         local="# L1\nlocal content\n# L2\nshared line\n",
@@ -114,7 +130,7 @@ async def test_all_local_then_accept_writes_local(vault_a, vault_b, cdp_a, cdp_b
     After clicking 'All local' and 'Apply merge', the vault file on A must
     contain the local text and NOT contain the remote-only text.
     """
-    path = "E2E/Conflict54/AllLocal.md"
+    path = _unique_path("AllLocal")
     local = "# H1\nlocal-A content\n"
     remote = "# H1\nremote-B content\n"
     await setup_conflict_for_a(
@@ -125,11 +141,9 @@ async def test_all_local_then_accept_writes_local(vault_a, vault_b, cdp_a, cdp_b
         await cdp_a.click_conflict_accept()
         await cdp_a.wait_for_conflict_modal_closed()
 
-        content = read_note(vault_a, path)
-        assert "local-A content" in content, (
-            f"Expected 'local-A content' in vault after All-local accept; "
-            f"got: {content[:200]!r}"
-        )
+        # wait_for_content polls: the merge's vault.modify() flush is async
+        # and can lag the modal-closed signal, so a bare read races the write.
+        content = wait_for_content(vault_a, path, "local-A content", timeout=10)
         assert "remote-B content" not in content, (
             f"Remote text should not appear after All-local accept; "
             f"got: {content[:200]!r}"
@@ -145,7 +159,7 @@ async def test_all_remote_then_accept_writes_remote(vault_a, vault_b, cdp_a, cdp
     After clicking 'All remote' and 'Apply merge', the vault file on A must
     contain the remote text and NOT contain the local-only text.
     """
-    path = "E2E/Conflict54/AllRemote.md"
+    path = _unique_path("AllRemote")
     local = "# H1\nlocal-A content\n"
     remote = "# H1\nremote-B content\n"
     await setup_conflict_for_a(
@@ -156,11 +170,7 @@ async def test_all_remote_then_accept_writes_remote(vault_a, vault_b, cdp_a, cdp
         await cdp_a.click_conflict_accept()
         await cdp_a.wait_for_conflict_modal_closed()
 
-        content = read_note(vault_a, path)
-        assert "remote-B content" in content, (
-            f"Expected 'remote-B content' in vault after All-remote accept; "
-            f"got: {content[:200]!r}"
-        )
+        content = wait_for_content(vault_a, path, "remote-B content", timeout=10)
         assert "local-A content" not in content, (
             f"Local text should not appear after All-remote accept; "
             f"got: {content[:200]!r}"
@@ -178,7 +188,7 @@ async def test_per_hunk_choices_mixed_then_accept(vault_a, vault_b, cdp_a, cdp_b
     collapse them into a single hunk. With sufficient context distance the
     plugin's groupIntoHunks() emits a separate hunk per diverged region.
     """
-    path = "E2E/Conflict54/PerHunk.md"
+    path = _unique_path("PerHunk")
     # 12 identical unchanged lines between the two diverged regions force
     # the diff grouper to emit two distinct hunks rather than fusing them.
     middle = "\n".join(f"context line {i}" for i in range(1, 13))
@@ -218,11 +228,9 @@ async def test_per_hunk_choices_mixed_then_accept(vault_a, vault_b, cdp_a, cdp_b
         await cdp_a.click_conflict_accept()
         await cdp_a.wait_for_conflict_modal_closed()
 
-        merged = read_note(vault_a, path)
-        assert "local-region-A" in merged, (
-            f"Expected 'local-region-A' (hunk 0 local choice) in merged; "
-            f"got: {merged[:400]!r}"
-        )
+        # Poll for the async vault.modify() flush; the file is written
+        # atomically so once hunk-0's content lands, hunk-1's is present too.
+        merged = wait_for_content(vault_a, path, "local-region-A", timeout=10)
         assert "remote-region-B" in merged, (
             f"Expected 'remote-region-B' (hunk 1 remote choice) in merged; "
             f"got: {merged[:400]!r}"
@@ -238,7 +246,7 @@ async def test_manual_merge_editor_then_accept(vault_a, vault_b, cdp_a, cdp_b):
     Overwrites the merge editor with hand-crafted text and confirms the vault
     file reflects exactly that content after 'Apply merge'.
     """
-    path = "E2E/Conflict54/ManualEditor.md"
+    path = _unique_path("ManualEditor")
     await setup_conflict_for_a(
         vault_a, vault_b, cdp_a, cdp_b, path,
         local="# H1\nlocal edit\n",
