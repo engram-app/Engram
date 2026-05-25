@@ -34,6 +34,21 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
       assert UsageMeters.last_active_at(user.id) == first_stamp
     end
 
+    test "warm cache hit within the window issues no meter query", %{conn: conn} do
+      user = insert(:user)
+
+      # First request: cold cache → reads (+writes) the meter and warms the cache.
+      conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
+
+      # Second request: warm cache → must not touch the DB at all.
+      queries =
+        count_meter_queries(fn ->
+          conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
+        end)
+
+      assert queries == 0
+    end
+
     test "bumps when last_active_at is older than 1h", %{conn: conn} do
       user = insert(:user)
       UsageMeters.bump_last_active(user.id)
@@ -52,6 +67,29 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
 
       bumped = UsageMeters.last_active_at(user.id)
       assert DateTime.diff(bumped, two_hours_ago, :second) > 7000
+    end
+  end
+
+  # Counts Repo queries against the `usage_meters` source while `fun` runs.
+  defp count_meter_queries(fun) do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{source: source}, _config ->
+        if source == "usage_meters", do: Agent.update(counter, &(&1 + 1))
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+      Agent.get(counter, & &1)
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
     end
   end
 end
