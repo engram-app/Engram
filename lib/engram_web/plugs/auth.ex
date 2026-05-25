@@ -19,11 +19,11 @@ defmodule EngramWeb.Plugs.Auth do
   def call(conn, _opts) do
     case authenticate(conn) do
       {:ok, user} ->
-        assign(conn, :current_user, user)
+        assign(conn, :current_user, with_billing_assoc(user))
 
       {:ok, user, api_key} ->
         conn
-        |> assign(:current_user, user)
+        |> assign(:current_user, with_billing_assoc(user))
         |> assign(:current_api_key, api_key)
 
       {:error, reason} ->
@@ -43,6 +43,18 @@ defmodule EngramWeb.Plugs.Auth do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] -> Engram.Auth.TokenResolver.resolve(token)
       _ -> {:error, :no_auth}
+    end
+  end
+
+  # Load the subscription once here so the downstream billing gates
+  # (RequireOnboarding, RequireApiRpsBudget, RequireApiWriteEnabled) reuse the
+  # preloaded assoc instead of each re-querying. Skipped in self-host mode,
+  # where no billing gate runs and the extra read would be pure waste.
+  defp with_billing_assoc(user) do
+    if Application.get_env(:engram, :billing_enabled, false) do
+      Engram.Repo.preload(user, :subscription)
+    else
+      user
     end
   end
 

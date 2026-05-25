@@ -4,7 +4,11 @@ defmodule Engram.BillingTest do
   import Mox
 
   alias Engram.Billing
+  alias Engram.Billing.LimitKeys
+  alias Engram.Billing.Plan
+  alias Engram.Billing.PlanCache
   alias Engram.Billing.Subscription
+  alias Engram.Repo
 
   setup :verify_on_exit!
 
@@ -292,6 +296,157 @@ defmodule Engram.BillingTest do
     test "unknown event types return {:ok, :ignored}" do
       event = %{"event_type" => "transaction.completed", "data" => %{}}
       assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+    end
+  end
+
+  describe "subscription memoization" do
+    test "get_subscription/1 reuses a preloaded :subscription assoc without querying" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      user = Repo.preload(user, :subscription)
+
+      {result, queries} = with_subscription_query_count(fn -> Billing.get_subscription(user) end)
+
+      assert %Subscription{tier: "pro"} = result
+      assert queries == 0
+    end
+
+    test "get_subscription/1 returns nil from a preloaded-but-empty assoc without querying" do
+      user = insert(:user) |> Repo.preload(:subscription)
+
+      {result, queries} = with_subscription_query_count(fn -> Billing.get_subscription(user) end)
+
+      assert result == nil
+      assert queries == 0
+    end
+
+    test "active?/1 and tier/1 reuse a preloaded subscription (zero extra queries)" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      user = Repo.preload(user, :subscription)
+
+      {_, queries} =
+        with_subscription_query_count(fn ->
+          assert Billing.active?(user)
+          assert Billing.tier(user) == :pro
+        end)
+
+      assert queries == 0
+    end
+
+    test "get_subscription/1 still queries when the assoc is not loaded" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      {result, queries} = with_subscription_query_count(fn -> Billing.get_subscription(user) end)
+
+      assert %Subscription{} = result
+      assert queries == 1
+    end
+  end
+
+  describe "plan limit caching" do
+    setup do
+      plan =
+        Repo.insert!(%Plan{
+          name: "pro_#{System.unique_integer([:positive])}",
+          limits: %{"vaults_cap" => 7, "cross_vault_search" => false}
+        })
+
+      user = insert(:user) |> Ecto.Changeset.change(plan_id: plan.id) |> Repo.update!()
+      on_exit(fn -> PlanCache.invalidate(plan.id) end)
+      %{plan: plan, user: user}
+    end
+
+    test "resolves plan limits and caches them after the first lookup", %{plan: plan, user: user} do
+      PlanCache.invalidate(plan.id)
+
+      {first, q1} =
+        with_query_count("plans", fn -> Billing.effective_limit(user, :vaults_cap) end)
+
+      assert first == 7
+      assert q1 == 1
+
+      {second, q2} =
+        with_query_count("plans", fn -> Billing.effective_limit(user, :vaults_cap) end)
+
+      assert second == 7
+      assert q2 == 0
+    end
+
+    test "cached lookup preserves false plan values (not treated as missing)", %{user: user} do
+      assert Billing.effective_limit(user, :cross_vault_search) == false
+      assert Billing.effective_limit(user, :cross_vault_search) == false
+    end
+
+    test "missing plan key falls through to the default", %{user: user} do
+      # vault_scoped_keys is not set on this plan → default for tier.
+      assert Billing.effective_limit(user, :vault_scoped_keys) ==
+               LimitKeys.default_for(:vault_scoped_keys, :free)
+    end
+
+    test "invalidate/1 forces a re-read", %{plan: plan, user: user} do
+      Billing.effective_limit(user, :vaults_cap)
+      PlanCache.invalidate(plan.id)
+
+      {_, q} = with_query_count("plans", fn -> Billing.effective_limit(user, :vaults_cap) end)
+      assert q == 1
+    end
+
+    test "invalidate/1 reflects a runtime limit change (not just a re-query)",
+         %{plan: plan, user: user} do
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      plan |> Ecto.Changeset.change(limits: %{"vaults_cap" => 99}) |> Repo.update!()
+      # Still cached → stale value until invalidated.
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      PlanCache.invalidate(plan.id)
+      assert Billing.effective_limit(user, :vaults_cap) == 99
+    end
+
+    test "invalidate_all/0 drops every cached plan", %{plan: plan, user: user} do
+      assert Billing.effective_limit(user, :vaults_cap) == 7
+
+      plan |> Ecto.Changeset.change(limits: %{"vaults_cap" => 42}) |> Repo.update!()
+      PlanCache.invalidate_all()
+
+      assert Billing.effective_limit(user, :vaults_cap) == 42
+    end
+
+    test "an unknown plan id resolves to an empty limits map (falls to defaults)" do
+      missing_id = 2_000_000_000
+      PlanCache.invalidate(missing_id)
+      assert PlanCache.limits(missing_id) == %{}
+    end
+  end
+
+  defp with_subscription_query_count(fun), do: with_query_count("subscriptions", fun)
+
+  # Counts Repo queries against `source` emitted while `fun` runs. Telemetry
+  # handlers run synchronously in the process that emitted the query, so we
+  # scope counting to this test's pid — otherwise concurrent async tests
+  # (running in their own processes) leak into the count.
+  defp with_query_count(source, fun) do
+    test_pid = self()
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{source: src}, _config ->
+        if src == source and self() == test_pid, do: Agent.update(counter, &(&1 + 1))
+      end,
+      nil
+    )
+
+    try do
+      result = fun.()
+      {result, Agent.get(counter, & &1)}
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
     end
   end
 end

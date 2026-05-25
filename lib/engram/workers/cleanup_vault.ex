@@ -19,6 +19,7 @@ defmodule Engram.Workers.CleanupVault do
   alias Engram.Attachments.Attachment
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
+  alias Engram.UsageMeters
   alias Engram.Vaults.Vault
 
   require Logger
@@ -74,6 +75,18 @@ defmodule Engram.Workers.CleanupVault do
     Repo.transaction(fn ->
       vault_id = vault.id
 
+      # Drop the owner's live-note counter by the notes this vault still holds
+      # as live (deleted_at IS NULL). Soft-deleted notes were already
+      # decremented at soft-delete time, so only the live set counts here.
+      live_notes =
+        Repo.one(
+          from(n in Note,
+            where: n.vault_id == ^vault_id and is_nil(n.deleted_at),
+            select: count(n.id)
+          ),
+          skip_tenant_check: true
+        ) || 0
+
       Chunk
       |> where(vault_id: ^vault_id)
       |> Repo.delete_all(skip_tenant_check: true)
@@ -81,6 +94,8 @@ defmodule Engram.Workers.CleanupVault do
       Note
       |> where(vault_id: ^vault_id)
       |> Repo.delete_all(skip_tenant_check: true)
+
+      :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
 
       Attachment
       |> where(vault_id: ^vault_id)

@@ -22,6 +22,41 @@ defmodule EngramWeb.Plugs.AuthTest do
     refute conn.halted
   end
 
+  test "preloads the subscription assoc when billing is enabled", %{user: user, raw_key: raw_key} do
+    prev_enabled = Application.get_env(:engram, :billing_enabled)
+    Application.put_env(:engram, :billing_enabled, true)
+    on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev_enabled) end)
+
+    insert(:subscription, user: user, tier: "pro", status: "active")
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{raw_key}")
+      |> Auth.call([])
+
+    sub = conn.assigns.current_user.subscription
+    refute match?(%Ecto.Association.NotLoaded{}, sub)
+    assert sub.tier == "pro"
+  end
+
+  test "does not preload the subscription in self-host mode (billing disabled)", %{
+    user: user,
+    raw_key: raw_key
+  } do
+    prev_enabled = Application.get_env(:engram, :billing_enabled)
+    Application.put_env(:engram, :billing_enabled, false)
+    on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev_enabled) end)
+
+    insert(:subscription, user: user, tier: "pro", status: "active")
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{raw_key}")
+      |> Auth.call([])
+
+    assert match?(%Ecto.Association.NotLoaded{}, conn.assigns.current_user.subscription)
+  end
+
   test "authenticates with valid local JWT" do
     Application.put_env(:engram, :auth_provider, :local)
 

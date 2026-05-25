@@ -11,6 +11,7 @@ defmodule Engram.Workers.CleanupVaultTest do
   alias Engram.Attachments.Attachment
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
+  alias Engram.UsageMeters
   alias Engram.Vaults
   alias Engram.Vaults.Vault
   alias Engram.Workers.CleanupVault
@@ -87,6 +88,25 @@ defmodule Engram.Workers.CleanupVaultTest do
       refute Repo.get(Note, note.id, skip_tenant_check: true)
       refute Repo.get(Attachment, attachment.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+
+    test "decrements the owner's notes_count by the vault's live notes", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+
+      # A soft-deleted note in the same vault must NOT be double-counted.
+      insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
+
+      # Setup seeded one live note; sync the counter to reality.
+      assert UsageMeters.recount_notes!(user.id) == 1
+      assert UsageMeters.notes_count(user.id) == 1
+
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      assert UsageMeters.notes_count(user.id) == 0
     end
 
     test "hard-deletes chunks associated with notes", %{

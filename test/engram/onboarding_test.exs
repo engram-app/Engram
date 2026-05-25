@@ -3,6 +3,7 @@ defmodule Engram.OnboardingTest do
 
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.TermsCache
 
   describe "accept_terms/3" do
     test "inserts an agreement row for the user and version" do
@@ -137,6 +138,72 @@ defmodule Engram.OnboardingTest do
 
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
+    end
+
+    test "caches a positive terms check so repeat calls skip the agreement query" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      # First call warms the cache.
+      assert %{terms_ok: true} = Onboarding.status(user)
+
+      {status, queries} =
+        with_agreement_query_count(fn -> Onboarding.status(user) end)
+
+      assert %{terms_ok: true} = status
+      assert queries == 0
+    end
+
+    test "does not cache a negative terms check (re-queries until accepted)" do
+      user = insert(:user)
+
+      assert %{terms_ok: false} = Onboarding.status(user)
+
+      {status, queries} =
+        with_agreement_query_count(fn -> Onboarding.status(user) end)
+
+      assert %{terms_ok: false} = status
+      assert queries >= 1
+    end
+
+    test "degrades to a DB read when the terms cache is unavailable" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      # Drop the cache owner (and its table). accepted?/2 must report not-cached
+      # (false) rather than raise, and status/1 must still read the DB and work.
+      :ok = Supervisor.terminate_child(Engram.Supervisor, TermsCache)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, TermsCache) end)
+
+      assert TermsCache.accepted?(user.id, "2026-05-15") == false
+      assert :ok = TermsCache.mark_accepted(user.id, "2026-05-15")
+      assert %{terms_ok: true} = Onboarding.status(user)
+    end
+  end
+
+  defp with_agreement_query_count(fun) do
+    # Scope to this test's pid: telemetry handlers run in the emitting process,
+    # so without this a concurrent async test could leak into the count.
+    test_pid = self()
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{source: source}, _config ->
+        if source == "user_agreements" and self() == test_pid,
+          do: Agent.update(counter, &(&1 + 1))
+      end,
+      nil
+    )
+
+    try do
+      result = fun.()
+      {result, Agent.get(counter, & &1)}
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
     end
   end
 end

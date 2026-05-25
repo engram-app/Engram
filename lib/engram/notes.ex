@@ -11,6 +11,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Repo
+  alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
 
   require Logger
@@ -100,8 +101,17 @@ defmodule Engram.Notes do
   defp insert_new_note(base_attrs, user, sanitized_path, folder, tags) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
-    # the unlimited case, in which check_limit is a no-op.
-    current_count = count_user_notes(user.id)
+    # the unlimited case, in which check_limit is a no-op. The current count is
+    # a maintained counter (usage_meters.notes_count), not a per-insert
+    # COUNT(*); we increment it inside this tenant transaction so it stays
+    # atomic with the INSERT.
+    #
+    # The check itself is best-effort, not a hard guarantee: read-then-insert
+    # is non-atomic, so concurrent inserts can land slightly over the cap. This
+    # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
+    # for a soft abuse-deterrent cap. A hard cap would need a conditional
+    # UPDATE ... WHERE notes_count < limit gating the insert.
+    current_count = UsageMeters.notes_count(user.id)
 
     case Billing.check_limit(user, :notes_cap, current_count) do
       {:error, :limit_reached} ->
@@ -117,18 +127,15 @@ defmodule Engram.Notes do
           changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
           case Repo.insert(changeset) do
-            {:ok, note} -> {:ok, {nil, note}}
-            {:error, changeset} -> {:error, changeset}
+            {:ok, note} ->
+              :ok = UsageMeters.inc_notes_count(user.id, 1)
+              {:ok, {nil, note}}
+
+            {:error, changeset} ->
+              {:error, changeset}
           end
         end
     end
-  end
-
-  defp count_user_notes(user_id) do
-    Repo.one(
-      from(n in Note, where: n.user_id == ^user_id and is_nil(n.deleted_at), select: count(n.id)),
-      skip_tenant_check: true
-    ) || 0
   end
 
   defp update_existing_note(
@@ -324,8 +331,13 @@ defmodule Engram.Notes do
       if note do
         _ =
           Repo.with_tenant(user.id, fn ->
-            from(n in Note, where: n.id == ^note.id)
-            |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+            {updated, _} =
+              from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
+              |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+
+            # Decrement by rows actually transitioned live → deleted, so a
+            # concurrent delete (already-nil deleted_at) can't double-count.
+            :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
         # T3.2 — pass path_hmac (base64), never plaintext path. The note row

@@ -18,6 +18,7 @@ defmodule Engram.UsageMeters do
     @primary_key {:user_id, :id, autogenerate: false}
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
+      field :notes_count, :integer, default: 0
       field :last_active_at, :utc_datetime_usec
       field :active_conversation_started_at, :utc_datetime_usec
       field :active_conversation_query_count, :integer, default: 0
@@ -74,6 +75,95 @@ defmodule Engram.UsageMeters do
   end
 
   def estimate_tokens(_), do: 0
+
+  # ── Notes counter (pricing v2 §G) ─────────────────────────────
+
+  @doc "Returns the maintained live-note count for the user (0 if no row yet)."
+  @spec notes_count(integer()) :: non_neg_integer()
+  def notes_count(user_id) when is_integer(user_id) do
+    Repo.one(
+      from(m in Meter, where: m.user_id == ^user_id, select: m.notes_count),
+      skip_tenant_check: true
+    ) || 0
+  end
+
+  @doc """
+  Adds `delta` to the user's live-note count, lazy-initialising the row. Use a
+  positive `delta` when notes become live (insert/restore). Single upsert so
+  concurrent writes can't lose increments to a read-modify-write race.
+  """
+  @spec inc_notes_count(integer(), pos_integer()) :: :ok
+  def inc_notes_count(user_id, delta)
+      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+    now = DateTime.utc_now()
+
+    {_, _} =
+      Repo.insert_all(
+        Meter,
+        [%{user_id: user_id, notes_count: delta, updated_at: now}],
+        on_conflict: [inc: [notes_count: delta], set: [updated_at: now]],
+        conflict_target: :user_id,
+        skip_tenant_check: true
+      )
+
+    :ok
+  end
+
+  @doc """
+  Subtracts `delta` from the user's live-note count, clamped at zero so drift
+  or a missing row can never produce a negative. Use when notes leave the live
+  set (soft-delete, bulk hard-delete). No-op when no meter row exists.
+  """
+  @spec dec_notes_count(integer(), non_neg_integer()) :: :ok
+  def dec_notes_count(_user_id, 0), do: :ok
+
+  def dec_notes_count(user_id, delta)
+      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+    now = DateTime.utc_now()
+
+    {_, _} =
+      from(m in Meter,
+        where: m.user_id == ^user_id,
+        update: [
+          set: [
+            notes_count: fragment("GREATEST(0, ? - ?)", m.notes_count, ^delta),
+            updated_at: ^now
+          ]
+        ]
+      )
+      |> Repo.update_all([], skip_tenant_check: true)
+
+    :ok
+  end
+
+  @doc """
+  Recomputes the live-note count from the notes table and upserts it. Repair
+  primitive for reconciling drift; not on any hot path.
+  """
+  @spec recount_notes!(integer()) :: non_neg_integer()
+  def recount_notes!(user_id) when is_integer(user_id) do
+    count =
+      Repo.one(
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user_id and is_nil(n.deleted_at),
+          select: count(n.id)
+        ),
+        skip_tenant_check: true
+      ) || 0
+
+    now = DateTime.utc_now()
+
+    {_, _} =
+      Repo.insert_all(
+        Meter,
+        [%{user_id: user_id, notes_count: count, updated_at: now}],
+        on_conflict: [set: [notes_count: count, updated_at: now]],
+        conflict_target: :user_id,
+        skip_tenant_check: true
+      )
+
+    count
+  end
 
   # ── Activity tracking (pricing v2 §C) ─────────────────────────
 

@@ -9,6 +9,7 @@ defmodule Engram.Onboarding do
 
   alias Engram.Billing
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.TermsCache
   alias Engram.Repo
 
   @terms_document "terms_of_service"
@@ -73,6 +74,16 @@ defmodule Engram.Onboarding do
   end
 
   defp terms_accepted?(user, current_version) do
+    if TermsCache.accepted?(user.id, current_version) do
+      true
+    else
+      accepted = query_terms_accepted?(user, current_version)
+      if accepted, do: TermsCache.mark_accepted(user.id, current_version)
+      accepted
+    end
+  end
+
+  defp query_terms_accepted?(user, current_version) do
     import Ecto.Query
 
     latest =

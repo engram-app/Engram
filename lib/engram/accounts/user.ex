@@ -26,6 +26,7 @@ defmodule Engram.Accounts.User do
     field :og_grandfather_redeemed_at, :utc_datetime_usec
 
     belongs_to :plan, Engram.Billing.Plan
+    has_one :subscription, Engram.Billing.Subscription
     has_many :notes, Engram.Notes.Note
     has_many :api_keys, Engram.Accounts.ApiKey
     has_many :vaults, Engram.Vaults.Vault
