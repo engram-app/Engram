@@ -14,6 +14,11 @@ defmodule Engram.Onboarding.TermsCache do
   The table is `:public` (the value is a non-secret boolean), so request
   processes read and write directly with no GenServer hop. This process exists
   only to own the table for the application's lifetime.
+
+  If the owning process is down and the table is absent, `accepted?/2` returns
+  `false` (forcing a DB read-through — never a false-positive accept) and
+  `mark_accepted/2` is a no-op, so a cache outage degrades to the authoritative
+  agreement query instead of raising.
   """
 
   use GenServer
@@ -27,12 +32,18 @@ defmodule Engram.Onboarding.TermsCache do
   @spec accepted?(user_id :: integer(), version :: String.t()) :: boolean()
   def accepted?(user_id, version) do
     :ets.member(@table, {user_id, version})
+  rescue
+    # Table absent → report not-cached so the caller re-queries the DB.
+    # Fails safe: never a false-positive acceptance.
+    ArgumentError -> false
   end
 
   @spec mark_accepted(user_id :: integer(), version :: String.t()) :: :ok
   def mark_accepted(user_id, version) do
     :ets.insert(@table, {{user_id, version}})
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @impl true

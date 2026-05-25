@@ -413,6 +413,12 @@ defmodule Engram.BillingTest do
 
       assert Billing.effective_limit(user, :vaults_cap) == 42
     end
+
+    test "an unknown plan id resolves to an empty limits map (falls to defaults)" do
+      missing_id = 2_000_000_000
+      PlanCache.invalidate(missing_id)
+      assert PlanCache.limits(missing_id) == %{}
+    end
   end
 
   defp with_subscription_query_count(fun), do: with_query_count("subscriptions", fun)

@@ -64,4 +64,48 @@ defmodule Engram.UsageMetersTest do
       assert UsageMeters.estimate_tokens("abcde") == 2
     end
   end
+
+  describe "notes_count counter (pricing v2 §G)" do
+    test "returns 0 for a user with no meter row" do
+      user = insert(:user)
+      assert UsageMeters.notes_count(user.id) == 0
+    end
+
+    test "inc_notes_count lazy-inits and accumulates across calls" do
+      user = insert(:user)
+      Enum.each(1..5, fn _ -> :ok = UsageMeters.inc_notes_count(user.id, 1) end)
+      assert UsageMeters.notes_count(user.id) == 5
+    end
+
+    test "dec_notes_count clamps at zero (never negative)" do
+      user = insert(:user)
+      :ok = UsageMeters.inc_notes_count(user.id, 2)
+      :ok = UsageMeters.dec_notes_count(user.id, 5)
+      assert UsageMeters.notes_count(user.id) == 0
+    end
+
+    test "dec_notes_count with a zero delta is a no-op" do
+      user = insert(:user)
+      :ok = UsageMeters.inc_notes_count(user.id, 3)
+      :ok = UsageMeters.dec_notes_count(user.id, 0)
+      assert UsageMeters.notes_count(user.id) == 3
+    end
+
+    test "dec_notes_count on a missing meter row is a safe no-op" do
+      user = insert(:user)
+      assert UsageMeters.dec_notes_count(user.id, 1) == :ok
+      assert UsageMeters.notes_count(user.id) == 0
+    end
+
+    test "recount_notes! recomputes the live count from notes (ignoring soft-deleted)" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
+
+      assert UsageMeters.recount_notes!(user.id) == 2
+      assert UsageMeters.notes_count(user.id) == 2
+    end
+  end
 end

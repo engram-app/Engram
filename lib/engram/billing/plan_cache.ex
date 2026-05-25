@@ -56,10 +56,16 @@ defmodule Engram.Billing.PlanCache do
   end
 
   defp load(plan_id) do
-    Repo.one(
-      from(p in Plan, where: p.id == ^plan_id, select: p.limits),
-      skip_tenant_check: true
-    ) || %{}
+    case Repo.one(
+           from(p in Plan, where: p.id == ^plan_id, select: p.limits),
+           skip_tenant_check: true
+         ) do
+      limits when is_map(limits) -> limits
+      # Unknown plan id, or a malformed (non-map) limits column. Resolve to an
+      # empty map so `plan_lookup` falls through to tier defaults rather than
+      # raising BadMapError on the request path.
+      _ -> %{}
+    end
   end
 
   defp key(plan_id), do: {__MODULE__, plan_id}

@@ -94,6 +94,21 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
       assert {:ok, cached} = ActivityCache.get(user.id)
       assert DateTime.diff(DateTime.utc_now(), cached, :second) < 60
     end
+
+    test "degrades to the DB path when the cache table is unavailable", %{conn: conn} do
+      user = insert(:user)
+
+      # Drop the cache owner (and its table). With the degrade in place this must
+      # NOT 500 the request — it falls back to the authoritative meter read.
+      :ok = Supervisor.terminate_child(Engram.Supervisor, ActivityCache)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, ActivityCache) end)
+
+      assert ActivityCache.get(user.id) == :miss
+      assert ActivityCache.put(user.id, DateTime.utc_now()) == :ok
+
+      conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
+      assert %DateTime{} = UsageMeters.last_active_at(user.id)
+    end
   end
 
   # Counts Repo queries against the `usage_meters` source while `fun` runs.

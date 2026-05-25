@@ -3,6 +3,7 @@ defmodule Engram.OnboardingTest do
 
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.TermsCache
 
   describe "accept_terms/3" do
     test "inserts an agreement row for the user and version" do
@@ -163,6 +164,20 @@ defmodule Engram.OnboardingTest do
 
       assert %{terms_ok: false} = status
       assert queries >= 1
+    end
+
+    test "degrades to a DB read when the terms cache is unavailable" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      # Drop the cache owner (and its table). accepted?/2 must report not-cached
+      # (false) rather than raise, and status/1 must still read the DB and work.
+      :ok = Supervisor.terminate_child(Engram.Supervisor, TermsCache)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, TermsCache) end)
+
+      assert TermsCache.accepted?(user.id, "2026-05-15") == false
+      assert :ok = TermsCache.mark_accepted(user.id, "2026-05-15")
+      assert %{terms_ok: true} = Onboarding.status(user)
     end
   end
 

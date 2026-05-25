@@ -105,6 +105,12 @@ defmodule Engram.Notes do
     # a maintained counter (usage_meters.notes_count), not a per-insert
     # COUNT(*); we increment it inside this tenant transaction so it stays
     # atomic with the INSERT.
+    #
+    # The check itself is best-effort, not a hard guarantee: read-then-insert
+    # is non-atomic, so concurrent inserts can land slightly over the cap. This
+    # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
+    # for a soft abuse-deterrent cap. A hard cap would need a conditional
+    # UPDATE ... WHERE notes_count < limit gating the insert.
     current_count = UsageMeters.notes_count(user.id)
 
     case Billing.check_limit(user, :notes_cap, current_count) do
