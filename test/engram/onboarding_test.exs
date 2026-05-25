@@ -138,5 +138,53 @@ defmodule Engram.OnboardingTest do
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
     end
+
+    test "caches a positive terms check so repeat calls skip the agreement query" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      # First call warms the cache.
+      assert %{terms_ok: true} = Onboarding.status(user)
+
+      {status, queries} =
+        with_agreement_query_count(fn -> Onboarding.status(user) end)
+
+      assert %{terms_ok: true} = status
+      assert queries == 0
+    end
+
+    test "does not cache a negative terms check (re-queries until accepted)" do
+      user = insert(:user)
+
+      assert %{terms_ok: false} = Onboarding.status(user)
+
+      {status, queries} =
+        with_agreement_query_count(fn -> Onboarding.status(user) end)
+
+      assert %{terms_ok: false} = status
+      assert queries >= 1
+    end
+  end
+
+  defp with_agreement_query_count(fun) do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{source: source}, _config ->
+        if source == "user_agreements", do: Agent.update(counter, &(&1 + 1))
+      end,
+      nil
+    )
+
+    try do
+      result = fun.()
+      {result, Agent.get(counter, & &1)}
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
+    end
   end
 end

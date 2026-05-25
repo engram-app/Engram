@@ -23,6 +23,7 @@ defmodule Engram.Application do
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
         Engram.UsageMeters.ActivityCache,
+        Engram.Onboarding.TermsCache,
         {EngramWeb.RateLimiter, [clean_period: :timer.minutes(2)]},
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
