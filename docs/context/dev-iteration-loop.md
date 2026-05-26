@@ -13,8 +13,102 @@ How to make changes show up in a browser when iterating locally on this VM. Patt
 | Frontend hot-reload while editing   | `http://localhost:5173/`         | `make frontend-dev` running                 |
 | Test prod bundle locally            | `http://localhost:4000/`         | `make dev` running + `bun run build`        |
 | Share with friends / external test  | `https://app.engram.page/`       | `make dev` running + `bun run build`        |
+| **UI-only iteration, real Clerk + data, no local backend** | `http://localhost:5173/` (or `http://10.0.20.172:5173/` from LAN) | Vite pointed at staging — see "Iterating against staging" below |
 
 > **Important:** `app.engram.page` only sees what Phoenix serves. To make changes visible there during dev, you must run `bun run build` inside `backend/frontend/` so Phoenix has the new static bundle to ship.
+
+## Iterating against the staging backend (no local Phoenix)
+
+_Added 2026-05-26._
+
+For **pure frontend/UI work** (e.g. the onboarding wizard) you can skip running
+Phoenix entirely and point the Vite dev server at the live **staging** backend.
+You get HMR on your branch's UI, real Clerk auth, and real data — and crucially
+**no local node joins the shared Oban queue** (see the Oban hazard below).
+
+### Why not just `make dev` against the FastRaid DB?
+
+`backend/.env.local` already points `DATABASE_URL` at FastRaid Postgres
+(`10.0.20.214:35432/engram`) and Qdrant at `10.0.20.201:6333`. But Oban starts
+unconditionally in `lib/engram/application.ex` with live queues
+(`embed/reindex/maintenance/crypto_backfill` + Cron, see `config/config.exs`) and
+there is **no dev/env override to disable it**. So a local `mix phx.server`
+against that DB becomes a worker on the shared job queue — it will pull and run
+real embedding jobs (Voyage cost), crypto_backfill, and cron against shared
+Qdrant/data. The staging-proxy approach below sidesteps this completely.
+
+### Setup
+
+In `backend/frontend/.env.local` (gitignored):
+
+```
+VITE_AUTH_PROVIDER=clerk
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_a2V5LWxvbmdob3JuLTc5LmNsZXJrLmFjY291bnRzLmRldiQ
+VITE_API_TARGET=https://staging.engram.page
+```
+
+The publishable key MUST be **staging's** Clerk instance. Get the current one with:
+
+```
+curl -s https://staging.engram.page/ | grep -o '__ENGRAM_CONFIG__[^<]*'
+```
+
+As of 2026-05-26 staging is Clerk instance **longhorn-79** (the key above). The
+local backend's `.env.local` uses a *different* instance (`rare-kingfish-16`) —
+using the wrong key gives 401s because staging won't validate JWTs minted by a
+different instance.
+
+`vite.config.ts` already carries the two changes this needs (committed): proxy
+entries with `changeOrigin: true` + `secure: true`, and an IPv4-forcing preamble
+(`dns.setDefaultResultOrder('ipv4first')` + `net.setDefaultAutoSelectFamily(false)`).
+
+### Run it (under node, not bun)
+
+```
+make dev-ui-staging          # from backend/ — binds 0.0.0.0 for LAN access
+```
+
+That target expands to (run from `backend/frontend/`):
+
+```
+VITE_API_TARGET=https://staging.engram.page node node_modules/.bin/vite          # localhost only
+VITE_API_TARGET=https://staging.engram.page node node_modules/.bin/vite --host 0.0.0.0   # reachable on LAN
+```
+
+Verify the proxy reaches staging (401 = reached backend, just unauthenticated):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:5173/api/billing/config   # expect 401
+```
+
+Then open `http://localhost:5173/` (or `http://10.0.20.172:5173/` from another LAN
+machine) and sign in via Clerk.
+
+### LAN access from another machine
+
+- Bind with `--host 0.0.0.0` (default bind is `localhost` only).
+- Open the VM firewall: `sudo firewall-cmd --add-port=5173/tcp` (runtime-only, no
+  `--permanent`, auto-closes on reboot/reload). Tighter: scope to the subnet with a
+  rich rule `source address="10.0.20.0/24"`. This VM's LAN IP is **10.0.20.172**.
+- Connect by **IP**, not a hostname — Vite's `allowedHosts` permits IP literals but
+  blocks unknown domain names ("Blocked request. This host is not allowed.").
+
+### Failed approaches / dead ends
+
+- **`bun run dev` against a remote https target → 502.** This VM has no IPv6
+  route, staging's DNS returns AAAA records, and the proxy's happy-eyeballs races
+  a dead IPv6 connect (`ENETUNREACH`), surfacing as `502 Bad Gateway` /
+  `AggregateError [ECONNREFUSED]`. Bun **ignores** `NODE_OPTIONS`,
+  `--dns-result-order`, and `net.setDefaultAutoSelectFamily`, so the config-level
+  IPv4 fix doesn't take effect under bun. **Run under `node`.**
+- **Passing the proxy a `family:4` https agent via the vite proxy `agent` option** —
+  did not help (Vite 8's proxy ignored it). The working fix is the process-level
+  `dns`/`net` preamble in `vite.config.ts`, which only applies under node.
+- **Relying on `.env.local` for `VITE_API_TARGET` under node** — node does NOT
+  auto-load `.env.local` into `process.env` (bun does), and `vite.config.ts` reads
+  `process.env.VITE_API_TARGET`. So pass it inline on the node command. (Client
+  vars like `VITE_AUTH_PROVIDER` still load fine — Vite reads `.env.*` into
+  `import.meta.env` regardless of runtime.)
 
 ## The white-page gotcha (and the fix)
 

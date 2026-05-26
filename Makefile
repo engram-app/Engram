@@ -1,4 +1,4 @@
-.PHONY: help deps dev dev-selfhost dev-stop test backend-build backend-up backend-down frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list parity-mix parity-bash parity-ci-up parity-ci-down gen-master-key
+.PHONY: help deps dev dev-selfhost dev-stop test backend-build backend-up backend-down frontend-install frontend-build frontend-dev dev-ui-staging ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list parity-mix parity-bash parity-ci-up parity-ci-down gen-master-key
 
 help:              ## List available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,6 +48,13 @@ frontend-build:    ## Build frontend (vite → priv/static/app)
 
 frontend-dev:      ## Run Vite dev server standalone
 	cd frontend && bun run dev
+
+dev-ui-staging:    ## Vite (:5173, LAN) against staging backend — UI-only, no local Phoenix/Oban
+	@# Must run under node (not bun): the IPv4 fix in vite.config.ts uses node DNS
+	@# APIs bun ignores, and node needs VITE_API_TARGET passed inline (it doesn't
+	@# auto-load .env.local into process.env). Clerk vars come from frontend/.env.local.
+	@# See docs/context/dev-iteration-loop.md → "Iterating against the staging backend".
+	cd frontend && VITE_API_TARGET=https://staging.engram.page node node_modules/.bin/vite --host 0.0.0.0
 
 # --- CI Stack ---
 
