@@ -46,4 +46,71 @@ defmodule Engram.MailerTest do
       assert :ok = Mailer.send_welcome(user)
     end
   end
+
+  describe "OG-waitlist grandfather emails" do
+    test "email 1 — pricing-locked heads-up with checkout link" do
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
+        assert to == "og@example.com"
+        assert subject =~ "founding-member pricing is locked"
+        assert html =~ "Ada"
+        assert html =~ "https://app.engram.page/checkout/og"
+        assert html =~ "$5"
+        assert html =~ "12 months"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_og_grandfather_1(
+                 "og@example.com",
+                 "Ada",
+                 "https://app.engram.page/checkout/og"
+               )
+    end
+
+    test "email 2 — expiry reminder with date and portal link" do
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
+        assert to == "og@example.com"
+        assert subject =~ "expires in 30 days"
+        assert html =~ "Ada"
+        assert html =~ "June 1, 2027"
+        assert html =~ "https://app.engram.page/portal"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_og_grandfather_2(
+                 "og@example.com",
+                 "Ada",
+                 "June 1, 2027",
+                 "https://app.engram.page/portal"
+               )
+    end
+
+    test "email 3 — post-expiry notice" do
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
+        assert to == "og@example.com"
+        assert subject =~ "pricing has updated"
+        assert html =~ "Ada"
+        assert html =~ "standard rate"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_og_grandfather_3("og@example.com", "Ada")
+    end
+
+    test "escapes HTML in the recipient name" do
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        refute html =~ "<script>"
+        assert html =~ "&lt;script&gt;"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_og_grandfather_1(
+                 "og@example.com",
+                 "<script>x</script>",
+                 "https://app.engram.page/checkout/og"
+               )
+    end
+  end
 end
