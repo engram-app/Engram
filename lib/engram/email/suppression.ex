@@ -19,8 +19,11 @@ defmodule Engram.Email.Suppression do
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
+  @type t :: %__MODULE__{}
+  @type reason :: :bounced | :complained
+
   @doc "Record `email` as suppressed for `reason` (idempotent on the address)."
-  @spec suppress(String.t(), String.t()) :: {:ok, t :: struct()} | {:error, Ecto.Changeset.t()}
+  @spec suppress(String.t(), reason()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def suppress(email, reason) do
     %__MODULE__{}
     |> changeset(%{email: email, reason: reason})
