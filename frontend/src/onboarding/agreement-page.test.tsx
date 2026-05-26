@@ -42,4 +42,14 @@ describe('AgreementPage', () => {
 
     await waitFor(() => expect(mutate).toHaveBeenCalledWith('2026-05-15'))
   })
+
+  it('links out to the hosted Terms and Privacy pages in a new tab', () => {
+    renderPage()
+    const terms = screen.getByRole('link', { name: /terms of service/i })
+    const privacy = screen.getByRole('link', { name: /privacy policy/i })
+    expect(terms).toHaveAttribute('href', 'https://engram.page/terms')
+    expect(privacy).toHaveAttribute('href', 'https://engram.page/privacy')
+    expect(terms).toHaveAttribute('target', '_blank')
+    expect(terms).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
 })
