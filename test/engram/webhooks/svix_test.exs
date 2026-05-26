@@ -48,5 +48,16 @@ defmodule Engram.Webhooks.SvixTest do
       assert {:error, _} = Svix.verify("msg_1", ts, "{}", "v1,x", nil)
       assert {:error, _} = Svix.verify("msg_1", ts, "{}", "v1,x", "")
     end
+
+    test "rejects a malformed (non-base64) secret" do
+      ts = to_string(System.system_time(:second))
+      assert {:error, reason} = Svix.verify("msg_1", ts, "{}", "v1,x", "whsec_not!valid!base64!")
+      assert reason =~ "malformed"
+    end
+
+    test "rejects a non-integer timestamp" do
+      assert {:error, reason} = Svix.verify("msg_1", "not-a-number", "{}", "v1,x", @secret)
+      assert reason =~ "timestamp"
+    end
   end
 end

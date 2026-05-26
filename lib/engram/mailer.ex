@@ -32,7 +32,7 @@ defmodule Engram.Mailer do
     <mj-text>— The Engram team</mj-text>
     """
 
-    deliver(email, "Welcome to Engram", Template.render(body), [])
+    render_and_deliver(email, "Welcome to Engram", body)
   end
 
   defp greeting_name(%User{display_name: name}) when is_binary(name) and name != "", do: name
@@ -61,11 +61,10 @@ defmodule Engram.Mailer do
     <mj-text>Thanks for being part of the founding cohort.<br />— Todd</mj-text>
     """
 
-    deliver(
+    render_and_deliver(
       email,
       "Engram pricing update — your founding-member pricing is locked",
-      Template.render(body),
-      []
+      body
     )
   end
 
@@ -91,11 +90,10 @@ defmodule Engram.Mailer do
     <mj-text>Thanks again for being part of the early Engram crew.</mj-text>
     """
 
-    deliver(
+    render_and_deliver(
       email,
       "Your Engram founding-member pricing expires in 30 days",
-      Template.render(body),
-      []
+      body
     )
   end
 
@@ -111,7 +109,7 @@ defmodule Engram.Mailer do
     needed; you can manage your subscription anytime in your dashboard.</mj-text>
     """
 
-    deliver(email, "Your Engram pricing has updated", Template.render(body), [])
+    render_and_deliver(email, "Your Engram pricing has updated", body)
   end
 
   def send_inactivity_warning_60(%User{email: email}) do
@@ -162,6 +160,16 @@ defmodule Engram.Mailer do
       """,
       []
     )
+  end
+
+  # Render an MJML body to HTML, then deliver. A render failure becomes a
+  # {:error, {:render_failed, reason}} return (not a raise) so one bad render is
+  # a per-recipient failure the broadcast can collect, not an aborted cohort.
+  defp render_and_deliver(email, subject, body) do
+    case Template.render(body) do
+      {:ok, html} -> deliver(email, subject, html, [])
+      {:error, reason} -> {:error, {:render_failed, reason}}
+    end
   end
 
   # Single send funnel: skip addresses on the suppression list (bounced /

@@ -12,12 +12,13 @@ defmodule Engram.Email.Template do
 
   @doc """
   Wrap a body MJML fragment (a series of `mj-text`/`mj-button` nodes) in the
-  shared layout and compile to responsive HTML.
+  shared layout and compile to responsive HTML. Returns `{:error, reason}` on a
+  compilation failure rather than raising, so a single bad render is a
+  per-recipient failure (not an aborted broadcast).
   """
-  @spec render(String.t()) :: String.t()
+  @spec render(String.t()) :: {:ok, String.t()} | {:error, term()}
   def render(body_mjml) when is_binary(body_mjml) do
-    {:ok, html} = Mjml.to_html(layout(body_mjml))
-    html
+    Mjml.to_html(layout(body_mjml))
   end
 
   @doc "HTML-escape an untrusted value before interpolating it into MJML."
