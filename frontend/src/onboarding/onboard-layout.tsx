@@ -24,8 +24,15 @@ export default function OnboardLayout() {
           </button>
         </nav>
       </header>
-      <section className="flex-1 overflow-y-auto">
-        <Outlet />
+      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+          <div className="absolute inset-0 grid-overlay opacity-30" />
+          <div className="absolute -left-32 -top-32 h-96 w-96 neural-glow-purple opacity-60" />
+          <div className="absolute -bottom-32 -right-32 h-96 w-96 neural-glow-cyan opacity-60" />
+        </div>
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <Outlet />
+        </div>
       </section>
     </main>
   )

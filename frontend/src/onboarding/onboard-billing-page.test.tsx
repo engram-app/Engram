@@ -40,10 +40,12 @@ function renderPage() {
 }
 
 describe('OnboardBillingPage', () => {
-  it('shows plan selection and a Free badge for a free-tier user', () => {
+  it('shows the plan choice with a recommended Pro plan for a free-tier user', () => {
     renderPage()
-    expect(screen.getByText('Free')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /choose a plan/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /choose your plan/i, level: 1 })).toBeInTheDocument()
+    expect(screen.getByText('Starter')).toBeInTheDocument()
+    expect(screen.getByText('Pro')).toBeInTheDocument()
+    expect(screen.getByText(/most popular/i)).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /start free trial/i })).toHaveLength(2)
   })
 })
