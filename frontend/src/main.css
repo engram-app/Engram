@@ -89,6 +89,12 @@
 @layer components {
   .grid-overlay {
     background-size: 20px 20px;
+    /* Light mode: --border is near-white, so use a darker neutral line for visible texture. */
+    background-image:
+      linear-gradient(to right, oklch(0% 0 0 / 0.2) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0% 0 0 / 0.2) 1px, transparent 1px);
+  }
+  .dark .grid-overlay {
     background-image:
       linear-gradient(to right, oklch(from var(--border) l c h / 0.5) 1px, transparent 1px),
       linear-gradient(to bottom, oklch(from var(--border) l c h / 0.5) 1px, transparent 1px);
