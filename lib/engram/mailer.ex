@@ -14,7 +14,10 @@ defmodule Engram.Mailer do
   """
 
   alias Engram.Accounts.User
+  alias Engram.Email.Suppression
   alias Engram.Email.Template
+
+  require Logger
 
   def send_welcome(%User{email: email} = user) do
     name = Template.esc(greeting_name(user))
@@ -28,7 +31,7 @@ defmodule Engram.Mailer do
     <mj-text>— The Engram team</mj-text>
     """
 
-    provider().send(email, "Welcome to Engram", Template.render(body), [])
+    deliver(email, "Welcome to Engram", Template.render(body), [])
   end
 
   defp greeting_name(%User{display_name: name}) when is_binary(name) and name != "", do: name
@@ -57,7 +60,7 @@ defmodule Engram.Mailer do
     <mj-text>Thanks for being part of the founding cohort.<br />— Todd</mj-text>
     """
 
-    provider().send(
+    deliver(
       email,
       "Engram pricing update — your founding-member pricing is locked",
       Template.render(body),
@@ -87,7 +90,7 @@ defmodule Engram.Mailer do
     <mj-text>Thanks again for being part of the early Engram crew.</mj-text>
     """
 
-    provider().send(
+    deliver(
       email,
       "Your Engram founding-member pricing expires in 30 days",
       Template.render(body),
@@ -107,11 +110,11 @@ defmodule Engram.Mailer do
     needed; you can manage your subscription anytime in your dashboard.</mj-text>
     """
 
-    provider().send(email, "Your Engram pricing has updated", Template.render(body), [])
+    deliver(email, "Your Engram pricing has updated", Template.render(body), [])
   end
 
   def send_inactivity_warning_60(%User{email: email}) do
-    provider().send(
+    deliver(
       email,
       "Engram: you haven't synced in 60 days",
       """
@@ -129,7 +132,7 @@ defmodule Engram.Mailer do
   end
 
   def send_inactivity_warning_80(%User{email: email}) do
-    provider().send(
+    deliver(
       email,
       "Engram: final notice — 10 days until auto-delete",
       """
@@ -146,7 +149,7 @@ defmodule Engram.Mailer do
   end
 
   def send_account_deleted_notice(%User{email: email}) do
-    provider().send(
+    deliver(
       email,
       "Engram: your vault was auto-deleted",
       """
@@ -158,6 +161,18 @@ defmodule Engram.Mailer do
       """,
       []
     )
+  end
+
+  # Single send funnel: skip addresses on the suppression list (bounced /
+  # complained) before handing off to the provider. Returns {:error, :suppressed}
+  # so callers (e.g. the broadcast task) can surface skips without sending.
+  defp deliver(email, subject, html, opts) do
+    if Suppression.suppressed?(email) do
+      Logger.info("Email skipped: address on suppression list", category: :email)
+      {:error, :suppressed}
+    else
+      provider().send(email, subject, html, opts)
+    end
   end
 
   defp provider do

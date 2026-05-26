@@ -45,6 +45,14 @@ defmodule Engram.MailerTest do
 
       assert :ok = Mailer.send_welcome(user)
     end
+
+    test "does not send to a suppressed address" do
+      user = insert(:user)
+      {:ok, _} = Engram.Email.Suppression.suppress(user.email, "bounced")
+
+      # No expect/0 set → if the provider is called, Mox raises.
+      assert {:error, :suppressed} = Mailer.send_welcome(user)
+    end
   end
 
   describe "OG-waitlist grandfather emails" do

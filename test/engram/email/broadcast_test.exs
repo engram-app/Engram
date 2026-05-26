@@ -1,5 +1,5 @@
 defmodule Engram.Email.BroadcastTest do
-  use ExUnit.Case, async: false
+  use Engram.DataCase, async: false
 
   import Mox
 
