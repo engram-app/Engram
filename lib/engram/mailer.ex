@@ -7,13 +7,14 @@ defmodule Engram.Mailer do
 
   Templates today:
   - `send_welcome/1`
-  - `send_og_grandfather_1/3`, `send_og_grandfather_2/4`, `send_og_grandfather_3/2`
+  - `send_og_grandfather_1/2`, `send_og_grandfather_2/3`, `send_og_grandfather_3/1` (take a `Recipient`)
   - `send_inactivity_warning_60/1`
   - `send_inactivity_warning_80/1`
   - `send_account_deleted_notice/1`
   """
 
   alias Engram.Accounts.User
+  alias Engram.Email.Recipient
   alias Engram.Email.Suppression
   alias Engram.Email.Template
 
@@ -41,7 +42,7 @@ defmodule Engram.Mailer do
   OG-waitlist email 1 (runbook §B.5.1): pricing updated, grandfather locked.
   `checkout_url` is the founding-member checkout link.
   """
-  def send_og_grandfather_1(email, name, checkout_url) when is_binary(email) do
+  def send_og_grandfather_1(%Recipient{email: email, name: name}, checkout_url) do
     name = Template.esc(name)
 
     body = """
@@ -73,7 +74,7 @@ defmodule Engram.Mailer do
   `expiry_date` is a human-formatted date string; `portal_url` is the Paddle
   customer portal link.
   """
-  def send_og_grandfather_2(email, name, expiry_date, portal_url) when is_binary(email) do
+  def send_og_grandfather_2(%Recipient{email: email, name: name}, expiry_date, portal_url) do
     name = Template.esc(name)
     expiry_date = Template.esc(expiry_date)
 
@@ -101,7 +102,7 @@ defmodule Engram.Mailer do
   @doc """
   OG-waitlist email 3 (runbook §B.5.3): post-expiry notice, no action needed.
   """
-  def send_og_grandfather_3(email, name) when is_binary(email) do
+  def send_og_grandfather_3(%Recipient{email: email, name: name}) do
     name = Template.esc(name)
 
     body = """

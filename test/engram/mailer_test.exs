@@ -69,8 +69,7 @@ defmodule Engram.MailerTest do
 
       assert :ok =
                Mailer.send_og_grandfather_1(
-                 "og@example.com",
-                 "Ada",
+                 og_recipient("Ada"),
                  "https://app.engram.page/checkout/og"
                )
     end
@@ -87,8 +86,7 @@ defmodule Engram.MailerTest do
 
       assert :ok =
                Mailer.send_og_grandfather_2(
-                 "og@example.com",
-                 "Ada",
+                 og_recipient("Ada"),
                  "June 1, 2027",
                  "https://app.engram.page/portal"
                )
@@ -103,7 +101,7 @@ defmodule Engram.MailerTest do
         :ok
       end)
 
-      assert :ok = Mailer.send_og_grandfather_3("og@example.com", "Ada")
+      assert :ok = Mailer.send_og_grandfather_3(og_recipient("Ada"))
     end
 
     test "escapes HTML in the recipient name" do
@@ -115,10 +113,14 @@ defmodule Engram.MailerTest do
 
       assert :ok =
                Mailer.send_og_grandfather_1(
-                 "og@example.com",
-                 "<script>x</script>",
+                 og_recipient("<script>x</script>"),
                  "https://app.engram.page/checkout/og"
                )
     end
+  end
+
+  defp og_recipient(name) do
+    {:ok, r} = Engram.Email.Recipient.new("og@example.com", name)
+    r
   end
 end
