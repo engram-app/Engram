@@ -1,22 +1,29 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AgreementPage from './agreement-page'
 
-const mutate = vi.fn().mockResolvedValue({ version: '2026-05-19', accepted_at: 'now' })
-
-vi.mock('../api/queries', () => ({
-  useAcceptTerms: () => ({ mutateAsync: mutate, isPending: false }),
-  useOnboardingStatus: () => ({
-    data: {
+const { mutate, statusRef } = vi.hoisted(() => ({
+  mutate: vi.fn().mockResolvedValue({ version: '2026-05-19', accepted_at: 'now' }),
+  statusRef: {
+    current: {
       enabled: true,
       next_step: 'agreement',
       current_tos_version: '2026-05-19',
       current_privacy_version: '2026-05-19',
-    },
-    isLoading: false,
-  }),
+    } as Record<string, unknown>,
+  },
+}))
+
+const DEFAULT_STATUS = { ...statusRef.current }
+afterEach(() => {
+  statusRef.current = { ...DEFAULT_STATUS }
+})
+
+vi.mock('../api/queries', () => ({
+  useAcceptTerms: () => ({ mutateAsync: mutate, isPending: false }),
+  useOnboardingStatus: () => ({ data: statusRef.current, isLoading: false }),
 }))
 
 function renderPage() {
@@ -73,5 +80,16 @@ describe('AgreementPage', () => {
         }),
       ),
     )
+  })
+
+  it('shows an error and disables continue when the backend names an unbundled version', () => {
+    statusRef.current = {
+      ...DEFAULT_STATUS,
+      current_tos_version: '2026-05-15',
+      current_privacy_version: '2026-05-15',
+    }
+    renderPage()
+    expect(screen.getByRole('alert')).toHaveTextContent(/isn.t available/i)
+    expect(screen.queryByRole('button', { name: /continue/i })).toBeNull()
   })
 })
