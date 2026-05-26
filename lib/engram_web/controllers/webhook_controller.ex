@@ -94,12 +94,14 @@ defmodule EngramWeb.WebhookController do
           :ok
 
         {:error, changeset} ->
-          # Log (no raw address — PII) so a swallowed insert is diagnosable.
-          # We still ack 200 so Resend doesn't retry a payload we can't persist.
-          Logger.error("Resend suppression insert failed",
+          # Log (no raw address — PII; errors are field names + validator
+          # messages) so a swallowed insert is diagnosable. We still ack 200 so
+          # Resend doesn't retry a payload we can't persist.
+          errors = Ecto.Changeset.traverse_errors(changeset, fn {m, _} -> m end)
+
+          Logger.error("Resend suppression insert failed: #{inspect(errors)}",
             category: :email,
-            reason_label: reason,
-            errors: Ecto.Changeset.traverse_errors(changeset, fn {m, _} -> m end) |> inspect()
+            reason_label: reason
           )
       end
     end)

@@ -54,7 +54,8 @@ defmodule Engram.Email.BroadcastTest do
       end)
 
       assert {:sent, %{sent: 1, failed: []}} =
-               Broadcast.run(%OG1{checkout_url: "https://app.engram.page/checkout/og"},
+               Broadcast.run(
+                 %OG1{checkout_url: "https://app.engram.page/checkout/og"},
                  [recipient("a@example.com")],
                  send?: true
                )

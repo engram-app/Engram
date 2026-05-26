@@ -91,13 +91,20 @@ defmodule Mix.Tasks.Engram.Email.Broadcast do
 
   defp build_template(opts) do
     case opts[:template] do
-      "og1" -> %OG1{checkout_url: require_opt!(opts, :checkout_url, "--checkout-url")}
-      "og2" -> %OG2{
-                 expiry_date: require_opt!(opts, :expiry_date, "--expiry-date"),
-                 portal_url: require_opt!(opts, :portal_url, "--portal-url")
-               }
-      "og3" -> %OG3{}
-      other -> Mix.raise("--template must be og1|og2|og3, got: #{inspect(other)}")
+      "og1" ->
+        %OG1{checkout_url: require_opt!(opts, :checkout_url, "--checkout-url")}
+
+      "og2" ->
+        %OG2{
+          expiry_date: require_opt!(opts, :expiry_date, "--expiry-date"),
+          portal_url: require_opt!(opts, :portal_url, "--portal-url")
+        }
+
+      "og3" ->
+        %OG3{}
+
+      other ->
+        Mix.raise("--template must be og1|og2|og3, got: #{inspect(other)}")
     end
   end
 

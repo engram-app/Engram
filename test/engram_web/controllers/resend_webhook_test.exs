@@ -74,7 +74,8 @@ defmodule EngramWeb.ResendWebhookTest do
     end
 
     test "suppresses every recipient in a multi-address event", %{conn: conn} do
-      conn = post_resend(conn, "evt_multi", "email.complained", ["a@example.com", "b@example.com"])
+      conn =
+        post_resend(conn, "evt_multi", "email.complained", ["a@example.com", "b@example.com"])
 
       assert json_response(conn, 200)["status"] == "ok"
       assert Suppression.suppressed?("a@example.com")
