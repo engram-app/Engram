@@ -4,12 +4,17 @@ import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AgreementPage from './agreement-page'
 
-const mutate = vi.fn().mockResolvedValue({ version: '2026-05-15', accepted_at: 'now' })
+const mutate = vi.fn().mockResolvedValue({ version: '2026-05-19', accepted_at: 'now' })
 
 vi.mock('../api/queries', () => ({
   useAcceptTerms: () => ({ mutateAsync: mutate, isPending: false }),
   useOnboardingStatus: () => ({
-    data: { enabled: true, next_step: 'agreement', current_tos_version: '2026-05-15' },
+    data: {
+      enabled: true,
+      next_step: 'agreement',
+      current_tos_version: '2026-05-19',
+      current_privacy_version: '2026-05-19',
+    },
     isLoading: false,
   }),
 }))
@@ -35,21 +40,38 @@ describe('AgreementPage', () => {
     expect(button).not.toBeDisabled()
   })
 
-  it('calls accept-terms with the current version on submit', async () => {
+  it('submits the new version+hash object shape on continue', async () => {
     renderPage()
     fireEvent.click(screen.getByRole('checkbox', { name: /agree/i }))
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
 
-    await waitFor(() => expect(mutate).toHaveBeenCalledWith('2026-05-15'))
+    await waitFor(() =>
+      expect(mutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tos_version: '2026-05-19',
+          privacy_version: '2026-05-19',
+        }),
+      ),
+    )
   })
 
-  it('links out to the hosted Terms and Privacy pages in a new tab', () => {
+  it('renders the ToS text inline and submits both versions with sha256 hashes', async () => {
     renderPage()
-    const terms = screen.getByRole('link', { name: /terms of service/i })
-    const privacy = screen.getByRole('link', { name: /privacy policy/i })
-    expect(terms).toHaveAttribute('href', 'https://engram.page/terms')
-    expect(privacy).toHaveAttribute('href', 'https://engram.page/privacy')
-    expect(terms).toHaveAttribute('target', '_blank')
-    expect(terms).toHaveAttribute('rel', expect.stringContaining('noopener'))
+    // The vendored ToS markdown renders its own "# Terms of Service" heading
+    // inline; assert against that heading specifically (the prose body repeats
+    // the phrase in paragraphs, so an unscoped getByText would multi-match).
+    expect(screen.getByRole('heading', { name: /Terms of Service/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /agree/i }))
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() =>
+      expect(mutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tos_version: '2026-05-19',
+          privacy_version: '2026-05-19',
+          tos_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          privacy_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        }),
+      ),
+    )
   })
 })
