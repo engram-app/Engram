@@ -24,4 +24,9 @@ defmodule Engram.Email.SuppressionTest do
     assert {:error, _} = Suppression.suppress("x@example.com", "nonsense")
     refute Suppression.suppressed?("x@example.com")
   end
+
+  test "stores reason as an atom and accepts an atom reason" do
+    assert {:ok, s} = Suppression.suppress("atom@example.com", :bounced)
+    assert s.reason == :bounced
+  end
 end

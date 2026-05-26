@@ -17,5 +17,11 @@ defmodule Engram.Repo.Migrations.CreateEmailSuppressions do
     end
 
     create unique_index(:email_suppressions, [:email])
+
+    # Enforce the closed reason set at the storage layer too, independent of the
+    # Ecto.Enum changeset cast (guards raw inserts / future backfills).
+    create constraint(:email_suppressions, :reason_must_be_valid,
+             check: "reason IN ('bounced', 'complained')"
+           )
   end
 end

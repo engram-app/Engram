@@ -52,10 +52,51 @@ defmodule EngramWeb.ResendWebhookTest do
       assert json_response(conn, 200)["status"] == "ok"
       refute Suppression.suppressed?("fine@example.com")
     end
+
+    test "suppresses a permanent bounce", %{conn: conn} do
+      conn =
+        post_resend(conn, "evt_perm", "email.bounced", ["perm@example.com"], %{
+          "bounce" => %{"type" => "Permanent"}
+        })
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert Suppression.suppressed?("perm@example.com")
+    end
+
+    test "ignores a transient bounce (does not suppress)", %{conn: conn} do
+      conn =
+        post_resend(conn, "evt_trans", "email.bounced", ["transient@example.com"], %{
+          "bounce" => %{"type" => "Transient"}
+        })
+
+      assert json_response(conn, 200)["status"] == "ok"
+      refute Suppression.suppressed?("transient@example.com")
+    end
+
+    test "suppresses every recipient in a multi-address event", %{conn: conn} do
+      conn = post_resend(conn, "evt_multi", "email.complained", ["a@example.com", "b@example.com"])
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert Suppression.suppressed?("a@example.com")
+      assert Suppression.suppressed?("b@example.com")
+    end
+
+    test "acknowledges an event with no recipients without crashing", %{conn: conn} do
+      payload = Jason.encode!(%{type: "email.bounced", data: %{}})
+      ts = System.system_time(:second)
+      sig = sign_resend("evt_empty", ts, payload)
+
+      conn =
+        conn
+        |> with_resend_headers("evt_empty", ts, sig)
+        |> post("/webhooks/resend", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+    end
   end
 
-  defp post_resend(conn, id, type, recipients) do
-    payload = Jason.encode!(%{type: type, data: %{to: recipients}})
+  defp post_resend(conn, id, type, recipients, extra_data \\ %{}) do
+    payload = Jason.encode!(%{type: type, data: Map.merge(%{to: recipients}, extra_data)})
     ts = System.system_time(:second)
     sig = sign_resend(id, ts, payload)
 

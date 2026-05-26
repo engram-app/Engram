@@ -12,11 +12,9 @@ defmodule Engram.Email.Suppression do
 
   alias Engram.Repo
 
-  @valid_reasons ~w(bounced complained)
-
   schema "email_suppressions" do
     field :email, :string
-    field :reason, :string
+    field :reason, Ecto.Enum, values: [:bounced, :complained]
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
@@ -41,7 +39,7 @@ defmodule Engram.Email.Suppression do
     |> cast(attrs, [:email, :reason])
     |> update_change(:email, &String.downcase/1)
     |> validate_required([:email, :reason])
-    |> validate_inclusion(:reason, @valid_reasons)
     |> unique_constraint(:email)
+    |> check_constraint(:reason, name: :reason_must_be_valid)
   end
 end

@@ -67,19 +67,43 @@ defmodule EngramWeb.WebhookController do
   end
 
   # Resend posts a bounce/complaint per delivery problem. Add the affected
-  # recipients to the suppression list so we stop sending to them; ignore all
-  # other event types (delivered, opened, etc.).
-  defp handle_resend_event(%{"type" => type, "data" => data})
-       when type in ["email.bounced", "email.complained"] do
-    reason = if type == "email.complained", do: "complained", else: "bounced"
+  # recipients to the suppression list so we stop sending to them. Transient
+  # bounces (full mailbox, temporary receiving-server issue) are NOT suppressed
+  # — only permanent failures and complaints. Other event types (delivered,
+  # opened, etc.) are acknowledged and ignored.
+  defp handle_resend_event(%{"type" => "email.complained", "data" => data}) do
+    suppress_recipients(data, :complained)
+  end
 
-    data
-    |> Map.get("to", [])
-    |> List.wrap()
-    |> Enum.each(fn email -> _ = Suppression.suppress(email, reason) end)
+  defp handle_resend_event(%{"type" => "email.bounced", "data" => data}) do
+    if transient_bounce?(data), do: :ok, else: suppress_recipients(data, :bounced)
   end
 
   defp handle_resend_event(_), do: :ok
+
+  defp transient_bounce?(%{"bounce" => %{"type" => type}}), do: type == "Transient"
+  defp transient_bounce?(_), do: false
+
+  defp suppress_recipients(data, reason) do
+    data
+    |> Map.get("to", [])
+    |> List.wrap()
+    |> Enum.each(fn email ->
+      case Suppression.suppress(email, reason) do
+        {:ok, _} ->
+          :ok
+
+        {:error, changeset} ->
+          # Log (no raw address — PII) so a swallowed insert is diagnosable.
+          # We still ack 200 so Resend doesn't retry a payload we can't persist.
+          Logger.error("Resend suppression insert failed",
+            category: :email,
+            reason_label: reason,
+            errors: Ecto.Changeset.traverse_errors(changeset, fn {m, _} -> m end) |> inspect()
+          )
+      end
+    end)
+  end
 
   defp resend_webhook_secret, do: Application.get_env(:engram, :resend_webhook_secret)
 
