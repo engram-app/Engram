@@ -10,7 +10,8 @@
 @import "katex/dist/katex.min.css" layer(base);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "@fontsource/noto-serif/400-italic.css";
 
 /* Obsidian-flavored callouts (matches @portaljs/remark-callouts class names). */
 @layer components {
@@ -82,6 +83,37 @@
   .prose h6:hover .anchor { @apply opacity-100; }
 }
 
+/* Brand texture — page chrome for high-touch surfaces (onboarding, auth), not work
+   surfaces. Token-driven so they swap with light/dark. Ported from engram-marketing
+   global.css. Always pair the host element with aria-hidden + pointer-events-none. */
+@layer components {
+  .grid-overlay {
+    background-size: 20px 20px;
+    /* Light mode: --border is near-white, so use a darker neutral line for visible texture. */
+    background-image:
+      linear-gradient(to right, oklch(0% 0 0 / 0.2) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0% 0 0 / 0.2) 1px, transparent 1px);
+  }
+  .dark .grid-overlay {
+    background-image:
+      linear-gradient(to right, oklch(from var(--border) l c h / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(from var(--border) l c h / 0.5) 1px, transparent 1px);
+  }
+  .neural-glow-cyan {
+    filter: blur(60px);
+    background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+  }
+  .neural-glow-purple {
+    filter: blur(60px);
+    background: radial-gradient(circle, var(--brand-purple) 0%, transparent 70%);
+  }
+  .wire-trace {
+    height: 1px;
+    opacity: 0.3;
+    background: linear-gradient(90deg, transparent 0%, var(--brand-purple) 50%, var(--primary) 100%);
+  }
+}
+
 /* Dark highlight.js theme — wrapped so it only applies under `.dark`. */
 @layer base {
   html.dark .hljs {
@@ -139,8 +171,11 @@
 }
 
 @theme inline {
-  --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-heading: var(--font-display);
+  --font-display: 'Inter Variable', system-ui, sans-serif;
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-serif-italic: 'Noto Serif', serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -164,6 +199,8 @@
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  --color-brand-purple-foreground: var(--brand-purple-foreground);
+  --color-brand-purple: var(--brand-purple);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
@@ -182,24 +219,27 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  /* Cyber-Organic palette (light) — ported from engram-marketing global.css. primary=cyan, secondary kept neutral (shadcn surface), brand-purple added as accent. */
+  --background: oklch(100.00% 0 0);
+  --foreground: oklch(14.52% 0.0021 286.13);
+  --card: oklch(100.00% 0 0);
+  --card-foreground: oklch(14.52% 0.0021 286.13);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(14.52% 0.0021 286.13);
+  --primary: oklch(60.89% 0.1109 221.72);
+  --primary-foreground: oklch(100.00% 0 0);
+  --secondary: oklch(96.74% 0.0013 286.37);
+  --secondary-foreground: oklch(21.03% 0.0059 285.89);
+  --muted: oklch(96.74% 0.0013 286.37);
+  --muted-foreground: oklch(44.19% 0.0146 285.79);
+  --accent: oklch(96.74% 0.0013 286.37);
+  --accent-foreground: oklch(21.03% 0.0059 285.89);
+  --destructive: oklch(57.71% 0.2152 27.33);
+  --border: oklch(91.97% 0.004 286.32);
+  --input: oklch(91.97% 0.004 286.32);
+  --ring: oklch(60.89% 0.1109 221.72);
+  --brand-purple: oklch(54.13% 0.2466 293.01);
+  --brand-purple-foreground: oklch(100.00% 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -217,24 +257,27 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  /* Cyber-Organic palette (dark) — ported from engram-marketing Stitch DS. Slightly lifted bg (0.1876 vs old 0.145) eases the too-dark feel; cards a real step lighter. */
+  --background: oklch(18.76% 0.004 286.01);
+  --foreground: oklch(91.37% 0.0059 333.99);
+  --card: oklch(24.01% 0.0038 286.11);
+  --card-foreground: oklch(91.37% 0.0059 333.99);
+  --popover: oklch(24.01% 0.0038 286.11);
+  --popover-foreground: oklch(91.37% 0.0059 333.99);
+  --primary: oklch(87.00% 0.1481 202.88);
+  --primary-foreground: oklch(30.32% 0.0516 202.84);
+  --secondary: oklch(28.58% 0.0036 286.17);
+  --secondary-foreground: oklch(91.37% 0.0059 333.99);
+  --muted: oklch(22.30% 0.0038 286.08);
+  --muted-foreground: oklch(82.64% 0.0186 201.07);
+  --accent: oklch(28.58% 0.0036 286.17);
+  --accent-foreground: oklch(91.37% 0.0059 333.99);
+  --destructive: oklch(83.83% 0.0891 26.76);
+  --border: oklch(39.39% 0.0182 207.04);
+  --input: oklch(39.39% 0.0182 207.04);
+  --ring: oklch(87.00% 0.1481 202.88);
+  --brand-purple: oklch(83.79% 0.1041 307.38);
+  --brand-purple-foreground: oklch(33.38% 0.1779 300.29);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);

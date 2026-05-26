@@ -8,13 +8,14 @@
   "author": "Rasbandit Software Solutions LLC d/b/a Engram",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:local": "playwright test --project=local",
-    "test:e2e:clerk": "playwright test --project=clerk"
+    "test:e2e:clerk": "playwright test --project=clerk",
+    "sync-theme": "bun scripts/sync-theme.ts"
   },
   "keywords": [],
   "dependencies": {
@@ -23,6 +24,8 @@
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.42.1",
     "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource/noto-serif": "^5.2.9",
     "@paddle/paddle-js": "^1.6.4",
     "@portaljs/remark-callouts": "^1.0.5",
     "@tailwindcss/typography": "^0.5.19",

@@ -117,6 +117,10 @@ config :engram,
 # via Application.put_env/3 in their setup blocks.
 config :engram, :billing_enabled, true
 config :engram, :current_tos_version, "2026-05-15"
+config :engram, :min_required_tos_version, "2026-05-15"
+config :engram, :current_tos_hash, "test-tos-hash"
+config :engram, :current_privacy_version, "2026-05-15"
+config :engram, :current_privacy_hash, "test-privacy-hash"
 
 # Limits enforced by default in test env so existing tests don't bypass.
 config :engram, :limits_enforced, true

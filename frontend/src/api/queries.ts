@@ -123,7 +123,7 @@ export function useMe() {
 
 // Billing types
 export interface BillingStatus {
-  tier: 'none' | 'trial' | 'starter' | 'pro'
+  tier: 'free' | 'none' | 'trial' | 'starter' | 'pro'
   active: boolean
   trial_days_remaining: number
   subscription: {
@@ -170,6 +170,7 @@ export interface OnboardingStatus {
   terms_ok?: boolean
   subscription_ok?: boolean
   current_tos_version?: string
+  current_privacy_version?: string
   next_step: 'agreement' | 'billing' | 'done'
 }
 
@@ -187,8 +188,12 @@ export function useOnboardingStatus() {
 export function useAcceptTerms() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (version: string) =>
-      api.post<{ version: string; accepted_at: string }>('/onboarding/accept-terms', { version }),
+    mutationFn: (body: {
+      tos_version: string
+      tos_hash: string
+      privacy_version: string
+      privacy_hash: string
+    }) => api.post<{ version: string; accepted_at: string }>('/onboarding/accept-terms', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },

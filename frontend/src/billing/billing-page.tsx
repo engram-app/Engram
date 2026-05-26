@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react'
 import { initializePaddle, type Paddle } from '@paddle/paddle-js'
 import { useBillingStatus, useBillingConfig, type BillingConfig } from '../api/queries'
 import { api } from '../api/client'
+import { cn } from '@/lib/utils'
 
 const TIER_LABELS = {
+  free: 'Free',
   none: 'No Plan',
   trial: 'Free Trial',
   starter: 'Starter',
   pro: 'Pro',
 } as const
 
-export default function BillingPage() {
+export default function BillingPage({ hideHeading = false }: { hideHeading?: boolean }) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
   const [paddle, setPaddle] = useState<Paddle>()
@@ -27,59 +29,65 @@ export default function BillingPage() {
   }, [config])
 
   if (isLoading || !billing) {
-    return <p className="text-gray-500 dark:text-gray-400">Loading billing info...</p>
+    return <p className="text-muted-foreground">Loading billing info...</p>
   }
 
-  const needsSubscription = billing.tier === 'none'
+  const needsSubscription = !billing.active
   const isTrial = billing.subscription?.status === 'trialing'
   const checkoutReady = Boolean(paddle && config)
 
   return (
     <article className="mx-auto max-w-2xl space-y-8">
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Billing</h1>
+      {!hideHeading && <h1 className="text-2xl font-bold text-foreground">Billing</h1>}
 
-      <section className="rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 space-y-4">
-        <header className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Current Plan</h2>
-          <span className="rounded-full bg-blue-100 dark:bg-blue-950 px-3 py-1 text-sm font-medium text-blue-800 dark:text-blue-200">
-            {TIER_LABELS[billing.tier]}
-          </span>
-        </header>
+      {!hideHeading && (
+        <section className="space-y-4 rounded-lg border border-border bg-card p-6">
+          <header className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-foreground">Current Plan</h2>
+            <span className="rounded-full bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground">
+              {TIER_LABELS[billing.tier]}
+            </span>
+          </header>
 
-        {needsSubscription && (
-          <p className="text-sm text-gray-600 dark:text-gray-300">
-            Choose a plan below to start your 7-day free trial. A card is required but you
-            won't be charged until the trial ends.
-          </p>
-        )}
+          {needsSubscription && (
+            <p className="text-sm text-muted-foreground">
+              Choose a plan below to start your 7-day free trial. A card is required but you
+              won't be charged until the trial ends.
+            </p>
+          )}
 
-        {isTrial && billing.trial_days_remaining > 0 && (
-          <p className="text-sm text-gray-600 dark:text-gray-300">
-            {billing.trial_days_remaining} days remaining in your free trial.
-          </p>
-        )}
+          {isTrial && billing.trial_days_remaining > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {billing.trial_days_remaining} days remaining in your free trial.
+            </p>
+          )}
 
-        {billing.subscription && (
-          <dl className="grid grid-cols-2 gap-4 text-sm">
-            <dt className="text-gray-500 dark:text-gray-400">Status</dt>
-            <dd className="font-medium capitalize">{billing.subscription.status.replace('_', ' ')}</dd>
-            {billing.subscription.current_period_end && (
-              <>
-                <dt className="text-gray-500 dark:text-gray-400">Current period ends</dt>
-                <dd className="font-medium">
-                  {new Date(billing.subscription.current_period_end).toLocaleDateString()}
-                </dd>
-              </>
-            )}
-          </dl>
-        )}
-      </section>
+          {billing.subscription && (
+            <dl className="grid grid-cols-2 gap-4 text-sm">
+              <dt className="text-muted-foreground">Status</dt>
+              <dd className="font-medium capitalize">{billing.subscription.status.replace('_', ' ')}</dd>
+              {billing.subscription.current_period_end && (
+                <>
+                  <dt className="text-muted-foreground">Current period ends</dt>
+                  <dd className="font-medium">
+                    {new Date(billing.subscription.current_period_end).toLocaleDateString()}
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
+        </section>
+      )}
 
       {needsSubscription && (
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Choose a Plan</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Both plans include a 7-day free trial.</p>
-          <ul className="grid gap-4 sm:grid-cols-2">
+          {!hideHeading && (
+            <>
+              <h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
+              <p className="text-sm text-muted-foreground">Both plans include a 7-day free trial.</p>
+            </>
+          )}
+          <ul className="grid items-stretch gap-4 sm:grid-cols-2">
             <PlanCard
               name="Starter"
               price="$5/mo"
@@ -97,6 +105,7 @@ export default function BillingPage() {
               paddle={paddle}
               config={config}
               disabled={!checkoutReady}
+              recommended
             />
           </ul>
         </section>
@@ -106,7 +115,7 @@ export default function BillingPage() {
         <section>
           <button
             onClick={handlePortal}
-            className="text-sm text-blue-600 underline hover:text-blue-800"
+            className="text-sm text-primary underline hover:text-primary/80"
           >
             Manage subscription
           </button>
@@ -124,6 +133,7 @@ function PlanCard({
   paddle,
   config,
   disabled,
+  recommended = false,
 }: {
   name: string
   price: string
@@ -132,6 +142,7 @@ function PlanCard({
   paddle: Paddle | undefined
   config: BillingConfig | undefined
   disabled: boolean
+  recommended?: boolean
 }) {
   function handleCheckout() {
     if (!paddle || !config) return
@@ -146,18 +157,38 @@ function PlanCard({
   }
 
   return (
-    <li className="rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 space-y-4">
+    <li
+      className={cn(
+        'relative flex flex-col gap-4 rounded-lg border bg-card p-6 transition duration-150 hover:-translate-y-0.5',
+        recommended
+          ? 'border-primary ring-1 ring-primary'
+          : 'border-border hover:border-primary/60',
+      )}
+    >
+      {recommended && (
+        <span className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground">
+          Most popular
+        </span>
+      )}
       <h3 className="text-lg font-semibold">{name}</h3>
       <p className="text-2xl font-bold">{price}</p>
-      <ul className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
+      <ul className="flex-1 space-y-1 text-sm text-muted-foreground">
         {features.map((f) => (
-          <li key={f}>&#10003; {f}</li>
+          <li key={f} className="flex items-center gap-2">
+            <span className="text-primary" aria-hidden="true">&#10003;</span>
+            {f}
+          </li>
         ))}
       </ul>
       <button
         onClick={handleCheckout}
         disabled={disabled}
-        className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        className={cn(
+          'w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+          recommended
+            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+            : 'border border-input bg-transparent text-foreground hover:bg-accent',
+        )}
       >
         Start free trial
       </button>

@@ -15,13 +15,22 @@ defmodule Engram.Onboarding.Agreement do
     field :accepted_at, :utc_datetime
     field :ip_address, :string
     field :user_agent, :string
+    field :content_hash, :string
 
     belongs_to :user, Engram.Accounts.User
   end
 
   def changeset(agreement, attrs) do
     agreement
-    |> cast(attrs, [:user_id, :document, :version, :accepted_at, :ip_address, :user_agent])
+    |> cast(attrs, [
+      :user_id,
+      :document,
+      :version,
+      :accepted_at,
+      :ip_address,
+      :user_agent,
+      :content_hash
+    ])
     |> validate_required([:user_id, :document, :version, :accepted_at])
   end
 end

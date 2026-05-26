@@ -17,6 +17,7 @@ defmodule EngramWeb.OnboardingController do
           terms_ok: terms_ok,
           subscription_ok: sub_ok,
           current_tos_version: version,
+          current_privacy_version: privacy_version,
           next_step: next
         } ->
           %{
@@ -24,6 +25,7 @@ defmodule EngramWeb.OnboardingController do
             terms_ok: terms_ok,
             subscription_ok: sub_ok,
             current_tos_version: version,
+            current_privacy_version: privacy_version,
             next_step: Atom.to_string(next)
           }
       end
@@ -31,17 +33,28 @@ defmodule EngramWeb.OnboardingController do
     json(conn, payload)
   end
 
-  def accept_terms(conn, %{"version" => version}) do
-    user = conn.assigns.current_user
-    current_version = Application.get_env(:engram, :current_tos_version)
+  def accept_terms(conn, %{
+        "tos_version" => tv,
+        "tos_hash" => th,
+        "privacy_version" => pv,
+        "privacy_hash" => ph
+      }) do
+    # Verify BOTH documents' version + content hash against the canonical config.
+    # Any mismatch means the app is showing different text than the backend
+    # expects (drift) — refuse with 409 instead of recording bad consent.
+    ok =
+      tv == Application.get_env(:engram, :current_tos_version) and
+        th == Application.get_env(:engram, :current_tos_hash) and
+        pv == Application.get_env(:engram, :current_privacy_version) and
+        ph == Application.get_env(:engram, :current_privacy_hash)
 
-    if version == current_version do
+    if ok do
       meta = %{
         ip_address: format_ip(conn.remote_ip),
         user_agent: get_user_agent(conn)
       }
 
-      case Onboarding.accept_terms(user, version, meta) do
+      case Onboarding.accept_terms(conn.assigns.current_user, tv, th, pv, ph, meta) do
         {:ok, agreement} ->
           conn
           |> put_status(:created)
@@ -51,12 +64,12 @@ defmodule EngramWeb.OnboardingController do
           conn |> put_status(422) |> json(%{error: "invalid"})
       end
     else
-      conn |> put_status(422) |> json(%{error: "version_mismatch"})
+      conn |> put_status(409) |> json(%{error: "stale"})
     end
   end
 
   def accept_terms(conn, _params) do
-    conn |> put_status(422) |> json(%{error: "missing_version"})
+    conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
 
   defp format_ip({a, b, c, d}), do: "#{a}.#{b}.#{c}.#{d}"

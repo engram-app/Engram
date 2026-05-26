@@ -311,7 +311,27 @@ end
 # Current Terms of Service version. Must match the version exported by
 # frontend/src/legal/terms-of-service.tsx. Bumping this re-prompts every
 # user on next request via the RequireOnboarding plug.
-config :engram, :current_tos_version, System.get_env("CURRENT_TOS_VERSION", "2026-05-15")
+#
+# content hashes pin the exact accepted document text; min_required_tos_version
+# is the floor below which an acceptance is no longer considered binding.
+# Guarded out of :test so config/test.exs provides deterministic values;
+# tests override per-case via Application.put_env.
+if config_env() != :test do
+  config :engram,
+    current_tos_version: System.get_env("CURRENT_TOS_VERSION", "2026-05-19"),
+    min_required_tos_version: System.get_env("MIN_REQUIRED_TOS_VERSION", "2026-05-19"),
+    current_tos_hash:
+      System.get_env(
+        "CURRENT_TOS_HASH",
+        "6785e725e9900d5f87a90eca362c388d3254dac0e5b7105ba5da29d316551e5c"
+      ),
+    current_privacy_version: System.get_env("CURRENT_PRIVACY_VERSION", "2026-05-19"),
+    current_privacy_hash:
+      System.get_env(
+        "CURRENT_PRIVACY_HASH",
+        "87e117552f1ab05acadb04cc50b3b18e37dba5b6a82a3c3e480286f587af2708"
+      )
+end
 
 # Key provider — skip in :test so test.exs stable key is not overwritten by a nil env read.
 # Dev and prod (including Docker CI containers) read from KEY_PROVIDER / ENCRYPTION_MASTER_KEY.

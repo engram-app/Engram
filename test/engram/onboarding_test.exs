@@ -82,12 +82,17 @@ defmodule Engram.OnboardingTest do
     setup do
       prev_enabled = Application.get_env(:engram, :billing_enabled)
       prev_version = Application.get_env(:engram, :current_tos_version)
+      prev_min = Application.get_env(:engram, :min_required_tos_version)
       Application.put_env(:engram, :billing_enabled, true)
       Application.put_env(:engram, :current_tos_version, "2026-05-15")
+      # Default min_required tracks current here so the pre-existing tests keep
+      # their original "accepted >= current" semantics.
+      Application.put_env(:engram, :min_required_tos_version, "2026-05-15")
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
         Application.put_env(:engram, :current_tos_version, prev_version)
+        Application.put_env(:engram, :min_required_tos_version, prev_min)
       end)
 
       :ok
@@ -178,6 +183,81 @@ defmodule Engram.OnboardingTest do
       assert TermsCache.accepted?(user.id, "2026-05-15") == false
       assert :ok = TermsCache.mark_accepted(user.id, "2026-05-15")
       assert %{terms_ok: true} = Onboarding.status(user)
+    end
+  end
+
+  describe "accept_terms/6 + min_required gate" do
+    setup do
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      prev_current = Application.get_env(:engram, :current_tos_version)
+      prev_min = Application.get_env(:engram, :min_required_tos_version)
+      prev_priv = Application.get_env(:engram, :current_privacy_version)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      on_exit(fn ->
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+        Application.put_env(:engram, :current_tos_version, prev_current)
+        Application.put_env(:engram, :min_required_tos_version, prev_min)
+        Application.put_env(:engram, :current_privacy_version, prev_priv)
+      end)
+
+      :ok
+    end
+
+    test "terms_accepted? true when accepted >= min_required even if below current" do
+      Application.put_env(:engram, :min_required_tos_version, "2026-05-19")
+      Application.put_env(:engram, :current_tos_version, "2026-06-01")
+
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h_tos", "2026-05-19", "h_priv", %{})
+
+      assert Onboarding.status(user).terms_ok
+    end
+
+    test "terms_accepted? false when accepted below min_required" do
+      Application.put_env(:engram, :min_required_tos_version, "2026-06-01")
+      Application.put_env(:engram, :current_tos_version, "2026-06-01")
+
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h_tos", "2026-05-19", "h_priv", %{})
+
+      refute Onboarding.status(user).terms_ok
+    end
+
+    test "accept_terms stores content_hash and writes a privacy_policy row" do
+      Application.put_env(:engram, :min_required_tos_version, "2026-05-19")
+      Application.put_env(:engram, :current_tos_version, "2026-05-19")
+
+      user = insert(:user)
+
+      {:ok, %Agreement{} = tos} =
+        Onboarding.accept_terms(user, "2026-05-19", "h_tos", "2026-05-19", "h_priv", %{
+          ip_address: "10.0.0.1",
+          user_agent: "UA"
+        })
+
+      assert tos.document == "terms_of_service"
+      assert tos.content_hash == "h_tos"
+
+      {:ok, rows} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.all(Agreement)
+        end)
+
+      privacy = Enum.find(rows, &(&1.document == "privacy_policy"))
+      assert privacy
+      assert privacy.version == "2026-05-19"
+      assert privacy.content_hash == "h_priv"
+    end
+
+    test "status returns current_privacy_version" do
+      Application.put_env(:engram, :min_required_tos_version, "2026-05-19")
+      Application.put_env(:engram, :current_tos_version, "2026-05-19")
+      Application.put_env(:engram, :current_privacy_version, "2026-05-19")
+
+      user = insert(:user)
+
+      assert Onboarding.status(user).current_privacy_version == "2026-05-19"
     end
   end
 
