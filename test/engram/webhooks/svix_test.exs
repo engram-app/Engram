@@ -7,7 +7,8 @@ defmodule Engram.Webhooks.SvixTest do
   @secret "whsec_" <> Base.encode64(@secret_raw)
 
   defp sign(id, ts, payload) do
-    "v1," <> (:crypto.mac(:hmac, :sha256, @secret_raw, "#{id}.#{ts}.#{payload}") |> Base.encode64())
+    "v1," <>
+      (:crypto.mac(:hmac, :sha256, @secret_raw, "#{id}.#{ts}.#{payload}") |> Base.encode64())
   end
 
   describe "verify/5" do

@@ -84,7 +84,9 @@ defmodule Mix.Tasks.Engram.Email.Broadcast do
   defp parse_template!("og1"), do: :og1
   defp parse_template!("og2"), do: :og2
   defp parse_template!("og3"), do: :og3
-  defp parse_template!(other), do: Mix.raise("--template must be og1|og2|og3, got: #{inspect(other)}")
+
+  defp parse_template!(other),
+    do: Mix.raise("--template must be og1|og2|og3, got: #{inspect(other)}")
 
   defp print_summary(%{dry_run: true, recipients: n}, template, _send?) do
     Mix.shell().info("[dry-run] #{template}: would send to #{n} recipients. Pass --send to send.")
