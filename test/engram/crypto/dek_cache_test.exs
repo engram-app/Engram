@@ -39,6 +39,45 @@ defmodule Engram.Crypto.DekCacheTest do
     assert :miss = DekCache.get(1)
   end
 
+  describe "cross-node invalidation (PubSub round-trip)" do
+    alias Engram.Cluster.CacheSync
+
+    test "invalidate/1 broadcasts the documented evict message" do
+      CacheSync.subscribe()
+      DekCache.put(1, @dek)
+      DekCache.invalidate(1)
+      assert_receive {:cache_sync, {:dek_evict, 1}}
+    end
+
+    test "invalidate_all/0 broadcasts the documented evict-all message" do
+      CacheSync.subscribe()
+      DekCache.put(1, @dek)
+      DekCache.invalidate_all()
+      assert_receive {:cache_sync, :dek_evict_all}
+    end
+
+    test "a peer evict message clears the local entry" do
+      DekCache.put(7, @dek)
+      assert {:ok, @dek} = DekCache.get(7)
+
+      CacheSync.broadcast({:dek_evict, 7})
+      # Barrier: a sync call is processed after the already-queued handle_info,
+      # so the eviction is guaranteed applied before we assert.
+      _ = DekCache.sensitive_flag?()
+
+      assert :miss = DekCache.get(7)
+    end
+
+    test "a peer evict-all message clears every local entry" do
+      DekCache.put(8, @dek)
+      DekCache.put(9, @dek)
+      CacheSync.broadcast(:dek_evict_all)
+      _ = DekCache.sensitive_flag?()
+      assert :miss = DekCache.get(8)
+      assert :miss = DekCache.get(9)
+    end
+  end
+
   describe "T3.3 / H2 — ETS write protection" do
     @table :engram_dek_cache
 
