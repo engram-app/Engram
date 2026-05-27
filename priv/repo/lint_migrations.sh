@@ -56,7 +56,8 @@ mix ecto.migrate --log-migrations-sql 2>/dev/null \
   | awk '{ t=$0; sub(/[ \t]+$/,"",t);
            if (t=="[]") { if(buf!=""){print buf ";"; buf=""} }
            else if (t ~ / \[\]$/) { sub(/ \[\]$/,"",t); buf=(buf==""?t:buf"\n"t); print buf ";"; buf="" }
-           else { buf=(buf==""?t:buf"\n"t) } }' > "$tmp_sql"
+           else { buf=(buf==""?t:buf"\n"t) } }
+       END { if (buf!="") print buf ";" }' > "$tmp_sql"
 
 if [ ! -s "$tmp_sql" ]; then
   echo "squawk: rendered no SQL — nothing to lint"

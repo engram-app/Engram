@@ -27,7 +27,7 @@ defmodule Engram.RlsCoverageTest do
   defp user_scoped_tables do
     %{rows: rows} =
       Repo.query!("""
-      SELECT c.relname, c.relrowsecurity,
+      SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
              (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid)
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -42,25 +42,28 @@ defmodule Engram.RlsCoverageTest do
   end
 
   test "every user-scoped table has an RLS policy or is explicitly allowlisted" do
+    # A table is protected only if RLS is both ENABLED and FORCED (the table
+    # owner / migration role bypasses non-forced RLS) and at least one policy
+    # exists.
     unprotected =
-      for [table, rls_enabled, policy_count] <- user_scoped_tables(),
-          not (rls_enabled and policy_count > 0),
+      for [table, rls_enabled, rls_forced, policy_count] <- user_scoped_tables(),
+          not (rls_enabled and rls_forced and policy_count > 0),
           table not in @no_rls_allowlist,
           do: table
 
     assert unprotected == [],
            """
-           User-scoped tables with neither an RLS policy nor an allowlist entry: \
+           User-scoped tables without FORCEd RLS + a policy, and not allowlisted: \
            #{Enum.join(unprotected, ", ")}.
-           Either enable RLS (ENABLE ROW LEVEL SECURITY + a tenant_isolation policy),
-           or, if application-layer scoping is intentional, add the table to
+           Either enable RLS (ENABLE + FORCE ROW LEVEL SECURITY + a tenant_isolation
+           policy), or, if application-layer scoping is intentional, add the table to
            @no_rls_allowlist in this test.
            """
   end
 
   test "no stale allowlist entries (each still exists and lacks RLS)" do
     no_rls_tables =
-      for [table, rls_enabled, _policy_count] <- user_scoped_tables(),
+      for [table, rls_enabled, _rls_forced, _policy_count] <- user_scoped_tables(),
           not rls_enabled,
           do: table
 
