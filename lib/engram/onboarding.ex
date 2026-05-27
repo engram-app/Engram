@@ -114,14 +114,20 @@ defmodule Engram.Onboarding do
     * `:subscription_ok` — user has trialing/active/past_due subscription
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
-    * `:terms_notice` — map describing a not-yet-accepted current version
-      (during the notice window), or `nil` when the user is current
+    * `:terms_notice` — metadata for the newest published ToS version the user
+      has not yet accepted (version/effective_date/material/changelog/accept_url),
+      or `nil` when the user is already on the current version
     * `:next_step` — one of `:agreement | :billing | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
-  version against the required floor (latest MATERIAL version effective now),
-  while `:terms_notice` reflects any newer published version not yet accepted.
+  version against the required floor (latest MATERIAL version effective now).
+
+  `:terms_notice` is independent of `:terms_ok`: it carries the pending version's
+  metadata whenever a newer published version exists unaccepted, and is the same
+  payload the client renders both as the non-blocking notice (while `terms_ok`
+  is still true, before the version's `effective_date`) and as the accept prompt
+  once the version is effective and `terms_ok` has flipped false.
 
   When `billing_enabled` is false (self-host), returns `{enabled: false,
   next_step: :done}` immediately so callers can skip all gates.

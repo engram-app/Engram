@@ -1,9 +1,14 @@
 defmodule Engram.Onboarding.TermsCache do
   @moduledoc """
   Per-node ETS cache of each user's latest accepted version per document, keyed
-  by `{user_id, document}`. Invalidated explicitly on accept (monotonic — only
-  ever advances). A cache miss falls through to the authoritative agreement
-  query.
+  by `{user_id, document}`. Written on accept (monotonic — versions only ever
+  advance). A cache miss falls through to the authoritative agreement query and
+  back-fills.
+
+  Writes are node-local: an accept on one node does not push to others, so a
+  peer node may hold a stale (older) accepted version until its own read-through
+  refreshes it. This only ever over-gates (shows a notice / withholds access a
+  little longer) — never a false accept, since the floor comparison is `>=`.
   """
 
   use GenServer

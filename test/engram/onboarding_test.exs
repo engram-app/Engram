@@ -303,7 +303,7 @@ defmodule Engram.OnboardingTest do
 
       status = Onboarding.status(user)
       assert status.terms_ok
-      refute Map.has_key?(status, :terms_notice) and status.terms_notice != nil
+      assert status.terms_notice == nil
     end
 
     test "notice present but terms_ok still true during the window (new material version, future effective_date)" do
