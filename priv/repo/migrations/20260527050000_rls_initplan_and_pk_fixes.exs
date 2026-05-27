@@ -38,7 +38,13 @@ defmodule Engram.Repo.Migrations.RlsInitplanAndPkFixes do
       """
     end
 
-    execute "ALTER TABLE client_origin_stats DROP CONSTRAINT client_origin_stats_pkey"
+    # ADD PRIMARY KEY USING INDEX keeps the source index's name as the
+    # constraint name (not <table>_pkey). Dropping the constraint also drops
+    # the backing index; recreate it as a plain unique index.
+    execute """
+    ALTER TABLE client_origin_stats
+      DROP CONSTRAINT client_origin_stats_user_id_day_fingerprint_class_index
+    """
 
     execute """
     CREATE UNIQUE INDEX client_origin_stats_user_id_day_fingerprint_class_index

@@ -1006,6 +1006,16 @@ jobs:
           docker exec "$PG_CONTAINER" createdb -U engram squawk_lint
           SQUAWK_BIN=/tmp/squawk bash priv/repo/lint_migrations.sh
 
+      - name: Test new migrations roll back (ecto.rollback)
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/rollback_test
+          MIX_ENV: test
+          BASE_REF: origin/main
+        run: |
+          git fetch -q --depth=1 origin main || true
+          docker exec "$PG_CONTAINER" createdb -U engram rollback_test
+          bash priv/repo/test_rollback.sh
+
       - name: Stop ephemeral postgres
         if: always()
         run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
