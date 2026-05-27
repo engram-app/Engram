@@ -3,12 +3,13 @@ import AuthGuard from './auth/auth-guard'
 import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
+import { config } from './config'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
 import AppearancePage from './settings/appearance-page'
 import ApiKeysPage from './settings/api-keys-page'
-import BillingPlaceholder from './settings/billing-placeholder'
+import AccountPage from './settings/account-page'
 import EncryptionPage from './settings/encryption-page'
 import SettingsLayout from './settings/settings-layout'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
@@ -54,18 +55,28 @@ export const router = createBrowserRouter(
                 { path: ROUTES.HOME, element: <Dashboard /> },
                 { path: '/note/*', element: <NotePage /> },
                 { path: '/search', element: <SearchPage /> },
-                { path: '/billing', element: <BillingPage /> },
+              ],
+            },
+            {
+              path: '/settings',
+              element: <SettingsLayout />,
+              children: [
                 {
-                  path: '/settings',
-                  element: <SettingsLayout />,
-                  children: [
-                    { index: true, element: <Navigate to="appearance" replace /> },
-                    { path: 'appearance', element: <AppearancePage /> },
-                    { path: 'api-keys', element: <ApiKeysPage /> },
-                    { path: 'encryption', element: <EncryptionPage /> },
-                    { path: 'billing', element: <BillingPlaceholder /> },
-                  ],
+                  index: true,
+                  element: (
+                    <Navigate
+                      to={config.authProvider === 'clerk' ? 'account' : 'appearance'}
+                      replace
+                    />
+                  ),
                 },
+                ...(config.authProvider === 'clerk'
+                  ? [{ path: 'account/*', element: <AccountPage /> }]
+                  : []),
+                { path: 'appearance', element: <AppearancePage /> },
+                { path: 'api-keys', element: <ApiKeysPage /> },
+                { path: 'encryption', element: <EncryptionPage /> },
+                { path: 'billing', element: <BillingPage /> },
               ],
             },
             { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
