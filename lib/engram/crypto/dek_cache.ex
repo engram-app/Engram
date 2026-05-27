@@ -21,6 +21,8 @@ defmodule Engram.Crypto.DekCache do
 
   use GenServer
 
+  alias Engram.Cluster.CacheSync
+
   @table :engram_dek_cache
   @sweep_interval_ms :timer.minutes(5)
 
@@ -64,7 +66,7 @@ defmodule Engram.Crypto.DekCache do
   @spec invalidate(user_id :: integer()) :: :ok
   def invalidate(user_id) do
     :ok = GenServer.call(__MODULE__, {:invalidate, user_id})
-    Engram.Cluster.CacheSync.broadcast({:dek_evict, user_id})
+    CacheSync.broadcast({:dek_evict, user_id})
   end
 
   @doc "Removes the cached DEK for `user_id`, if any. Alias of `invalidate/1`."
@@ -74,7 +76,7 @@ defmodule Engram.Crypto.DekCache do
   @spec invalidate_all() :: :ok
   def invalidate_all do
     :ok = GenServer.call(__MODULE__, :invalidate_all)
-    Engram.Cluster.CacheSync.broadcast(:dek_evict_all)
+    CacheSync.broadcast(:dek_evict_all)
   end
 
   @doc "Force an immediate sweep; exposed for tests."
@@ -106,7 +108,7 @@ defmodule Engram.Crypto.DekCache do
     # Cross-node eviction: peers broadcast here after a DEK rotation / rebind so
     # this node drops its now-unwrappable cached DEK instead of serving it for
     # up to the TTL. See Engram.Cluster.CacheSync.
-    _ = Engram.Cluster.CacheSync.subscribe()
+    _ = CacheSync.subscribe()
 
     schedule_sweep()
     {:ok, %{}}

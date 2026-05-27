@@ -30,7 +30,7 @@ defmodule Engram.ClusterCase do
 
     {:ok, peer_pid, _peer_node} =
       :peer.start(%{
-        name: :"peer#{System.unique_integer([:positive])}",
+        name: peer_name(),
         host: ~c"127.0.0.1",
         longnames: true,
         connection: :standard_io
@@ -83,4 +83,10 @@ defmodule Engram.ClusterCase do
   end
 
   defp peer_node, do: Node.list() |> List.first()
+
+  # Fixed, compile-time node name (not an interpolated/dynamic atom — Credo's
+  # Warning.UnsafeToAtom is enforced in test/ too). Safe to reuse: the only
+  # peer user is the `async: false` cluster test, and `on_exit` stops the peer
+  # (freeing the epmd name) before any subsequent test runs.
+  defp peer_name, do: :engram_cluster_test_peer
 end
