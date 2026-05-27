@@ -1,5 +1,5 @@
 import { Menu, PanelRightOpen, X } from 'lucide-react'
-import { lazy, type MouseEvent, Suspense, useState } from 'react'
+import { type MouseEvent, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -11,19 +11,13 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import { config } from '../config'
 import ThemeToggle from '../theme/theme-toggle'
 import FolderTree from '../viewer/folder-tree'
 import FolderActions from './folder-actions'
 import { FolderTreeProvider } from './folder-tree-context'
 import { useRightSidebar } from './right-sidebar-context'
+import UserMenu from './user-menu'
 import VaultSwitcher from './vault-switcher'
-
-const isClerk = config.authProvider === 'clerk'
-const ClerkUserButton = isClerk
-  ? lazy(() => import('@clerk/clerk-react').then((mod) => ({ default: mod.UserButton })))
-  : null
-const LocalUserMenu = lazy(() => import('../auth/local-user-menu'))
 
 function HeaderLink({ to, label }: { to: string; label: string }) {
   return (
@@ -97,9 +91,7 @@ export default function MobileLayout() {
           <HeaderLink to="/search" label="Search" />
           <HeaderLink to="/settings" label="Settings" />
           <ThemeToggle />
-          <Suspense fallback={null}>
-            {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
-          </Suspense>
+          <UserMenu />
           {rightContent && (
             <Sheet open={rightOpen} onOpenChange={setRightOpen}>
               <SheetTrigger asChild>
