@@ -975,6 +975,47 @@ jobs:
           # job; this extends the same bar to test/**.
           mix test --warnings-as-errors
 
+      - name: Lint DB schema (splinter)
+        run: |
+          # splinter (priv/repo/splinter.sql) references Supabase's API roles,
+          # so stub them — without them the linter aborts on a plain Postgres.
+          # Our tables aren't granted to these roles, so the API-exposure lints
+          # (rls_disabled_in_public, *_table_exposed) stay silent; only genuine
+          # schema/security findings surface. unused_index is filtered by the
+          # gate (no scan stats on a fresh CI database).
+          docker exec "$PG_CONTAINER" psql -U engram -d engram_test -q -v ON_ERROR_STOP=1 -c "
+            DO \$\$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
+            DO \$\$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
+            DO \$\$ BEGIN CREATE ROLE service_role NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;"
+          docker exec -i "$PG_CONTAINER" psql -U engram -d engram_test -At -F'|' \
+            < priv/repo/splinter.sql | bash priv/repo/lint_schema.sh
+
+      - name: Lint new migrations (squawk)
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/squawk_lint
+          MIX_ENV: test
+          BASE_REF: origin/main
+        run: |
+          # Need origin/main locally to detect which migrations are new.
+          git fetch -q --depth=1 origin main || true
+          # squawk (Rust, baseline x86-64), pinned.
+          curl -fsSL -o /tmp/squawk \
+            https://github.com/sbdchd/squawk/releases/download/v2.54.0/squawk-linux-x64
+          chmod +x /tmp/squawk
+          # Fresh DB to render the new migrations' DDL from scratch.
+          docker exec "$PG_CONTAINER" createdb -U engram squawk_lint
+          SQUAWK_BIN=/tmp/squawk bash priv/repo/lint_migrations.sh
+
+      - name: Test new migrations roll back (ecto.rollback)
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/rollback_test
+          MIX_ENV: test
+          BASE_REF: origin/main
+        run: |
+          git fetch -q --depth=1 origin main || true
+          docker exec "$PG_CONTAINER" createdb -U engram rollback_test
+          bash priv/repo/test_rollback.sh
+
       - name: Stop ephemeral postgres
         if: always()
         run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true

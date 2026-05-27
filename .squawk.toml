@@ -1,0 +1,13 @@
+# squawk lints the DDL of migrations new on each branch
+# (see priv/repo/lint_migrations.sh). These two rules structurally conflict
+# with Ecto's generated migration SQL, so they're excluded — everything else
+# (ban-drop-column, adding-required-field, renaming-column, changing-column-type,
+# disallowed-unique-constraint, etc.) still gates the build.
+#
+#   require-timeout-settings — Ecto migrations never emit `SET lock_timeout` /
+#     `SET statement_timeout`; those are managed outside the migration SQL.
+#   prefer-robust-stmts      — Ecto wraps each migration in a transaction
+#     (invisible once the SQL is flattened) and reruns via the schema_migrations
+#     table, and this rule also flags every `CREATE INDEX CONCURRENTLY` for a
+#     missing `IF NOT EXISTS` that Ecto does not generate.
+excluded_rules = ["require-timeout-settings", "prefer-robust-stmts"]

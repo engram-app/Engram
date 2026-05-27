@@ -167,6 +167,7 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/oidc-deploy-cutover.md` | OIDC pull-based deploy daemon, legacy SSH-as-root retirement |
 | `docs/context/aws-kms-provider-integration.md` | Tier-4 / Phase F roadmap for KMS provider routing |
 | `docs/context/followup-show-attachments-in-tree.md` | One-feature follow-up tracker |
+| `docs/context/local-supabase-audit.md` | Throwaway local Supabase stack to run Studio Security/Performance Advisors against the Engram schema (AVX2 CLI build, encrypted-seed, RLS role grant, boot-canary gotchas) |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS
