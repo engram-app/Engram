@@ -56,7 +56,7 @@ defmodule Engram.Auth.SignupRejections do
 
   @impl true
   def init(_opts) do
-    :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
+    _table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
     schedule_sweep()
     {:ok, %{}}
   end
