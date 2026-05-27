@@ -165,6 +165,13 @@ if email_from = System.get_env("EMAIL_FROM") do
   config :engram, :email_from, email_from
 end
 
+# Resend bounce/complaint webhook secret (whsec_*), verifies inbound svix
+# signatures at POST /webhooks/resend. Without it the endpoint rejects all
+# events (cannot verify → cannot accept).
+if wh_secret = System.get_env("RESEND_WEBHOOK_SECRET") do
+  config :engram, :resend_webhook_secret, String.trim(wh_secret)
+end
+
 # Rate limit override for CI E2E tests (only effective when CI=true).
 # Production deploys never set CI=true, so this is unreachable in prod.
 if override = System.get_env("RATE_LIMIT_AUTH_OVERRIDE") do

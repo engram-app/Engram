@@ -105,6 +105,10 @@ config :engram, :clerk_api, Engram.Auth.Clerk.ApiMock
 # care about email delivery.
 config :engram, :email_provider, Engram.Email.NoOp
 
+# Resend webhook — svix-style HMAC signing (same scheme as Clerk). Secret is
+# base64 of "resend-test-secret" with the `whsec_` prefix per svix spec.
+config :engram, :resend_webhook_secret, "whsec_#{Base.encode64("resend-test-secret")}"
+
 # Default to local auth provider in tests
 config :engram, :auth_provider, :local
 

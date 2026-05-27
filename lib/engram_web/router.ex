@@ -60,6 +60,7 @@ defmodule EngramWeb.Router do
 
     post "/paddle", WebhookController, :paddle
     post "/clerk", WebhookController, :clerk
+    post "/resend", WebhookController, :resend
   end
 
   # OAuth 2.1 discovery documents — RFC 8414 + RFC 9728. Public, no auth.
