@@ -5,33 +5,24 @@ defmodule EngramWeb.OnboardingController do
 
   def status(conn, _params) do
     user = conn.assigns.current_user
-    state = Onboarding.status(user)
 
     payload =
-      case state do
-        %{enabled: false} ->
-          %{enabled: false, next_step: "done"}
+      case Onboarding.status(user) do
+        %{enabled: false} = s ->
+          %{enabled: false, next_step: Atom.to_string(s.next_step)}
 
-        %{
-          enabled: true,
-          terms_ok: terms_ok,
-          subscription_ok: sub_ok,
-          current_tos_version: version,
-          current_privacy_version: privacy_version,
-          next_step: next
-        } ->
-          %{
-            enabled: true,
-            terms_ok: terms_ok,
-            subscription_ok: sub_ok,
-            current_tos_version: version,
-            current_privacy_version: privacy_version,
-            next_step: Atom.to_string(next)
-          }
+        %{enabled: true} = s ->
+          s
+          |> Map.update!(:next_step, &Atom.to_string/1)
+          |> reject_nil_notice()
       end
 
     json(conn, payload)
   end
+
+  # Drop terms_notice from the wire when there's nothing to notify.
+  defp reject_nil_notice(%{terms_notice: nil} = s), do: Map.delete(s, :terms_notice)
+  defp reject_nil_notice(s), do: s
 
   def accept_terms(conn, %{
         "tos_version" => tv,
@@ -39,14 +30,15 @@ defmodule EngramWeb.OnboardingController do
         "privacy_version" => pv,
         "privacy_hash" => ph
       }) do
-    # Verify BOTH documents' version + content hash against the canonical config.
-    # Any mismatch means the app is showing different text than the backend
-    # expects (drift) — refuse with 409 instead of recording bad consent.
+    # Verify BOTH documents' version + content hash against the canonical
+    # terms_versions table (via the cache). Any mismatch means the app is
+    # showing different text than the backend expects (drift) — refuse with 409
+    # instead of recording bad consent.
     ok =
-      tv == Application.get_env(:engram, :current_tos_version) and
-        th == Application.get_env(:engram, :current_tos_hash) and
-        pv == Application.get_env(:engram, :current_privacy_version) and
-        ph == Application.get_env(:engram, :current_privacy_hash)
+      th == Engram.Legal.VersionCache.hash_for("terms_of_service", tv) and th != nil and
+        ph == Engram.Legal.VersionCache.hash_for("privacy_policy", pv) and ph != nil and
+        tv == Engram.Legal.VersionCache.current_version("terms_of_service") and
+        pv == Engram.Legal.VersionCache.current_version("privacy_policy")
 
     if ok do
       meta = %{

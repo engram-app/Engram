@@ -5,17 +5,29 @@ defmodule EngramWeb.OnboardingControllerTest do
 
   setup %{conn: conn} do
     prev_enabled = Application.get_env(:engram, :billing_enabled)
-    prev_version = Application.get_env(:engram, :current_tos_version)
-    prev_min = Application.get_env(:engram, :min_required_tos_version)
     Application.put_env(:engram, :billing_enabled, true)
-    Application.put_env(:engram, :current_tos_version, "2026-05-15")
-    # min_required tracks current here so accepting "2026-05-15" satisfies the gate.
-    Application.put_env(:engram, :min_required_tos_version, "2026-05-15")
+
+    Engram.LegalFixtures.insert_version(
+      document: "terms_of_service",
+      version: "2026-05-15",
+      content_hash: "canonical",
+      material: true,
+      effective_date: nil
+    )
+
+    Engram.LegalFixtures.insert_version(
+      document: "privacy_policy",
+      version: "2026-05-15",
+      content_hash: "p",
+      material: true,
+      effective_date: nil
+    )
+
+    Engram.Legal.VersionCache.invalidate_all()
+    on_exit(&Engram.Legal.VersionCache.invalidate_all/0)
 
     on_exit(fn ->
       Application.put_env(:engram, :billing_enabled, prev_enabled)
-      Application.put_env(:engram, :current_tos_version, prev_version)
-      Application.put_env(:engram, :min_required_tos_version, prev_min)
     end)
 
     user = insert(:user)
@@ -46,6 +58,22 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["next_step"] == "done"
     end
 
+    test "status forwards terms_notice when present", %{conn: conn} do
+      Engram.LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-06-01",
+        content_hash: "h2",
+        material: true,
+        effective_date: ~D[2099-01-01]
+      )
+
+      Engram.Legal.VersionCache.invalidate_all()
+
+      conn = get(conn, "/api/onboarding/status")
+      body = json_response(conn, 200)
+      assert body["terms_notice"]["version"] == "2026-06-01"
+    end
+
     test "returns enabled=false in self-host mode", %{conn: conn} do
       Application.put_env(:engram, :billing_enabled, false)
       conn = get(conn, "/api/onboarding/status")
@@ -56,27 +84,27 @@ defmodule EngramWeb.OnboardingControllerTest do
   end
 
   describe "POST /api/onboarding/accept-terms" do
-    # Pin all four canonical config values these tests assert against. test.exs
-    # pins only current_tos_version, so set the rest here with on_exit restore.
+    # Seed the canonical current versions these tests accept against. The outer
+    # setup already seeded "2026-05-15"; adding "2026-05-19" rows makes that the
+    # current version, with content hashes "canonical"/"p".
     setup do
-      prev = %{
-        tos_version: Application.get_env(:engram, :current_tos_version),
-        tos_hash: Application.get_env(:engram, :current_tos_hash),
-        privacy_version: Application.get_env(:engram, :current_privacy_version),
-        privacy_hash: Application.get_env(:engram, :current_privacy_hash)
-      }
+      Engram.LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-19",
+        content_hash: "canonical",
+        material: true,
+        effective_date: nil
+      )
 
-      Application.put_env(:engram, :current_tos_version, "2026-05-19")
-      Application.put_env(:engram, :current_tos_hash, "canonical")
-      Application.put_env(:engram, :current_privacy_version, "2026-05-19")
-      Application.put_env(:engram, :current_privacy_hash, "p")
+      Engram.LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-19",
+        content_hash: "p",
+        material: true,
+        effective_date: nil
+      )
 
-      on_exit(fn ->
-        Application.put_env(:engram, :current_tos_version, prev.tos_version)
-        Application.put_env(:engram, :current_tos_hash, prev.tos_hash)
-        Application.put_env(:engram, :current_privacy_version, prev.privacy_version)
-        Application.put_env(:engram, :current_privacy_hash, prev.privacy_hash)
-      end)
+      Engram.Legal.VersionCache.invalidate_all()
 
       :ok
     end
