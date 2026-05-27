@@ -21,4 +21,28 @@ defmodule Engram.Legal.TermsVersionTest do
 
     assert cs.valid?
   end
+
+  test "changeset rejects an unknown document" do
+    cs =
+      TermsVersion.changeset(%TermsVersion{}, %{
+        document: "cookie_policy",
+        version: "2026-05-19",
+        content_hash: "abc"
+      })
+
+    refute cs.valid?
+    assert %{document: _} = errors_on(cs)
+  end
+
+  test "changeset rejects a malformed version" do
+    cs =
+      TermsVersion.changeset(%TermsVersion{}, %{
+        document: "terms_of_service",
+        version: "v1.2.3",
+        content_hash: "abc"
+      })
+
+    refute cs.valid?
+    assert %{version: _} = errors_on(cs)
+  end
 end

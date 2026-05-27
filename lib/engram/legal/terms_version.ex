@@ -28,5 +28,6 @@ defmodule Engram.Legal.TermsVersion do
     |> validate_inclusion(:document, @documents)
     |> validate_format(:version, ~r/^\d{4}-\d{2}-\d{2}$/)
     |> unique_constraint([:document, :version])
+    |> check_constraint(:document, name: :document_must_be_valid)
   end
 end

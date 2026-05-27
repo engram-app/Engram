@@ -8,6 +8,8 @@ defmodule Engram.LegalFixtures do
   Pass `effective_date:` a `~D[]` in the future for the notice-window case.
   """
   def insert_version(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+
     defaults = %{
       document: "terms_of_service",
       version: "2026-05-19",
@@ -18,7 +20,7 @@ defmodule Engram.LegalFixtures do
     }
 
     %TermsVersion{}
-    |> TermsVersion.changeset(Map.merge(defaults, Map.new(attrs)))
+    |> TermsVersion.changeset(Map.merge(defaults, attrs))
     |> Repo.insert!(skip_tenant_check: true)
   end
 end
