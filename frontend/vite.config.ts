@@ -29,9 +29,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': apiTarget,
+      // changeOrigin rewrites the Host header to the target — required when
+      // VITE_API_TARGET points at a remote host routed by Host (e.g. Cloudflare);
+      // harmless against localhost.
+      '/api': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
       '/socket': {
         target: apiTarget,
+        changeOrigin: true,
         ws: true,
       },
     },

@@ -18,10 +18,13 @@ defmodule Engram.Auth.Clerk.HttpApi do
     url = "#{@base_url}/users/#{URI.encode_www_form(clerk_user_id)}"
 
     case Application.get_env(:engram, :clerk_secret_key) do
-      nil ->
-        {:error, :missing_secret}
+      blank when blank in [nil, ""] ->
+        # A missing secret silently disables the §A multi-account block — the
+        # duplicate user can't be revoked. This is a config defect, not a no-op.
+        Logger.error("Clerk delete_user skipped — CLERK_SECRET_KEY not configured",
+          clerk_user_id: clerk_user_id
+        )
 
-      "" ->
         {:error, :missing_secret}
 
       secret ->

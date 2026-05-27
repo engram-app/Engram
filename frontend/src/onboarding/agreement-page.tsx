@@ -4,6 +4,7 @@ import { useAcceptTerms, useOnboardingStatus } from '../api/queries'
 import { loadVersion, sha256Hex } from '../legal/load'
 import { LegalDoc } from '../legal/legal-doc'
 import { Checkbox } from '@/components/ui/checkbox'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
 const PRIVACY_URL = 'https://engram.page/privacy'
@@ -88,9 +89,11 @@ export default function AgreementPage() {
         ) : (
           <>
             {tosText ? (
-              <div className="max-h-96 overflow-y-auto rounded-lg border border-border bg-background p-4">
-                <LegalDoc source={tosText} />
-              </div>
+              <ScrollArea className="h-80 rounded-lg border border-border bg-background lg:h-[60vh]">
+                <div className="p-4">
+                  <LegalDoc source={tosText} />
+                </div>
+              </ScrollArea>
             ) : null}
             <label
               className={cn(

@@ -14,6 +14,7 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   alias Engram.Accounts
   alias Engram.Auth.EmailNormalizer
+  alias Engram.Auth.SignupRejections
   alias Engram.Repo
 
   require Logger
@@ -45,23 +46,46 @@ defmodule Engram.Auth.Clerk.Webhook do
   defp apply_user_created(clerk_id, email, normalized) do
     case Accounts.find_by_normalized_email(normalized) do
       {:ok, _existing} ->
+        Logger.warning("Clerk signup rejected — normalized email already exists",
+          clerk_user_id: clerk_id,
+          normalized_email_hash: hash(normalized)
+        )
+
+        # Stash the reason before the delete orphans the session, so the web app
+        # can fetch it and explain the bounce instead of failing silently.
+        SignupRejections.record(clerk_id, :duplicate_identity)
+        revoke_duplicate(clerk_id, normalized)
+        :ok
+
+      {:error, :user_not_found} ->
+        _ = Accounts.find_or_create_by_external_id(clerk_id, %{email: email})
+        :ok
+    end
+  end
+
+  # The block is only real if Clerk actually revokes the duplicate. A failed
+  # delete (e.g. missing CLERK_SECRET_KEY) leaves the duplicate account live and
+  # signed in — count the outcome, not the intent, and make a failure alertable.
+  defp revoke_duplicate(clerk_id, normalized) do
+    case clerk_api().delete_user(clerk_id) do
+      :ok ->
         :telemetry.execute(
           [:engram, :abuse, :multi_account_blocked],
           %{count: 1},
           %{normalized_email_hash: hash(normalized)}
         )
 
-        Logger.warning("Clerk signup rejected — normalized email already exists",
-          clerk_user_id: clerk_id,
-          normalized_email_hash: hash(normalized)
+      {:error, reason} ->
+        :telemetry.execute(
+          [:engram, :abuse, :multi_account_block_failed],
+          %{count: 1},
+          %{normalized_email_hash: hash(normalized), reason: inspect(reason)}
         )
 
-        _ = clerk_api().delete_user(clerk_id)
-        :ok
-
-      {:error, :user_not_found} ->
-        _ = Accounts.find_or_create_by_external_id(clerk_id, %{email: email})
-        :ok
+        Logger.error("Clerk delete_user did not revoke duplicate signup — account still live",
+          clerk_user_id: clerk_id,
+          reason: inspect(reason)
+        )
     end
   end
 

@@ -110,6 +110,10 @@ defmodule EngramWeb.Router do
     post "/auth/device", DeviceAuthController, :start
     post "/auth/device/token", DeviceAuthController, :token
     post "/auth/token/refresh", DeviceAuthController, :refresh
+
+    # Public: explain why a just-completed sign-up was rejected (multi-account
+    # block deletes the Clerk user, so there is no session to authenticate with).
+    get "/auth/signup-rejection", SignupRejectionController, :show
   end
 
   # Local auth endpoints — always compiled, guarded at runtime by RequireLocalAuth plug

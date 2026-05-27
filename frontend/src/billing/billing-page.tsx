@@ -1,8 +1,23 @@
-import { useEffect, useState } from 'react'
-import { initializePaddle, type Paddle } from '@paddle/paddle-js'
-import { useBillingStatus, useBillingConfig, type BillingConfig } from '../api/queries'
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { CheckoutEventNames, initializePaddle, type Paddle } from '@paddle/paddle-js'
+import {
+  useBillingStatus,
+  useBillingConfig,
+  type BillingConfig,
+  type OnboardingStatus,
+} from '../api/queries'
 import { api } from '../api/client'
+import { useTheme } from '../theme/theme-provider'
 import { cn } from '@/lib/utils'
+
+// Paddle confirms checkout client-side (checkout.completed) before its webhook
+// reaches our backend and flips the subscription active, so a single refetch
+// races the webhook and reads stale state. Poll the onboarding gate until it
+// catches up (or we give up), writing each result into the query cache so the
+// onboarding redirect fires without a manual reload.
+const ACTIVATION_POLL_MS = 2000
+const ACTIVATION_POLL_TIMEOUT_MS = 30000
 
 const TIER_LABELS = {
   free: 'Free',
@@ -15,18 +30,70 @@ const TIER_LABELS = {
 export default function BillingPage({ hideHeading = false }: { hideHeading?: boolean }) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
+  const { resolved } = useTheme()
+  const qc = useQueryClient()
   const [paddle, setPaddle] = useState<Paddle>()
+  const [activationStuck, setActivationStuck] = useState(false)
+  const pollTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const activeRef = useRef(true)
+
+  useEffect(() => {
+    activeRef.current = true
+    return () => {
+      activeRef.current = false
+      clearTimeout(pollTimer.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!config) return
+
+    function pollUntilActive(deadline: number) {
+      clearTimeout(pollTimer.current)
+      pollTimer.current = setTimeout(async () => {
+        try {
+          const status = await api.get<OnboardingStatus>('/onboarding/status')
+          if (!activeRef.current) return
+          qc.setQueryData(['onboarding', 'status'], status)
+          qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+          if (status.next_step === 'done') return
+        } catch (err) {
+          // A transient 401 (token refresh mid-checkout), 429, or 5xx must not
+          // kill the poll — log and fall through to retry within the deadline.
+          console.error('billing activation poll request failed; retrying', err)
+        }
+        if (!activeRef.current) return
+        if (Date.now() < deadline) {
+          pollUntilActive(deadline)
+        } else {
+          // Paid, but the webhook hasn't flipped us active in time. Surface it
+          // rather than silently stranding the user on the plan page.
+          console.error('billing activation timed out before subscription became active')
+          setActivationStuck(true)
+        }
+      }, ACTIVATION_POLL_MS)
+    }
+
     initializePaddle({
       token: config.client_token,
       environment: config.environment,
-      checkout: { settings: { displayMode: 'overlay', theme: 'light', locale: 'en' } },
+      eventCallback: (event) => {
+        if (event.name === CheckoutEventNames.CHECKOUT_COMPLETED) {
+          setActivationStuck(false)
+          pollUntilActive(Date.now() + ACTIVATION_POLL_TIMEOUT_MS)
+        }
+      },
+      checkout: {
+        settings: {
+          displayMode: 'overlay',
+          theme: resolved === 'dark' ? 'dark' : 'light',
+          locale: 'en',
+        },
+      },
     }).then((instance) => {
       if (instance) setPaddle(instance)
     })
-  }, [config])
+  }, [config, resolved, qc])
 
   if (isLoading || !billing) {
     return <p className="text-muted-foreground">Loading billing info...</p>
@@ -39,6 +106,16 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
   return (
     <article className="mx-auto max-w-2xl space-y-8">
       {!hideHeading && <h1 className="text-2xl font-bold text-foreground">Billing</h1>}
+
+      {activationStuck && (
+        <div role="alert" className="rounded-lg border border-border bg-card p-4 text-sm">
+          <p className="font-medium text-foreground">Payment received — finishing activation</p>
+          <p className="mt-1 text-muted-foreground">
+            This is taking longer than usual. Refresh the page in a moment; if it persists,
+            contact support and we’ll sort it out.
+          </p>
+        </div>
+      )}
 
       {!hideHeading && (
         <section className="space-y-4 rounded-lg border border-border bg-card p-6">

@@ -103,6 +103,33 @@ defmodule EngramWeb.ClerkWebhookTest do
 
       assert json_response(conn, 200)["status"] == "ok"
       assert {:error, :user_not_found} = Accounts.find_by_external_id("user_dup1")
+      # Reason is stashed so the web app can explain the bounce.
+      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_dup1")
+    end
+
+    test "emits block_failed telemetry and still acks when Clerk delete fails", %{conn: conn} do
+      _existing = insert(:user, email: "dupf@gmail.com", normalized_email: "dupf@gmail.com")
+
+      # Simulate a misconfigured/unreachable Clerk — the duplicate stays live.
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_dupf" ->
+        {:error, :missing_secret}
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :multi_account_block_failed]
+        ])
+
+      payload = clerk_user_created_payload("user_dupf", "dupf@gmail.com")
+      conn = post_clerk(conn, "evt_dupf", payload)
+
+      # Still ack the webhook (200) and stash the reason, but loudly count the
+      # failed revocation so the silent-no-op bypass is observable.
+      assert json_response(conn, 200)["status"] == "ok"
+      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_dupf")
+      assert_received {[:engram, :abuse, :multi_account_block_failed], ^ref, %{count: 1}, _meta}
+
+      :telemetry.detach(ref)
     end
 
     test "ignores duplicate event when local user already exists for same external_id",

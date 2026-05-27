@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { config } from '../config'
+import AuthLayout from './auth-layout'
 
 const isClerk = config.authProvider === 'clerk'
 
@@ -7,9 +8,9 @@ const ClerkSignUpPage = isClerk
   ? lazy(() =>
       import('@clerk/clerk-react').then((mod) => ({
         default: () => (
-          <main style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}>
+          <AuthLayout>
             <mod.SignUp routing="hash" forceRedirectUrl="/" />
-          </main>
+          </AuthLayout>
         ),
       }))
     )

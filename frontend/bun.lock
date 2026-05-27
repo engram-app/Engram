@@ -6,6 +6,7 @@
       "name": "engram-frontend",
       "dependencies": {
         "@clerk/clerk-react": "^5.61.4",
+        "@clerk/themes": "^2.4.57",
         "@codemirror/lang-markdown": "^6.5.0",
         "@codemirror/state": "^6.6.0",
         "@codemirror/view": "^6.42.1",
@@ -139,6 +140,8 @@
     "@clerk/shared": ["@clerk/shared@4.8.0", "http://10.0.20.214:4873/@clerk/shared/-/shared-4.8.0.tgz", { "dependencies": { "@tanstack/query-core": "5.90.16", "dequal": "2.0.3", "glob-to-regexp": "0.4.1", "js-cookie": "3.0.5", "std-env": "^3.9.0" }, "peerDependencies": { "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0", "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0" }, "optionalPeers": ["react", "react-dom"] }, "sha512-RLIs8gqSmciALkJ5caAed0+Xb38b0itW+lTwhZ2arqOcbY/nfJboZbfXKU5VDUbs4ivMD0xKKy6tHQTbpKgqmA=="],
 
     "@clerk/testing": ["@clerk/testing@2.0.14", "http://10.0.20.214:4873/@clerk/testing/-/testing-2.0.14.tgz", { "dependencies": { "@clerk/backend": "^3.2.10", "@clerk/shared": "^4.8.0", "dotenv": "17.2.2" }, "peerDependencies": { "@playwright/test": "^1", "cypress": "^13 || ^14" }, "optionalPeers": ["@playwright/test", "cypress"] }, "sha512-HClHsj9yOVTzH8amOiDBLif4lSeoSdAooH5crFaancprpqVssMhGm+MaFZvoTfTFNzUeLxDxoFcf0frFhLPeXQ=="],
+
+    "@clerk/themes": ["@clerk/themes@2.4.57", "http://10.0.20.214:4873/@clerk/themes/-/themes-2.4.57.tgz", { "dependencies": { "@clerk/shared": "^3.47.2", "tslib": "2.8.1" } }, "sha512-Nb3bO79rMTU/MPVTC/dde6LG27/IgOMKIYi5KSvAmO4ZUHlj0OWufu6CMvz5OYVZ0YdyMnTBU2aPGRUiRzO+2w=="],
 
     "@codemirror/autocomplete": ["@codemirror/autocomplete@6.20.2", "http://10.0.20.214:4873/@codemirror/autocomplete/-/autocomplete-6.20.2.tgz", { "dependencies": { "@codemirror/language": "^6.0.0", "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.17.0", "@lezer/common": "^1.0.0" } }, "sha512-G5FPkgIiLjOgZMjqVjvuKQ1rGPtHogLldJr33eFJdVLtmwY+giGrlv/ewljLz6b9BSQLkjxuwBc6g6omDM+YxQ=="],
 
@@ -1718,6 +1721,8 @@
 
     "@clerk/shared/std-env": ["std-env@3.10.0", "http://10.0.20.214:4873/std-env/-/std-env-3.10.0.tgz", {}, "sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg=="],
 
+    "@clerk/themes/@clerk/shared": ["@clerk/shared@3.47.3", "http://10.0.20.214:4873/@clerk/shared/-/shared-3.47.3.tgz", { "dependencies": { "csstype": "3.1.3", "dequal": "2.0.3", "glob-to-regexp": "0.4.1", "js-cookie": "3.0.5", "std-env": "^3.9.0", "swr": "2.3.4" }, "peerDependencies": { "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0", "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0" }, "optionalPeers": ["react", "react-dom"] }, "sha512-jG0wMIZuuc8zaKieg9Os8ocTphG+llluRukUUdyVnu4+ZI1syVf+dkpDP3ZK69yLavTX3D0KAmkmQqTPzQV/Nw=="],
+
     "@dotenvx/dotenvx/commander": ["commander@11.1.0", "http://10.0.20.214:4873/commander/-/commander-11.1.0.tgz", {}, "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ=="],
 
     "@dotenvx/dotenvx/execa": ["execa@5.1.1", "http://10.0.20.214:4873/execa/-/execa-5.1.1.tgz", { "dependencies": { "cross-spawn": "^7.0.3", "get-stream": "^6.0.0", "human-signals": "^2.1.0", "is-stream": "^2.0.0", "merge-stream": "^2.0.0", "npm-run-path": "^4.0.1", "onetime": "^5.1.2", "signal-exit": "^3.0.3", "strip-final-newline": "^2.0.0" } }, "sha512-8uSpZZocAZRBAPIEINJj3Lo9HyGitllczc27Eh5YYojjMFMn8yHMDMaUHE2Jqfq05D/wucwI4JGURyXt1vchyg=="],
@@ -1975,6 +1980,10 @@
     "@clerk/clerk-react/@clerk/shared/csstype": ["csstype@3.1.3", "http://10.0.20.214:4873/csstype/-/csstype-3.1.3.tgz", {}, "sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw=="],
 
     "@clerk/clerk-react/@clerk/shared/std-env": ["std-env@3.10.0", "http://10.0.20.214:4873/std-env/-/std-env-3.10.0.tgz", {}, "sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg=="],
+
+    "@clerk/themes/@clerk/shared/csstype": ["csstype@3.1.3", "http://10.0.20.214:4873/csstype/-/csstype-3.1.3.tgz", {}, "sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw=="],
+
+    "@clerk/themes/@clerk/shared/std-env": ["std-env@3.10.0", "http://10.0.20.214:4873/std-env/-/std-env-3.10.0.tgz", {}, "sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg=="],
 
     "@dotenvx/dotenvx/execa/get-stream": ["get-stream@6.0.1", "http://10.0.20.214:4873/get-stream/-/get-stream-6.0.1.tgz", {}, "sha512-ts6Wi+2j3jQjqi70w5AlN8DFnkSwC+MqmxEzdEALB2qXZYV3X/b1CTfgPLGJNMeAWxdPfU8FO1ms3NUfaHCPYg=="],
 

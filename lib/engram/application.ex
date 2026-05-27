@@ -24,6 +24,7 @@ defmodule Engram.Application do
         Engram.Crypto.DekCache,
         Engram.UsageMeters.ActivityCache,
         Engram.Onboarding.TermsCache,
+        Engram.Auth.SignupRejections,
         {EngramWeb.RateLimiter, [clean_period: :timer.minutes(2)]},
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),

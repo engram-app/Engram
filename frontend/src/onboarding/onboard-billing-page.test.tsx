@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ThemeProvider } from '../theme/theme-provider'
 import OnboardBillingPage from './onboard-billing-page'
 
 vi.mock('@paddle/paddle-js', () => ({
   initializePaddle: vi.fn().mockResolvedValue(undefined),
+  CheckoutEventNames: { CHECKOUT_COMPLETED: 'checkout.completed' },
 }))
 
 vi.mock('../api/queries', () => ({
@@ -32,9 +34,11 @@ function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <OnboardBillingPage />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter>
+          <OnboardBillingPage />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
