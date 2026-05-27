@@ -20,6 +20,9 @@ defmodule Engram.Application do
         boot_canary_guard(),
         {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Engram.PubSub},
+        # Must start after PubSub (it subscribes in init) and before the
+        # maybe_seed_legal/0 boot broadcast below, so this node's own subscriber
+        # can't miss its boot-reseed eviction. Don't reorder above PubSub.
         Engram.Legal.VersionCache.Invalidator,
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
