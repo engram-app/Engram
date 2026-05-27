@@ -215,7 +215,11 @@ defmodule Engram.OnboardingTest do
     test "terms_accepted? true when accepted >= floor even if below current" do
       # Floor = 2026-05-19 (material, effective now); current = 2026-06-01
       # (material, future effective_date so it stays out of the floor).
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
 
       Engram.LegalFixtures.insert_version(
         version: "2026-06-01",
@@ -249,7 +253,12 @@ defmodule Engram.OnboardingTest do
     end
 
     test "accept_terms stores content_hash and writes a privacy_policy row" do
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
+
       Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       Engram.Legal.VersionCache.invalidate_all()
 
@@ -276,7 +285,12 @@ defmodule Engram.OnboardingTest do
     end
 
     test "status returns current_privacy_version" do
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
+
       Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       Engram.Legal.VersionCache.invalidate_all()
 
@@ -301,7 +315,12 @@ defmodule Engram.OnboardingTest do
     end
 
     test "terms_ok true and no notice when accepted == current, effective now" do
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
+
       Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       Engram.Legal.VersionCache.invalidate_all()
       user = insert(:user)
@@ -313,12 +332,22 @@ defmodule Engram.OnboardingTest do
     end
 
     test "notice present but terms_ok still true during the window (new material version, future effective_date)" do
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
+
       Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       user = insert(:user)
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
-      Engram.LegalFixtures.insert_version(version: "2026-06-01", material: true, effective_date: ~D[2099-01-01])
+      Engram.LegalFixtures.insert_version(
+        version: "2026-06-01",
+        material: true,
+        effective_date: ~D[2099-01-01]
+      )
+
       Engram.Legal.VersionCache.invalidate_all()
 
       status = Onboarding.status(user)
@@ -328,12 +357,22 @@ defmodule Engram.OnboardingTest do
     end
 
     test "terms_ok false once the new material version is effective and unaccepted" do
-      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(
+        version: "2026-05-19",
+        material: true,
+        effective_date: nil
+      )
+
       Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       user = insert(:user)
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
-      Engram.LegalFixtures.insert_version(version: "2026-06-01", material: true, effective_date: ~D[2000-01-01])
+      Engram.LegalFixtures.insert_version(
+        version: "2026-06-01",
+        material: true,
+        effective_date: ~D[2000-01-01]
+      )
+
       Engram.Legal.VersionCache.invalidate_all()
 
       refute Onboarding.status(user).terms_ok

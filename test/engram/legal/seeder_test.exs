@@ -7,8 +7,10 @@ defmodule Engram.Legal.SeederTest do
     assert :ok = Seeder.seed()
     # v1 terms row exists with the manifest hash and is effective now (material).
     assert Legal.required_floor("terms_of_service") == "2026-05-19"
+
     assert Legal.hash_for("terms_of_service", "2026-05-19") ==
              "6785e725e9900d5f87a90eca362c388d3254dac0e5b7105ba5da29d316551e5c"
+
     assert Legal.required_floor("privacy_policy") == "2026-05-19"
     # seed→verify round-trips cleanly when the DB matches the manifest.
     assert :ok = Seeder.verify()

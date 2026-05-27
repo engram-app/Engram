@@ -9,7 +9,8 @@ defmodule Engram.Legal.VersionCache do
   alias Engram.Legal
 
   @spec required_floor(String.t()) :: String.t() | nil
-  def required_floor(document), do: fetch({:floor, document}, fn -> Legal.required_floor(document) end)
+  def required_floor(document),
+    do: fetch({:floor, document}, fn -> Legal.required_floor(document) end)
 
   @spec current_version(String.t()) :: String.t() | nil
   def current_version(document),
