@@ -6,13 +6,29 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   setup do
     prev_enabled = Application.get_env(:engram, :billing_enabled)
-    prev_version = Application.get_env(:engram, :current_tos_version)
     Application.put_env(:engram, :billing_enabled, true)
-    Application.put_env(:engram, :current_tos_version, "2026-05-15")
+
+    Engram.LegalFixtures.insert_version(
+      document: "terms_of_service",
+      version: "2026-05-15",
+      content_hash: "canonical",
+      material: true,
+      effective_date: nil
+    )
+
+    Engram.LegalFixtures.insert_version(
+      document: "privacy_policy",
+      version: "2026-05-15",
+      content_hash: "p",
+      material: true,
+      effective_date: nil
+    )
+
+    Engram.Legal.VersionCache.invalidate_all()
+    on_exit(&Engram.Legal.VersionCache.invalidate_all/0)
 
     on_exit(fn ->
       Application.put_env(:engram, :billing_enabled, prev_enabled)
-      Application.put_env(:engram, :current_tos_version, prev_version)
     end)
 
     :ok
