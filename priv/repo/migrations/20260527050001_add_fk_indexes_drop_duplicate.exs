@@ -26,10 +26,10 @@ defmodule Engram.Repo.Migrations.AddFkIndexesDropDuplicate do
 
   def down do
     create index(:api_key_vaults, [:api_key_id, :vault_id],
-      name: "api_key_vaults_api_key_id_vault_id_index",
-      unique: true,
-      concurrently: true
-    )
+             name: "api_key_vaults_api_key_id_vault_id_index",
+             unique: true,
+             concurrently: true
+           )
 
     drop index(:api_keys, [:user_id], concurrently: true)
     drop index(:api_key_vaults, [:vault_id], concurrently: true)

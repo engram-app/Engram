@@ -37,7 +37,9 @@ defmodule DevSeed do
 
   def words(n), do: 1..n |> Enum.map(fn _ -> Enum.random(@words) end) |> Enum.join(" ")
 
-  def paragraph, do: 1..(:rand.uniform(4) + 2) |> Enum.map(fn _ -> sentence() end) |> Enum.join(" ")
+  def paragraph,
+    do: 1..(:rand.uniform(4) + 2) |> Enum.map(fn _ -> sentence() end) |> Enum.join(" ")
+
   defp sentence, do: String.capitalize(words(:rand.uniform(10) + 4)) <> "."
 
   def folder, do: Enum.random(@folders)
