@@ -5,6 +5,7 @@ import { AuthContext, type AuthAdapter } from './auth-context'
 import { rememberSignupUser } from './signup-rejection'
 import { setTokenGetter } from '../api/client'
 import { config } from '../config'
+import { router } from '../router'
 import { ROUTES } from '../routes'
 import { useTheme } from '../theme/theme-provider'
 
@@ -88,6 +89,8 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
       signInUrl={ROUTES.SIGN_IN}
       signUpUrl={ROUTES.SIGN_UP}
       afterSignOutUrl={ROUTES.SIGN_IN}
+      routerPush={(to) => router.navigate(to)}
+      routerReplace={(to) => router.navigate(to, { replace: true })}
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>
