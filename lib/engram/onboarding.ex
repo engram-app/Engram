@@ -8,6 +8,8 @@ defmodule Engram.Onboarding do
   """
 
   alias Engram.Billing
+  alias Engram.Legal
+  alias Engram.Legal.VersionCache
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
@@ -39,28 +41,39 @@ defmodule Engram.Onboarding do
 
     # Atomic: a ToS row without its paired Privacy row is an incomplete audit
     # record, so roll back the first insert if the second fails.
-    Repo.transaction(fn ->
-      with {:ok, tos_row} <-
-             insert_agreement(
-               Map.merge(base, %{
-                 document: @terms_document,
-                 version: tos_version,
-                 content_hash: tos_hash
-               })
-             ),
-           {:ok, _privacy_row} <-
-             insert_agreement(
-               Map.merge(base, %{
-                 document: @privacy_document,
-                 version: privacy_version,
-                 content_hash: privacy_hash
-               })
-             ) do
-        tos_row
-      else
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end)
+    result =
+      Repo.transaction(fn ->
+        with {:ok, tos_row} <-
+               insert_agreement(
+                 Map.merge(base, %{
+                   document: @terms_document,
+                   version: tos_version,
+                   content_hash: tos_hash
+                 })
+               ),
+             {:ok, _privacy_row} <-
+               insert_agreement(
+                 Map.merge(base, %{
+                   document: @privacy_document,
+                   version: privacy_version,
+                   content_hash: privacy_hash
+                 })
+               ) do
+          tos_row
+        else
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, tos_row} ->
+        TermsCache.put_accepted(user.id, @terms_document, tos_version)
+        TermsCache.put_accepted(user.id, @privacy_document, privacy_version)
+        {:ok, tos_row}
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -97,19 +110,30 @@ defmodule Engram.Onboarding do
   Compute the onboarding state for a user. Returns a map with:
 
     * `:enabled` — true when billing (and therefore the wizard) is active
-    * `:terms_ok` — current TOS version accepted
+    * `:terms_ok` — latest accepted ToS version satisfies the computed floor
     * `:subscription_ok` — user has trialing/active/past_due subscription
-    * `:current_tos_version` — string from config
+    * `:current_tos_version` — latest published ToS version (from `terms_versions`)
+    * `:current_privacy_version` — latest published Privacy version
+    * `:terms_notice` — map describing a not-yet-accepted current version
+      (during the notice window), or `nil` when the user is current
     * `:next_step` — one of `:agreement | :billing | :done`
+
+  The gate is computed from the `terms_versions` table via
+  `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
+  version against the required floor (latest MATERIAL version effective now),
+  while `:terms_notice` reflects any newer published version not yet accepted.
 
   When `billing_enabled` is false (self-host), returns `{enabled: false,
   next_step: :done}` immediately so callers can skip all gates.
   """
   def status(user) do
     if Application.get_env(:engram, :billing_enabled, false) do
-      current_version = Application.get_env(:engram, :current_tos_version)
-      min_required = Application.get_env(:engram, :min_required_tos_version)
-      terms_ok = terms_accepted?(user, min_required)
+      floor = VersionCache.required_floor(@terms_document)
+      current_tos = VersionCache.current_version(@terms_document)
+      current_privacy = VersionCache.current_version(@privacy_document)
+
+      accepted_tos = accepted_version(user, @terms_document)
+      terms_ok = accepted_satisfies?(accepted_tos, floor)
       subscription_ok = Billing.active?(user)
       next = next_step(terms_ok, subscription_ok)
 
@@ -117,8 +141,9 @@ defmodule Engram.Onboarding do
         enabled: true,
         terms_ok: terms_ok,
         subscription_ok: subscription_ok,
-        current_tos_version: current_version,
-        current_privacy_version: Application.get_env(:engram, :current_privacy_version),
+        current_tos_version: current_tos,
+        current_privacy_version: current_privacy,
+        terms_notice: notice(@terms_document, current_tos, accepted_tos),
         next_step: next
       }
     else
@@ -126,34 +151,56 @@ defmodule Engram.Onboarding do
     end
   end
 
-  # Gate on `min_required_tos_version`: a bump to `current_tos_version` alone
-  # (minor edit) must NOT force re-accept — only a `min_required` bump does.
-  defp terms_accepted?(user, min_required) do
-    if TermsCache.accepted?(user.id, min_required) do
-      true
-    else
-      accepted = query_terms_accepted?(user, min_required)
-      if accepted, do: TermsCache.mark_accepted(user.id, min_required)
-      accepted
+  # Cache-first read of the user's latest accepted version for a document.
+  defp accepted_version(user, document) do
+    case TermsCache.accepted_version(user.id, document) do
+      nil ->
+        v = query_accepted_version(user, document)
+        if v, do: TermsCache.put_accepted(user.id, document, v)
+        v
+
+      cached ->
+        cached
     end
   end
 
-  defp query_terms_accepted?(user, min_required) do
+  defp accepted_satisfies?(nil, _floor), do: false
+  defp accepted_satisfies?(_accepted, nil), do: true
+  defp accepted_satisfies?(accepted, floor), do: accepted >= floor
+
+  # A notice is due when there is a current version the user hasn't accepted yet.
+  defp notice(_document, nil, _accepted), do: nil
+
+  defp notice(document, current, accepted)
+       when is_nil(accepted) or current > accepted do
+    case Legal.get(document, current) do
+      nil ->
+        nil
+
+      row ->
+        %{
+          document: document,
+          version: row.version,
+          effective_date: row.effective_date,
+          material: row.material,
+          changelog: row.changelog,
+          accept_url: "https://app.engram.page/onboard/agreement"
+        }
+    end
+  end
+
+  defp notice(_document, _current, _accepted), do: nil
+
+  defp query_accepted_version(user, document) do
     import Ecto.Query
 
-    latest =
-      from(a in Agreement,
-        where: a.user_id == ^user.id and a.document == ^@terms_document,
-        order_by: [desc: a.accepted_at],
-        limit: 1,
-        select: a.version
-      )
-      |> Repo.one(skip_tenant_check: true)
-
-    case latest do
-      nil -> false
-      accepted -> accepted >= min_required
-    end
+    from(a in Agreement,
+      where: a.user_id == ^user.id and a.document == ^document,
+      order_by: [desc: a.accepted_at],
+      limit: 1,
+      select: a.version
+    )
+    |> Repo.one(skip_tenant_check: true)
   end
 
   defp next_step(false, _), do: :agreement

@@ -261,6 +261,54 @@ defmodule Engram.OnboardingTest do
     end
   end
 
+  describe "computed floor gate + terms_notice" do
+    setup do
+      Engram.Legal.VersionCache.invalidate_all()
+      Application.put_env(:engram, :billing_enabled, true)
+      on_exit(fn -> Engram.Legal.VersionCache.invalidate_all() end)
+      :ok
+    end
+
+    test "terms_ok true and no notice when accepted == current, effective now" do
+      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      Engram.Legal.VersionCache.invalidate_all()
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      status = Onboarding.status(user)
+      assert status.terms_ok
+      refute Map.has_key?(status, :terms_notice) and status.terms_notice != nil
+    end
+
+    test "notice present but terms_ok still true during the window (new material version, future effective_date)" do
+      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      Engram.LegalFixtures.insert_version(version: "2026-06-01", material: true, effective_date: ~D[2099-01-01])
+      Engram.Legal.VersionCache.invalidate_all()
+
+      status = Onboarding.status(user)
+      assert status.terms_ok
+      assert status.terms_notice.version == "2026-06-01"
+      assert status.terms_notice.effective_date == ~D[2099-01-01]
+    end
+
+    test "terms_ok false once the new material version is effective and unaccepted" do
+      Engram.LegalFixtures.insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      Engram.LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      Engram.LegalFixtures.insert_version(version: "2026-06-01", material: true, effective_date: ~D[2000-01-01])
+      Engram.Legal.VersionCache.invalidate_all()
+
+      refute Onboarding.status(user).terms_ok
+    end
+  end
+
   defp with_agreement_query_count(fun) do
     # Scope to this test's pid: telemetry handlers run in the emitting process,
     # so without this a concurrent async test could leak into the count.
