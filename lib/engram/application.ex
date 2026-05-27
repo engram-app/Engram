@@ -25,7 +25,7 @@ defmodule Engram.Application do
         Engram.UsageMeters.ActivityCache,
         Engram.Onboarding.TermsCache,
         Engram.Auth.SignupRejections,
-        {EngramWeb.RateLimiter, [clean_period: :timer.minutes(2)]},
+        rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
         EngramWeb.Endpoint
@@ -102,6 +102,20 @@ defmodule Engram.Application do
     if Application.get_env(:engram, :auth_provider) == :clerk &&
          Application.get_env(:engram, :clerk_jwks_url) do
       {Engram.Auth.ClerkStrategy, time_interval: 60_000, first_fetch_sync: true}
+    end
+  end
+
+  # Start the concrete limiter matching the configured backend. ETS (default)
+  # needs only a clean_period; Redis needs connection opts (REDIS_URL, wired in
+  # runtime.exs). Same release artifact, runtime-selected — see EngramWeb.RateLimiter.
+  defp rate_limiter_child do
+    case EngramWeb.RateLimiter.backend() do
+      :redis ->
+        opts = Application.get_env(:engram, EngramWeb.RateLimiter.Redis, [])
+        {EngramWeb.RateLimiter.Redis, opts}
+
+      _ets ->
+        {EngramWeb.RateLimiter.ETS, [clean_period: :timer.minutes(2)]}
     end
   end
 

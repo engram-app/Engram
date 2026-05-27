@@ -429,6 +429,21 @@ if config_env() == :prod do
 
   config :engram, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Rate-limiter: opt into the cluster-shared Redis backend only when a store
+  # URL is provided (SaaS prod, ElastiCache — engram-infra#158). Self-host /
+  # any deploy without REDIS_URL stays on the per-node ETS default. The Redis
+  # limiter fails open + alerts if the store is unreachable (see RateLimiter).
+  if redis_url = System.get_env("REDIS_URL") do
+    config :engram, EngramWeb.RateLimiter, backend: :redis
+
+    # `:url` + `:key_prefix` are the documented Hammer.Redis 7.x start options.
+    # VERIFY exact option names against hammer_backend_redis 7.1 README before
+    # first deploy; adjust here only (call sites + façade are option-agnostic).
+    config :engram, EngramWeb.RateLimiter.Redis,
+      url: redis_url,
+      key_prefix: "engram_rl:"
+  end
+
   config :engram, EngramWeb.Endpoint,
     http: [
       # Enable IPv6 and bind on all interfaces.

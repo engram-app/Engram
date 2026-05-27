@@ -93,6 +93,7 @@ defmodule Engram.MixProject do
 
       # Rate limiting
       {:hammer, "~> 7.3"},
+      {:hammer_backend_redis, "~> 7.0"},
 
       # Telemetry & logging
       {:telemetry_metrics, "~> 1.0"},
