@@ -15,8 +15,6 @@ defmodule EngramWeb.Plugs.BumpActivity do
   alias Engram.UsageMeters
   alias Engram.UsageMeters.ActivityCache
 
-  @debounce_seconds 3600
-
   def init(opts), do: opts
 
   def call(%Plug.Conn{assigns: %{current_user: %{id: user_id}}} = conn, _opts) do
@@ -48,6 +46,6 @@ defmodule EngramWeb.Plugs.BumpActivity do
   defp needs_bump?(nil), do: true
 
   defp needs_bump?(%DateTime{} = ts) do
-    DateTime.diff(DateTime.utc_now(), ts, :second) > @debounce_seconds
+    DateTime.diff(DateTime.utc_now(), ts, :second) > ActivityCache.debounce_seconds()
   end
 end

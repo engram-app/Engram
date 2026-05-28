@@ -12,11 +12,17 @@ defmodule Engram.Cache do
 
   This module owns only the Redis path; the ETS path lives in each cache because
   the key/value shapes differ. Redis ops **fail open**: any error returns a miss
-  (`redis_get/1`) or is swallowed (`redis_set/3`) after emitting
+  (`redis_get/2`) or is swallowed (`redis_set/4`) after emitting
   `[:engram, :cache, :backend_error]` telemetry, so a store outage degrades to
-  the authoritative DB read-through instead of failing the request.
+  the authoritative DB read-through instead of failing the request. The event is
+  tagged with `cache` (`:activity | :terms`) and `op` (`:get | :set`) so a
+  degraded store is attributable per cache/op in CloudWatch — the metric is
+  registered in `EngramWeb.Telemetry` (registration is what makes the "alert"
+  half of fail-open+alert actually reach a reporter).
   """
 
+  @type cache :: :activity | :terms
+  @type op :: :get | :set
   @type get_result :: {:ok, binary()} | :miss
 
   @spec backend() :: :ets | :redis
@@ -29,19 +35,20 @@ defmodule Engram.Cache do
   @doc """
   Fetch a key from the shared store. Returns `{:ok, value}` on a hit, `:miss`
   for an absent key, and — on any store error — `:miss` after emitting
-  backend-error telemetry (fail-open).
+  backend-error telemetry (fail-open). `cache` labels the calling cache for
+  observability.
   """
-  @spec redis_get(String.t()) :: get_result()
-  def redis_get(key) do
+  @spec redis_get(cache(), String.t()) :: get_result()
+  def redis_get(cache, key) do
     case impl().command(["GET", key]) do
       {:ok, nil} -> :miss
       {:ok, value} when is_binary(value) -> {:ok, value}
-      {:error, reason} -> degrade(reason)
+      {:error, reason} -> degrade(cache, :get, reason)
     end
   rescue
-    error -> degrade(error)
+    error -> degrade(cache, :get, error)
   catch
-    :exit, reason -> degrade(reason)
+    :exit, reason -> degrade(cache, :get, reason)
   end
 
   @doc """
@@ -49,17 +56,25 @@ defmodule Engram.Cache do
   swallowed after emitting telemetry (fail-open — a failed cache write just
   means the next read re-derives from the DB).
   """
-  @spec redis_set(String.t(), String.t(), pos_integer()) :: :ok
-  def redis_set(key, value, ttl_seconds) do
+  @spec redis_set(cache(), String.t(), String.t(), pos_integer()) :: :ok
+  def redis_set(cache, key, value, ttl_seconds) do
     case impl().command(["SET", key, value, "EX", Integer.to_string(ttl_seconds)]) do
       {:ok, _} -> :ok
-      {:error, reason} -> emit_backend_error(reason)
+      {:error, reason} -> emit_backend_error(cache, :set, reason)
     end
   rescue
-    error -> emit_backend_error(error)
+    error -> emit_backend_error(cache, :set, error)
   catch
-    :exit, reason -> emit_backend_error(reason)
+    :exit, reason -> emit_backend_error(cache, :set, reason)
   end
+
+  @doc """
+  Emit a cache backend-error event directly. For callers that detect a store
+  problem the get/set wrappers can't see — e.g. a value that decodes wrong
+  (corrupt/foreign write) — so it's distinguishable from a normal `:miss`.
+  """
+  @spec report_backend_error(cache(), op(), term()) :: :ok
+  def report_backend_error(cache, op, reason), do: emit_backend_error(cache, op, reason)
 
   # Overridable so tests can inject a fake/raising command impl; prod uses the
   # real Redix connection. Reads the same Engram.Cache config keyword list.
@@ -69,27 +84,20 @@ defmodule Engram.Cache do
     |> Keyword.get(:redis_impl, Engram.Cache.Redix)
   end
 
-  defp degrade(reason) do
-    emit_backend_error(reason)
+  defp degrade(cache, op, reason) do
+    emit_backend_error(cache, op, reason)
     :miss
   end
 
-  defp emit_backend_error(reason) do
+  defp emit_backend_error(cache, op, reason) do
     :telemetry.execute(
       [:engram, :cache, :backend_error],
       %{count: 1},
-      %{reason: error_kind(reason)}
+      # Bounded, log-safe reason — see Engram.Telemetry.error_kind/1 (the raw
+      # term can carry the REDIS_URL password and telemetry skips redaction).
+      %{cache: cache, op: op, reason: Engram.Telemetry.error_kind(reason)}
     )
 
     :ok
   end
-
-  # Map an arbitrary failure to a bounded, log-safe atom. NEVER forward the raw
-  # reason: a Redix/connection error term can carry the REDIS_URL (incl. its
-  # password), and telemetry metadata does not pass through the Logger redaction
-  # filter. Mirrors EngramWeb.RateLimiter.error_kind/1.
-  defp error_kind(reason) when is_atom(reason), do: reason
-  defp error_kind({kind, _}) when is_atom(kind), do: kind
-  defp error_kind(%{__exception__: true} = e), do: e.__struct__
-  defp error_kind(_), do: :other
 end

@@ -44,13 +44,13 @@ defmodule Engram.Onboarding.TermsCache do
   @spec put_accepted(user_id :: integer(), document :: String.t(), version :: String.t()) :: :ok
   def put_accepted(user_id, document, version) do
     case Cache.backend() do
-      :redis -> Cache.redis_set(key(user_id, document), version, @redis_ttl_seconds)
+      :redis -> Cache.redis_set(:terms, key(user_id, document), version, @redis_ttl_seconds)
       _ -> ets_put(user_id, document, version)
     end
   end
 
   defp redis_get(user_id, document) do
-    case Cache.redis_get(key(user_id, document)) do
+    case Cache.redis_get(:terms, key(user_id, document)) do
       {:ok, version} -> version
       :miss -> nil
     end

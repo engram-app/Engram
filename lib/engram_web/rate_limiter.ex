@@ -58,20 +58,13 @@ defmodule EngramWeb.RateLimiter do
     :telemetry.execute(
       [:engram, :rate_limiter, :backend_error],
       %{count: 1},
-      %{backend: :redis, reason: error_kind(reason)}
+      # Bounded, log-safe reason — see Engram.Telemetry.error_kind/1 (the raw
+      # term can carry the REDIS_URL password and telemetry skips redaction).
+      %{backend: :redis, reason: Engram.Telemetry.error_kind(reason)}
     )
 
     {:allow, 0}
   end
-
-  # Map an arbitrary failure to a bounded, log-safe atom. NEVER forward the raw
-  # reason: a Redix/connection error term can carry the REDIS_URL (incl. its
-  # password), and telemetry metadata does not pass through the Logger redaction
-  # filter. Matches the convention in Engram.Telemetry.ObanDiscardHandler.
-  defp error_kind(reason) when is_atom(reason), do: reason
-  defp error_kind({kind, _}) when is_atom(kind), do: kind
-  defp error_kind(%{__exception__: true} = e), do: e.__struct__
-  defp error_kind(_), do: :other
 
   if Mix.env() == :test do
     @doc "Wipe every bucket (test setup only). ETS backend only."

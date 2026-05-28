@@ -29,15 +29,25 @@ defmodule Engram.UsageMeters.ActivityCache do
 
   @table :engram_activity_cache
 
-  # Redis TTL for the activity key. Must be >= the BumpActivity debounce window
-  # (3600s): the entry only needs to survive the window, and expiry naturally
-  # re-arms the cold-path meter read. A longer TTL would just retain a stale
-  # timestamp that the caller's `>` comparison already treats as "needs bump".
-  @redis_ttl_seconds 3600
+  # Canonical home of the activity-stamp debounce window. BumpActivity reads it
+  # via debounce_seconds/0 so the plug's debounce and the Redis key TTL can't
+  # drift apart.
+  @debounce_seconds 3600
+
+  # Redis TTL for the activity key == the debounce window: the entry only needs
+  # to survive one window, and expiry re-arms the cold-path meter read. A longer
+  # TTL would also be correct (the caller's `>` comparison treats an
+  # over-retained stale timestamp as "needs bump"), but matching the window
+  # keeps memory minimal.
+  @redis_ttl_seconds @debounce_seconds
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
   end
+
+  @doc "The activity-stamp debounce window, in seconds (single source of truth)."
+  @spec debounce_seconds() :: pos_integer()
+  def debounce_seconds, do: @debounce_seconds
 
   @spec get(user_id :: integer()) :: {:ok, DateTime.t()} | :miss
   def get(user_id) do
@@ -51,7 +61,12 @@ defmodule Engram.UsageMeters.ActivityCache do
   def put(user_id, %DateTime{} = last_active_at) do
     case Cache.backend() do
       :redis ->
-        Cache.redis_set(key(user_id), DateTime.to_iso8601(last_active_at), @redis_ttl_seconds)
+        Cache.redis_set(
+          :activity,
+          key(user_id),
+          DateTime.to_iso8601(last_active_at),
+          @redis_ttl_seconds
+        )
 
       _ ->
         ets_put(user_id, last_active_at)
@@ -59,11 +74,23 @@ defmodule Engram.UsageMeters.ActivityCache do
   end
 
   defp redis_get(user_id) do
-    with {:ok, iso} <- Cache.redis_get(key(user_id)),
-         {:ok, ts, _offset} <- DateTime.from_iso8601(iso) do
-      {:ok, ts}
-    else
-      _ -> :miss
+    case Cache.redis_get(:activity, key(user_id)) do
+      {:ok, iso} -> decode(iso)
+      :miss -> :miss
+    end
+  end
+
+  # Everything we write is valid ISO8601, so a parse failure means a corrupt or
+  # foreign write — surface it as a distinct backend error (not a silent miss)
+  # and fall back to the DB read-through. The next bump self-heals the key.
+  defp decode(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, ts, _offset} ->
+        {:ok, ts}
+
+      _ ->
+        Cache.report_backend_error(:activity, :get, :decode_error)
+        :miss
     end
   end
 
