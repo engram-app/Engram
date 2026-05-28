@@ -1,4 +1,5 @@
 import { ProfileSection } from './account/profile-section'
+import { AppearanceSection } from './account/appearance-section'
 import { EmailSection } from './account/email-section'
 import { PasswordSection } from './account/password-section'
 import { ConnectedAccountsSection } from './account/connected-accounts-section'
@@ -19,6 +20,7 @@ export default function AccountPage() {
         </p>
       </header>
       <ProfileSection />
+      <AppearanceSection />
       <EmailSection />
       <PasswordSection />
       <ConnectedAccountsSection providers={[...OAUTH_PROVIDERS]} />

@@ -14,6 +14,9 @@ vi.mock('@clerk/clerk-react/errors', () => ({
   isReverificationCancelledError: () => false,
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/theme/theme-provider', () => ({
+  useTheme: () => ({ theme: 'system', resolved: 'dark', setTheme: vi.fn() }),
+}))
 
 import AccountPage from './account-page'
 
@@ -22,6 +25,7 @@ describe('AccountPage', () => {
     render(<AccountPage />)
     expect(screen.getByRole('heading', { name: 'Account', level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Profile photo' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Password' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /danger zone/i })).toBeInTheDocument()
   })

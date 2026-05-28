@@ -61,14 +61,14 @@ export default function SettingsLayout() {
         <div className="relative z-10 h-full sm:p-6">
           <div className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden bg-card sm:rounded-xl sm:border sm:border-border sm:shadow-sm md:flex-row">
             {/* Mobile: section switcher in a drawer. */}
-            <div className="flex items-center gap-2 border-b border-border p-3 md:hidden">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 md:hidden">
               <Sheet open={navOpen} onOpenChange={setNavOpen}>
                 <SheetTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label="Open settings sections"
-                    className="h-11 w-11"
+                    className="size-9"
                   >
                     <Menu className="size-5" />
                   </Button>
