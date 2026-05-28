@@ -1,16 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CheckoutEventNames, initializePaddle, type Paddle } from '@paddle/paddle-js'
+import { toast } from 'sonner'
 import {
   useBillingStatus,
   useBillingConfig,
+  useBillingSubscriptionDetail,
+  useBillingHistory,
   type BillingConfig,
   type OnboardingStatus,
 } from '../api/queries'
 import { api } from '../api/client'
 import { useTheme } from '../theme/theme-provider'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import CurrentPlanCard from './current-plan-card'
+import PaymentMethodCard from './payment-method-card'
+import BillingHistoryTable from './billing-history-table'
+import PendingChangeBanner from './pending-change-banner'
+
+async function openPortal(action?: string) {
+  try {
+    const path = action ? `/billing/portal?action=${action}` : '/billing/portal'
+    const { url } = await api.get<{ url: string }>(path)
+    window.location.href = url
+  } catch {
+    toast.error('Could not open the billing portal. Please try again.')
+  }
+}
+
+async function downloadInvoice(transactionId: string) {
+  try {
+    const { url } = await api.get<{ url: string }>(`/billing/transactions/${transactionId}/invoice`)
+    window.open(url, '_blank', 'noopener')
+  } catch {
+    toast.error('Could not fetch that invoice. Please try again.')
+  }
+}
 
 // Paddle confirms checkout client-side (checkout.completed) before its webhook
 // reaches our backend and flips the subscription active, so a single refetch
@@ -23,6 +49,9 @@ const ACTIVATION_POLL_TIMEOUT_MS = 30000
 export default function BillingPage({ hideHeading = false }: { hideHeading?: boolean }) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
+  const hasSubscription = Boolean(billing?.subscription)
+  const { data: detail } = useBillingSubscriptionDetail(hasSubscription)
+  const { data: history } = useBillingHistory(hasSubscription)
   const { resolved } = useTheme()
   const qc = useQueryClient()
   const [paddle, setPaddle] = useState<Paddle>()
@@ -150,15 +179,28 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
         </section>
       )}
 
-      {billing.subscription && billing.subscription.status !== 'canceled' && (
-        <section>
-          <button
-            onClick={handlePortal}
-            className="text-sm text-primary underline hover:text-primary/80"
-          >
-            Manage subscription
-          </button>
-        </section>
+      {!hideHeading && billing.subscription && (
+        <>
+          <PendingChangeBanner scheduledChange={detail?.scheduled_change ?? null} />
+          <PaymentMethodCard
+            paymentMethod={history?.payment_method ?? null}
+            onUpdate={() => openPortal('update_payment')}
+          />
+          <BillingHistoryTable
+            transactions={history?.transactions ?? []}
+            onDownload={downloadInvoice}
+          />
+          <section className="flex flex-wrap gap-3">
+            <Button variant="outline" onClick={() => openPortal()}>
+              Manage in Paddle
+            </Button>
+            {billing.subscription.status !== 'canceled' && (
+              <Button variant="ghost" onClick={() => openPortal('cancel')}>
+                Cancel subscription
+              </Button>
+            )}
+          </section>
+        </>
       )}
     </article>
   )
@@ -233,9 +275,4 @@ function PlanCard({
       </button>
     </li>
   )
-}
-
-async function handlePortal() {
-  const { url } = await api.get<{ url: string }>('/billing/portal')
-  window.location.href = url
 }
