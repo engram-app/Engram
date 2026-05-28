@@ -14,7 +14,8 @@ function loadAuthState(): { email: string; password: string; clerk_user_id: stri
 
 const SIGN_IN = '[data-clerk-component="SignIn"]'
 const SIGN_UP = '[data-clerk-component="SignUp"]'
-const USER_BUTTON = '[data-clerk-component="UserButton"]'
+// The header uses a custom avatar dropdown (UserMenu), not Clerk's <UserButton>.
+const USER_MENU = { role: 'button' as const, name: 'User menu' }
 
 /**
  * Sign in via Clerk Backend API ticket — bypasses form + bot detection entirely.
@@ -60,16 +61,16 @@ test.describe('Clerk auth provider', () => {
     await clerkSignIn(page, state.email)
   })
 
-  test('Clerk UserButton renders in header', async ({ page }) => {
+  test('user menu renders in header', async ({ page }) => {
     await clerkSignIn(page, state.email)
 
-    await expect(page.locator(USER_BUTTON)).toBeVisible()
+    await expect(page.getByRole(USER_MENU.role, { name: USER_MENU.name })).toBeVisible()
   })
 
   test('sign out via Clerk → redirects', async ({ page }) => {
     await clerkSignIn(page, state.email)
 
-    await page.locator(USER_BUTTON).click()
+    await page.getByRole(USER_MENU.role, { name: USER_MENU.name }).click()
     await page.getByRole('menuitem', { name: /sign out/i }).click()
 
     await expect(page).toHaveURL(/\/sign-in/, { timeout: 10_000 })
