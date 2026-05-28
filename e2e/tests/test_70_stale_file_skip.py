@@ -97,6 +97,35 @@ async def test_stale_local_accepts_remote(vault_a, cdp_a, api_sync):
         )
 
         # ------------------------------------------------------------------ #
+        # Step 3b: Wait until Obsidian's *cached* TFile.stat.mtime reflects   #
+        # the backdated value.  The staleness branch reads existing.stat.mtime #
+        # (Obsidian's in-memory cache — src/sync.ts ~1376), NOT the on-disk    #
+        # mtime, and the file-watcher updates that cache asynchronously after  #
+        # os.utime().  Without this gate the write-time mtime can still be     #
+        # cached when the pull runs → stale=false → spurious conflict (the     #
+        # intermittent failure this guards against — a seeding race, not a     #
+        # product bug).                                                        #
+        # ------------------------------------------------------------------ #
+        stale_cached = False
+        for _ in range(40):  # up to ~10 s
+            stale_cached = await cdp_a.evaluate(
+                "(() => {"
+                f"  const f = app.vault.getFileByPath({path!r});"
+                f"  return !!f && (Date.now() / 1000 - f.stat.mtime / 1000) > {_STALE_THRESHOLD_S};"
+                "})()"
+            )
+            if stale_cached:
+                break
+            await asyncio.sleep(0.25)
+
+        assert stale_cached, (
+            "Obsidian's cached stat.mtime for the test file never reflected the "
+            "backdated (2 h-old) value within ~10 s — the file-watcher didn't pick "
+            "up os.utime(), so the staleness heuristic can't fire.  This is the "
+            "seeding precondition, not the behavior under test."
+        )
+
+        # ------------------------------------------------------------------ #
         # Step 4: Trigger a pull on A.  The engine sees:                     #
         #   - local file exists (just written above)                          #
         #   - no sync hash → staleness heuristic branch                      #
