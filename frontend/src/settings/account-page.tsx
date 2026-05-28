@@ -1,19 +1,13 @@
-import { lazy, Suspense } from 'react'
+import { ProfileSection } from './account/profile-section'
+import { EmailSection } from './account/email-section'
+import { PasswordSection } from './account/password-section'
+import { ConnectedAccountsSection } from './account/connected-accounts-section'
+import { SessionsSection } from './account/sessions-section'
+import { DangerZoneSection } from './account/danger-zone-section'
 
-const UserProfile = lazy(() =>
-  import('@clerk/clerk-react').then((mod) => ({ default: mod.UserProfile })),
-)
-
-// The global ClerkProvider already maps our design tokens + reactive dark
-// theme. Here we only override layout for the embedded (in-panel) context:
-// fill the settings column so the card can't overflow and skew centering, and
-// drop Clerk's own card shadow since it sits inside our settings panel.
-const appearance = {
-  elements: {
-    rootBox: { width: '100%' },
-    cardBox: { width: '100%', boxShadow: 'none' },
-  },
-}
+// OAuth providers enabled on this Clerk instance. Confirm against the instance
+// before adjusting (see note below).
+const OAUTH_PROVIDERS = ['oauth_google'] as const
 
 export default function AccountPage() {
   return (
@@ -24,9 +18,12 @@ export default function AccountPage() {
           Manage your profile, security, and active sessions.
         </p>
       </header>
-      <Suspense fallback={<p className="text-muted-foreground">Loading account…</p>}>
-        <UserProfile routing="path" path="/settings/account" appearance={appearance} />
-      </Suspense>
+      <ProfileSection />
+      <EmailSection />
+      <PasswordSection />
+      <ConnectedAccountsSection providers={[...OAUTH_PROVIDERS]} />
+      <SessionsSection />
+      <DangerZoneSection />
     </article>
   )
 }

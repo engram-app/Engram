@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, createBrowserRouter } from 'react-router'
 import AuthGuard from './auth/auth-guard'
 import SignInPage from './auth/sign-in'
@@ -8,7 +9,6 @@ import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
 import ApiKeysPage from './settings/api-keys-page'
-import AccountPage from './settings/account-page'
 import SettingsLayout from './settings/settings-layout'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import { ROUTES } from './routes'
@@ -20,6 +20,10 @@ import OnboardLayout from './onboarding/onboard-layout'
 import OnboardRedirect from './onboarding/onboard-redirect'
 import AgreementPage from './onboarding/agreement-page'
 import OnboardBillingPage from './onboarding/onboard-billing-page'
+
+// Lazy so Clerk-only code (the account page pulls in @clerk/clerk-react hooks)
+// stays out of the main chunk for local self-host builds.
+const AccountPage = lazy(() => import('./settings/account-page'))
 
 export const router = createBrowserRouter(
   [
@@ -68,10 +72,19 @@ export const router = createBrowserRouter(
                     />
                   ),
                 },
-                // Wildcard: Clerk's <UserProfile> renders its own nested
-                // sub-routes (security, sessions) under path routing.
                 ...(config.authProvider === 'clerk'
-                  ? [{ path: 'account/*', element: <AccountPage /> }]
+                  ? [
+                      {
+                        path: 'account',
+                        element: (
+                          <Suspense
+                            fallback={<p className="text-muted-foreground">Loading…</p>}
+                          >
+                            <AccountPage />
+                          </Suspense>
+                        ),
+                      },
+                    ]
                   : []),
                 { path: 'api-keys', element: <ApiKeysPage /> },
                 { path: 'billing', element: <BillingPage /> },
