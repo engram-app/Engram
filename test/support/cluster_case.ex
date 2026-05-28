@@ -28,7 +28,7 @@ defmodule Engram.ClusterCase do
       Node.set_cookie(:engram_cluster_test)
     end
 
-    {:ok, peer_pid, _peer_node} =
+    {:ok, peer_pid, peer_node} =
       :peer.start(%{
         name: peer_name(),
         host: ~c"127.0.0.1",
@@ -79,10 +79,8 @@ defmodule Engram.ClusterCase do
     end
 
     true = :peer.call(peer_pid, Node, :connect, [Node.self()])
-    {peer_pid, peer_node()}
+    {peer_pid, peer_node}
   end
-
-  defp peer_node, do: Node.list() |> List.first()
 
   # Fixed, compile-time node name (not an interpolated/dynamic atom — Credo's
   # Warning.UnsafeToAtom is enforced in test/ too). Safe to reuse: the only

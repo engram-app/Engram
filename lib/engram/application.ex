@@ -20,9 +20,9 @@ defmodule Engram.Application do
         boot_canary_guard(),
         {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Engram.PubSub},
-        # Must start after PubSub (it subscribes in init) and before the
-        # maybe_seed_legal/0 boot broadcast below, so this node's own subscriber
-        # can't miss its boot-reseed eviction. Don't reorder above PubSub.
+        # Subscribes to CacheSync in init, so it must start after PubSub. (Local
+        # eviction is synchronous in invalidate_all/0; this subscriber only
+        # matters for evictions broadcast by already-clustered peer nodes.)
         Engram.Legal.VersionCache.Invalidator,
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
@@ -112,7 +112,8 @@ defmodule Engram.Application do
   # Start the concrete limiter matching the configured backend. ETS (default)
   # needs only a clean_period; Redis needs connection opts (REDIS_URL, wired in
   # runtime.exs). Same release artifact, runtime-selected — see EngramWeb.RateLimiter.
-  defp rate_limiter_child do
+  @doc false
+  def rate_limiter_child do
     case EngramWeb.RateLimiter.backend() do
       :redis ->
         opts = Application.get_env(:engram, EngramWeb.RateLimiter.Redis, [])

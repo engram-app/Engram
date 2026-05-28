@@ -24,8 +24,10 @@ defmodule Engram.Cluster.CacheSync do
   def subscribe, do: Phoenix.PubSub.subscribe(Engram.PubSub, @topic)
 
   @spec broadcast(term()) :: :ok
-  def broadcast(payload),
-    do: Phoenix.PubSub.broadcast(Engram.PubSub, @topic, {:cache_sync, payload})
+  def broadcast(payload) do
+    _ = Phoenix.PubSub.broadcast(Engram.PubSub, @topic, {:cache_sync, payload})
+    :ok
+  end
 
   @spec topic() :: String.t()
   def topic, do: @topic

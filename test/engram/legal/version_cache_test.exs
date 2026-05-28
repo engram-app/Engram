@@ -51,5 +51,18 @@ defmodule Engram.Legal.VersionCacheTest do
 
       assert VersionCache.required_floor("terms_of_service") == "2026-06-01"
     end
+
+    test "Invalidator ignores a foreign cache_sync message (DekCache's) without crashing" do
+      pid = Process.whereis(Invalidator)
+      insert_version(version: "2026-05-19", material: true, effective_date: nil)
+      assert VersionCache.required_floor("terms_of_service") == "2026-05-19"
+
+      CacheSync.broadcast({:dek_evict, 1})
+      _ = :sys.get_state(Invalidator)
+
+      assert Process.alive?(pid)
+      # foreign message must NOT have erased the cache
+      assert VersionCache.required_floor("terms_of_service") == "2026-05-19"
+    end
   end
 end

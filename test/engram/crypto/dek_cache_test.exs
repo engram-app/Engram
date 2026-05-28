@@ -76,6 +76,17 @@ defmodule Engram.Crypto.DekCacheTest do
       assert :miss = DekCache.get(8)
       assert :miss = DekCache.get(9)
     end
+
+    test "ignores a foreign cache_sync message (VersionCache's) without crashing" do
+      pid = Process.whereis(Engram.Crypto.DekCache)
+      DekCache.put(50, @dek)
+
+      CacheSync.broadcast(:version_evict_all)
+      _ = DekCache.sensitive_flag?()
+
+      assert Process.alive?(pid)
+      assert {:ok, @dek} = DekCache.get(50)
+    end
   end
 
   describe "real two-node eviction" do
@@ -92,6 +103,26 @@ defmodule Engram.Crypto.DekCacheTest do
 
       assert eventually(fn ->
                :miss == :peer.call(peer_pid, Engram.Crypto.DekCache, :get, [123])
+             end)
+    end
+
+    @tag :cluster
+    test "invalidate_all on node A evicts all entries cached on node B" do
+      {peer_pid, _peer_node} =
+        Engram.ClusterCase.start_peer!([Engram.Crypto.DekCache], &on_exit/1)
+
+      for id <- [1, 2] do
+        DekCache.put(id, @dek)
+        :ok = :peer.call(peer_pid, Engram.Crypto.DekCache, :put, [id, @dek, nil])
+      end
+
+      assert {:ok, @dek} = :peer.call(peer_pid, Engram.Crypto.DekCache, :get, [1])
+
+      DekCache.invalidate_all()
+
+      assert eventually(fn ->
+               :miss == :peer.call(peer_pid, Engram.Crypto.DekCache, :get, [1]) and
+                 :miss == :peer.call(peer_pid, Engram.Crypto.DekCache, :get, [2])
              end)
     end
   end
