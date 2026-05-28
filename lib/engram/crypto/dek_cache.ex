@@ -21,6 +21,8 @@ defmodule Engram.Crypto.DekCache do
 
   use GenServer
 
+  alias Engram.Cluster.CacheSync
+
   @table :engram_dek_cache
   @sweep_interval_ms :timer.minutes(5)
 
@@ -63,7 +65,8 @@ defmodule Engram.Crypto.DekCache do
 
   @spec invalidate(user_id :: integer()) :: :ok
   def invalidate(user_id) do
-    GenServer.call(__MODULE__, {:invalidate, user_id})
+    :ok = GenServer.call(__MODULE__, {:invalidate, user_id})
+    CacheSync.broadcast({:dek_evict, user_id})
   end
 
   @doc "Removes the cached DEK for `user_id`, if any. Alias of `invalidate/1`."
@@ -72,7 +75,8 @@ defmodule Engram.Crypto.DekCache do
 
   @spec invalidate_all() :: :ok
   def invalidate_all do
-    GenServer.call(__MODULE__, :invalidate_all)
+    :ok = GenServer.call(__MODULE__, :invalidate_all)
+    CacheSync.broadcast(:dek_evict_all)
   end
 
   @doc "Force an immediate sweep; exposed for tests."
@@ -100,6 +104,11 @@ defmodule Engram.Crypto.DekCache do
     # The ETS table's data lives in this process's memory map, so plaintext
     # DEKs would otherwise be recoverable from `erl_crash.dump`.
     _ = :erlang.process_flag(:sensitive, true)
+
+    # Cross-node eviction: peers broadcast here after a DEK rotation / rebind so
+    # this node drops its now-unwrappable cached DEK instead of serving it for
+    # up to the TTL. See Engram.Cluster.CacheSync.
+    _ = CacheSync.subscribe()
 
     schedule_sweep()
     {:ok, %{}}
@@ -160,6 +169,22 @@ defmodule Engram.Crypto.DekCache do
     schedule_sweep()
     {:noreply, state}
   end
+
+  @impl true
+  def handle_info({:cache_sync, {:dek_evict, user_id}}, state) do
+    :ets.delete(@table, user_id)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:cache_sync, :dek_evict_all}, state) do
+    :ets.delete_all_objects(@table)
+    {:noreply, state}
+  end
+
+  # Ignore cache_sync messages addressed to other caches.
+  @impl true
+  def handle_info({:cache_sync, _other}, state), do: {:noreply, state}
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 

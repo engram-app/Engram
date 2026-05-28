@@ -8,10 +8,20 @@ Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 # preserving full diagnostic output for real failures.
 ExUnit.configure(capture_log: true)
 
-# Exclude :qdrant_integration tests unless QDRANT_INTEGRATION=1 is set.
-# These tests require a running Qdrant instance at localhost:6333 (CI stack).
-if System.get_env("QDRANT_INTEGRATION") != "1" do
-  ExUnit.configure(exclude: [:qdrant_integration])
+# Infra-dependent tags excluded by default; opt in via env var.
+# - :qdrant_integration needs a running Qdrant (CI stack) → QDRANT_INTEGRATION=1
+# - :cluster needs BEAM distribution (epmd + longnames). CI's unit-tests runner
+#   has no distribution (:net_kernel.start fails with :nodistribution), so these
+#   real two-node :peer tests are opt-in → CLUSTER_TESTS=1 (run locally, or in a
+#   dedicated CI job that provides distribution).
+qdrant_excluded =
+  if System.get_env("QDRANT_INTEGRATION") == "1", do: [], else: [:qdrant_integration]
+
+cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cluster]
+
+case qdrant_excluded ++ cluster_excluded do
+  [] -> :ok
+  excluded -> ExUnit.configure(exclude: excluded)
 end
 
 # Ensure SPA index.html has </head> for config injection.

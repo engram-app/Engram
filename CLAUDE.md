@@ -46,7 +46,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 ### Key Patterns
 
 - **OTP supervision** — `one_for_one`: Channel crashes don't affect Oban, and vice versa
-- **Phoenix Channels + PubSub** — bidirectional real-time sync, cluster-wide broadcast via Erlang distribution (no Redis)
+- **Phoenix Channels + PubSub** — bidirectional real-time sync, cluster-wide broadcast via Erlang distribution (no Redis for PubSub/caches — BEAM clustering handles those natively; SaaS prod uses Redis/ElastiCache **only** as the shared rate-limit store so per-plan/§G and Voyage-quota counters are exact across clustered nodes; self-host stays Redis-free, rate limiter defaults to ETS)
 - **PostgreSQL RLS** — DB-enforced tenant isolation via `SET LOCAL app.current_tenant`. `Repo.prepare_query` raises on unscoped queries. See `docs/context/database-schema-rls.md`
 - **Two DB roles** — `engram_owner` (migrations) and `engram_app` (runtime, subject to RLS)
 - **Behaviour-based adapters** — `Engram.Embedder` behaviour for Voyage/Ollama

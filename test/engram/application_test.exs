@@ -1,5 +1,35 @@
 defmodule Engram.ApplicationTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  describe "rate_limiter_child/0" do
+    alias EngramWeb.RateLimiter
+
+    setup do
+      on_exit(fn ->
+        Application.put_env(:engram, EngramWeb.RateLimiter, backend: :ets)
+        Application.delete_env(:engram, EngramWeb.RateLimiter.Redis)
+      end)
+    end
+
+    test "selects the ETS limiter by default" do
+      Application.put_env(:engram, RateLimiter, backend: :ets)
+      assert {EngramWeb.RateLimiter.ETS, opts} = Engram.Application.rate_limiter_child()
+      assert Keyword.has_key?(opts, :clean_period)
+    end
+
+    test "selects the Redis limiter with its configured opts when backend is :redis" do
+      Application.put_env(:engram, RateLimiter, backend: :redis)
+
+      Application.put_env(:engram, EngramWeb.RateLimiter.Redis,
+        url: "redis://example",
+        key_prefix: "p:"
+      )
+
+      assert {EngramWeb.RateLimiter.Redis, opts} = Engram.Application.rate_limiter_child()
+      assert opts[:url] == "redis://example"
+      assert opts[:key_prefix] == "p:"
+    end
+  end
 
   describe "wiring source-lint (T3-audit C2)" do
     @app_path "lib/engram/application.ex"

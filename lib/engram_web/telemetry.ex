@@ -192,6 +192,20 @@ defmodule EngramWeb.Telemetry do
         tags: [:worker, :queue],
         description:
           "Jobs that exhausted max_attempts and were dropped by Oban. Layer 3 surface — non-zero is a triage signal."
+      ),
+
+      # Clustering-readiness — rate-limiter backend fail-open alert.
+      #
+      # The RateLimiter façade fails open and emits this event whenever the
+      # Redis backend is unreachable. Without this registration the "alert"
+      # half of fail-open+alert never reaches any reporter — a silently
+      # degraded limiter. Tag ONLY on :backend; :reason is inspect(reason)
+      # (unbounded-cardinality string) and stays as event metadata, never a
+      # metric tag.
+      counter("engram.rate_limiter.backend_error.count",
+        tags: [:backend],
+        description:
+          "Rate-limiter backend (Redis) unreachable — façade failed open and allowed the request. Non-zero means abuse protection is degraded; investigate the store."
       )
     ]
   end
