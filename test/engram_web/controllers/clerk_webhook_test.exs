@@ -176,6 +176,74 @@ defmodule EngramWeb.ClerkWebhookTest do
     end
   end
 
+  describe "POST /webhooks/clerk — user.updated email sync" do
+    setup do
+      user = insert(:user, email: "old@gmail.com", normalized_email: "old@gmail.com")
+
+      user
+      |> Ecto.Changeset.change(%{external_id: "user_email"})
+      |> Repo.update!(skip_tenant_check: true)
+
+      %{user: user}
+    end
+
+    test "mirrors changed primary email into email + normalized_email",
+         %{conn: conn, user: user} do
+      payload = clerk_user_updated_payload("user_email", email: "New.Primary+tag@gmail.com")
+      conn = post_clerk(conn, "evt_email1", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+      reloaded = Repo.reload!(user)
+      assert reloaded.email == "New.Primary+tag@gmail.com"
+      assert reloaded.normalized_email == "newprimary@gmail.com"
+    end
+
+    test "is a no-op when primary email is unchanged", %{conn: conn, user: user} do
+      before = Repo.reload!(user)
+      payload = clerk_user_updated_payload("user_email", email: "old@gmail.com")
+      conn = post_clerk(conn, "evt_email_noop", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+      reloaded = Repo.reload!(user)
+      assert reloaded.email == "old@gmail.com"
+      assert reloaded.normalized_email == "old@gmail.com"
+      assert reloaded.updated_at == before.updated_at
+    end
+
+    test "skips mirror and emits telemetry when normalized email collides with another account",
+         %{conn: conn, user: user} do
+      _other = insert(:user, email: "taken@gmail.com", normalized_email: "taken@gmail.com")
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :email_sync_collision]
+        ])
+
+      # "Ta.ken@gmail.com" normalizes to "taken@gmail.com" — collides with _other.
+      payload = clerk_user_updated_payload("user_email", email: "Ta.ken@gmail.com")
+      conn = post_clerk(conn, "evt_email_coll", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+      reloaded = Repo.reload!(user)
+      assert reloaded.email == "old@gmail.com"
+      assert reloaded.normalized_email == "old@gmail.com"
+
+      assert_received {[:engram, :abuse, :email_sync_collision], ^ref, %{count: 1}, _meta}
+    end
+
+    test "syncs email and phone independently in one event", %{conn: conn, user: user} do
+      payload =
+        clerk_user_updated_payload("user_email", email: "both@gmail.com", phone_verified: true)
+
+      conn = post_clerk(conn, "evt_email_phone", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+      reloaded = Repo.reload!(user)
+      assert reloaded.email == "both@gmail.com"
+      assert %DateTime{} = reloaded.phone_verified_at
+    end
+  end
+
   describe "POST /webhooks/clerk — other events" do
     test "returns 200 and no-ops for unknown event type", %{conn: conn} do
       payload = Jason.encode!(%{"type" => "session.created", "data" => %{}})
@@ -205,7 +273,10 @@ defmodule EngramWeb.ClerkWebhookTest do
     })
   end
 
-  defp clerk_user_updated_payload(clerk_id, phone_verified: verified) do
+  defp clerk_user_updated_payload(clerk_id, opts) do
+    verified = Keyword.get(opts, :phone_verified, false)
+    email = Keyword.get(opts, :email, "phone@gmail.com")
+
     phones =
       if verified do
         [
@@ -226,7 +297,7 @@ defmodule EngramWeb.ClerkWebhookTest do
         "email_addresses" => [
           %{
             "id" => "email_1",
-            "email_address" => "phone@gmail.com",
+            "email_address" => email,
             "verification" => %{"status" => "verified"}
           }
         ],

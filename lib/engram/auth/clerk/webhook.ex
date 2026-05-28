@@ -6,8 +6,10 @@ defmodule Engram.Auth.Clerk.Webhook do
   Handles:
   - `user.created` — dup-check against normalized_email; revoke via Clerk API if
     duplicate, otherwise insert local user row.
-  - `user.updated` — sets `users.phone_verified_at` when a verified phone
-    appears (drives the §A.3 EmbedNote pre-flight gate).
+  - `user.updated` — mirrors the Clerk primary email into `users.email` +
+    `normalized_email`, and sets `users.phone_verified_at` when a verified phone
+    appears (drives the §A.3 EmbedNote pre-flight gate). Email and phone sync are
+    independent.
 
   All other event types no-op.
   """
@@ -90,18 +92,68 @@ defmodule Engram.Auth.Clerk.Webhook do
   end
 
   defp handle_user_updated(%{"id" => clerk_id} = data) do
-    with {:ok, user} <- Accounts.find_by_external_id(clerk_id),
-         true <- has_verified_phone?(data),
-         nil <- user.phone_verified_at do
+    case Accounts.find_by_external_id(clerk_id) do
+      {:ok, user} ->
+        # Email and phone sync are independent — a no-op on one must not skip the
+        # other. They touch disjoint columns, so order doesn't matter.
+        sync_primary_email(user, data)
+        sync_verified_phone(user, data)
+        :ok
+
+      {:error, :user_not_found} ->
+        :ok
+    end
+  end
+
+  # Mirror the Clerk primary email into users.email + normalized_email. Idempotent
+  # (user.updated fires on any profile change). On a normalized-email collision
+  # with another account, keep the stored values — losing the §A anti-farming key
+  # is worse than cosmetic drift — and emit abuse telemetry instead of raising
+  # (a raise → 500 → Clerk retries forever).
+  defp sync_primary_email(user, data) do
+    with {:ok, email} <- primary_email(data),
+         normalized = EmailNormalizer.normalize(email),
+         true <- email != user.email or normalized != user.normalized_email do
+      user
+      |> Ecto.Changeset.change(%{email: email, normalized_email: normalized})
+      |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
+      |> Ecto.Changeset.unique_constraint(:normalized_email,
+        name: :users_normalized_email_index
+      )
+      |> Repo.update(skip_tenant_check: true)
+      |> case do
+        {:ok, _user} ->
+          :ok
+
+        {:error, _changeset} ->
+          :telemetry.execute(
+            [:engram, :abuse, :email_sync_collision],
+            %{count: 1},
+            %{user_id: user.id, normalized_email_hash: hash(normalized)}
+          )
+
+          Logger.warning("Clerk email sync skipped — normalized email collides with another user",
+            user_id: user.id,
+            normalized_email_hash: hash(normalized)
+          )
+
+          :ok
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp sync_verified_phone(user, data) do
+    if has_verified_phone?(data) and is_nil(user.phone_verified_at) do
       user
       |> Ecto.Changeset.change(%{phone_verified_at: DateTime.utc_now()})
       |> Repo.update(skip_tenant_check: true)
 
       :telemetry.execute([:engram, :auth, :phone_verified], %{count: 1}, %{user_id: user.id})
-      :ok
-    else
-      _ -> :ok
     end
+
+    :ok
   end
 
   defp primary_email(%{"primary_email_address_id" => pid, "email_addresses" => addrs})
