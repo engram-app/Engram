@@ -30,8 +30,10 @@ async def test_mcp_write_note_broadcasts_to_vault(vault_b, cdp_b, api_sync):
     path = "E2E/McpWriteRT.md"
     content = "# MCP Write RT\nCreated via MCP write_note tool"
 
-    connected = await cdp_b.check_stream_connected()
-    assert connected, "B's WebSocket channel is not connected"
+    # Poll until the channel's join is acked (isLiveConnected flips true only on
+    # the phx_join reply) — a one-shot check races the publish below when the
+    # channel is still (re)joining after fixture/prior-test setup (issue #161).
+    await cdp_b.wait_for_stream_connected(timeout=RT_TIMEOUT)
 
     t0 = time.monotonic()
     resp, status = api_sync.mcp_call("write_note", {"path": path, "content": content})
@@ -47,8 +49,10 @@ async def test_mcp_write_note_broadcasts_to_vault(vault_b, cdp_b, api_sync):
 @pytest.mark.asyncio
 async def test_mcp_create_note_broadcasts_to_vault(vault_b, cdp_b, api_sync):
     """MCP create_note with suggested_folder → B receives at server-chosen path."""
-    connected = await cdp_b.check_stream_connected()
-    assert connected, "B's WebSocket channel is not connected"
+    # Poll until the channel's join is acked (isLiveConnected flips true only on
+    # the phx_join reply) — a one-shot check races the publish below when the
+    # channel is still (re)joining after fixture/prior-test setup (issue #161).
+    await cdp_b.wait_for_stream_connected(timeout=RT_TIMEOUT)
 
     t0 = time.monotonic()
     resp, status = api_sync.mcp_call(
@@ -79,8 +83,10 @@ async def test_mcp_delete_broadcasts_to_vault(vault_b, cdp_b, api_sync):
     """MCP delete_note → B removes file from vault via WebSocket channel."""
     path = "E2E/McpDeleteRT.md"
 
-    connected = await cdp_b.check_stream_connected()
-    assert connected, "B's WebSocket channel is not connected"
+    # Poll until the channel's join is acked (isLiveConnected flips true only on
+    # the phx_join reply) — a one-shot check races the publish below when the
+    # channel is still (re)joining after fixture/prior-test setup (issue #161).
+    await cdp_b.wait_for_stream_connected(timeout=RT_TIMEOUT)
 
     # Pre-create via MCP and wait for arrival
     resp, status = api_sync.mcp_call(
