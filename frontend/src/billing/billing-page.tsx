@@ -104,8 +104,15 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
   const checkoutReady = Boolean(paddle && config)
 
   return (
-    <article className="mx-auto max-w-2xl space-y-8">
-      {!hideHeading && <h1 className="text-2xl font-bold text-foreground">Billing</h1>}
+    <article className="space-y-6">
+      {!hideHeading && (
+        <header>
+          <h1 className="text-xl font-semibold text-foreground">Billing</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage your plan and payment method.
+          </p>
+        </header>
+      )}
 
       {activationStuck && (
         <div role="alert" className="rounded-lg border border-border bg-card p-4 text-sm">
@@ -228,7 +235,7 @@ function PlanCard({
       customer: { email: config.customer_email },
       customData: config.custom_data,
       settings: {
-        successUrl: `${window.location.origin}/billing?status=success`,
+        successUrl: `${window.location.origin}/settings/billing?status=success`,
       },
     })
   }

@@ -15,30 +15,30 @@ export default function ApiKeysPage() {
 
   return (
     <article className="space-y-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">API Keys</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+          <h1 className="text-xl font-semibold text-foreground">API Keys</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Used by the Obsidian plugin and MCP clients to access your vault.
           </p>
         </div>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
           + New Key
         </button>
       </header>
 
       {error && (
-        <p className="rounded-md bg-red-50 dark:bg-red-950 px-3 py-2 text-sm text-red-700 dark:text-red-200" role="alert">
+        <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
           Failed to load API keys: {error instanceof Error ? error.message : 'unknown error'}
         </p>
       )}
 
       {isLoading ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
+        <p className="text-sm text-muted-foreground">Loading…</p>
       ) : keys && keys.length > 0 ? (
         <ApiKeyTable keys={keys} />
       ) : (
@@ -62,8 +62,8 @@ export default function ApiKeysPage() {
 
 function EmptyState() {
   return (
-    <section className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-8 text-center">
-      <p className="text-sm text-gray-600 dark:text-gray-300">
+    <section className="rounded-lg border border-dashed border-input p-8 text-center">
+      <p className="text-sm text-muted-foreground">
         No API keys yet. Generate one to connect Claude Desktop, MCP, or the Obsidian plugin.
       </p>
     </section>
@@ -74,44 +74,46 @@ function ApiKeyTable({ keys }: { keys: ApiKey[] }) {
   const revoke = useRevokeApiKey()
 
   return (
-    <section className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 dark:bg-gray-950 text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          <tr>
-            <th className="px-4 py-3 font-medium">Name</th>
-            <th className="px-4 py-3 font-medium">Key</th>
-            <th className="px-4 py-3 font-medium">Created</th>
-            <th className="px-4 py-3 font-medium">Last used</th>
-            <th className="px-4 py-3" />
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-          {keys.map((k) => (
-            <tr key={k.id}>
-              <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{k.name || '(unnamed)'}</td>
-              <td className="px-4 py-3 font-mono text-xs text-gray-500 dark:text-gray-400">engram_••••••</td>
-              <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{formatDate(k.created_at)}</td>
-              <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                {k.last_used ? formatDate(k.last_used) : '—'}
-              </td>
-              <td className="px-4 py-3 text-right">
-                <button
-                  type="button"
-                  disabled={revoke.isPending}
-                  onClick={() => {
-                    if (confirm(`Revoke "${k.name || 'this key'}"? This cannot be undone.`)) {
-                      revoke.mutate(k.id)
-                    }
-                  }}
-                  className="text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
-                >
-                  Revoke
-                </button>
-              </td>
+    <section className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead className="bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-3 font-medium">Name</th>
+              <th className="px-4 py-3 font-medium">Key</th>
+              <th className="px-4 py-3 font-medium">Created</th>
+              <th className="px-4 py-3 font-medium">Last used</th>
+              <th className="px-4 py-3" />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {keys.map((k) => (
+              <tr key={k.id}>
+                <td className="px-4 py-3 font-medium text-foreground">{k.name || '(unnamed)'}</td>
+                <td className="px-4 py-3 font-mono text-xs text-muted-foreground">engram_••••••</td>
+                <td className="px-4 py-3 text-muted-foreground">{formatDate(k.created_at)}</td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {k.last_used ? formatDate(k.last_used) : '—'}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    type="button"
+                    disabled={revoke.isPending}
+                    onClick={() => {
+                      if (confirm(`Revoke "${k.name || 'this key'}"? This cannot be undone.`)) {
+                        revoke.mutate(k.id)
+                      }
+                    }}
+                    className="text-sm text-destructive hover:text-destructive/80 disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }
@@ -141,22 +143,22 @@ function CreateKeyModal({
     <ModalShell onClose={onClose} title="New API Key">
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Name</span>
+          <span className="text-sm font-medium text-foreground">Name</span>
           <input
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. iPhone MCP"
             maxLength={64}
-            className="mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+          <span className="mt-1 block text-xs text-muted-foreground">
             Helps you identify the key later — pick something memorable.
           </span>
         </label>
 
         {create.error && (
-          <p className="text-sm text-red-600" role="alert">
+          <p className="text-sm text-destructive" role="alert">
             {create.error instanceof ApiError
               ? create.error.message
               : 'Could not create key. Try again.'}
@@ -167,14 +169,14 @@ function CreateKeyModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+            className="rounded-md px-4 py-2 text-sm text-foreground hover:bg-accent"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={create.isPending || name.trim().length === 0}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {create.isPending ? 'Generating…' : 'Generate Key'}
           </button>
@@ -220,14 +222,14 @@ function RevealKeyModal({
             value={createdKey.key}
             onFocus={selectAll}
             onClick={selectAll}
-            className="flex-1 min-w-0 rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 px-3 py-2 font-mono text-sm text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="flex-1 min-w-0 rounded-md border border-input bg-muted px-3 py-2 font-mono text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             aria-label="API key"
           />
           <button
             type="button"
             onClick={copy}
             aria-label="Copy API key"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 active:bg-blue-800 active:scale-[0.98]"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
           >
             <CopyIcon copied={copyState === 'copied'} />
             <span className="min-w-12 text-left">
@@ -237,7 +239,7 @@ function RevealKeyModal({
         </div>
 
         {copyState === 'error' && (
-          <p className="text-sm text-red-700" role="alert">
+          <p className="text-sm text-destructive" role="alert">
             Copy failed — click the field and press Cmd/Ctrl+C to copy manually.
           </p>
         )}
@@ -246,7 +248,7 @@ function RevealKeyModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+            className="rounded-md border border-input bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-accent"
           >
             Done
           </button>
@@ -334,11 +336,11 @@ function ModalShell({
       onClick={onClose}
     >
       <article
-        className="w-full max-w-md rounded-lg bg-white dark:bg-gray-900 p-6 shadow-xl"
+        className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="mb-4">
-          <h2 id="modal-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          <h2 id="modal-title" className="text-lg font-semibold text-foreground">
             {title}
           </h2>
         </header>

@@ -3,7 +3,7 @@ import { createContext } from 'react'
 export interface AuthAdapter {
   isLoaded: boolean
   isSignedIn: boolean
-  user: { email: string } | null
+  user: { email: string; imageUrl?: string } | null
 
   getToken(): Promise<string | null>
 

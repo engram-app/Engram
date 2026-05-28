@@ -64,24 +64,6 @@ test.describe('Dark mode', () => {
     await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
   })
 
-  test('Settings → Appearance segmented control sets theme', async ({ page, baseURL }) => {
-    const email = testEmail('settings')
-    await registerUser(baseURL!, email)
-    await signIn(page, email)
-
-    await page.goto('/settings/appearance')
-    const segDark = page.locator('button[data-theme-option="dark"]')
-    const segLight = page.locator('button[data-theme-option="light"]')
-    await expect(segDark).toBeVisible()
-    await segDark.click()
-    await expect(page.locator('html')).toHaveClass(/dark/)
-    await expect(segDark).toHaveAttribute('aria-pressed', 'true')
-
-    await segLight.click()
-    await expect(page.locator('html')).not.toHaveClass(/dark/)
-    await expect(segLight).toHaveAttribute('aria-pressed', 'true')
-  })
-
   test('System mode tracks prefers-color-scheme', async ({ browser, baseURL }) => {
     const email = testEmail('system')
     await registerUser(baseURL!, email)

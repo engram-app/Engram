@@ -4,9 +4,9 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels'
-import { Link, NavLink, Outlet } from 'react-router'
+import { Outlet } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
   ResizableHandle,
@@ -15,37 +15,15 @@ import {
 } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useMediaQuery } from '@/hooks/use-media-query'
-import { config } from '../config'
-
-const isClerk = config.authProvider === 'clerk'
-const ClerkUserButton = isClerk
-  ? lazy(() => import('@clerk/clerk-react').then((mod) => ({ default: mod.UserButton })))
-  : null
-const LocalUserMenu = lazy(() => import('../auth/local-user-menu'))
 import { useBillingStatus } from '../api/queries'
 import { useChannel } from '../api/use-channel'
-import ThemeToggle from '../theme/theme-toggle'
+import AppHeader from './app-header'
 import FolderTree from '../viewer/folder-tree'
 import FolderActions from './folder-actions'
 import { FolderTreeProvider } from './folder-tree-context'
 import MobileLayout from './mobile-layout'
 import { RightSidebarProvider, useRightSidebar } from './right-sidebar-context'
 import VaultSwitcher from './vault-switcher'
-
-function HeaderLink({ to, label }: { to: string; label: string }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        `text-sm transition hover:text-foreground ${
-          isActive ? 'font-medium text-foreground' : 'text-muted-foreground'
-        }`
-      }
-    >
-      {label}
-    </NavLink>
-  )
-}
 
 const LAYOUT_PANEL_IDS = ['sidebar', 'main', 'right-sidebar']
 
@@ -89,20 +67,7 @@ function DesktopLayout() {
 
   return (
     <section className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-        <Link to="/" className="text-lg font-semibold text-foreground hover:text-foreground/80">
-          Engram
-        </Link>
-        <nav className="flex items-center gap-3" aria-label="Main navigation">
-          <HeaderLink to="/search" label="Search" />
-          <HeaderLink to="/billing" label="Billing" />
-          <HeaderLink to="/settings" label="Settings" />
-          <ThemeToggle />
-          <Suspense fallback={null}>
-            {ClerkUserButton ? <ClerkUserButton /> : <LocalUserMenu />}
-          </Suspense>
-        </nav>
-      </header>
+      <AppHeader />
 
       <ResizablePanelGroup
         orientation="horizontal"

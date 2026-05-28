@@ -5,6 +5,7 @@ import { AuthContext, type AuthAdapter } from './auth-context'
 import { rememberSignupUser } from './signup-rejection'
 import { setTokenGetter } from '../api/client'
 import { config } from '../config'
+import { router } from '../router'
 import { ROUTES } from '../routes'
 import { useTheme } from '../theme/theme-provider'
 
@@ -50,16 +51,17 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
   }, [clerkUserId])
 
   const email = clerk.user?.primaryEmailAddress?.emailAddress
+  const imageUrl = clerk.user?.imageUrl
   const adapter: AuthAdapter = useMemo(
     () => ({
       isLoaded,
       isSignedIn: isSignedIn ?? false,
-      user: isSignedIn && email ? { email } : null,
+      user: isSignedIn && email ? { email, imageUrl } : null,
       getToken: tokenGetter,
       logout: async () => { await clerk.signOut() },
       hasBuiltInUI: true,
     }),
-    [isLoaded, isSignedIn, clerk, email, tokenGetter],
+    [isLoaded, isSignedIn, clerk, email, imageUrl, tokenGetter],
   )
 
   return <AuthContext.Provider value={adapter}>{children}</AuthContext.Provider>
@@ -88,6 +90,8 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
       signInUrl={ROUTES.SIGN_IN}
       signUpUrl={ROUTES.SIGN_UP}
       afterSignOutUrl={ROUTES.SIGN_IN}
+      routerPush={(to) => router.navigate(to)}
+      routerReplace={(to) => router.navigate(to, { replace: true })}
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>
