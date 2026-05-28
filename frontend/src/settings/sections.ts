@@ -5,16 +5,16 @@ export interface SettingsSection {
   label: string
 }
 
-const BASE_SECTIONS: SettingsSection[] = [
-  { to: 'api-keys', label: 'API Keys' },
-  { to: 'billing', label: 'Billing' },
-]
-
 export function buildSettingsSections(
   authProvider: EngramConfig['authProvider'],
+  billingEnabled: boolean,
 ): SettingsSection[] {
-  if (authProvider === 'clerk') {
-    return [{ to: 'account', label: 'Account' }, ...BASE_SECTIONS]
+  const sections: SettingsSection[] = [{ to: 'api-keys', label: 'API Keys' }]
+  if (billingEnabled) {
+    sections.push({ to: 'billing', label: 'Billing' })
   }
-  return BASE_SECTIONS
+  if (authProvider === 'clerk') {
+    return [{ to: 'account', label: 'Account' }, ...sections]
+  }
+  return sections
 }

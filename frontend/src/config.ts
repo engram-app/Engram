@@ -1,11 +1,12 @@
 export interface EngramConfig {
   authProvider: 'local' | 'clerk'
   clerkPublishableKey: string
+  billingEnabled: boolean
 }
 
 const VALID_PROVIDERS = ['local', 'clerk'] as const
 
-function loadConfig(): EngramConfig {
+export function loadConfig(): EngramConfig {
   const injected = (window as unknown as { __ENGRAM_CONFIG__?: Record<string, unknown> })
     .__ENGRAM_CONFIG__
 
@@ -13,6 +14,7 @@ function loadConfig(): EngramConfig {
     return {
       authProvider: injected.authProvider as 'local' | 'clerk',
       clerkPublishableKey: (injected.clerkPublishableKey as string) ?? '',
+      billingEnabled: injected.billingEnabled === true,
     }
   }
 
@@ -27,6 +29,7 @@ function loadConfig(): EngramConfig {
   return {
     authProvider: (import.meta.env.VITE_AUTH_PROVIDER as 'local' | 'clerk') ?? 'local',
     clerkPublishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '',
+    billingEnabled: import.meta.env.VITE_BILLING_ENABLED === 'true',
   }
 }
 

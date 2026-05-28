@@ -44,19 +44,88 @@ defmodule EngramWeb.BillingController do
     })
   end
 
-  def customer_portal(conn, _params) do
-    user = conn.assigns.current_user
+  @doc """
+  Customer-portal redirect. Without an `action` param this returns the generic
+  overview URL; with `action=cancel` / `action=update_payment` it returns the
+  matching per-subscription deep link so the UI can offer distinct buttons.
+  """
+  def customer_portal(conn, params) do
+    with_billing(conn, fn ->
+      user = conn.assigns.current_user
 
-    case Billing.create_portal_session(user) do
-      {:ok, url} ->
-        json(conn, %{url: url})
+      result =
+        case params["action"] do
+          nil -> Billing.create_portal_session(user)
+          action -> Billing.portal_action_url(user, action)
+        end
 
-      {:error, :no_subscription} ->
-        conn |> put_status(404) |> json(%{error: "no subscription"})
+      respond_with_url(conn, result)
+    end)
+  end
 
-      {:error, reason} ->
-        Logger.error("Paddle portal error", reason_label: inspect(reason))
-        conn |> put_status(502) |> json(%{error: "payment provider error"})
+  @doc "Live subscription detail (next bill, billing cycle, scheduled change)."
+  def subscription_detail(conn, _params) do
+    with_billing(conn, fn ->
+      case Billing.subscription_detail(conn.assigns.current_user) do
+        {:ok, detail} -> json(conn, detail)
+        {:error, :no_subscription} -> not_found(conn, "no subscription")
+        {:error, reason} -> paddle_error(conn, reason)
+      end
+    end)
+  end
+
+  @doc "Transaction history plus the card behind the latest card payment."
+  def transactions(conn, _params) do
+    with_billing(conn, fn ->
+      case Billing.billing_history(conn.assigns.current_user) do
+        {:ok, history} -> json(conn, history)
+        {:error, :no_subscription} -> not_found(conn, "no subscription")
+        {:error, reason} -> paddle_error(conn, reason)
+      end
+    end)
+  end
+
+  @doc "Mint the hosted invoice URL for one of the user's own transactions."
+  def transaction_invoice(conn, %{"id" => transaction_id}) do
+    with_billing(conn, fn ->
+      case Billing.transaction_invoice_url(conn.assigns.current_user, transaction_id) do
+        {:ok, url} -> json(conn, %{url: url})
+        {:error, :no_subscription} -> not_found(conn, "no subscription")
+        {:error, :not_found} -> not_found(conn, "transaction not found")
+        {:error, reason} -> paddle_error(conn, reason)
+      end
+    end)
+  end
+
+  @doc "Mint a transaction id for the in-app Paddle.js payment-method overlay."
+  def payment_update_transaction(conn, _params) do
+    with_billing(conn, fn ->
+      case Billing.update_payment_transaction(conn.assigns.current_user) do
+        {:ok, transaction_id} -> json(conn, %{transaction_id: transaction_id})
+        {:error, :no_subscription} -> not_found(conn, "no subscription")
+        {:error, reason} -> paddle_error(conn, reason)
+      end
+    end)
+  end
+
+  # Self-host (billing_enabled=false) never reaches Paddle: the page is hidden
+  # client-side, but gate here too so a direct request 404s instead of erroring.
+  defp with_billing(conn, fun) do
+    if Application.get_env(:engram, :billing_enabled, false) == true do
+      fun.()
+    else
+      not_found(conn, "billing disabled")
     end
+  end
+
+  defp respond_with_url(conn, {:ok, url}), do: json(conn, %{url: url})
+  defp respond_with_url(conn, {:error, :no_subscription}), do: not_found(conn, "no subscription")
+  defp respond_with_url(conn, {:error, reason}), do: paddle_error(conn, reason)
+
+  defp not_found(conn, message), do: conn |> put_status(404) |> json(%{error: message})
+
+  defp paddle_error(conn, reason) do
+    Logger.error("Paddle billing error", reason_label: inspect(reason))
+    conn |> put_status(502) |> json(%{error: "payment provider error"})
   end
 end

@@ -45,7 +45,7 @@ function SettingsNavList({
 }
 
 export default function SettingsLayout() {
-  const sections = buildSettingsSections(config.authProvider)
+  const sections = buildSettingsSections(config.authProvider, config.billingEnabled)
   const [navOpen, setNavOpen] = useState(false)
 
   return (

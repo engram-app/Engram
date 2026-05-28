@@ -66,7 +66,8 @@ defmodule EngramWeb.SpaController do
 
     config = %{
       authProvider: provider,
-      clerkPublishableKey: Application.get_env(:engram, :clerk_publishable_key, "")
+      clerkPublishableKey: Application.get_env(:engram, :clerk_publishable_key, ""),
+      billingEnabled: Application.get_env(:engram, :billing_enabled, false) == true
     }
 
     json =

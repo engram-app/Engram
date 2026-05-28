@@ -87,7 +87,9 @@ export const router = createBrowserRouter(
                     ]
                   : []),
                 { path: 'api-keys', element: <ApiKeysPage /> },
-                { path: 'billing', element: <BillingPage /> },
+                ...(config.billingEnabled
+                  ? [{ path: 'billing', element: <BillingPage /> }]
+                  : []),
               ],
             },
             { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },

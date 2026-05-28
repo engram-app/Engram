@@ -163,6 +163,54 @@ export function useBillingConfig() {
   })
 }
 
+export interface SubscriptionDetail {
+  next_billed_at: string | null
+  amount: string | null
+  currency: string | null
+  billing_cycle: { interval: string; frequency: number } | null
+  scheduled_change: { action: string; effective_at: string } | null
+}
+
+export interface PaymentMethod {
+  type: string | null
+  card_brand: string | null
+  last4: string | null
+  exp_month: number | null
+  exp_year: number | null
+}
+
+export interface BillingTransaction {
+  id: string
+  billed_at: string | null
+  amount: string | null
+  currency: string | null
+  status: string
+  invoice_id: string | null
+}
+
+export interface BillingHistory {
+  payment_method: PaymentMethod | null
+  transactions: BillingTransaction[]
+}
+
+// Live read-through endpoints — only meaningful for users with a Paddle
+// subscription (they 404 otherwise), so callers gate with `enabled`.
+export function useBillingSubscriptionDetail(enabled: boolean) {
+  return useQuery({
+    queryKey: ['billing', 'subscription'],
+    queryFn: () => api.get<SubscriptionDetail>('/billing/subscription'),
+    enabled,
+  })
+}
+
+export function useBillingHistory(enabled: boolean) {
+  return useQuery({
+    queryKey: ['billing', 'transactions'],
+    queryFn: () => api.get<BillingHistory>('/billing/transactions'),
+    enabled,
+  })
+}
+
 // Onboarding types
 
 export interface OnboardingStatus {

@@ -143,6 +143,254 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "subscription_detail/1" do
+    test "normalizes the Paddle subscription for the user" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_dev" ->
+        {:ok,
+         %{
+           "id" => "sub_dev",
+           "status" => "active",
+           "currency_code" => "USD",
+           "next_billed_at" => "2026-06-27T07:00:00Z",
+           "billing_cycle" => %{"interval" => "month", "frequency" => 1},
+           "scheduled_change" => nil,
+           "recurring_transaction_details" => %{"totals" => %{"total" => "2000"}}
+         }}
+      end)
+
+      assert {:ok, detail} = Billing.subscription_detail(user)
+      assert detail.next_billed_at == "2026-06-27T07:00:00Z"
+      assert detail.amount == "2000"
+      assert detail.currency == "USD"
+      assert detail.billing_cycle == %{interval: "month", frequency: 1}
+      assert detail.scheduled_change == nil
+    end
+
+    test "surfaces a scheduled cancellation" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_cancel")
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_cancel" ->
+        {:ok,
+         %{
+           "id" => "sub_cancel",
+           "status" => "active",
+           "currency_code" => "USD",
+           "scheduled_change" => %{
+             "action" => "cancel",
+             "effective_at" => "2026-06-27T07:00:00Z"
+           }
+         }}
+      end)
+
+      assert {:ok, detail} = Billing.subscription_detail(user)
+      assert detail.scheduled_change == %{action: "cancel", effective_at: "2026-06-27T07:00:00Z"}
+    end
+
+    test "returns :no_subscription when the user has none" do
+      assert {:error, :no_subscription} = Billing.subscription_detail(insert(:user))
+    end
+
+    test "propagates client errors" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_err")
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn _ ->
+        {:error, {:paddle_error, 500}}
+      end)
+
+      assert {:error, {:paddle_error, 500}} = Billing.subscription_detail(user)
+    end
+  end
+
+  describe "billing_history/1" do
+    test "normalizes transactions and extracts the card from the latest payment" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok,
+         [
+           %{
+             "id" => "txn_2",
+             "status" => "completed",
+             "billed_at" => "2026-05-27T07:00:00Z",
+             "invoice_id" => "inv_2",
+             "details" => %{"totals" => %{"grand_total" => "2000", "currency_code" => "USD"}},
+             "payments" => [
+               %{
+                 "method_details" => %{
+                   "type" => "card",
+                   "card" => %{
+                     "type" => "visa",
+                     "last4" => "4242",
+                     "expiry_month" => 12,
+                     "expiry_year" => 2027
+                   }
+                 }
+               }
+             ]
+           },
+           %{
+             "id" => "txn_1",
+             "status" => "completed",
+             "billed_at" => "2026-04-27T07:00:00Z",
+             "invoice_id" => "inv_1",
+             "details" => %{"totals" => %{"grand_total" => "2000", "currency_code" => "USD"}},
+             "payments" => []
+           }
+         ]}
+      end)
+
+      assert {:ok, %{payment_method: pm, transactions: txns}} = Billing.billing_history(user)
+      assert pm.card_brand == "visa"
+      assert pm.last4 == "4242"
+      assert pm.exp_month == 12
+      assert pm.exp_year == 2027
+      assert length(txns) == 2
+      assert hd(txns).id == "txn_2"
+      assert hd(txns).amount == "2000"
+      assert hd(txns).currency == "USD"
+      assert hd(txns).status == "completed"
+    end
+
+    test "payment_method is nil when no card payment is present" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_nopm")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn _ ->
+        {:ok, [%{"id" => "txn_x", "status" => "completed", "payments" => []}]}
+      end)
+
+      assert {:ok, %{payment_method: nil, transactions: [_]}} = Billing.billing_history(user)
+    end
+
+    test "returns :no_subscription when the user has none" do
+      assert {:error, :no_subscription} = Billing.billing_history(insert(:user))
+    end
+  end
+
+  describe "transaction_invoice_url/2" do
+    test "returns the invoice URL when the transaction belongs to the user" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [%{"id" => "txn_2", "payments" => []}, %{"id" => "txn_1", "payments" => []}]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_2" ->
+        {:ok, "https://paddle.com/invoice/txn_2.pdf"}
+      end)
+
+      assert {:ok, "https://paddle.com/invoice/txn_2.pdf"} =
+               Billing.transaction_invoice_url(user, "txn_2")
+    end
+
+    test "rejects a transaction id that does not belong to the user (IDOR guard)" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+      end)
+
+      # get_transaction_invoice must NOT be called for a foreign id.
+      assert {:error, :not_found} = Billing.transaction_invoice_url(user, "txn_999")
+    end
+  end
+
+  describe "portal_action_url/2" do
+    setup do
+      urls = %{
+        "general" => %{"overview" => "https://p/overview"},
+        "subscriptions" => [
+          %{
+            "id" => "sub_dev",
+            "cancel_subscription" => "https://p/cancel",
+            "update_subscription_payment_method" => "https://p/update"
+          }
+        ]
+      }
+
+      {:ok, urls: urls}
+    end
+
+    test "returns the cancel deep link", %{urls: urls} do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_customer_id: "ctm_dev",
+        paddle_subscription_id: "sub_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :get_portal_session, fn "ctm_dev" -> {:ok, urls} end)
+      assert {:ok, "https://p/cancel"} = Billing.portal_action_url(user, "cancel")
+    end
+
+    test "returns the update-payment deep link", %{urls: urls} do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_customer_id: "ctm_dev",
+        paddle_subscription_id: "sub_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :get_portal_session, fn "ctm_dev" -> {:ok, urls} end)
+      assert {:ok, "https://p/update"} = Billing.portal_action_url(user, "update_payment")
+    end
+
+    test "falls back to the overview URL for the overview action", %{urls: urls} do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_customer_id: "ctm_dev",
+        paddle_subscription_id: "sub_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :get_portal_session, fn "ctm_dev" -> {:ok, urls} end)
+      assert {:ok, "https://p/overview"} = Billing.portal_action_url(user, "overview")
+    end
+
+    test "returns :no_subscription when the user has none" do
+      assert {:error, :no_subscription} = Billing.portal_action_url(insert(:user), "cancel")
+    end
+  end
+
+  describe "update_payment_transaction/1" do
+    test "returns the Paddle transaction id for the in-app overlay" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn "sub_dev" ->
+        {:ok, %{"id" => "txn_update_1", "checkout" => %{"url" => "https://pay.paddle.com/x"}}}
+      end)
+
+      assert {:ok, "txn_update_1"} = Billing.update_payment_transaction(user)
+    end
+
+    test "returns :no_subscription when the user has none" do
+      assert {:error, :no_subscription} = Billing.update_payment_transaction(insert(:user))
+    end
+
+    test "propagates client errors" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_err")
+
+      expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn _ ->
+        {:error, {:paddle_error, 500}}
+      end)
+
+      assert {:error, {:paddle_error, 500}} = Billing.update_payment_transaction(user)
+    end
+  end
+
   describe "upsert_from_paddle_event/1" do
     test "subscription.created inserts a new row with custom_data" do
       user = insert(:user)

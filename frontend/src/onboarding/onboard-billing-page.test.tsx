@@ -28,6 +28,8 @@ vi.mock('../api/queries', () => ({
       custom_data: { user_id: 1 },
     },
   }),
+  useBillingSubscriptionDetail: () => ({ data: undefined }),
+  useBillingHistory: () => ({ data: undefined }),
 }))
 
 function renderPage() {

@@ -40,6 +40,11 @@ defmodule EngramWeb.SpaControllerTest do
     assert body =~ ~s("authProvider":)
   end
 
+  test "GET / injects billingEnabled flag so the SPA can gate the billing page", %{conn: conn} do
+    body = conn |> get("/") |> response(200)
+    assert body =~ ~s("billingEnabled":)
+  end
+
   test "GET /oauth/consent renders SPA (consent UI route)", %{conn: conn} do
     conn = get(conn, "/oauth/consent")
     assert conn.status == 200

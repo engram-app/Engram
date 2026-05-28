@@ -5,7 +5,9 @@ import SettingsLayout from './settings-layout'
 
 vi.mock('../theme/theme-toggle', () => ({ default: () => null }))
 vi.mock('../layout/user-menu', () => ({ default: () => null }))
-vi.mock('../config', () => ({ config: { authProvider: 'clerk', clerkPublishableKey: '' } }))
+vi.mock('../config', () => ({
+  config: { authProvider: 'clerk', clerkPublishableKey: '', billingEnabled: true },
+}))
 
 function renderAt(path: string) {
   return render(

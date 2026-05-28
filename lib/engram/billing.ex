@@ -11,6 +11,7 @@ defmodule Engram.Billing do
   alias Engram.Billing.PlanCache
   alias Engram.Billing.Subscription
   alias Engram.Billing.UserLimitOverride
+  alias Engram.Paddle.Client
   alias Engram.Repo
 
   defmodule UnknownLimitKey do
@@ -195,12 +196,177 @@ defmodule Engram.Billing do
   def create_portal_session(user) do
     case get_subscription(user) do
       %Subscription{paddle_customer_id: customer_id} when is_binary(customer_id) ->
-        Engram.Paddle.Client.impl().create_customer_portal_session(customer_id)
+        Client.impl().create_customer_portal_session(customer_id)
 
       _ ->
         {:error, :no_subscription}
     end
   end
+
+  # ── Live Paddle Read-Through (billing settings surface) ────────
+  #
+  # The subscription detail, payment method, and invoice history are fetched
+  # live from Paddle per page load rather than persisted — the webhook row
+  # only carries tier/status/period-end, and mirroring the rest would couple
+  # us to stale data. All of these short-circuit to {:error, :no_subscription}
+  # for users without a Paddle subscription.
+
+  @doc """
+  Fetch and normalize the user's live subscription detail: next bill, amount
+  (Paddle minor units + currency for the frontend to format), billing cycle,
+  and any pending `scheduled_change` (cancel/pause/plan change).
+  """
+  def subscription_detail(user) do
+    with_paddle_subscription(user, fn sub ->
+      case Client.impl().get_subscription(sub.paddle_subscription_id) do
+        {:ok, raw} -> {:ok, normalize_subscription(raw)}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Fetch the user's transaction history plus the card behind the most recent
+  card payment. Returns `%{payment_method: pm | nil, transactions: [...]}`.
+  """
+  def billing_history(user) do
+    with_paddle_subscription(user, fn sub ->
+      case Client.impl().list_transactions(sub.paddle_subscription_id) do
+        {:ok, txns} ->
+          {:ok,
+           %{
+             payment_method: payment_method_from(txns),
+             transactions: Enum.map(txns, &normalize_transaction/1)
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Mint the hosted invoice URL for one of the user's transactions. Verifies the
+  transaction belongs to the user's subscription before minting (IDOR guard) —
+  Paddle transaction IDs are otherwise enumerable across customers.
+  """
+  def transaction_invoice_url(user, transaction_id) do
+    with_paddle_subscription(user, fn sub ->
+      case Client.impl().list_transactions(sub.paddle_subscription_id) do
+        {:ok, txns} ->
+          if Enum.any?(txns, &(&1["id"] == transaction_id)) do
+            Client.impl().get_transaction_invoice(transaction_id)
+          else
+            {:error, :not_found}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
+  Resolve a customer-portal deep link for a given action: `"cancel"`,
+  `"update_payment"`, or anything else (→ the general overview URL).
+  """
+  def portal_action_url(user, action) do
+    case get_subscription(user) do
+      %Subscription{paddle_customer_id: customer_id} = sub when is_binary(customer_id) ->
+        case Client.impl().get_portal_session(customer_id) do
+          {:ok, urls} -> {:ok, pick_portal_url(urls, action, sub.paddle_subscription_id)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :no_subscription}
+    end
+  end
+
+  @doc """
+  Mint a transaction for an in-app payment-method update. Returns the Paddle
+  transaction id for `Paddle.Checkout.open({ transactionId })`.
+  """
+  def update_payment_transaction(user) do
+    with_paddle_subscription(user, fn sub ->
+      case Client.impl().get_update_payment_transaction(sub.paddle_subscription_id) do
+        {:ok, %{"id" => transaction_id}} -> {:ok, transaction_id}
+        {:ok, _} -> {:error, :invalid_response}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp with_paddle_subscription(user, fun) do
+    case get_subscription(user) do
+      %Subscription{paddle_subscription_id: sub_id} = sub when is_binary(sub_id) ->
+        fun.(sub)
+
+      _ ->
+        {:error, :no_subscription}
+    end
+  end
+
+  defp normalize_subscription(raw) do
+    %{
+      next_billed_at: raw["next_billed_at"],
+      amount: get_in(raw, ["recurring_transaction_details", "totals", "total"]),
+      currency: raw["currency_code"],
+      billing_cycle: normalize_cycle(raw["billing_cycle"]),
+      scheduled_change: normalize_scheduled_change(raw["scheduled_change"])
+    }
+  end
+
+  defp normalize_cycle(%{"interval" => interval, "frequency" => frequency}),
+    do: %{interval: interval, frequency: frequency}
+
+  defp normalize_cycle(_), do: nil
+
+  defp normalize_scheduled_change(%{"action" => action, "effective_at" => effective_at}),
+    do: %{action: action, effective_at: effective_at}
+
+  defp normalize_scheduled_change(_), do: nil
+
+  defp normalize_transaction(t) do
+    %{
+      id: t["id"],
+      billed_at: t["billed_at"] || t["created_at"],
+      amount: get_in(t, ["details", "totals", "grand_total"]),
+      currency: get_in(t, ["details", "totals", "currency_code"]),
+      status: t["status"],
+      invoice_id: t["invoice_id"]
+    }
+  end
+
+  defp payment_method_from(txns) do
+    Enum.find_value(txns, fn t ->
+      case t["payments"] do
+        [%{"method_details" => %{"card" => card} = md} | _] when is_map(card) ->
+          %{
+            type: md["type"],
+            card_brand: card["type"],
+            last4: card["last4"],
+            exp_month: card["expiry_month"],
+            exp_year: card["expiry_year"]
+          }
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp pick_portal_url(urls, action, sub_id) do
+    sub_urls = Enum.find(urls["subscriptions"] || [], &(&1["id"] == sub_id)) || %{}
+
+    case action do
+      "cancel" -> sub_urls["cancel_subscription"] || overview_url(urls)
+      "update_payment" -> sub_urls["update_subscription_payment_method"] || overview_url(urls)
+      _ -> overview_url(urls)
+    end
+  end
+
+  defp overview_url(urls), do: get_in(urls, ["general", "overview"])
 
   # ── Webhook Event Processing ───────────────────────────────────
 

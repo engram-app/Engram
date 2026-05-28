@@ -1,15 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CheckoutEventNames, initializePaddle, type Paddle } from '@paddle/paddle-js'
+import { toast } from 'sonner'
 import {
   useBillingStatus,
   useBillingConfig,
+  useBillingSubscriptionDetail,
+  useBillingHistory,
   type BillingConfig,
   type OnboardingStatus,
 } from '../api/queries'
 import { api } from '../api/client'
 import { useTheme } from '../theme/theme-provider'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import CurrentPlanCard from './current-plan-card'
+import PaymentMethodCard from './payment-method-card'
+import BillingHistoryTable from './billing-history-table'
+import PendingChangeBanner from './pending-change-banner'
+
+async function openPortal(action?: string) {
+  try {
+    const path = action ? `/billing/portal?action=${action}` : '/billing/portal'
+    const { url } = await api.get<{ url: string }>(path)
+    window.location.href = url
+  } catch {
+    toast.error('Could not open the billing portal. Please try again.')
+  }
+}
+
+async function downloadInvoice(transactionId: string) {
+  try {
+    const { url } = await api.get<{ url: string }>(`/billing/transactions/${transactionId}/invoice`)
+    window.open(url, '_blank', 'noopener')
+  } catch {
+    toast.error('Could not fetch that invoice. Please try again.')
+  }
+}
 
 // Paddle confirms checkout client-side (checkout.completed) before its webhook
 // reaches our backend and flips the subscription active, so a single refetch
@@ -19,17 +46,12 @@ import { cn } from '@/lib/utils'
 const ACTIVATION_POLL_MS = 2000
 const ACTIVATION_POLL_TIMEOUT_MS = 30000
 
-const TIER_LABELS = {
-  free: 'Free',
-  none: 'No Plan',
-  trial: 'Free Trial',
-  starter: 'Starter',
-  pro: 'Pro',
-} as const
-
 export default function BillingPage({ hideHeading = false }: { hideHeading?: boolean }) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
+  const hasSubscription = Boolean(billing?.subscription)
+  const { data: detail } = useBillingSubscriptionDetail(hasSubscription)
+  const { data: history } = useBillingHistory(hasSubscription)
   const { resolved } = useTheme()
   const qc = useQueryClient()
   const [paddle, setPaddle] = useState<Paddle>()
@@ -80,6 +102,11 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
       eventCallback: (event) => {
         if (event.name === CheckoutEventNames.CHECKOUT_COMPLETED) {
           setActivationStuck(false)
+          // Refresh the live billing surface so an updated card / plan shows
+          // without a reload. The subscription-activation poll handles the
+          // separate onboarding-gate race below.
+          qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+          qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
           pollUntilActive(Date.now() + ACTIVATION_POLL_TIMEOUT_MS)
         }
       },
@@ -100,8 +127,25 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
   }
 
   const needsSubscription = !billing.active
-  const isTrial = billing.subscription?.status === 'trialing'
   const checkoutReady = Boolean(paddle && config)
+
+  async function handleUpdatePayment() {
+    // No initialized Paddle.js yet — fall back to the hosted portal so the
+    // action still works rather than silently no-opping.
+    if (!paddle) {
+      openPortal('update_payment')
+      return
+    }
+
+    try {
+      const { transaction_id } = await api.get<{ transaction_id: string }>(
+        '/billing/payment-update-transaction',
+      )
+      paddle.Checkout.open({ transactionId: transaction_id })
+    } catch {
+      toast.error('Could not start the payment update. Please try again.')
+    }
+  }
 
   return (
     <article className="space-y-6">
@@ -124,44 +168,7 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
         </div>
       )}
 
-      {!hideHeading && (
-        <section className="space-y-4 rounded-lg border border-border bg-card p-6">
-          <header className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">Current Plan</h2>
-            <span className="rounded-full bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground">
-              {TIER_LABELS[billing.tier]}
-            </span>
-          </header>
-
-          {needsSubscription && (
-            <p className="text-sm text-muted-foreground">
-              Choose a plan below to start your 7-day free trial. A card is required but you
-              won't be charged until the trial ends.
-            </p>
-          )}
-
-          {isTrial && billing.trial_days_remaining > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {billing.trial_days_remaining} days remaining in your free trial.
-            </p>
-          )}
-
-          {billing.subscription && (
-            <dl className="grid grid-cols-2 gap-4 text-sm">
-              <dt className="text-muted-foreground">Status</dt>
-              <dd className="font-medium capitalize">{billing.subscription.status.replace('_', ' ')}</dd>
-              {billing.subscription.current_period_end && (
-                <>
-                  <dt className="text-muted-foreground">Current period ends</dt>
-                  <dd className="font-medium">
-                    {new Date(billing.subscription.current_period_end).toLocaleDateString()}
-                  </dd>
-                </>
-              )}
-            </dl>
-          )}
-        </section>
-      )}
+      {!hideHeading && <CurrentPlanCard billing={billing} />}
 
       {needsSubscription && (
         <section className="space-y-4">
@@ -195,15 +202,28 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
         </section>
       )}
 
-      {billing.subscription && billing.subscription.status !== 'canceled' && (
-        <section>
-          <button
-            onClick={handlePortal}
-            className="text-sm text-primary underline hover:text-primary/80"
-          >
-            Manage subscription
-          </button>
-        </section>
+      {!hideHeading && billing.subscription && (
+        <>
+          <PendingChangeBanner scheduledChange={detail?.scheduled_change ?? null} />
+          <PaymentMethodCard
+            paymentMethod={history?.payment_method ?? null}
+            onUpdate={handleUpdatePayment}
+          />
+          <BillingHistoryTable
+            transactions={history?.transactions ?? []}
+            onDownload={downloadInvoice}
+          />
+          <section className="flex flex-wrap gap-3">
+            <Button variant="outline" onClick={() => openPortal()}>
+              Manage in Paddle
+            </Button>
+            {billing.subscription.status !== 'canceled' && (
+              <Button variant="ghost" onClick={() => openPortal('cancel')}>
+                Cancel subscription
+              </Button>
+            )}
+          </section>
+        </>
       )}
     </article>
   )
@@ -278,9 +298,4 @@ function PlanCard({
       </button>
     </li>
   )
-}
-
-async function handlePortal() {
-  const { url } = await api.get<{ url: string }>('/billing/portal')
-  window.location.href = url
 }
