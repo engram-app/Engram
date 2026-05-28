@@ -253,6 +253,12 @@ jobs:
       - name: Build image (skip if already cached on this daemon)
         env:
           IMAGE: ${{ steps.tag.outputs.image }}
+          # Use buildx's plain progress writer instead of the fancy tty printer.
+          # The latter races on `--load`/LoadImage: a progress goroutine writes
+          # to a closed channel and panics *after* the image built fine, failing
+          # the job (issue #334, upstream docker/buildx bug). Plain writer = no
+          # such goroutine.
+          BUILDKIT_PROGRESS: plain
         run: |
           if docker image inspect "$IMAGE" >/dev/null 2>&1; then
             echo "::notice::Image $IMAGE already cached locally — skipping build"

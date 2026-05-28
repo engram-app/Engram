@@ -1,5 +1,10 @@
 defmodule EngramWeb.VaultsControllerTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false — the vault-limit tests read the global `:limits_enforced`
+  # flag, which LimitsTest / RequireApi*Test flip via Application.put_env. Under
+  # async this module can run concurrently with a flip and observe `:unlimited`
+  # → 201 where 402 is expected. Reading global state means leaving the async
+  # pool too, not just the writers. See engram-app/engram#183, #236.
+  use EngramWeb.ConnCase, async: false
 
   import Ecto.Query
 

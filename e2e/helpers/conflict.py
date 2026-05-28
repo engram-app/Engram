@@ -24,6 +24,14 @@ import time
 from helpers.vault import write_note
 
 
+# How long to wait for ConflictModal to mount after pull() dispatches
+# resolveConflict. The modal genuinely opens just outside 10 s on a loaded CI
+# runner (the seed does 8+ CDP round-trips first), so a 10 s budget produced
+# rerun-pass flakes (issue #192). 20 s keeps real-time intent while absorbing
+# CI load; the modal-open path itself is unchanged.
+_MODAL_OPEN_TIMEOUT_S = 20
+
+
 # Snapshot helper for setup_conflict_for_a step-by-step diagnostics.
 # Captures everything we need to figure out which step lost syncState.
 _SNAPSHOT_JS = """
@@ -299,7 +307,7 @@ async def setup_conflict_for_a(
 
     # Wait for ConflictModal to mount (pull dispatches resolveConflict which
     # opens the modal asynchronously).
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + _MODAL_OPEN_TIMEOUT_S
     while time.monotonic() < deadline:
         present = await cdp_a.evaluate(
             "Boolean(document.querySelector('.engram-conflict-modal'))"
@@ -365,7 +373,7 @@ async def setup_conflict_for_a(
         f"  {name}: {json.dumps(snap, sort_keys=True)}" for name, snap in snapshots
     )
     raise TimeoutError(
-        f"ConflictModal never opened for path '{path}' within 10 s\n"
+        f"ConflictModal never opened for path '{path}' within {_MODAL_OPEN_TIMEOUT_S} s\n"
         f"resolveConflict invocations during pull: "
         f"{json.dumps(resolve_calls_parsed)}\n"
         f"per-step snapshots:\n{snapshot_dump}"

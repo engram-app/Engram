@@ -368,17 +368,32 @@ class CdpClient:
         )
 
     async def wait_for_sync_preview_modal(self, timeout: float = 5) -> None:
-        """Poll until SyncPreviewModal is mounted in the DOM."""
+        """Poll until SyncPreviewModal is mounted AND settled in the DOM.
+
+        Mounted-only was racy: `Modal.onOpen()` resolves before the open CSS
+        transition finishes, so a header read / option click could fire against
+        an un-painted modal (issue #161). "Settled" means: present, the
+        animating `.modal-container` ancestor has reached full opacity, and the
+        element has layout boxes (actually rendered). Degrades to mounted-only
+        when there's no transition (opacity is 1 immediately), so it never
+        waits longer than necessary.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            present = await self.evaluate(
-                "Boolean(document.querySelector('.engram-sync-preview-modal'))"
+            settled = await self.evaluate(
+                "(() => {"
+                "  const el = document.querySelector('.engram-sync-preview-modal');"
+                "  if (!el) return false;"
+                "  const anim = el.closest('.modal-container') || el;"
+                "  const op = parseFloat(getComputedStyle(anim).opacity || '1');"
+                "  return op >= 0.99 && el.getClientRects().length > 0;"
+                "})()"
             )
-            if present is True:
+            if settled is True:
                 return
             await asyncio.sleep(0.1)
         raise TimeoutError(
-            f"SyncPreviewModal not mounted after {timeout}s on CDP port {self.port}"
+            f"SyncPreviewModal not settled after {timeout}s on CDP port {self.port}"
         )
 
     async def dismiss_modals(

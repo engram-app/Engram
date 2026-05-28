@@ -24,7 +24,23 @@ const USER_BUTTON = '[data-clerk-component="UserButton"]'
 async function clerkSignIn(page: Page, email: string) {
   // Navigate first so Clerk JS SDK loads on the page
   await page.goto('/sign-in/')
-  await clerk.signIn({ page, emailAddress: email })
+  // Clerk user creation in global-setup is eventually consistent: the
+  // backend sign-in-token call here can briefly 404 the freshly-created user
+  // ("No user found with email") before replication settles. Retry a few
+  // times before giving up (issue #193); rethrow any other error immediately.
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await clerk.signIn({ page, emailAddress: email })
+      lastErr = undefined
+      break
+    } catch (err) {
+      if (!/No user found/i.test(String(err))) throw err
+      lastErr = err
+      await page.waitForTimeout(1_000)
+    }
+  }
+  if (lastErr) throw lastErr
   await page.goto('/')
   await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
 }
@@ -77,6 +93,10 @@ test.describe('Clerk auth provider', () => {
 
   test('wrong password shows Clerk error', async ({ page }) => {
     await page.goto('/sign-in/')
+    // Two-stage wait (mirrors the SignUp test): the Clerk container attaches
+    // first, then the SDK hydrates it visible. Asserting toBeVisible directly
+    // races Clerk's JS load on a busy CI runner (issue #306).
+    await page.locator(SIGN_IN).waitFor({ state: 'attached', timeout: 15_000 })
     await expect(page.locator(SIGN_IN)).toBeVisible({ timeout: 15_000 })
 
     await page.locator('input[name="identifier"]').fill(state.email)
