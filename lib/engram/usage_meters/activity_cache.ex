@@ -46,7 +46,9 @@ defmodule Engram.UsageMeters.ActivityCache do
   end
 
   @doc "The activity-stamp debounce window, in seconds (single source of truth)."
-  @spec debounce_seconds() :: pos_integer()
+  # No @spec: the body returns a compile-time literal, so Dialyzer's success
+  # typing is the singleton `3600` and a `pos_integer()` spec is a rejected
+  # supertype. The @doc documents intent without over-constraining.
   def debounce_seconds, do: @debounce_seconds
 
   @spec get(user_id :: integer()) :: {:ok, DateTime.t()} | :miss
