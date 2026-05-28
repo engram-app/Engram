@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
 import { makeUser } from './section-test-helpers'
 
 const newEmail = {
@@ -14,13 +15,19 @@ vi.mock('@clerk/clerk-react', () => ({
   useUser: () => ({ user, isLoaded: true }),
   useReverification: (fn: unknown) => fn,
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({ isClerkAPIResponseError: () => false }))
+vi.mock('@clerk/clerk-react/errors', () => ({
+  isClerkAPIResponseError: () => false,
+  isReverificationCancelledError: vi.fn(() => false),
+}))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import { EmailSection } from './email-section'
 
 describe('EmailSection', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isReverificationCancelledError).mockReturnValue(false)
+  })
 
   it('lists existing emails', () => {
     render(<EmailSection />)
@@ -45,9 +52,10 @@ describe('EmailSection', () => {
     await waitFor(() => expect(newEmail.attemptVerification).toHaveBeenCalledWith({ code: '123456' }))
   })
 
-  it('removes an email via destroy', async () => {
+  it('removes an email via destroy and reloads the user', async () => {
     render(<EmailSection />)
     fireEvent.click(screen.getByRole('button', { name: /remove ada@example.com/i }))
     await waitFor(() => expect(user.emailAddresses[0]!.destroy).toHaveBeenCalled())
+    await waitFor(() => expect(user.reload).toHaveBeenCalled())
   })
 })

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUser, useReverification } from '@clerk/clerk-react'
+import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { SettingsSectionCard } from './section-card'
@@ -40,6 +41,28 @@ export function EmailSection() {
     }
   }
 
+  async function makePrimary(id: string) {
+    try {
+      await setPrimary(id)
+      await user!.reload()
+      toast.success('Primary email updated')
+    } catch (e) {
+      if (isReverificationCancelledError(e)) return
+      toast.error('Could not set primary email')
+    }
+  }
+
+  async function remove(destroy: () => Promise<unknown>) {
+    try {
+      await removeEmail(destroy)
+      await user!.reload()
+      toast.success('Email removed')
+    } catch (e) {
+      if (isReverificationCancelledError(e)) return
+      toast.error('Could not remove email')
+    }
+  }
+
   return (
     <SettingsSectionCard title="Email addresses" description="Add, verify, or remove email addresses.">
       <ul className="space-y-2">
@@ -53,30 +76,42 @@ export function EmailSection() {
             </span>
             <span className="flex gap-2">
               {e.id !== user.primaryEmailAddressId && (
-                <Button variant="ghost" size="sm" onClick={() => setPrimary(e.id)}>Make primary</Button>
+                <Button variant="ghost" size="sm" onClick={() => makePrimary(e.id)}>Make primary</Button>
               )}
-              <Button variant="ghost" size="sm" aria-label={`Remove ${e.emailAddress}`} onClick={() => removeEmail(() => e.destroy())}>Remove</Button>
+              <Button variant="ghost" size="sm" aria-label={`Remove ${e.emailAddress}`} onClick={() => remove(() => e.destroy())}>Remove</Button>
             </span>
           </li>
         ))}
       </ul>
 
       {pending ? (
-        <div className="mt-4">
+        <form
+          className="mt-4"
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            verify()
+          }}
+        >
           <label className="block text-sm font-medium text-foreground">
             Verification code
             <input className={inputClass} value={code} onChange={(ev) => setCode(ev.target.value)} />
           </label>
-          <Button className="mt-2" onClick={verify}>Verify</Button>
-        </div>
+          <Button className="mt-2" type="submit">Verify</Button>
+        </form>
       ) : (
-        <div className="mt-4 flex items-end gap-2">
+        <form
+          className="mt-4 flex items-end gap-2"
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            add()
+          }}
+        >
           <label className="flex-1 block text-sm font-medium text-foreground">
             Add email
             <input className={inputClass} type="email" value={email} onChange={(ev) => setEmail(ev.target.value)} />
           </label>
-          <Button onClick={add}>Add</Button>
-        </div>
+          <Button type="submit">Add</Button>
+        </form>
       )}
     </SettingsSectionCard>
   )

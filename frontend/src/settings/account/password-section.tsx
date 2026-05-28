@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUser, useReverification } from '@clerk/clerk-react'
+import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { SettingsSectionCard } from './section-card'
@@ -29,26 +30,37 @@ export function PasswordSection() {
       setCurrent('')
       setNext('')
       toast.success('Password updated')
-    } catch {
+    } catch (e) {
+      if (isReverificationCancelledError(e)) return
       toast.error('Could not update password')
     }
   }
 
   return (
     <SettingsSectionCard title="Password" description="Set or change your password.">
-      {hasPassword && (
-        <label className="block text-sm font-medium text-foreground">
-          Current password
-          <input className={inputClass} type="password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        {hasPassword && (
+          <label className="block text-sm font-medium text-foreground">
+            Current password
+            <input className={inputClass} type="password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </label>
+        )}
+        <label className="mt-4 block text-sm font-medium text-foreground">
+          New password
+          <input className={inputClass} type="password" value={next} onChange={(e) => setNext(e.target.value)} />
         </label>
-      )}
-      <label className="mt-4 block text-sm font-medium text-foreground">
-        New password
-        <input className={inputClass} type="password" value={next} onChange={(e) => setNext(e.target.value)} />
-      </label>
-      <Button className="mt-4" onClick={submit}>
-        {hasPassword ? 'Update password' : 'Set password'}
-      </Button>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Changing your password signs you out of all other sessions.
+        </p>
+        <Button className="mt-4" type="submit">
+          {hasPassword ? 'Update password' : 'Set password'}
+        </Button>
+      </form>
     </SettingsSectionCard>
   )
 }

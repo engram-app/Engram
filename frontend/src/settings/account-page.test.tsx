@@ -7,8 +7,12 @@ vi.mock('@clerk/clerk-react', () => ({
   useReverification: (fn: unknown) => fn,
   useSessionList: () => ({ isLoaded: true, sessions: [] }),
   useSession: () => ({ session: { id: 'sess_current' } }),
+  useClerk: () => ({ signOut: vi.fn().mockResolvedValue({}) }),
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({ isClerkAPIResponseError: () => false }))
+vi.mock('@clerk/clerk-react/errors', () => ({
+  isClerkAPIResponseError: () => false,
+  isReverificationCancelledError: () => false,
+}))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import AccountPage from './account-page'

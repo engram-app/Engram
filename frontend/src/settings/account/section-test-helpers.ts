@@ -7,7 +7,6 @@ export function makeUser(overrides: Record<string, unknown> = {}) {
     lastName: 'Lovelace',
     imageUrl: 'https://example.com/a.png',
     passwordEnabled: true,
-    twoFactorEnabled: false,
     primaryEmailAddressId: 'eml_1',
     emailAddresses: [
       { id: 'eml_1', emailAddress: 'ada@example.com', verification: { status: 'verified' }, destroy: vi.fn().mockResolvedValue({}), prepareVerification: vi.fn().mockResolvedValue({}), attemptVerification: vi.fn().mockResolvedValue({}) },
@@ -17,10 +16,6 @@ export function makeUser(overrides: Record<string, unknown> = {}) {
     setProfileImage: vi.fn().mockResolvedValue({}),
     updatePassword: vi.fn().mockResolvedValue({}),
     createEmailAddress: vi.fn().mockResolvedValue({ id: 'eml_2', emailAddress: 'new@example.com', prepareVerification: vi.fn().mockResolvedValue({}), attemptVerification: vi.fn().mockResolvedValue({}) }),
-    createTOTP: vi.fn().mockResolvedValue({ secret: 'SECRET', uri: 'otpauth://totp/x' }),
-    verifyTOTP: vi.fn().mockResolvedValue({}),
-    createBackupCode: vi.fn().mockResolvedValue({ codes: ['11111111', '22222222'] }),
-    disableTOTP: vi.fn().mockResolvedValue({}),
     createExternalAccount: vi.fn().mockResolvedValue({ verification: { externalVerificationRedirectURL: new URL('https://accounts.example.com/oauth') } }),
     delete: vi.fn().mockResolvedValue({}),
     reload: vi.fn().mockResolvedValue({}),

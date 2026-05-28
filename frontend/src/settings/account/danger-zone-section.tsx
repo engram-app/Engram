@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { useUser, useReverification } from '@clerk/clerk-react'
+import { useUser, useReverification, useClerk } from '@clerk/clerk-react'
+import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ROUTES } from '@/routes'
 
 const CONFIRM = 'delete my account'
 const inputClass =
@@ -9,6 +11,7 @@ const inputClass =
 
 export function DangerZoneSection() {
   const { user, isLoaded } = useUser()
+  const clerk = useClerk()
   const [phrase, setPhrase] = useState('')
   const remove = useReverification(() => user!.delete())
 
@@ -17,7 +20,9 @@ export function DangerZoneSection() {
   async function onDelete() {
     try {
       await remove()
-    } catch {
+      await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN })
+    } catch (e) {
+      if (isReverificationCancelledError(e)) return
       toast.error('Could not delete account')
     }
   }
@@ -30,13 +35,20 @@ export function DangerZoneSection() {
           Permanently delete your account and all associated data. This cannot be undone.
         </p>
       </header>
-      <label className="block text-sm font-medium text-foreground">
-        Type "{CONFIRM}" to confirm
-        <input className={inputClass} value={phrase} onChange={(e) => setPhrase(e.target.value)} />
-      </label>
-      <Button className="mt-4" variant="destructive" disabled={phrase !== CONFIRM} onClick={onDelete}>
-        Delete my account
-      </Button>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          onDelete()
+        }}
+      >
+        <label className="block text-sm font-medium text-foreground">
+          Type "{CONFIRM}" to confirm
+          <input className={inputClass} value={phrase} onChange={(e) => setPhrase(e.target.value)} />
+        </label>
+        <Button className="mt-4" type="submit" variant="destructive" disabled={phrase !== CONFIRM}>
+          Delete my account
+        </Button>
+      </form>
     </section>
   )
 }

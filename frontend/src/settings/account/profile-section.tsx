@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -11,15 +11,14 @@ export function ProfileSection() {
   const { user, isLoaded } = useUser()
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
-  const [seeded, setSeeded] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  useEffect(() => {
+    setFirstName(user?.firstName ?? '')
+    setLastName(user?.lastName ?? '')
+  }, [user?.id, user?.firstName, user?.lastName])
+
   if (!isLoaded || !user) return null
-  if (!seeded) {
-    setFirstName(user.firstName ?? '')
-    setLastName(user.lastName ?? '')
-    setSeeded(true)
-  }
 
   async function save() {
     setSaving(true)
