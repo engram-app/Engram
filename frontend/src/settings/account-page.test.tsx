@@ -21,7 +21,7 @@ describe('AccountPage', () => {
   it('renders the section stack with no embedded Clerk UserProfile', () => {
     render(<AccountPage />)
     expect(screen.getByRole('heading', { name: 'Account', level: 1 })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Profile photo' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Password' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /danger zone/i })).toBeInTheDocument()
   })

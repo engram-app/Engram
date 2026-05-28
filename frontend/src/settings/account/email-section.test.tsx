@@ -9,7 +9,18 @@ const newEmail = {
   prepareVerification: vi.fn().mockResolvedValue({}),
   attemptVerification: vi.fn().mockResolvedValue({}),
 }
-const user = makeUser({ createEmailAddress: vi.fn().mockResolvedValue(newEmail) })
+
+function twoEmailUser() {
+  return makeUser({
+    createEmailAddress: vi.fn().mockResolvedValue(newEmail),
+    emailAddresses: [
+      { id: 'eml_1', emailAddress: 'ada@example.com', verification: { status: 'verified' }, destroy: vi.fn().mockResolvedValue({}) },
+      { id: 'eml_2b', emailAddress: 'second@example.com', verification: { status: 'verified' }, destroy: vi.fn().mockResolvedValue({}) },
+    ],
+  })
+}
+
+let user = twoEmailUser()
 
 vi.mock('@clerk/clerk-react', () => ({
   useUser: () => ({ user, isLoaded: true }),
@@ -27,6 +38,7 @@ describe('EmailSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(isReverificationCancelledError).mockReturnValue(false)
+    user = twoEmailUser()
   })
 
   it('lists existing emails', () => {
@@ -57,5 +69,15 @@ describe('EmailSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove ada@example.com/i }))
     await waitFor(() => expect(user.emailAddresses[0]!.destroy).toHaveBeenCalled())
     await waitFor(() => expect(user.reload).toHaveBeenCalled())
+  })
+
+  it('disables Remove when only one email address remains', () => {
+    user = makeUser({
+      emailAddresses: [
+        { id: 'eml_1', emailAddress: 'ada@example.com', verification: { status: 'verified' }, destroy: vi.fn() },
+      ],
+    })
+    render(<EmailSection />)
+    expect(screen.getByRole('button', { name: /remove ada@example.com/i })).toBeDisabled()
   })
 })

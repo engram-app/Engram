@@ -33,6 +33,15 @@ describe('ConnectedAccountsSection', () => {
     await waitFor(() => expect(user.reload).toHaveBeenCalled())
   })
 
+  it('shows a "Connected" fallback when the provider returned no email or username', () => {
+    const bare = { id: 'ext_2', provider: 'github', emailAddress: '', username: null, destroy: vi.fn() }
+    user = makeUser({ externalAccounts: [bare] })
+    render(<ConnectedAccountsSection providers={['oauth_github']} />)
+    expect(screen.getByText('GitHub')).toBeInTheDocument()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.queryByText(/—/)).not.toBeInTheDocument()
+  })
+
   it('connects a new provider via createExternalAccount', async () => {
     render(<ConnectedAccountsSection providers={['oauth_github']} />)
     fireEvent.click(screen.getByRole('button', { name: /connect github/i }))

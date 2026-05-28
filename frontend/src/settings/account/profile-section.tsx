@@ -1,70 +1,62 @@
-import { useEffect, useState } from 'react'
-import { useUser } from '@clerk/clerk-react'
+import { useRef } from 'react'
+import { useUser, useReverification } from '@clerk/clerk-react'
+import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { clerkErrorMessage } from './clerk-errors'
 import { SettingsSectionCard } from './section-card'
-
-const inputClass =
-  'mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring'
 
 export function ProfileSection() {
   const { user, isLoaded } = useUser()
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    setFirstName(user?.firstName ?? '')
-    setLastName(user?.lastName ?? '')
-  }, [user?.id, user?.firstName, user?.lastName])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Changing the avatar is reverification-protected — raw calls return 403.
+  const setProfileImage = useReverification((file: File) => user!.setProfileImage({ file }))
 
   if (!isLoaded || !user) return null
-
-  async function save() {
-    setSaving(true)
-    try {
-      await user!.update({ firstName, lastName })
-      toast.success('Profile updated')
-    } catch {
-      toast.error('Could not update profile')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   async function onImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     try {
-      await user!.setProfileImage({ file })
+      await setProfileImage(file)
       toast.success('Profile image updated')
-    } catch {
-      toast.error('Could not update image')
+    } catch (err) {
+      if (isReverificationCancelledError(err)) return
+      toast.error(clerkErrorMessage(err, 'Could not update image'))
+    } finally {
+      // Reset so picking the same file again still fires onChange.
+      e.target.value = ''
     }
   }
 
   return (
-    <SettingsSectionCard title="Profile" description="Your name and avatar.">
+    <SettingsSectionCard title="Profile photo" description="Your avatar.">
       <div className="flex items-center gap-4">
-        <img src={user.imageUrl} alt="" className="size-12 rounded-full border border-border" />
-        <label className="text-sm text-muted-foreground">
-          <span className="sr-only">Profile image</span>
-          <input aria-label="Profile image" type="file" accept="image/*" onChange={onImage} className="text-sm" />
-        </label>
+        <img
+          src={user.imageUrl}
+          alt=""
+          className="size-14 rounded-full border border-border object-cover"
+        />
+        <div>
+          <input
+            ref={fileInputRef}
+            aria-label="Profile image"
+            type="file"
+            accept="image/*"
+            onChange={onImage}
+            className="sr-only"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            Change photo
+          </Button>
+          <p className="mt-1 text-xs text-muted-foreground">JPG, PNG or GIF.</p>
+        </div>
       </div>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <label className="block text-sm font-medium text-foreground">
-          First name
-          <input className={inputClass} value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-        </label>
-        <label className="block text-sm font-medium text-foreground">
-          Last name
-          <input className={inputClass} value={lastName} onChange={(e) => setLastName(e.target.value)} />
-        </label>
-      </div>
-      <Button className="mt-4" onClick={save} disabled={saving}>
-        {saving ? 'Saving…' : 'Save'}
-      </Button>
     </SettingsSectionCard>
   )
 }
