@@ -442,6 +442,12 @@ if config_env() == :prod do
     config :engram,
            EngramWeb.RateLimiter.Redis,
            EngramWeb.RateLimiter.Redis.start_opts(redis_url)
+
+    # Same opt-in for the per-user caches (ActivityCache, TermsCache): the shared
+    # store makes the activity debounce exact and terms-accept visible across all
+    # nodes instead of per-node. Reuses the same REDIS_URL on its own connection;
+    # fails open to the DB read-through if the store is unreachable (see Engram.Cache).
+    config :engram, Engram.Cache, backend: :redis, url: redis_url
   end
 
   config :engram, EngramWeb.Endpoint,

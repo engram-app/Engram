@@ -26,6 +26,7 @@ defmodule Engram.Application do
         Engram.Legal.VersionCache.Invalidator,
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
+        cache_store_child(),
         Engram.UsageMeters.ActivityCache,
         Engram.Onboarding.TermsCache,
         Engram.Auth.SignupRejections,
@@ -106,6 +107,16 @@ defmodule Engram.Application do
     if Application.get_env(:engram, :auth_provider) == :clerk &&
          Application.get_env(:engram, :clerk_jwks_url) do
       {Engram.Auth.ClerkStrategy, time_interval: 60_000, first_fetch_sync: true}
+    end
+  end
+
+  # Shared Redis/Valkey connection for the per-user caches (ActivityCache,
+  # TermsCache). Started only when the cache backend is :redis (REDIS_URL set,
+  # wired in runtime.exs); the ETS default needs no connection. Separate from
+  # the rate limiter's Hammer-managed connection — same URL, distinct pool.
+  defp cache_store_child do
+    if Engram.Cache.backend() == :redis do
+      {Engram.Cache.Redix, Application.get_env(:engram, Engram.Cache, [])}
     end
   end
 
