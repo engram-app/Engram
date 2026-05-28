@@ -64,4 +64,35 @@ defmodule EngramWeb.RateLimiterTest do
 
     :telemetry.detach("fail-open-raise-#{inspect(ref)}")
   end
+
+  describe "Redis backend start options" do
+    alias EngramWeb.RateLimiter.Redis, as: RedisLimiter
+
+    test "start_opts/1 passes only :url through to Redix" do
+      # :prefix and :timeout are compile-time `use Hammer` options, NOT Redix
+      # start options. Only :url is a valid runtime start option for the
+      # Hammer.Redis backend, so the runtime config must pass nothing else.
+      assert RedisLimiter.start_opts("redis://localhost:6379") == [url: "redis://localhost:6379"]
+    end
+
+    test "limiter starts under a supervisor with the production opt shape" do
+      # Redix connects asynchronously (sync_connect: false), so this validates
+      # the option schema without needing a live Redis server.
+      opts = RedisLimiter.start_opts("redis://localhost:6379")
+      assert {:ok, pid} = start_supervised({RedisLimiter, opts})
+      assert is_pid(pid)
+    end
+
+    test ":key_prefix is rejected as a runtime start option (regression guard)" do
+      # Documents why the prefix had to move to compile-time `use` opts: passing
+      # it as a start option crashes the limiter on boot because Redix validates
+      # its option schema strictly and has no :key_prefix key.
+      Process.flag(:trap_exit, true)
+
+      assert {:error, _reason} =
+               start_supervised(
+                 {RedisLimiter, [url: "redis://localhost:6379", key_prefix: "engram_rl:"]}
+               )
+    end
+  end
 end

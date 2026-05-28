@@ -436,16 +436,12 @@ if config_env() == :prod do
   if redis_url = System.get_env("REDIS_URL") do
     config :engram, EngramWeb.RateLimiter, backend: :redis
 
-    # `:url` + `:key_prefix` are the documented Hammer.Redis 7.x start options.
-    # `:timeout` bounds each Redis command so fail-open stays fast even under a
-    # silent network partition (Hammer.Redis/Redix default is :infinity).
-    # VERIFY exact option names against hammer_backend_redis 7.1 README before
-    # first deploy, and confirm :timeout is a supported Hammer.Redis option;
-    # adjust here only (call sites + façade are option-agnostic).
-    config :engram, EngramWeb.RateLimiter.Redis,
-      url: redis_url,
-      key_prefix: "engram_rl:",
-      timeout: 250
+    # `:url` is the only valid runtime start option for the Hammer.Redis backend
+    # (Redix rejects unknown start keys). The key prefix and command timeout are
+    # compile-time `use Hammer` opts on the limiter module — see start_opts/1.
+    config :engram,
+           EngramWeb.RateLimiter.Redis,
+           EngramWeb.RateLimiter.Redis.start_opts(redis_url)
   end
 
   config :engram, EngramWeb.Endpoint,
