@@ -1,5 +1,9 @@
 defmodule EngramWeb.BillingControllerTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false — this suite flips the global :billing_enabled app env, which
+  # toggles RequireOnboarding on the vault-scoped pipeline. Running concurrently
+  # would intermittently gate unrelated async controller tests. Matches the
+  # other billing_enabled-flipping suites (onboarding_controller_test, etc.).
+  use EngramWeb.ConnCase, async: false
 
   import Mox
 
