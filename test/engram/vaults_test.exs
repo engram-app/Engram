@@ -1,5 +1,6 @@
 defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
+  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Vaults
 
@@ -226,6 +227,104 @@ defmodule Engram.VaultsTest do
     end
   end
 
+  describe "list_deleted_vaults/1" do
+    setup %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      :ok
+    end
+
+    test "returns only soft-deleted vaults, newest-deleted first", %{user: user} do
+      {:ok, keep} = Vaults.create_vault(user, %{name: "Keep"})
+      {:ok, gone} = Vaults.create_vault(user, %{name: "Gone"})
+      {:ok, _} = Vaults.delete_vault(user, gone.id)
+
+      deleted = Vaults.list_deleted_vaults(user)
+
+      assert Enum.map(deleted, & &1.id) == [gone.id]
+      assert keep.id not in Enum.map(deleted, & &1.id)
+      assert hd(deleted).name == "Gone"
+    end
+
+    test "excludes other users' deleted vaults", %{user: user, other_user: other} do
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, mine} = Vaults.create_vault(user, %{name: "Mine"})
+      {:ok, theirs} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, _} = Vaults.delete_vault(user, mine.id)
+      {:ok, _} = Vaults.delete_vault(other, theirs.id)
+
+      assert Enum.map(Vaults.list_deleted_vaults(user), & &1.id) == [mine.id]
+    end
+  end
+
+  describe "restore_vault/2" do
+    test "clears deleted_at and returns the vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Temp"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert {:ok, restored} = Vaults.restore_vault(user, v.id)
+      assert restored.id == v.id
+      assert restored.deleted_at == nil
+      assert Enum.map(Vaults.list_vaults(user), & &1.id) |> Enum.member?(v.id)
+      assert Vaults.list_deleted_vaults(user) == []
+    end
+
+    test "blocks restore when it would exceed the vault cap", %{user: user} do
+      # Cap of 1: create one, delete it, create a replacement, then try to restore.
+      {:ok, first} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _} = Vaults.delete_vault(user, first.id)
+      {:ok, _replacement} = Vaults.create_vault(user, %{name: "Replacement"})
+
+      assert {:error, :limit_reached} = Vaults.restore_vault(user, first.id)
+      # Blocked restore leaves the vault soft-deleted: it stays in the trash
+      # list and is NOT promoted back into the active list.
+      assert first.id in deleted_ids(user)
+      assert first.id not in Enum.map(Vaults.list_vaults(user), & &1.id)
+    end
+
+    test "returns :not_found for an active vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
+    end
+
+    test "returns :not_found for another user's deleted vault", %{user: user, other_user: other} do
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, _} = Vaults.delete_vault(other, v.id)
+      assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
+    end
+
+    defp deleted_ids(user), do: Enum.map(Vaults.list_deleted_vaults(user), & &1.id)
+  end
+
+  # ---------------------------------------------------------------------------
+  # purge_vault/2
+  # ---------------------------------------------------------------------------
+
+  describe "purge_vault/2" do
+    test "enqueues an immediate force cleanup for a soft-deleted vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Doomed"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert {:ok, vault} = Vaults.purge_vault(user, v.id)
+      assert vault.id == v.id
+
+      assert_enqueued(
+        worker: Engram.Workers.CleanupVault,
+        args: %{vault_id: v.id, user_id: user.id, force: true}
+      )
+    end
+
+    test "returns :not_found for an active vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      assert {:error, :not_found} = Vaults.purge_vault(user, v.id)
+      refute_enqueued(worker: Engram.Workers.CleanupVault)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # get_vault/2
   # ---------------------------------------------------------------------------
@@ -357,6 +456,17 @@ defmodule Engram.VaultsTest do
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
       assert {:error, :not_found} = Vaults.delete_vault(user, 0)
+    end
+
+    test "delete_vault enqueues the deletion-notice email", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Bye"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert_enqueued(
+        worker: Engram.Workers.VaultDeletedEmail,
+        args: %{vault_id: v.id, user_id: user.id}
+      )
     end
   end
 

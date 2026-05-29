@@ -25,6 +25,7 @@ defmodule Engram.Workers.CleanupVault do
   require Logger
 
   @retention_days 30
+  @retention_secs @retention_days * 86_400
 
   @doc """
   Enqueues a CleanupVault job scheduled 30 days from now.
@@ -35,14 +36,26 @@ defmodule Engram.Workers.CleanupVault do
     |> Oban.insert()
   end
 
+  @doc """
+  Enqueues an immediate (unscheduled) force-purge. Used by the "delete
+  permanently now" path — bypasses the retention age guard.
+  """
+  def enqueue_now(vault_id, user_id) do
+    %{vault_id: vault_id, user_id: user_id, force: true}
+    |> new()
+    |> Oban.insert()
+  end
+
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"vault_id" => vault_id, "user_id" => user_id}}) do
-    perform_cleanup(vault_id, user_id)
+  def perform(%Oban.Job{args: %{"vault_id" => vault_id, "user_id" => user_id} = args}) do
+    perform_cleanup(vault_id, user_id, force: Map.get(args, "force", false))
   end
 
   @doc false
-  def perform_cleanup(vault_id, _user_id) do
+  def perform_cleanup(vault_id, user_id, opts \\ []) do
+    force = Keyword.get(opts, :force, false)
     vault = Repo.get(Vault, vault_id, skip_tenant_check: true)
+    _ = user_id
 
     cond do
       is_nil(vault) ->
@@ -53,10 +66,19 @@ defmodule Engram.Workers.CleanupVault do
         Logger.info("CleanupVault: vault #{vault_id} was restored — skipping")
         :ok
 
+      not force and retention_age_secs(vault) < @retention_secs ->
+        snooze = @retention_secs - retention_age_secs(vault)
+        Logger.info("CleanupVault: vault #{vault_id} not yet at retention — snoozing #{snooze}s")
+        {:snooze, snooze}
+
       true ->
         Logger.info("CleanupVault: starting hard-delete for vault #{vault_id}")
         run_cleanup(vault)
     end
+  end
+
+  defp retention_age_secs(vault) do
+    DateTime.diff(DateTime.utc_now(), vault.deleted_at, :second)
   end
 
   # ---------------------------------------------------------------------------

@@ -159,6 +159,8 @@ defmodule EngramWeb.Router do
     get "/vaults/:id", VaultsController, :show
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
+    post "/vaults/:id/restore", VaultsController, :restore
+    post "/vaults/:id/purge", VaultsController, :purge
 
     # Billing — Paddle checkout opens client-side via paddle.js, so the
     # backend only exposes status, the public client config, and a portal

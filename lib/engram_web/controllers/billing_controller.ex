@@ -40,9 +40,21 @@ defmodule EngramWeb.BillingController do
         pro: Application.get_env(:engram, :paddle_pro_price_id)
       },
       customer_email: user.email,
-      custom_data: %{user_id: user.id}
+      custom_data: %{user_id: user.id},
+      vaults_cap: cap_json(Billing.effective_limit(user, :vaults_cap))
     })
   end
+
+  # Normalizes an effective limit to a JSON-friendly value: a positive integer
+  # cap, or `null` for "unlimited" (`:unlimited` / `nil` / `-1`). The frontend
+  # treats `null` as no cap.
+  defp cap_json(:unlimited), do: nil
+  defp cap_json(nil), do: nil
+  defp cap_json(-1), do: nil
+  defp cap_json(limit) when is_integer(limit), do: limit
+  # Unknown/malformed override (e.g. a non-integer value) → treat as no cap
+  # rather than 500 the endpoint.
+  defp cap_json(_), do: nil
 
   @doc """
   Customer-portal redirect. Without an `action` param this returns the generic

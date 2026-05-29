@@ -11,6 +11,7 @@ defmodule Engram.Mailer do
   - `send_inactivity_warning_60/1`
   - `send_inactivity_warning_80/1`
   - `send_account_deleted_notice/1`
+  - `send_vault_deletion_notice/4`
   """
 
   alias Engram.Accounts.User
@@ -160,6 +161,28 @@ defmodule Engram.Mailer do
       """,
       []
     )
+  end
+
+  @doc """
+  Notifies a user that a vault was soft-deleted and will be purged on
+  `purge_date` (a preformatted string). `manage_url` deep-links to the vault
+  settings page where they can restore or purge immediately.
+  """
+  def send_vault_deletion_notice(%User{email: email}, vault_name, purge_date, manage_url) do
+    vault_name = Template.esc(vault_name)
+    purge_date = Template.esc(purge_date)
+
+    body = """
+    <mj-text>Your Engram vault "#{vault_name}" has been deleted.</mj-text>
+    <mj-text>It will be permanently removed on #{purge_date}. Until then you can
+    restore it — or, if you meant to delete it, remove it permanently now — from
+    your vault settings.</mj-text>
+    <mj-button href="#{manage_url}" background-color="#5b5bd6">Manage vault</mj-button>
+    <mj-text>No action is needed if you want it gone; it will be cleaned up
+    automatically.</mj-text>
+    """
+
+    render_and_deliver(email, "Your Engram vault was deleted", body)
   end
 
   # Render an MJML body to HTML, then deliver. A render failure becomes a

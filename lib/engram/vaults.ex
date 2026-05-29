@@ -156,6 +156,24 @@ defmodule Engram.Vaults do
   end
 
   @doc """
+  Returns all soft-deleted vaults for a user, newest-deleted first.
+  """
+  def list_deleted_vaults(user) do
+    user = fresh_user(user)
+
+    {:ok, vaults} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from v in Vault,
+            where: v.user_id == ^user.id and not is_nil(v.deleted_at),
+            order_by: [desc: v.deleted_at, desc: v.id]
+        )
+      end)
+
+    Enum.map(vaults, &decrypt_vault_if_needed(&1, user))
+  end
+
+  @doc """
   Loads vaults owned by `user` whose IDs appear in `vault_ids`.
 
   `vault_ids` is a list of strings (as they arrive from Qdrant payload JSON).
@@ -312,12 +330,79 @@ defmodule Engram.Vaults do
           case result do
             {:ok, deleted} ->
               _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
+              _ = Engram.Workers.VaultDeletedEmail.enqueue(deleted.user_id, deleted.id)
               emit_vault_count(deleted.user_id, :deleted)
               result
 
             _ ->
               result
           end
+      end
+    end)
+    |> unwrap_transaction()
+  end
+
+  # ── Restore (soft-delete reversal) ──────────────────────────────────────────
+
+  @doc """
+  Restores a soft-deleted vault by clearing deleted_at.
+
+  Refuses (`{:error, :limit_reached}`) if restoring would exceed the user's
+  vault cap. The vault is restored as non-default; the user re-sets default
+  explicitly. The pending CleanupVault job becomes a no-op once deleted_at is nil.
+
+  Returns {:ok, vault}, {:error, :limit_reached}, or {:error, :not_found}.
+  """
+  def restore_vault(user, vault_id) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      case fetch_deleted(user.id, vault_id) do
+        nil ->
+          {:error, :not_found}
+
+        vault ->
+          active_count = count_vaults(user.id)
+
+          case Billing.check_limit(user, :vaults_cap, active_count) do
+            {:error, :limit_reached} ->
+              {:error, :limit_reached}
+
+            :ok ->
+              vault
+              |> Vault.changeset(%{deleted_at: nil})
+              |> Repo.update()
+              |> case do
+                {:ok, v} ->
+                  emit_vault_count(user.id, :restored)
+                  {:ok, decrypt_vault_if_needed(v, user)}
+
+                other ->
+                  other
+              end
+          end
+      end
+    end)
+    |> unwrap_transaction()
+  end
+
+  @doc """
+  Immediately hard-deletes a soft-deleted vault by enqueuing a force CleanupVault
+  job. Only soft-deleted vaults can be purged.
+
+  Returns {:ok, vault} or {:error, :not_found}.
+  """
+  def purge_vault(user, vault_id) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      case fetch_deleted(user.id, vault_id) do
+        nil ->
+          {:error, :not_found}
+
+        vault ->
+          {:ok, _job} = Engram.Workers.CleanupVault.enqueue_now(vault.id, vault.user_id)
+          {:ok, vault}
       end
     end)
     |> unwrap_transaction()
@@ -389,6 +474,13 @@ defmodule Engram.Vaults do
     Repo.one(
       from v in Vault,
         where: v.user_id == ^user_id and v.id == ^vault_id and is_nil(v.deleted_at)
+    )
+  end
+
+  defp fetch_deleted(user_id, vault_id) do
+    Repo.one(
+      from v in Vault,
+        where: v.user_id == ^user_id and v.id == ^vault_id and not is_nil(v.deleted_at)
     )
   end
 

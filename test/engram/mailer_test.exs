@@ -119,6 +119,47 @@ defmodule Engram.MailerTest do
     end
   end
 
+  describe "send_vault_deletion_notice/4" do
+    test "returns :ok and includes the manage link, vault name, and purge date" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
+        assert to == "u@example.com"
+        assert subject =~ "vault was deleted"
+        assert html =~ "My Vault"
+        assert html =~ "June 27, 2026"
+        assert html =~ "https://app.engram.page/settings/vaults?highlight=1"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_vault_deletion_notice(
+                 user,
+                 "My Vault",
+                 "June 27, 2026",
+                 "https://app.engram.page/settings/vaults?highlight=1"
+               )
+    end
+
+    test "escapes HTML in the vault name" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        refute html =~ "<script>alert(1)</script>"
+        assert html =~ "&lt;script&gt;"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_vault_deletion_notice(
+                 user,
+                 "<script>alert(1)</script>",
+                 "June 27, 2026",
+                 "https://app.engram.page/settings/vaults?highlight=1"
+               )
+    end
+  end
+
   defp og_recipient(name) do
     {:ok, r} = Engram.Email.Recipient.new("og@example.com", name)
     r

@@ -59,7 +59,14 @@ defmodule Engram.Workers.CleanupVaultTest do
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
       user = insert(:user)
-      vault = insert(:vault, user: user, deleted_at: DateTime.utc_now())
+      # Aged past the 30-day retention window so perform_cleanup hard-deletes
+      # rather than snoozing on the age guard.
+      vault =
+        insert(:vault,
+          user: user,
+          deleted_at: DateTime.add(DateTime.utc_now(), -31, :day) |> DateTime.truncate(:second)
+        )
+
       note = insert(:note, user: user, vault: vault)
       attachment = insert(:attachment, user: user, vault: vault)
 
@@ -172,7 +179,14 @@ defmodule Engram.Workers.CleanupVaultTest do
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
       user = insert(:user)
-      vault = insert(:vault, user: user, deleted_at: DateTime.utc_now())
+      # Aged past the 30-day retention window so perform_cleanup hard-deletes
+      # rather than snoozing on the age guard.
+      vault =
+        insert(:vault,
+          user: user,
+          deleted_at: DateTime.add(DateTime.utc_now(), -31, :day) |> DateTime.truncate(:second)
+        )
+
       note = insert(:note, user: user, vault: vault)
       attachment = insert(:attachment, user: user, vault: vault, storage_key: "test/blob.png")
 
@@ -232,6 +246,77 @@ defmodule Engram.Workers.CleanupVaultTest do
 
       # Vault still exists
       assert Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # perform_cleanup/3 — retention age guard + force purge
+  # ---------------------------------------------------------------------------
+
+  describe "perform_cleanup/3 — age guard" do
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+      user = insert(:user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      %{bypass: bypass, user: user}
+    end
+
+    defp stub_qdrant_ack(bypass) do
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+    end
+
+    defp backdate_deleted_at(vault_id, days) do
+      ts =
+        DateTime.utc_now()
+        |> DateTime.add(-days * 86_400, :second)
+        |> DateTime.truncate(:second)
+
+      from(v in Vault, where: v.id == ^vault_id)
+      |> Repo.update_all([set: [deleted_at: ts]], skip_tenant_check: true)
+    end
+
+    test "skips when the vault was restored (deleted_at nil)", %{user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      assert :ok = CleanupVault.perform_cleanup(v.id, user.id)
+      assert Repo.get(Vault, v.id, skip_tenant_check: true)
+    end
+
+    test "snoozes when deleted_at is younger than 30 days", %{user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+      backdate_deleted_at(v.id, 5)
+
+      assert {:snooze, secs} = CleanupVault.perform_cleanup(v.id, user.id)
+      assert secs > 0
+      assert Repo.get(Vault, v.id, skip_tenant_check: true)
+    end
+
+    test "purges when deleted_at is older than 30 days", %{bypass: bypass, user: user} do
+      stub_qdrant_ack(bypass)
+      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+      backdate_deleted_at(v.id, 31)
+
+      assert :ok = CleanupVault.perform_cleanup(v.id, user.id)
+      refute Repo.get(Vault, v.id, skip_tenant_check: true)
+    end
+
+    test "force purges immediately regardless of age", %{bypass: bypass, user: user} do
+      stub_qdrant_ack(bypass)
+      {:ok, v} = Vaults.create_vault(user, %{name: "V"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+      # freshly deleted (age ~0) but force=true
+
+      assert :ok = CleanupVault.perform_cleanup(v.id, user.id, force: true)
+      refute Repo.get(Vault, v.id, skip_tenant_check: true)
     end
   end
 end

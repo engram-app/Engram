@@ -10,6 +10,7 @@ import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
 import ApiKeysPage from './settings/api-keys-page'
 import SettingsLayout from './settings/settings-layout'
+import VaultsPage from './settings/vaults-page'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import { ROUTES } from './routes'
 import Dashboard from './viewer/dashboard'
@@ -86,6 +87,7 @@ export const router = createBrowserRouter(
                       },
                     ]
                   : []),
+                { path: 'vaults', element: <VaultsPage /> },
                 { path: 'api-keys', element: <ApiKeysPage /> },
                 ...(config.billingEnabled
                   ? [{ path: 'billing', element: <BillingPage /> }]

@@ -66,6 +66,32 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["custom_data"]["user_id"] == user.id
     end
 
+    test "exposes the tier-default vaults_cap when the user has no override", %{conn: conn} do
+      # limits_enforced is true in test (config/test.exs), so effective_limit
+      # resolves the free-tier default for a new user with no subscription:
+      # LimitKeys vaults_cap default for :free is 1.
+      conn = get(conn, "/api/billing/config")
+      body = json_response(conn, 200)
+      assert body["vaults_cap"] == 1
+    end
+
+    test "exposes an explicit integer vaults_cap override", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      conn = get(conn, "/api/billing/config")
+      body = json_response(conn, 200)
+      assert body["vaults_cap"] == 5
+    end
+
+    test "stays resilient (200, null cap) when the override value is malformed", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => "lots"})
+      conn = get(conn, "/api/billing/config")
+      body = json_response(conn, 200)
+      assert body["vaults_cap"] == nil
+    end
+
     test "returns 401 without auth" do
       conn = build_conn() |> get("/api/billing/config")
       assert json_response(conn, 401)

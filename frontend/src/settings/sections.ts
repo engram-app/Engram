@@ -9,7 +9,10 @@ export function buildSettingsSections(
   authProvider: EngramConfig['authProvider'],
   billingEnabled: boolean,
 ): SettingsSection[] {
-  const sections: SettingsSection[] = [{ to: 'api-keys', label: 'API Keys' }]
+  const sections: SettingsSection[] = [
+    { to: 'vaults', label: 'Vaults' },
+    { to: 'api-keys', label: 'API Keys' },
+  ]
   if (billingEnabled) {
     sections.push({ to: 'billing', label: 'Billing' })
   }
