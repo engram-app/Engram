@@ -156,6 +156,24 @@ defmodule Engram.Vaults do
   end
 
   @doc """
+  Returns all soft-deleted vaults for a user, newest-deleted first.
+  """
+  def list_deleted_vaults(user) do
+    user = fresh_user(user)
+
+    {:ok, vaults} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from v in Vault,
+            where: v.user_id == ^user.id and not is_nil(v.deleted_at),
+            order_by: [desc: v.deleted_at, desc: v.id]
+        )
+      end)
+
+    Enum.map(vaults, &decrypt_vault_if_needed(&1, user))
+  end
+
+  @doc """
   Loads vaults owned by `user` whose IDs appear in `vault_ids`.
 
   `vault_ids` is a list of strings (as they arrive from Qdrant payload JSON).
@@ -389,6 +407,13 @@ defmodule Engram.Vaults do
     Repo.one(
       from v in Vault,
         where: v.user_id == ^user_id and v.id == ^vault_id and is_nil(v.deleted_at)
+    )
+  end
+
+  defp fetch_deleted(user_id, vault_id) do
+    Repo.one(
+      from v in Vault,
+        where: v.user_id == ^user_id and v.id == ^vault_id and not is_nil(v.deleted_at)
     )
   end
 

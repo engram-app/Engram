@@ -226,6 +226,35 @@ defmodule Engram.VaultsTest do
     end
   end
 
+  describe "list_deleted_vaults/1" do
+    setup %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      :ok
+    end
+
+    test "returns only soft-deleted vaults, newest-deleted first", %{user: user} do
+      {:ok, keep} = Vaults.create_vault(user, %{name: "Keep"})
+      {:ok, gone} = Vaults.create_vault(user, %{name: "Gone"})
+      {:ok, _} = Vaults.delete_vault(user, gone.id)
+
+      deleted = Vaults.list_deleted_vaults(user)
+
+      assert Enum.map(deleted, & &1.id) == [gone.id]
+      assert keep.id not in Enum.map(deleted, & &1.id)
+      assert hd(deleted).name == "Gone"
+    end
+
+    test "excludes other users' deleted vaults", %{user: user, other_user: other} do
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, mine} = Vaults.create_vault(user, %{name: "Mine"})
+      {:ok, theirs} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, _} = Vaults.delete_vault(user, mine.id)
+      {:ok, _} = Vaults.delete_vault(other, theirs.id)
+
+      assert Enum.map(Vaults.list_deleted_vaults(user), & &1.id) == [mine.id]
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # get_vault/2
   # ---------------------------------------------------------------------------
