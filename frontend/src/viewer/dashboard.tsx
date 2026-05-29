@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router'
-import { useFolderNotes, type NoteSummary } from '../api/queries'
+import { useFolderNotes, useVaults, type NoteSummary } from '../api/queries'
+import { EmptyVaultState } from '../layout/empty-vault-state'
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
@@ -67,6 +68,15 @@ function FolderNotes({ folder }: { folder: string }) {
 export default function Dashboard() {
   const [searchParams] = useSearchParams()
   const folder = searchParams.get('folder') ?? ''
+  const { data: vaults } = useVaults()
+
+  // Deleting the last vault leaves zero active vaults. Show a create-a-vault
+  // prompt instead of the (empty) note browser. Guard against the loading
+  // state (vaults === undefined) so the empty state doesn't flash while the
+  // vault list is still in flight.
+  if (vaults && vaults.length === 0) {
+    return <EmptyVaultState />
+  }
 
   if (folder) {
     return (
