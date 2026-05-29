@@ -310,6 +310,8 @@ export interface Vault {
   cooldown_days: number | null
   deleted_at?: string | null
   purge_at?: string | null
+  note_count?: number
+  attachment_count?: number
 }
 
 export interface EncryptionProgress {

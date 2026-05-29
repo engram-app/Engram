@@ -207,6 +207,62 @@ defmodule Engram.Vaults do
     end
   end
 
+  # ── Content counts ───────────────────────────────────────────────────────
+
+  @zero_counts %{notes: 0, attachments: 0}
+
+  @doc """
+  Returns a map of `%{vault_id => %{notes: n, attachments: m}}` for the given
+  vaults, counting only non-deleted notes/attachments owned by `user`.
+
+  Two batched GROUP BY queries (one per table) — no N+1. Tenant scoping is the
+  explicit `user_id == ^user_id` clause; RLS is bypassed (`skip_tenant_check:
+  true`) for performance, matching `list_for_ids/2`. The clause MUST stay.
+  """
+  @spec content_counts_for(Engram.Accounts.User.t(), [Vault.t()]) ::
+          %{integer() => %{notes: integer(), attachments: integer()}}
+  def content_counts_for(%Engram.Accounts.User{id: user_id}, vaults) when is_list(vaults) do
+    ids = Enum.map(vaults, & &1.id)
+    do_content_counts(user_id, ids)
+  end
+
+  @doc """
+  Returns `%{notes: n, attachments: m}` for a single vault id owned by `user`.
+  """
+  @spec content_counts(Engram.Accounts.User.t(), integer()) :: %{
+          notes: integer(),
+          attachments: integer()
+        }
+  def content_counts(%Engram.Accounts.User{id: user_id}, vault_id) do
+    Map.get(do_content_counts(user_id, [vault_id]), vault_id, @zero_counts)
+  end
+
+  defp do_content_counts(_user_id, []), do: %{}
+
+  defp do_content_counts(user_id, ids) do
+    note_counts =
+      from(n in Engram.Notes.Note,
+        where: n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at),
+        group_by: n.vault_id,
+        select: {n.vault_id, count(n.id)}
+      )
+      |> Repo.all(skip_tenant_check: true)
+      |> Map.new()
+
+    attachment_counts =
+      from(a in Engram.Attachments.Attachment,
+        where: a.user_id == ^user_id and a.vault_id in ^ids and is_nil(a.deleted_at),
+        group_by: a.vault_id,
+        select: {a.vault_id, count(a.id)}
+      )
+      |> Repo.all(skip_tenant_check: true)
+      |> Map.new()
+
+    Map.new(ids, fn id ->
+      {id, %{notes: Map.get(note_counts, id, 0), attachments: Map.get(attachment_counts, id, 0)}}
+    end)
+  end
+
   # ── Get ─────────────────────────────────────────────────────────────────────
 
   @doc """

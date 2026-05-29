@@ -56,6 +56,19 @@ defmodule EngramWeb.VaultsControllerTest do
 
       assert json_response(conn, 401)
     end
+
+    test "index includes note_count and attachment_count", %{conn: conn, user: user} do
+      vault = insert(:vault, user: user)
+      insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault)
+      insert(:attachment, user: user, vault: vault)
+
+      resp = conn |> get(~p"/api/vaults") |> json_response(200)
+      row = Enum.find(resp["vaults"], &(&1["id"] == vault.id))
+
+      assert row["note_count"] == 2
+      assert row["attachment_count"] == 1
+    end
   end
 
   describe "POST /api/vaults" do
@@ -148,8 +161,10 @@ defmodule EngramWeb.VaultsControllerTest do
   end
 
   describe "GET /api/vaults?deleted=true" do
-    test "lists soft-deleted vaults with a purge_at", %{conn: conn, user: user} do
+    test "lists soft-deleted vaults with a purge_at and content counts", %{conn: conn, user: user} do
       {:ok, v} = Vaults.create_vault(user, %{name: "Trashed"})
+      insert(:note, user: user, vault: v)
+      insert(:attachment, user: user, vault: v)
       {:ok, _} = Vaults.delete_vault(user, v.id)
 
       body = conn |> get("/api/vaults?deleted=true") |> json_response(200)
@@ -157,6 +172,8 @@ defmodule EngramWeb.VaultsControllerTest do
       assert item["id"] == v.id
       assert item["deleted_at"]
       assert item["purge_at"]
+      assert item["note_count"] == 1
+      assert item["attachment_count"] == 1
     end
 
     test "active listing excludes deleted vaults", %{conn: conn, user: user} do
