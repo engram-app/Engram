@@ -61,8 +61,11 @@ defmodule EngramWeb.VaultsController do
     case parse_id(id) do
       {:ok, vault_id} ->
         case Vaults.get_vault(user, vault_id) do
-          {:ok, vault} -> json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
-          {:error, :not_found} -> not_found(conn)
+          {:ok, vault} ->
+            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
+
+          {:error, :not_found} ->
+            not_found(conn)
         end
 
       :error ->
@@ -176,10 +179,17 @@ defmodule EngramWeb.VaultsController do
         {:ok, vault, :created} ->
           conn
           |> put_status(201)
-          |> json(vault_json(vault, Vaults.content_counts(user, vault.id)) |> Map.put(:status, "created"))
+          |> json(
+            vault_json(vault, Vaults.content_counts(user, vault.id))
+            |> Map.put(:status, "created")
+          )
 
         {:ok, vault, :existing} ->
-          json(conn, vault_json(vault, Vaults.content_counts(user, vault.id)) |> Map.put(:status, "existing"))
+          json(
+            conn,
+            vault_json(vault, Vaults.content_counts(user, vault.id))
+            |> Map.put(:status, "existing")
+          )
 
         {:error, :vault_limit_reached} ->
           limit = Billing.effective_limit(user, :vaults_cap)
