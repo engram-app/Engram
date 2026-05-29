@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchSignupRejection, takePendingSignupUser } from './signup-rejection'
+import { destructiveAlert } from '@/lib/ui-classes'
+import { cn } from '@/lib/utils'
 
 // Shown on the sign-in page after a sign-up was rejected server-side by the
 // multi-account block. Self-contained: renders nothing unless a recent pending
@@ -24,7 +26,7 @@ export default function SignupRejectionNotice() {
   return (
     <div
       role="alert"
-      className="mb-4 w-full max-w-sm rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm"
+      className={cn(destructiveAlert, 'mb-4 w-full max-w-sm')}
     >
       <p className="font-medium text-foreground">An account with this email already exists</p>
       <p className="mt-1 text-muted-foreground">

@@ -5,7 +5,8 @@ import { loadVersion, sha256Hex } from '../legal/load'
 import { LegalDoc } from '../legal/legal-doc'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { cn } from '@/lib/utils'
+import AuthPanel from '@/layout/auth-panel'
+import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 
 const PRIVACY_URL = 'https://engram.page/privacy'
 
@@ -56,9 +57,8 @@ export default function AgreementPage() {
   }
 
   return (
-    <section className="m-auto w-full max-w-2xl px-4 py-6">
-      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-background p-5 sm:p-6">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+    <AuthPanel className="flex flex-col gap-4">
+        <h1 className={heading}>
           Review the Terms
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -76,7 +76,7 @@ export default function AgreementPage() {
         {unavailable ? (
           <div
             role="alert"
-            className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm"
+            className={destructiveAlert}
           >
             <p className="font-medium text-foreground">
               The current agreement isn’t available right now.
@@ -96,10 +96,7 @@ export default function AgreementPage() {
               </ScrollArea>
             ) : null}
             <label
-              className={cn(
-                'flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors',
-                agreed ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50',
-              )}
+              className={selectableRow(agreed)}
             >
               <Checkbox
                 checked={agreed}
@@ -120,7 +117,6 @@ export default function AgreementPage() {
             </button>
           </>
         )}
-      </div>
-    </section>
+    </AuthPanel>
   )
 }

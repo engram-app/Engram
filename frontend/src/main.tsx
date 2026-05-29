@@ -7,6 +7,7 @@ import { router } from './router'
 import { queryClient } from './api/query-client'
 import { config } from './config'
 import { ThemeProvider } from './theme/theme-provider'
+import LoadingScreen from './layout/loading-screen'
 import './main.css'
 
 const isClerk = config.authProvider === 'clerk'
@@ -18,7 +19,7 @@ const AuthProvider = isClerk
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider>
-      <Suspense fallback={<p>Loading...</p>}>
+      <Suspense fallback={<LoadingScreen />}>
         <AuthProvider>
           <QueryClientProvider client={queryClient}>
             <RouterProvider router={router} />

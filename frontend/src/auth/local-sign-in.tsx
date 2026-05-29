@@ -3,6 +3,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ROUTES } from '../routes'
 import { safeReturnTo } from './safe-return-to'
 import { useAuthAdapter } from './use-auth-adapter'
+import AuthLayout from './auth-layout'
+import { Button } from '@/components/ui/button'
+import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
+import { cn } from '@/lib/utils'
 
 export default function LocalSignIn() {
   const { login, isSignedIn } = useAuthAdapter()
@@ -35,49 +39,58 @@ export default function LocalSignIn() {
   }
 
   return (
-    <main className="flex justify-center pt-16">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4">
-        <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">Sign in to Engram</h1>
+    <AuthLayout>
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
+      >
+        <div className="flex flex-col items-center gap-2 text-center">
+          <img src="/engram-mark.svg" alt="Engram" className="size-12" />
+          <h1 className={heading}>Sign in to Engram</h1>
+        </div>
 
         {error && (
-          <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>
+          <p
+            role="alert"
+            className={cn(destructiveAlert, 'p-3 text-foreground')}
+          >
+            {error}
+          </p>
         )}
 
         <label className="block">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Email</span>
+          <span className="text-sm font-medium text-foreground">Email</span>
           <input
             type="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            className={cn('mt-1 block', fieldInput)}
           />
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Password</span>
+          <span className="text-sm font-medium text-foreground">Password</span>
           <input
             type="password"
             required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            className={cn('mt-1 block', fieldInput)}
           />
         </label>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? 'Signing in...' : 'Sign in'}
-        </button>
+        <Button type="submit" disabled={loading} className="w-full">
+          {loading ? 'Signing in…' : 'Sign in'}
+        </Button>
 
-        <p className="text-center text-sm text-gray-500 dark:text-gray-400">
+        <p className="text-center text-sm text-muted-foreground">
           Don't have an account?{' '}
-          <Link to={ROUTES.SIGN_UP} className="text-blue-600 hover:underline">Sign up</Link>
+          <Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
+            Sign up
+          </Link>
         </p>
       </form>
-    </main>
+    </AuthLayout>
   )
 }

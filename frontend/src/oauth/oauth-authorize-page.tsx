@@ -7,6 +7,11 @@ import {
   type OAuthConsentParams,
 } from '../api/oauth'
 import { useVaults, useMe } from '../api/queries'
+import AuthShell from '../layout/auth-shell'
+import AuthPanel from '../layout/auth-panel'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 
 const REQUIRED_PARAMS = [
   'client_id',
@@ -75,27 +80,49 @@ export default function OAuthAuthorizePage() {
 
   if (missing.length > 0) {
     return (
-      <main style={pageStyle}>
-        <h1>Invalid authorization request</h1>
-        <p>Missing required OAuth parameters:</p>
-        <ul>
-          {missing.map((m) => (
-            <li key={m}>
-              <code>{m}</code>
-            </li>
-          ))}
-        </ul>
-        <p>This page should be opened via an OAuth client redirect, not directly.</p>
-      </main>
+      <AuthShell>
+        <AuthPanel className="flex flex-col gap-3">
+          <h1 className={heading}>
+            Invalid authorization request
+          </h1>
+          <div
+            role="alert"
+            className={destructiveAlert}
+          >
+            <p className="font-medium text-foreground">Missing required OAuth parameters:</p>
+            <ul className="mt-2 list-inside list-disc text-muted-foreground">
+              {missing.map((m) => (
+                <li key={m}>
+                  <code>{m}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            This page should be opened via an OAuth client redirect, not directly.
+          </p>
+        </AuthPanel>
+      </AuthShell>
     )
   }
 
   if (clientQuery.isError) {
     return (
-      <main style={pageStyle}>
-        <h1>Unknown OAuth client</h1>
-        <p>The client requesting access is not registered with Engram.</p>
-      </main>
+      <AuthShell>
+        <AuthPanel className="flex flex-col gap-3">
+          <h1 className={heading}>
+            Unknown OAuth client
+          </h1>
+          <div
+            role="alert"
+            className={destructiveAlert}
+          >
+            <p className="text-muted-foreground">
+              The client requesting access is not registered with Engram.
+            </p>
+          </div>
+        </AuthPanel>
+      </AuthShell>
     )
   }
 
@@ -130,104 +157,91 @@ export default function OAuthAuthorizePage() {
   }
 
   const clientName = clientQuery.data?.client_name ?? 'this app'
-  const isLoadingShell = clientQuery.isLoading || vaultsQuery.isLoading || meQuery.isLoading
+  const isLoadingShell =
+    clientQuery.isLoading || vaultsQuery.isLoading || meQuery.isLoading
 
   return (
-    <main style={pageStyle}>
-      <h1>
-        Authorize <strong>{clientName}</strong> to access your Engram
-      </h1>
-      {meQuery.data && <p>Signed in as {meQuery.data.email}.</p>}
+    <AuthShell>
+      <AuthPanel className="flex flex-col gap-4">
+        <header className="flex flex-col gap-1">
+          <h1 className={heading}>
+            Authorize <span className="text-primary">{clientName}</span>
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            This app is requesting access to your Engram.
+            {meQuery.data ? ` Signed in as ${meQuery.data.email}.` : ''}
+          </p>
+        </header>
 
-      {isLoadingShell ? (
-        <p>Loading…</p>
-      ) : (
-        <>
-          <fieldset style={fieldsetStyle}>
-            <legend>Which vault?</legend>
-            {vaultsQuery.data?.map((v) => (
-              <label key={v.id} style={labelStyle}>
+        {isLoadingShell ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-1 text-sm font-medium text-foreground">
+                Which vault?
+              </legend>
+              {vaultsQuery.data?.map((v) => {
+                const value = `vault:${v.id}`
+                const active = vaultChoice === value
+                return (
+                  <label
+                    key={v.id}
+                    className={selectableRow(active)}
+                  >
+                    <input
+                      type="radio"
+                      name="vault_choice"
+                      value={value}
+                      checked={active}
+                      onChange={() => setVaultChoice(value)}
+                      className="accent-primary"
+                    />
+                    <span className="text-sm font-medium text-foreground">{v.name}</span>
+                  </label>
+                )
+              })}
+              <label
+                className={selectableRow(vaultChoice === 'vault:*')}
+              >
                 <input
                   type="radio"
                   name="vault_choice"
-                  value={`vault:${v.id}`}
-                  checked={vaultChoice === `vault:${v.id}`}
-                  onChange={() => setVaultChoice(`vault:${v.id}`)}
-                />{' '}
-                {v.name}
+                  value="vault:*"
+                  checked={vaultChoice === 'vault:*'}
+                  onChange={() => setVaultChoice('vault:*')}
+                  className="accent-primary"
+                />
+                <span className="text-sm font-medium text-foreground">All vaults</span>
               </label>
-            ))}
-            <label style={labelStyle}>
-              <input
-                type="radio"
-                name="vault_choice"
-                value="vault:*"
-                checked={vaultChoice === 'vault:*'}
-                onChange={() => setVaultChoice('vault:*')}
-              />{' '}
-              All vaults
-            </label>
-          </fieldset>
+            </fieldset>
 
-          {submitError && (
-            <p style={{ color: 'red' }} role="alert">
-              {submitError}
-            </p>
-          )}
+            {submitError && (
+              <p
+                role="alert"
+                className={cn(destructiveAlert, 'p-3 text-foreground')}
+              >
+                {submitError}
+              </p>
+            )}
 
-          <section style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-            <button
-              type="button"
-              onClick={handleApprove}
-              disabled={submitting}
-              style={primaryBtn}
-            >
-              {submitting ? 'Approving…' : 'Approve'}
-            </button>
-            <button
-              type="button"
-              onClick={handleCancel}
-              disabled={submitting}
-              style={secondaryBtn}
-            >
-              Cancel
-            </button>
-          </section>
-        </>
-      )}
-    </main>
+            <div className="flex gap-3">
+              <Button type="button" onClick={handleApprove} disabled={submitting} className="flex-1">
+                {submitting ? 'Approving…' : 'Approve'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancel}
+                disabled={submitting}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+            </div>
+          </>
+        )}
+      </AuthPanel>
+    </AuthShell>
   )
-}
-
-const pageStyle: React.CSSProperties = {
-  maxWidth: 480,
-  margin: '4rem auto',
-  padding: '1rem',
-  fontFamily: 'system-ui, sans-serif',
-}
-
-const fieldsetStyle: React.CSSProperties = {
-  border: '1px solid #ccc',
-  padding: '1rem',
-  margin: '1rem 0',
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  padding: '0.25rem 0',
-  cursor: 'pointer',
-}
-
-const primaryBtn: React.CSSProperties = {
-  padding: '0.5rem 1rem',
-  fontSize: '1rem',
-  cursor: 'pointer',
-}
-
-const secondaryBtn: React.CSSProperties = {
-  padding: '0.5rem 1rem',
-  fontSize: '1rem',
-  cursor: 'pointer',
-  background: 'transparent',
-  border: '1px solid #ccc',
 }
