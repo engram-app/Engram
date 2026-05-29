@@ -277,7 +277,7 @@ defmodule Engram.VaultsTest do
       assert {:error, :limit_reached} = Vaults.restore_vault(user, first.id)
       # Blocked restore leaves the vault soft-deleted: it stays in the trash
       # list and is NOT promoted back into the active list.
-      assert first.id in restored_ids(user)
+      assert first.id in deleted_ids(user)
       assert first.id not in Enum.map(Vaults.list_vaults(user), & &1.id)
     end
 
@@ -294,7 +294,7 @@ defmodule Engram.VaultsTest do
       assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
     end
 
-    defp restored_ids(user), do: Enum.map(Vaults.list_deleted_vaults(user), & &1.id)
+    defp deleted_ids(user), do: Enum.map(Vaults.list_deleted_vaults(user), & &1.id)
   end
 
   # ---------------------------------------------------------------------------
