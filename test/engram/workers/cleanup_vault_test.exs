@@ -66,6 +66,7 @@ defmodule Engram.Workers.CleanupVaultTest do
           user: user,
           deleted_at: DateTime.add(DateTime.utc_now(), -31, :day) |> DateTime.truncate(:second)
         )
+
       note = insert(:note, user: user, vault: vault)
       attachment = insert(:attachment, user: user, vault: vault)
 
@@ -185,6 +186,7 @@ defmodule Engram.Workers.CleanupVaultTest do
           user: user,
           deleted_at: DateTime.add(DateTime.utc_now(), -31, :day) |> DateTime.truncate(:second)
         )
+
       note = insert(:note, user: user, vault: vault)
       attachment = insert(:attachment, user: user, vault: vault, storage_key: "test/blob.png")
 
