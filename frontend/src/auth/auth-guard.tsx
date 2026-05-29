@@ -1,5 +1,6 @@
 import { Navigate, Outlet, useLocation } from 'react-router'
 import { ROUTES } from '../routes'
+import LoadingScreen from '../layout/loading-screen'
 import { useAuthAdapter } from './use-auth-adapter'
 
 export default function AuthGuard() {
@@ -7,7 +8,7 @@ export default function AuthGuard() {
   const location = useLocation()
 
   if (!isLoaded) {
-    return <p>Loading...</p>
+    return <LoadingScreen />
   }
 
   if (!isSignedIn) {
