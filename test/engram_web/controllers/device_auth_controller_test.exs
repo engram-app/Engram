@@ -1,7 +1,10 @@
 defmodule EngramWeb.DeviceAuthControllerTest do
   use EngramWeb.ConnCase, async: true
 
-  alias Engram.Auth.DeviceFlow
+  import Ecto.Query
+
+  alias Engram.Auth.{DeviceFlow, DeviceRefreshToken}
+  alias Engram.Repo
 
   defp create_authed_conn(%{conn: conn}) do
     user = insert(:user)
@@ -118,13 +121,22 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["expires_in"] == Engram.Token.ttl_seconds()
     end
 
-    test "rejects revoked refresh token", %{conn: conn} do
+    test "rejects a refresh token reused after the grace window", %{conn: conn} do
       user = insert(:user)
       vault = insert(:vault, user: user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
       {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
       {:ok, tokens} = DeviceFlow.exchange_device_code(auth.device_code)
       {:ok, _} = DeviceFlow.refresh_access_token(tokens.refresh_token)
+
+      # Age the revocation past the grace window so reuse is genuinely rejected.
+      stale = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(rt in DeviceRefreshToken, where: not is_nil(rt.revoked_at)),
+        [set: [revoked_at: stale]],
+        skip_tenant_check: true
+      )
 
       conn = post(conn, "/api/auth/token/refresh", %{refresh_token: tokens.refresh_token})
       assert json_response(conn, 401)

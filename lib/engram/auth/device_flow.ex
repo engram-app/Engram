@@ -15,6 +15,10 @@ defmodule Engram.Auth.DeviceFlow do
   @refresh_token_bytes 32
   @refresh_token_ttl_days 90
   @device_code_ttl_seconds 300
+  # Grace window after a refresh token is rotated during which the old token is
+  # still accepted, so a client that loses the rotated token (e.g. a plugin
+  # reload mid-refresh) can recover instead of being forced to re-login.
+  @refresh_grace_seconds 60
 
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
@@ -98,10 +102,17 @@ defmodule Engram.Auth.DeviceFlow do
   def refresh_access_token(raw_refresh_token) do
     token_hash = hash_token(raw_refresh_token)
     now = DateTime.utc_now()
+    grace_cutoff = DateTime.add(now, -@refresh_grace_seconds, :second)
 
+    # Rotation is single-use, but a token revoked within the grace window is
+    # still accepted. This lets a client that lost the rotated token (a plugin
+    # reload mid-refresh, a quit right after, or a brief concurrent retry)
+    # recover, instead of being bricked for the token's full 90-day life.
     query =
       from(rt in DeviceRefreshToken,
-        where: rt.token_hash == ^token_hash and rt.expires_at > ^now and is_nil(rt.revoked_at),
+        where:
+          rt.token_hash == ^token_hash and rt.expires_at > ^now and
+            (is_nil(rt.revoked_at) or rt.revoked_at > ^grace_cutoff),
         preload: [:user]
       )
 
@@ -110,9 +121,13 @@ defmodule Engram.Auth.DeviceFlow do
         {:error, :invalid_refresh_token}
 
       old_token ->
-        old_token
-        |> Ecto.Changeset.change(%{revoked_at: DateTime.truncate(now, :second)})
-        |> Repo.update!(skip_tenant_check: true)
+        # Stamp revoked_at only on first use, so the grace window is measured
+        # from the first rotation and can't be slid forward by repeated retries.
+        if is_nil(old_token.revoked_at) do
+          old_token
+          |> Ecto.Changeset.change(%{revoked_at: DateTime.truncate(now, :second)})
+          |> Repo.update!(skip_tenant_check: true)
+        end
 
         access_token = Accounts.generate_jwt(old_token.user)
         {raw_refresh, _hash} = create_refresh_token(old_token.user_id, old_token.vault_id)

@@ -1,7 +1,10 @@
 defmodule Engram.Auth.DeviceFlowTest do
   use Engram.DataCase, async: true
 
-  alias Engram.Auth.DeviceFlow
+  import Ecto.Query
+
+  alias Engram.Auth.{DeviceFlow, DeviceRefreshToken}
+  alias Engram.Repo
 
   describe "start_device_flow/1" do
     test "creates a pending device authorization" do
@@ -142,13 +145,38 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert refreshed.expires_in == Engram.Token.ttl_seconds()
     end
 
-    test "old refresh token is revoked after rotation" do
+    test "old refresh token still works within the grace window" do
+      # Rotation is single-use, but a short grace window lets a client that lost
+      # the rotated token (e.g. a plugin reload mid-refresh) recover instead of
+      # being bricked for the token's full 90-day life.
       user = insert(:user)
       vault = insert(:vault, user: user)
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
       {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
       {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
       {:ok, _} = DeviceFlow.refresh_access_token(initial.refresh_token)
+
+      # Immediate reuse (well within the grace window) still succeeds.
+      assert {:ok, refreshed} = DeviceFlow.refresh_access_token(initial.refresh_token)
+      assert is_binary(refreshed.access_token)
+    end
+
+    test "old refresh token is rejected after the grace window expires" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
+      {:ok, _} = DeviceFlow.refresh_access_token(initial.refresh_token)
+
+      # Age the revocation past the grace window.
+      stale = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(rt in DeviceRefreshToken, where: not is_nil(rt.revoked_at)),
+        [set: [revoked_at: stale]],
+        skip_tenant_check: true
+      )
 
       assert {:error, :invalid_refresh_token} =
                DeviceFlow.refresh_access_token(initial.refresh_token)
