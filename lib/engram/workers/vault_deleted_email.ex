@@ -49,8 +49,10 @@ defmodule Engram.Workers.VaultDeletedEmail do
   end
 
   defp vault_name(vault, user) do
-    case Crypto.maybe_decrypt_vault_fields(vault, user) do
-      {:ok, %{name: name}} when is_binary(name) and name != "" -> name
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_vault_fields(vault, user),
+         label when is_binary(label) and label != "" <- decrypted.name do
+      label
+    else
       _ -> vault.slug
     end
   end
