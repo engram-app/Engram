@@ -77,7 +77,6 @@ export function DeleteVaultDialog({
             <input
               autoFocus
               className={inputClass}
-              aria-label={`Type ${vault.name} to confirm`}
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
             />
