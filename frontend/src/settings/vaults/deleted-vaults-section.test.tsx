@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router'
 
 const restoreMutate = vi.fn()
 const purgeMutate = vi.fn()
@@ -30,29 +32,31 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import { DeletedVaultsSection } from './deleted-vaults-section'
 
+function renderWithRouter(ui: ReactElement, { route = '/settings/vaults' } = {}) {
+  return render(<MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>)
+}
+
 describe('DeletedVaultsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     activeCount = 1
-    // Reset the URL so ?highlight from one test doesn't leak into others.
-    window.history.pushState({}, '', '/settings/vaults')
   })
 
   it('shows the purge date', () => {
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />)
     expect(screen.getByText('Old')).toBeInTheDocument()
     expect(screen.getByText(/purges/i)).toBeInTheDocument()
   })
 
   it('disables restore when at the cap', () => {
     activeCount = 1 // cap is 1, so restoring would exceed
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />)
     expect(screen.getByRole('button', { name: /restore/i })).toBeDisabled()
   })
 
   it('restores when under cap', async () => {
     activeCount = 0
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />)
     const btn = screen.getByRole('button', { name: /restore/i })
     expect(btn).toBeEnabled()
     fireEvent.click(btn)
@@ -61,22 +65,20 @@ describe('DeletedVaultsSection', () => {
 
   it('purges permanently when confirmed', async () => {
     window.confirm = vi.fn().mockReturnValue(true)
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />)
     fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
     await waitFor(() => expect(purgeMutate).toHaveBeenCalledWith(5, expect.anything()))
   })
 
   it('does not purge when confirmation is dismissed', () => {
     window.confirm = vi.fn().mockReturnValue(false)
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />)
     fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
     expect(purgeMutate).not.toHaveBeenCalled()
   })
 
   it('highlights the row matching ?highlight=<id>', () => {
-    // jsdom: set the query param the component reads
-    window.history.pushState({}, '', '/settings/vaults?highlight=5')
-    render(<DeletedVaultsSection />)
+    renderWithRouter(<DeletedVaultsSection />, { route: '/settings/vaults?highlight=5' })
     expect(screen.getByText('Old').closest('li')).toHaveAttribute('data-highlighted', 'true')
   })
 })

@@ -1,4 +1,5 @@
 import { toast } from 'sonner'
+import { useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { SettingsSectionCard } from '@/settings/account/section-card'
 import {
@@ -39,12 +40,13 @@ function DeletedRow({ vault }: { vault: Vault }) {
   const overCap = activeCount >= cap
   const purgeDate = vault.purge_at ? new Date(vault.purge_at).toLocaleDateString() : null
 
-  const highlightId = new URLSearchParams(window.location.search).get('highlight')
+  const [searchParams] = useSearchParams()
+  const highlightId = searchParams.get('highlight')
   const highlighted = highlightId === String(vault.id)
 
   return (
     <li
-      data-highlighted={highlighted}
+      data-highlighted={highlighted || undefined}
       className={`flex items-center justify-between gap-3 py-3 ${
         highlighted ? 'rounded-md bg-accent/40 ring-1 ring-ring' : ''
       }`}
