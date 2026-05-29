@@ -128,6 +128,58 @@ defmodule Engram.VaultsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # content_counts_for/2 and content_counts/2
+  # ---------------------------------------------------------------------------
+
+  describe "content_counts_for/2 and content_counts/2" do
+    setup %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, a} = Vaults.create_vault(user, %{name: "Alpha"})
+      {:ok, b} = Vaults.create_vault(user, %{name: "Beta"})
+      %{a: a, b: b}
+    end
+
+    test "counts active notes and attachments per vault", %{user: user, a: a, b: b} do
+      insert_pair(:note, user: user, vault: a)
+      insert(:note, user: user, vault: b)
+      insert(:attachment, user: user, vault: a)
+
+      counts = Vaults.content_counts_for(user, [a, b])
+
+      assert counts[a.id] == %{notes: 2, attachments: 1}
+      assert counts[b.id] == %{notes: 1, attachments: 0}
+    end
+
+    test "excludes soft-deleted notes and attachments", %{user: user, a: a} do
+      insert(:note, user: user, vault: a)
+      insert(:note, user: user, vault: a, deleted_at: DateTime.utc_now(:second))
+      insert(:attachment, user: user, vault: a, deleted_at: DateTime.utc_now(:second))
+
+      assert Vaults.content_counts_for(user, [a])[a.id] == %{notes: 1, attachments: 0}
+    end
+
+    test "does not bleed across users", %{user: user, other_user: other, a: a} do
+      insert(:note, user: other, vault: build(:vault, user: other))
+      insert(:note, user: user, vault: a)
+
+      assert Vaults.content_counts_for(user, [a])[a.id] == %{notes: 1, attachments: 0}
+    end
+
+    test "empty vault list returns empty map", %{user: user} do
+      assert Vaults.content_counts_for(user, []) == %{}
+    end
+
+    test "content_counts/2 returns a single vault's counts", %{user: user, a: a} do
+      insert(:note, user: user, vault: a)
+      assert Vaults.content_counts(user, a.id) == %{notes: 1, attachments: 0}
+    end
+
+    test "content_counts/2 returns zeros for an empty vault", %{user: user, b: b} do
+      assert Vaults.content_counts(user, b.id) == %{notes: 0, attachments: 0}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # register_vault/3
   # ---------------------------------------------------------------------------
 
