@@ -255,6 +255,48 @@ defmodule Engram.VaultsTest do
     end
   end
 
+  describe "restore_vault/2" do
+    test "clears deleted_at and returns the vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Temp"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert {:ok, restored} = Vaults.restore_vault(user, v.id)
+      assert restored.id == v.id
+      assert restored.deleted_at == nil
+      assert Enum.map(Vaults.list_vaults(user), & &1.id) |> Enum.member?(v.id)
+      assert Vaults.list_deleted_vaults(user) == []
+    end
+
+    test "blocks restore when it would exceed the vault cap", %{user: user} do
+      # Cap of 1: create one, delete it, create a replacement, then try to restore.
+      {:ok, first} = Vaults.create_vault(user, %{name: "First"})
+      {:ok, _} = Vaults.delete_vault(user, first.id)
+      {:ok, _replacement} = Vaults.create_vault(user, %{name: "Replacement"})
+
+      assert {:error, :limit_reached} = Vaults.restore_vault(user, first.id)
+      # Blocked restore leaves the vault soft-deleted: it stays in the trash
+      # list and is NOT promoted back into the active list.
+      assert first.id in restored_ids(user)
+      assert first.id not in Enum.map(Vaults.list_vaults(user), & &1.id)
+    end
+
+    test "returns :not_found for an active vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
+    end
+
+    test "returns :not_found for another user's deleted vault", %{user: user, other_user: other} do
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(other, %{name: "Theirs"})
+      {:ok, _} = Vaults.delete_vault(other, v.id)
+      assert {:error, :not_found} = Vaults.restore_vault(user, v.id)
+    end
+
+    defp restored_ids(user), do: Enum.map(Vaults.list_deleted_vaults(user), & &1.id)
+  end
+
   # ---------------------------------------------------------------------------
   # get_vault/2
   # ---------------------------------------------------------------------------

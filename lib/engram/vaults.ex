@@ -341,6 +341,50 @@ defmodule Engram.Vaults do
     |> unwrap_transaction()
   end
 
+  # ── Restore (soft-delete reversal) ──────────────────────────────────────────
+
+  @doc """
+  Restores a soft-deleted vault by clearing deleted_at.
+
+  Refuses (`{:error, :limit_reached}`) if restoring would exceed the user's
+  vault cap. The vault is restored as non-default; the user re-sets default
+  explicitly. The pending CleanupVault job becomes a no-op once deleted_at is nil.
+
+  Returns {:ok, vault}, {:error, :limit_reached}, or {:error, :not_found}.
+  """
+  def restore_vault(user, vault_id) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      case fetch_deleted(user.id, vault_id) do
+        nil ->
+          {:error, :not_found}
+
+        vault ->
+          active_count = count_vaults(user.id)
+
+          case Billing.check_limit(user, :vaults_cap, active_count) do
+            {:error, :limit_reached} ->
+              {:error, :limit_reached}
+
+            :ok ->
+              vault
+              |> Vault.changeset(%{deleted_at: nil})
+              |> Repo.update()
+              |> case do
+                {:ok, v} ->
+                  emit_vault_count(user.id, :restored)
+                  {:ok, decrypt_vault_if_needed(v, user)}
+
+                other ->
+                  other
+              end
+          end
+      end
+    end)
+    |> unwrap_transaction()
+  end
+
   # ── API key access check ────────────────────────────────────────────────
 
   @doc """
