@@ -52,6 +52,9 @@ defmodule EngramWeb.BillingController do
   defp cap_json(nil), do: nil
   defp cap_json(-1), do: nil
   defp cap_json(limit) when is_integer(limit), do: limit
+  # Unknown/malformed override (e.g. a non-integer value) → treat as no cap
+  # rather than 500 the endpoint.
+  defp cap_json(_), do: nil
 
   @doc """
   Customer-portal redirect. Without an `action` param this returns the generic

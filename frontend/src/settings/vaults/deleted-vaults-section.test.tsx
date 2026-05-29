@@ -56,4 +56,18 @@ describe('DeletedVaultsSection', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(restoreMutate).toHaveBeenCalledWith(5, expect.anything()))
   })
+
+  it('purges permanently when confirmed', async () => {
+    window.confirm = vi.fn().mockReturnValue(true)
+    render(<DeletedVaultsSection />)
+    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
+    await waitFor(() => expect(purgeMutate).toHaveBeenCalledWith(5, expect.anything()))
+  })
+
+  it('does not purge when confirmation is dismissed', () => {
+    window.confirm = vi.fn().mockReturnValue(false)
+    render(<DeletedVaultsSection />)
+    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
+    expect(purgeMutate).not.toHaveBeenCalled()
+  })
 })

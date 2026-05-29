@@ -82,6 +82,16 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["vaults_cap"] == 5
     end
 
+    test "stays resilient (200, null cap) when the override value is malformed", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => "lots"})
+      conn = get(conn, "/api/billing/config")
+      body = json_response(conn, 200)
+      assert body["vaults_cap"] == nil
+    end
+
     test "returns 401 without auth" do
       conn = build_conn() |> get("/api/billing/config")
       assert json_response(conn, 401)
