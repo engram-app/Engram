@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -16,6 +16,8 @@ const deleted = [
     encrypted: true,
     deleted_at: '2026-05-28T00:00:00Z',
     purge_at: '2026-06-27T00:00:00Z',
+    note_count: 5,
+    attachment_count: 2,
   },
 ]
 let activeCount = 1
@@ -42,14 +44,16 @@ describe('DeletedVaultsSection', () => {
     activeCount = 1
   })
 
-  it('shows the purge date', () => {
+  it('shows counts and the purge date', () => {
     renderWithRouter(<DeletedVaultsSection />)
-    expect(screen.getByText('Old')).toBeInTheDocument()
+    const row = within(screen.getByText('Old').closest('tr') as HTMLElement)
+    expect(row.getByText('5')).toBeInTheDocument()
+    expect(row.getByText('2')).toBeInTheDocument()
     expect(screen.getByText(/purges/i)).toBeInTheDocument()
   })
 
   it('disables restore when at the cap', () => {
-    activeCount = 1 // cap is 1, so restoring would exceed
+    activeCount = 1
     renderWithRouter(<DeletedVaultsSection />)
     expect(screen.getByRole('button', { name: /restore/i })).toBeDisabled()
   })
@@ -66,19 +70,19 @@ describe('DeletedVaultsSection', () => {
   it('purges permanently when confirmed', async () => {
     window.confirm = vi.fn().mockReturnValue(true)
     renderWithRouter(<DeletedVaultsSection />)
-    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
+    fireEvent.click(screen.getByRole('button', { name: /permanently delete .*old/i }))
     await waitFor(() => expect(purgeMutate).toHaveBeenCalledWith(5, expect.anything()))
   })
 
   it('does not purge when confirmation is dismissed', () => {
     window.confirm = vi.fn().mockReturnValue(false)
     renderWithRouter(<DeletedVaultsSection />)
-    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
+    fireEvent.click(screen.getByRole('button', { name: /permanently delete .*old/i }))
     expect(purgeMutate).not.toHaveBeenCalled()
   })
 
   it('highlights the row matching ?highlight=<id>', () => {
     renderWithRouter(<DeletedVaultsSection />, { route: '/settings/vaults?highlight=5' })
-    expect(screen.getByText('Old').closest('li')).toHaveAttribute('data-highlighted', 'true')
+    expect(screen.getByText('Old').closest('tr')).toHaveAttribute('data-highlighted', 'true')
   })
 })
