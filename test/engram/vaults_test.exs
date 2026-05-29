@@ -1,5 +1,6 @@
 defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
+  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Vaults
 
@@ -295,6 +296,32 @@ defmodule Engram.VaultsTest do
     end
 
     defp deleted_ids(user), do: Enum.map(Vaults.list_deleted_vaults(user), & &1.id)
+  end
+
+  # ---------------------------------------------------------------------------
+  # purge_vault/2
+  # ---------------------------------------------------------------------------
+
+  describe "purge_vault/2" do
+    test "enqueues an immediate force cleanup for a soft-deleted vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Doomed"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert {:ok, vault} = Vaults.purge_vault(user, v.id)
+      assert vault.id == v.id
+
+      assert_enqueued(
+        worker: Engram.Workers.CleanupVault,
+        args: %{vault_id: v.id, user_id: user.id, force: true}
+      )
+    end
+
+    test "returns :not_found for an active vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      assert {:error, :not_found} = Vaults.purge_vault(user, v.id)
+    end
   end
 
   # ---------------------------------------------------------------------------

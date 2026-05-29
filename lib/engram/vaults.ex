@@ -385,6 +385,28 @@ defmodule Engram.Vaults do
     |> unwrap_transaction()
   end
 
+  @doc """
+  Immediately hard-deletes a soft-deleted vault by enqueuing a force CleanupVault
+  job. Only soft-deleted vaults can be purged.
+
+  Returns {:ok, vault} or {:error, :not_found}.
+  """
+  def purge_vault(user, vault_id) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      case fetch_deleted(user.id, vault_id) do
+        nil ->
+          {:error, :not_found}
+
+        vault ->
+          {:ok, _job} = Engram.Workers.CleanupVault.enqueue_now(vault.id, vault.user_id)
+          {:ok, vault}
+      end
+    end)
+    |> unwrap_transaction()
+  end
+
   # ── API key access check ────────────────────────────────────────────────
 
   @doc """
