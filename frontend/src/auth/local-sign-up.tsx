@@ -48,7 +48,10 @@ export default function LocalSignUp() {
         onSubmit={handleSubmit}
         className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
       >
-        <h1 className={heading}>Create your account</h1>
+        <div className="flex flex-col items-center gap-2 text-center">
+          <img src="/engram-mark.svg" alt="Engram" className="size-12" />
+          <h1 className={heading}>Create your account</h1>
+        </div>
 
         {error && (
           <p
