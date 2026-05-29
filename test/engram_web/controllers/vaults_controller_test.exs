@@ -56,6 +56,19 @@ defmodule EngramWeb.VaultsControllerTest do
 
       assert json_response(conn, 401)
     end
+
+    test "index includes note_count and attachment_count", %{conn: conn, user: user} do
+      vault = insert(:vault, user: user)
+      insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault)
+      insert(:attachment, user: user, vault: vault)
+
+      resp = conn |> get(~p"/api/vaults") |> json_response(200)
+      row = Enum.find(resp["vaults"], &(&1["id"] == vault.id))
+
+      assert row["note_count"] == 2
+      assert row["attachment_count"] == 1
+    end
   end
 
   describe "POST /api/vaults" do

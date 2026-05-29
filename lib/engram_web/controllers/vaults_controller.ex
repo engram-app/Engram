@@ -4,18 +4,28 @@ defmodule EngramWeb.VaultsController do
   alias Engram.Billing
   alias Engram.Vaults
 
+  @zero_counts %{notes: 0, attachments: 0}
+
   # ── index ──────────────────────────────────────────────────────────────────
 
   def index(conn, %{"deleted" => "true"}) do
     user = conn.assigns.current_user
     vaults = Vaults.list_deleted_vaults(user)
-    json(conn, %{vaults: Enum.map(vaults, &deleted_vault_json(&1, user))})
+    counts = Vaults.content_counts_for(user, vaults)
+
+    json(conn, %{
+      vaults: Enum.map(vaults, &deleted_vault_json(&1, Map.get(counts, &1.id, @zero_counts)))
+    })
   end
 
   def index(conn, _params) do
     user = conn.assigns.current_user
     vaults = Vaults.list_vaults(user)
-    json(conn, %{vaults: Enum.map(vaults, &vault_json(&1, user))})
+    counts = Vaults.content_counts_for(user, vaults)
+
+    json(conn, %{
+      vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))
+    })
   end
 
   # ── create ─────────────────────────────────────────────────────────────────
@@ -27,7 +37,7 @@ defmodule EngramWeb.VaultsController do
       {:ok, vault} ->
         conn
         |> put_status(201)
-        |> json(%{vault: vault_json(vault, user)})
+        |> json(%{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
       {:error, :vault_limit_reached} ->
         limit = Billing.effective_limit(user, :vaults_cap)
@@ -51,7 +61,7 @@ defmodule EngramWeb.VaultsController do
     case parse_id(id) do
       {:ok, vault_id} ->
         case Vaults.get_vault(user, vault_id) do
-          {:ok, vault} -> json(conn, %{vault: vault_json(vault, user)})
+          {:ok, vault} -> json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
           {:error, :not_found} -> not_found(conn)
         end
 
@@ -70,7 +80,7 @@ defmodule EngramWeb.VaultsController do
       {:ok, vault_id} ->
         case Vaults.update_vault(user, vault_id, attrs) do
           {:ok, vault} ->
-            json(conn, %{vault: vault_json(vault, user)})
+            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
           {:error, :not_found} ->
             not_found(conn)
@@ -112,7 +122,7 @@ defmodule EngramWeb.VaultsController do
       {:ok, vault_id} ->
         case Vaults.restore_vault(user, vault_id) do
           {:ok, vault} ->
-            json(conn, %{vault: vault_json(vault, user)})
+            json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
           {:error, :limit_reached} ->
             limit = Billing.effective_limit(user, :vaults_cap)
@@ -166,10 +176,10 @@ defmodule EngramWeb.VaultsController do
         {:ok, vault, :created} ->
           conn
           |> put_status(201)
-          |> json(vault_json(vault, user) |> Map.put(:status, "created"))
+          |> json(vault_json(vault, Vaults.content_counts(user, vault.id)) |> Map.put(:status, "created"))
 
         {:ok, vault, :existing} ->
-          json(conn, vault_json(vault, user) |> Map.put(:status, "existing"))
+          json(conn, vault_json(vault, Vaults.content_counts(user, vault.id)) |> Map.put(:status, "existing"))
 
         {:error, :vault_limit_reached} ->
           limit = Billing.effective_limit(user, :vaults_cap)
@@ -183,7 +193,7 @@ defmodule EngramWeb.VaultsController do
 
   # ── Private ────────────────────────────────────────────────────────────────
 
-  defp vault_json(vault, _user) do
+  defp vault_json(vault, counts) do
     %{
       id: vault.id,
       name: vault.name,
@@ -194,13 +204,15 @@ defmodule EngramWeb.VaultsController do
       # Phase B.4: encryption is mandatory and one-way. Surfaced as a
       # constant `true` for clients still consuming this field; the toggle
       # is gone.
-      encrypted: true
+      encrypted: true,
+      note_count: counts.notes,
+      attachment_count: counts.attachments
     }
   end
 
-  defp deleted_vault_json(vault, user) do
+  defp deleted_vault_json(vault, counts) do
     vault
-    |> vault_json(user)
+    |> vault_json(counts)
     |> Map.merge(%{
       deleted_at: vault.deleted_at,
       purge_at: purge_at(vault.deleted_at)
