@@ -51,6 +51,14 @@ export const api = {
     return res.json()
   },
 
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    const res = await authFetch(path, {
+      method: 'PATCH',
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    return res.json()
+  },
+
   async del<T>(path: string): Promise<T> {
     const res = await authFetch(path, { method: 'DELETE' })
     return res.json()

@@ -306,6 +306,8 @@ export interface Vault {
   decrypt_requested_at: string | null
   last_toggle_at: string | null
   cooldown_days: number | null
+  deleted_at?: string | null
+  purge_at?: string | null
 }
 
 export interface EncryptionProgress {
@@ -342,5 +344,55 @@ export function useEncryptionProgress(vaultId: number | undefined, enabled: bool
     queryFn: () => api.get<EncryptionProgress>(`/vaults/${vaultId}/encryption_progress`),
     enabled: enabled && vaultId !== undefined,
     refetchInterval: enabled ? 3000 : false,
+  })
+}
+
+export function useDeletedVaults() {
+  return useQuery({
+    queryKey: ['vaults', 'deleted'],
+    queryFn: () => api.get<{ vaults: Vault[] }>('/vaults?deleted=true'),
+    select: (data) => data.vaults,
+  })
+}
+
+export function useDeleteVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+  })
+}
+
+export function useRestoreVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+  })
+}
+
+export function usePurgeVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+  })
+}
+
+export function useUpdateVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...attrs }: { id: number; name?: string; description?: string; is_default?: boolean }) =>
+      api.patch<{ vault: Vault }>(`/vaults/${id}`, attrs),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+  })
+}
+
+export function useCreateVault() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (attrs: { name: string; description?: string }) =>
+      api.post<{ vault: Vault }>('/vaults', attrs),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
   })
 }
