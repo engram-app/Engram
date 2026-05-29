@@ -3,15 +3,16 @@ import ThemeToggle from '../theme/theme-toggle'
 
 type AuthShellProps = {
   actions?: ReactNode
+  navLabel?: string
   children: ReactNode
 }
 
-export default function AuthShell({ actions, children }: AuthShellProps) {
+export default function AuthShell({ actions, navLabel, children }: AuthShellProps) {
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <span className="text-lg font-semibold text-foreground">Engram</span>
-        <nav className="flex items-center gap-3">
+        <nav className="flex items-center gap-3" aria-label={navLabel}>
           {actions}
           <ThemeToggle />
         </nav>

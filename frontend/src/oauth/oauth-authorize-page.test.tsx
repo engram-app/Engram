@@ -82,4 +82,14 @@ describe('OAuthAuthorizePage', () => {
     )
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://app/cb?code=ok'))
   })
+
+  it('cancels by redirecting back with access_denied', async () => {
+    fetchOAuthClient.mockResolvedValue({ client_id: 'cli', client_name: 'Claude Desktop' })
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {})
+
+    renderAt(VALID_QS)
+    fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
+
+    expect(assign).toHaveBeenCalledWith('https://app/cb?error=access_denied&state=xyz')
+  })
 })

@@ -10,6 +10,7 @@ export default function OnboardLayout() {
 
   return (
     <AuthShell
+      navLabel="Onboarding"
       actions={
         <>
           <p className="text-sm text-muted-foreground">Step {stepNumber} of 2</p>
