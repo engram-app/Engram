@@ -6,6 +6,12 @@ defmodule EngramWeb.VaultsController do
 
   # ── index ──────────────────────────────────────────────────────────────────
 
+  def index(conn, %{"deleted" => "true"}) do
+    user = conn.assigns.current_user
+    vaults = Vaults.list_deleted_vaults(user)
+    json(conn, %{vaults: Enum.map(vaults, &deleted_vault_json(&1, user))})
+  end
+
   def index(conn, _params) do
     user = conn.assigns.current_user
     vaults = Vaults.list_vaults(user)
@@ -97,6 +103,50 @@ defmodule EngramWeb.VaultsController do
     end
   end
 
+  # ── restore ──────────────────────────────────────────────────────────────────
+
+  def restore(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    case parse_id(id) do
+      {:ok, vault_id} ->
+        case Vaults.restore_vault(user, vault_id) do
+          {:ok, vault} ->
+            json(conn, %{vault: vault_json(vault, user)})
+
+          {:error, :limit_reached} ->
+            limit = Billing.effective_limit(user, :vaults_cap)
+
+            conn
+            |> put_status(402)
+            |> json(%{error: "vault_limit_reached", limit: limit})
+
+          {:error, :not_found} ->
+            not_found(conn)
+        end
+
+      :error ->
+        not_found(conn)
+    end
+  end
+
+  # ── purge (immediate hard delete) ──────────────────────────────────────────────
+
+  def purge(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    case parse_id(id) do
+      {:ok, vault_id} ->
+        case Vaults.purge_vault(user, vault_id) do
+          {:ok, _vault} -> json(conn, %{purged: true, id: vault_id})
+          {:error, :not_found} -> not_found(conn)
+        end
+
+      :error ->
+        not_found(conn)
+    end
+  end
+
   # Phase B.4: encrypt/decrypt toggle actions are retired. Every vault is
   # encrypted at rest by definition; per-note reads decrypt on demand.
 
@@ -147,6 +197,18 @@ defmodule EngramWeb.VaultsController do
       encrypted: true
     }
   end
+
+  defp deleted_vault_json(vault, user) do
+    vault
+    |> vault_json(user)
+    |> Map.merge(%{
+      deleted_at: vault.deleted_at,
+      purge_at: purge_at(vault.deleted_at)
+    })
+  end
+
+  defp purge_at(nil), do: nil
+  defp purge_at(deleted_at), do: DateTime.add(deleted_at, 30 * 86_400, :second)
 
   defp not_found(conn) do
     conn

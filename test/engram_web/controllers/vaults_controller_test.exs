@@ -147,6 +147,73 @@ defmodule EngramWeb.VaultsControllerTest do
     end
   end
 
+  describe "GET /api/vaults?deleted=true" do
+    test "lists soft-deleted vaults with a purge_at", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Trashed"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      body = conn |> get("/api/vaults?deleted=true") |> json_response(200)
+      [item] = body["vaults"]
+      assert item["id"] == v.id
+      assert item["deleted_at"]
+      assert item["purge_at"]
+    end
+
+    test "active listing excludes deleted vaults", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Trashed"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      body = conn |> get("/api/vaults") |> json_response(200)
+      assert body["vaults"] == []
+    end
+  end
+
+  describe "POST /api/vaults/:id/restore" do
+    test "restores a deleted vault", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Back"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      body = conn |> post("/api/vaults/#{v.id}/restore") |> json_response(200)
+      assert body["vault"]["id"] == v.id
+    end
+
+    test "returns 402 when over cap", %{conn: _conn} do
+      # fresh user with default cap (1), no override
+      other = insert(:user)
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(other, "k")
+      grant_api_write!(other)
+      oconn = build_conn() |> put_req_header("authorization", "Bearer #{raw_key}")
+
+      {:ok, first} = Vaults.create_vault(other, %{name: "First"})
+      {:ok, _} = Vaults.delete_vault(other, first.id)
+      {:ok, _} = Vaults.create_vault(other, %{name: "Replacement"})
+
+      body = oconn |> post("/api/vaults/#{first.id}/restore") |> json_response(402)
+      assert body["error"] == "vault_limit_reached"
+    end
+
+    test "returns 404 for an active vault", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      conn |> post("/api/vaults/#{v.id}/restore") |> json_response(404)
+    end
+  end
+
+  describe "POST /api/vaults/:id/purge" do
+    test "purges a deleted vault", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Doomed"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      body = conn |> post("/api/vaults/#{v.id}/purge") |> json_response(200)
+      assert body["purged"] == true
+      assert body["id"] == v.id
+    end
+
+    test "returns 404 for an active vault", %{conn: conn, user: user} do
+      {:ok, v} = Vaults.create_vault(user, %{name: "Active"})
+      conn |> post("/api/vaults/#{v.id}/purge") |> json_response(404)
+    end
+  end
+
   describe "POST /api/vaults/register" do
     test "creates vault on first call (201)", %{conn: conn} do
       conn = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-001"})
