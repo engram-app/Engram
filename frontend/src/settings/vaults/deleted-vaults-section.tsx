@@ -39,8 +39,16 @@ function DeletedRow({ vault }: { vault: Vault }) {
   const overCap = activeCount >= cap
   const purgeDate = vault.purge_at ? new Date(vault.purge_at).toLocaleDateString() : null
 
+  const highlightId = new URLSearchParams(window.location.search).get('highlight')
+  const highlighted = highlightId === String(vault.id)
+
   return (
-    <li className="flex items-center justify-between gap-3 py-3">
+    <li
+      data-highlighted={highlighted}
+      className={`flex items-center justify-between gap-3 py-3 ${
+        highlighted ? 'rounded-md bg-accent/40 ring-1 ring-ring' : ''
+      }`}
+    >
       <div>
         <p className="text-sm font-medium text-foreground">{vault.name}</p>
         {purgeDate && <p className="text-xs text-muted-foreground">Purges {purgeDate}</p>}

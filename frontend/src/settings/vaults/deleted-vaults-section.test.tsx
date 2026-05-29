@@ -34,6 +34,8 @@ describe('DeletedVaultsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     activeCount = 1
+    // Reset the URL so ?highlight from one test doesn't leak into others.
+    window.history.pushState({}, '', '/settings/vaults')
   })
 
   it('shows the purge date', () => {
@@ -69,5 +71,12 @@ describe('DeletedVaultsSection', () => {
     render(<DeletedVaultsSection />)
     fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
     expect(purgeMutate).not.toHaveBeenCalled()
+  })
+
+  it('highlights the row matching ?highlight=<id>', () => {
+    // jsdom: set the query param the component reads
+    window.history.pushState({}, '', '/settings/vaults?highlight=5')
+    render(<DeletedVaultsSection />)
+    expect(screen.getByText('Old').closest('li')).toHaveAttribute('data-highlighted', 'true')
   })
 })
