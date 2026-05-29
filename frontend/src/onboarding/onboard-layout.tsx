@@ -1,4 +1,3 @@
-// src/onboarding/onboard-layout.tsx
 import { Outlet, useLocation } from 'react-router'
 import { useAuthAdapter } from '../auth/use-auth-adapter'
 import AuthShell from '../layout/auth-shell'
