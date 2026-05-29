@@ -6,6 +6,7 @@ import { LegalDoc } from '../legal/legal-doc'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import AuthPanel from '@/layout/auth-panel'
 
 const PRIVACY_URL = 'https://engram.page/privacy'
 
@@ -56,8 +57,7 @@ export default function AgreementPage() {
   }
 
   return (
-    <section className="m-auto w-full max-w-2xl px-4 py-6">
-      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-background p-5 sm:p-6">
+    <AuthPanel className="flex flex-col gap-4">
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           Review the Terms
         </h1>
@@ -120,7 +120,6 @@ export default function AgreementPage() {
             </button>
           </>
         )}
-      </div>
-    </section>
+    </AuthPanel>
   )
 }
