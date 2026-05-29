@@ -330,6 +330,7 @@ defmodule Engram.Vaults do
           case result do
             {:ok, deleted} ->
               _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
+              _ = Engram.Workers.VaultDeletedEmail.enqueue(deleted.user_id, deleted.id)
               emit_vault_count(deleted.user_id, :deleted)
               result
 

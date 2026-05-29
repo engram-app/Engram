@@ -457,6 +457,17 @@ defmodule Engram.VaultsTest do
     test "returns {:error, :not_found} for missing vault", %{user: user} do
       assert {:error, :not_found} = Vaults.delete_vault(user, 0)
     end
+
+    test "delete_vault enqueues the deletion-notice email", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v} = Vaults.create_vault(user, %{name: "Bye"})
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert_enqueued(
+        worker: Engram.Workers.VaultDeletedEmail,
+        args: %{vault_id: v.id, user_id: user.id}
+      )
+    end
   end
 
   # ---------------------------------------------------------------------------
