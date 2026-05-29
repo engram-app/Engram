@@ -3,6 +3,7 @@ import { ROUTES } from './routes'
 import AuthShell from './layout/auth-shell'
 import AuthPanel from './layout/auth-panel'
 import { Button } from '@/components/ui/button'
+import { heading } from '@/lib/ui-classes'
 
 export default function NotFoundPage() {
   return (
@@ -11,7 +12,7 @@ export default function NotFoundPage() {
         <p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text font-extrabold leading-none tracking-tight text-transparent text-7xl sm:text-8xl">
           404
         </p>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+        <h1 className={heading}>
           Page not found
         </h1>
         <p className="max-w-md text-sm text-muted-foreground">

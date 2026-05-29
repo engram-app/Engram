@@ -6,6 +6,7 @@ import AuthShell from '../layout/auth-shell'
 import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 
 type Vault = { id: number; name: string; note_count: number }
 
@@ -27,7 +28,7 @@ export default function DeviceLinkPage() {
     return (
       <AuthShell>
         <AuthPanel className="flex flex-col gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          <h1 className={heading}>
             Link Obsidian Vault
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -106,7 +107,7 @@ export default function DeviceLinkPage() {
               onChange={(e) => setUserCode(e.target.value.toUpperCase())}
               placeholder="XXXX-XXXX"
               maxLength={9}
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-center font-mono text-2xl tracking-widest text-foreground outline-none transition-colors focus-visible:border-primary"
+              className={cn(fieldInput, 'text-center font-mono text-2xl tracking-widest')}
               onKeyDown={(e) => e.key === 'Enter' && handleVerifyCode()}
             />
             <Button type="button" onClick={handleVerifyCode} disabled={loading} className="w-full">
@@ -128,12 +129,7 @@ export default function DeviceLinkPage() {
                 return (
                   <label
                     key={v.id}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors',
-                      active
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50',
-                    )}
+                    className={selectableRow(active)}
                   >
                     <input
                       type="radio"
@@ -156,12 +152,7 @@ export default function DeviceLinkPage() {
               })}
               {vaults.length > 0 && (
                 <label
-                  className={cn(
-                    'flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors',
-                    createNew
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-primary/50',
-                  )}
+                  className={selectableRow(createNew)}
                 >
                   <input
                     type="radio"
@@ -184,7 +175,7 @@ export default function DeviceLinkPage() {
                 value={newVaultName}
                 onChange={(e) => setNewVaultName(e.target.value)}
                 placeholder="Vault name"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus-visible:border-primary"
+                className={fieldInput}
               />
             )}
 
@@ -211,7 +202,7 @@ export default function DeviceLinkPage() {
         {error && (
           <p
             role="alert"
-            className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-foreground"
+            className={cn(destructiveAlert, 'p-3 text-foreground')}
           >
             {error}
           </p>

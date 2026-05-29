@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/sheet'
 import { config } from '../config'
 import AppHeader from '../layout/app-header'
+import AuthBackdrop from '../layout/auth-backdrop'
 import { buildSettingsSections, type SettingsSection } from './sections'
 
 function SettingsNavList({
@@ -53,11 +54,7 @@ export default function SettingsLayout() {
       <AppHeader />
       <section className="relative min-h-0 flex-1 overflow-hidden">
         {/* Brand grid texture behind the settings panel (matches onboarding). */}
-        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden="true">
-          <div className="absolute inset-0 grid-overlay opacity-30" />
-          <div className="absolute -left-32 -top-32 h-96 w-96 neural-glow-purple opacity-60" />
-          <div className="absolute -bottom-32 -right-32 h-96 w-96 neural-glow-cyan opacity-60" />
-        </div>
+        <AuthBackdrop />
         <div className="relative z-10 h-full sm:p-6">
           <div className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden bg-card sm:rounded-xl sm:border sm:border-border sm:shadow-sm md:flex-row">
             {/* Mobile: section switcher in a drawer. */}

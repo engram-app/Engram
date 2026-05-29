@@ -11,6 +11,7 @@ import AuthShell from '../layout/auth-shell'
 import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 
 const REQUIRED_PARAMS = [
   'client_id',
@@ -81,12 +82,12 @@ export default function OAuthAuthorizePage() {
     return (
       <AuthShell>
         <AuthPanel className="flex flex-col gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          <h1 className={heading}>
             Invalid authorization request
           </h1>
           <div
             role="alert"
-            className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm"
+            className={destructiveAlert}
           >
             <p className="font-medium text-foreground">Missing required OAuth parameters:</p>
             <ul className="mt-2 list-inside list-disc text-muted-foreground">
@@ -109,12 +110,12 @@ export default function OAuthAuthorizePage() {
     return (
       <AuthShell>
         <AuthPanel className="flex flex-col gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          <h1 className={heading}>
             Unknown OAuth client
           </h1>
           <div
             role="alert"
-            className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm"
+            className={destructiveAlert}
           >
             <p className="text-muted-foreground">
               The client requesting access is not registered with Engram.
@@ -163,7 +164,7 @@ export default function OAuthAuthorizePage() {
     <AuthShell>
       <AuthPanel className="flex flex-col gap-4">
         <header className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          <h1 className={heading}>
             Authorize <span className="text-primary">{clientName}</span>
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -186,12 +187,7 @@ export default function OAuthAuthorizePage() {
                 return (
                   <label
                     key={v.id}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors',
-                      active
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50',
-                    )}
+                    className={selectableRow(active)}
                   >
                     <input
                       type="radio"
@@ -206,12 +202,7 @@ export default function OAuthAuthorizePage() {
                 )
               })}
               <label
-                className={cn(
-                  'flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors',
-                  vaultChoice === 'vault:*'
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:border-primary/50',
-                )}
+                className={selectableRow(vaultChoice === 'vault:*')}
               >
                 <input
                   type="radio"
@@ -228,7 +219,7 @@ export default function OAuthAuthorizePage() {
             {submitError && (
               <p
                 role="alert"
-                className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-foreground"
+                className={cn(destructiveAlert, 'p-3 text-foreground')}
               >
                 {submitError}
               </p>

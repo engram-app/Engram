@@ -4,9 +4,8 @@ import { ROUTES } from '../routes'
 import { useAuthAdapter } from './use-auth-adapter'
 import AuthLayout from './auth-layout'
 import { Button } from '@/components/ui/button'
-
-const inputClass =
-  'mt-1 block w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus-visible:border-primary'
+import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
+import { cn } from '@/lib/utils'
 
 export default function LocalSignUp() {
   const { register, isSignedIn } = useAuthAdapter()
@@ -49,12 +48,12 @@ export default function LocalSignUp() {
         onSubmit={handleSubmit}
         className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
       >
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Create your account</h1>
+        <h1 className={heading}>Create your account</h1>
 
         {error && (
           <p
             role="alert"
-            className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-foreground"
+            className={cn(destructiveAlert, 'p-3 text-foreground')}
           >
             {error}
           </p>
@@ -67,7 +66,7 @@ export default function LocalSignUp() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className={inputClass}
+            className={cn('mt-1 block', fieldInput)}
           />
         </label>
 
@@ -79,7 +78,7 @@ export default function LocalSignUp() {
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className={inputClass}
+            className={cn('mt-1 block', fieldInput)}
           />
         </label>
 
@@ -90,7 +89,7 @@ export default function LocalSignUp() {
             required
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
-            className={inputClass}
+            className={cn('mt-1 block', fieldInput)}
           />
         </label>
 
