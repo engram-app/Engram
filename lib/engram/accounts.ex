@@ -176,14 +176,19 @@ defmodule Engram.Accounts do
     user
     |> Ecto.Changeset.cast(attrs, [:display_name])
     |> Ecto.Changeset.update_change(:display_name, fn
-      nil -> nil
+      nil ->
+        nil
+
       val ->
         case String.trim(val) do
           "" -> nil
           trimmed -> trimmed
         end
     end)
-    |> Ecto.Changeset.validate_length(:display_name, max: @max_display_name_chars, count: :codepoints)
+    |> Ecto.Changeset.validate_length(:display_name,
+      max: @max_display_name_chars,
+      count: :codepoints
+    )
   end
 
   @doc "Sets a new bcrypt password hash for a user (local auth)."
