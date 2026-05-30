@@ -6,10 +6,10 @@ defmodule Engram.Accounts.PasswordReset do
   user's other refresh tokens (spec §8/§10).
   """
   import Ecto.Query
-  alias Engram.Repo
   alias Engram.Accounts
-  alias Engram.Accounts.User
   alias Engram.Accounts.PasswordReset.Token
+  alias Engram.Accounts.User
+  alias Engram.Repo
 
   defmodule Token do
     use Ecto.Schema

@@ -3,8 +3,8 @@ defmodule Engram.Instance do
   Instance-global settings (self-host). Singleton row at id=1.
   registration_mode controls self-registration: closed | invite_only | open.
   """
-  alias Engram.Repo
   alias Engram.Instance.InstanceSettings
+  alias Engram.Repo
 
   @default_mode "invite_only"
 
@@ -25,7 +25,7 @@ defmodule Engram.Instance do
         on_conflict: [
           set: [
             registration_mode: mode,
-            updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            updated_at: DateTime.utc_now(:second)
           ]
         ],
         conflict_target: :id

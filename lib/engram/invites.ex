@@ -4,8 +4,8 @@ defmodule Engram.Invites do
   once, stored as lowercase-hex SHA-256 hashes (mirrors `Accounts.hash_refresh_token/1`).
   """
   import Ecto.Query
-  alias Engram.Repo
   alias Engram.Invites.Invite
+  alias Engram.Repo
 
   @doc """
   Creates an invite. attrs: :label, :max_uses (default 1), :expires_in_days
@@ -94,7 +94,7 @@ defmodule Engram.Invites do
 
       invite ->
         invite
-        |> Ecto.Changeset.change(revoked_at: DateTime.utc_now() |> DateTime.truncate(:second))
+        |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
         |> Repo.update()
     end
   end

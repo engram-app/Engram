@@ -1,7 +1,7 @@
 defmodule EngramWeb.Plugs.RequireAdminTest do
   use EngramWeb.ConnCase, async: false
-  alias EngramWeb.Plugs.RequireAdmin
   alias Engram.Accounts.User
+  alias EngramWeb.Plugs.RequireAdmin
 
   setup do
     Application.put_env(:engram, :auth_provider, :local)
