@@ -75,5 +75,10 @@ defmodule EngramWeb.UsersControllerTest do
       conn = auth_conn(admin) |> delete("/api/me?password=password123")
       assert %{"error" => "last_admin"} = json_response(conn, 409)
     end
+
+    test "400 when password param is missing", %{user: user} do
+      conn = auth_conn(user) |> delete("/api/me")
+      assert %{"error" => "password_required"} = json_response(conn, 400)
+    end
   end
 end

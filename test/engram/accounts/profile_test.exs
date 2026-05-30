@@ -64,6 +64,16 @@ defmodule Engram.Accounts.ProfileTest do
 
       assert Accounts.active_admin_count() == 0
     end
+
+    test "ignores suspended admins" do
+      {:ok, admin} = Accounts.create_user_with_password("susp-admin@example.com", "password123")
+
+      admin
+      |> Ecto.Changeset.change(%{suspended_at: DateTime.utc_now()})
+      |> Engram.Repo.update!(skip_tenant_check: true)
+
+      assert Accounts.active_admin_count() == 0
+    end
   end
 
   describe "delete_self/2" do
