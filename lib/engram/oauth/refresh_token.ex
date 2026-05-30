@@ -34,7 +34,7 @@ defmodule Engram.OAuth.RefreshToken do
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at)a
+  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at last_used_at last_used_ip)a
   @required ~w(token_hash family_id client_id user_id expires_at)a
 
   def changeset(token, attrs) do

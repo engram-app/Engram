@@ -1,8 +1,13 @@
 defmodule EngramWeb.OAuthTokenControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  import Ecto.Query
+
   alias Engram.OAuth
+  alias Engram.OAuth.RefreshToken
   alias Engram.Repo
+
+  defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
 
   defp pkce_pair do
     verifier =
@@ -173,6 +178,36 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert body["error"] == "invalid_grant"
     end
 
+    test "stamps last_used_at and last_used_ip on the newly-minted refresh token", %{conn: conn} do
+      user = insert(:user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, client, redirect_uri, challenge)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      body = json_response(conn, 200)
+      token_hash = hash_token(body["refresh_token"])
+
+      row =
+        Repo.one!(
+          from(rt in RefreshToken, where: rt.token_hash == ^token_hash),
+          skip_tenant_check: true
+        )
+
+      assert row.last_used_at != nil
+      assert is_binary(row.last_used_ip)
+      assert row.last_used_ip =~ ~r/^\d+\.\d+\.\d+\.\d+$|^[0-9a-fA-F:]+$/
+    end
+
     test "rejects expired code", %{conn: conn} do
       user = insert(:user)
       client = register_client()
@@ -328,6 +363,50 @@ defmodule EngramWeb.OAuthTokenControllerTest do
                }),
                400
              )
+    end
+
+    test "stamps last_used_at and last_used_ip on the new refresh token after rotation", %{
+      conn: conn
+    } do
+      user = insert(:user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, client, redirect_uri, challenge)
+
+      %{"refresh_token" => first_refresh} =
+        json_response(
+          post(conn, "/oauth/token", %{
+            "grant_type" => "authorization_code",
+            "code" => code,
+            "redirect_uri" => redirect_uri,
+            "client_id" => client.client_id,
+            "code_verifier" => verifier
+          }),
+          200
+        )
+
+      conn2 =
+        post(build_conn(), "/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => first_refresh,
+          "client_id" => client.client_id
+        })
+
+      body = json_response(conn2, 200)
+      new_token_hash = hash_token(body["refresh_token"])
+
+      new_row =
+        Repo.one!(
+          from(rt in RefreshToken,
+            where: rt.token_hash == ^new_token_hash and is_nil(rt.consumed_at)
+          ),
+          skip_tenant_check: true
+        )
+
+      assert new_row.last_used_at != nil
+      assert is_binary(new_row.last_used_ip)
+      assert new_row.last_used_ip =~ ~r/^\d+\.\d+\.\d+\.\d+$|^[0-9a-fA-F:]+$/
     end
 
     test "rejects refresh token for a different client", %{conn: conn} do

@@ -156,7 +156,9 @@ defmodule Engram.OAuth do
   Validates: code exists, unconsumed, unexpired, matching client_id,
   matching redirect_uri, PKCE verifier hashes to stored challenge.
   """
-  def exchange_authorization_code(params) do
+  def exchange_authorization_code(params, opts \\ []) do
+    ip = Keyword.get(opts, :ip)
+
     with {:ok, code_row} <- find_unconsumed_code(params["code"]),
          :ok <- check_code_client(code_row, params["client_id"]),
          :ok <- check_code_redirect_uri(code_row, params["redirect_uri"]),
@@ -169,7 +171,9 @@ defmodule Engram.OAuth do
              client_id: code_row.client_id,
              user_id: code_row.user_id,
              vault_id: code_row.vault_id,
-             scope: code_row.scope
+             scope: code_row.scope,
+             last_used_at: DateTime.utc_now(),
+             last_used_ip: ip
            }) do
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
@@ -181,7 +185,8 @@ defmodule Engram.OAuth do
   consumed (replay) or revoked, this revokes the entire family per
   RFC 6749 §10.4.
   """
-  def rotate_refresh_token(raw_token, client_id) do
+  def rotate_refresh_token(raw_token, client_id, opts \\ []) do
+    ip = Keyword.get(opts, :ip)
     hash = hash_code(raw_token)
 
     case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash),
@@ -191,32 +196,32 @@ defmodule Engram.OAuth do
         {:error, :invalid_grant}
 
       %RefreshToken{} = rt ->
-        rotate_existing(rt, client_id)
+        rotate_existing(rt, client_id, ip)
     end
   end
 
-  defp rotate_existing(%RefreshToken{client_id: actual}, requested) when actual != requested,
+  defp rotate_existing(%RefreshToken{client_id: actual}, requested, _ip) when actual != requested,
     do: {:error, :invalid_grant}
 
-  defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id) do
+  defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip) do
     revoke_family(rt.family_id)
     {:error, :invalid_grant}
   end
 
-  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id) do
+  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip) do
     revoke_family(rt.family_id)
     {:error, :invalid_grant}
   end
 
-  defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id) do
+  defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
       {:error, :invalid_grant}
     else
-      do_rotate(rt)
+      do_rotate(rt, ip)
     end
   end
 
-  defp do_rotate(rt) do
+  defp do_rotate(rt, ip) do
     now = DateTime.utc_now(:second)
 
     rt
@@ -229,7 +234,9 @@ defmodule Engram.OAuth do
         client_id: rt.client_id,
         user_id: rt.user_id,
         vault_id: rt.vault_id,
-        scope: rt.scope
+        scope: rt.scope,
+        last_used_at: DateTime.utc_now(),
+        last_used_ip: ip
       })
 
     case fetch_user(rt.user_id) do

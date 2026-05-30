@@ -8,9 +8,12 @@ defmodule EngramWeb.OAuthTokenController do
   use EngramWeb, :controller
 
   alias Engram.OAuth
+  alias EngramWeb.RequestMeta
 
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
-    case OAuth.exchange_authorization_code(params) do
+    ip = RequestMeta.format_ip(conn.remote_ip)
+
+    case OAuth.exchange_authorization_code(params, ip: ip) do
       {:ok, response} ->
         json(conn, response)
 
@@ -40,7 +43,9 @@ defmodule EngramWeb.OAuthTokenController do
   def exchange(conn, _params), do: invalid_request(conn)
 
   defp do_refresh(conn, raw_token, client_id) do
-    case OAuth.rotate_refresh_token(raw_token, client_id) do
+    ip = RequestMeta.format_ip(conn.remote_ip)
+
+    case OAuth.rotate_refresh_token(raw_token, client_id, ip: ip) do
       {:ok, response} ->
         json(conn, response)
 
