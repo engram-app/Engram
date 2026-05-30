@@ -3,6 +3,7 @@ defmodule EngramWeb.LocalAuthController do
 
   alias Engram.Accounts
   alias Engram.Auth.Providers.Local
+  alias Engram.Invites
 
   @refresh_cookie_base [
     http_only: true,
@@ -116,5 +117,13 @@ defmodule EngramWeb.LocalAuthController do
     conn
     |> delete_resp_cookie("refresh_token", path: "/api/auth")
     |> send_resp(204, "")
+  end
+
+  @doc """
+  Public preview for an invite link. Non-enumerating: returns `%{valid: false}`
+  for any unknown/expired/revoked/exhausted token rather than 404.
+  """
+  def invite_preview(conn, %{"token" => token}) do
+    json(conn, Invites.preview(token))
   end
 end

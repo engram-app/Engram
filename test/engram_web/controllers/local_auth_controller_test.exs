@@ -157,4 +157,20 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert json_response(conn, 201)
     end
   end
+
+  describe "GET /api/auth/invite/:token" do
+    test "previews a valid invite", %{conn: conn} do
+      admin = insert(:user, role: "admin")
+      {:ok, {raw, _}} = Engram.Invites.create_invite(admin, %{label: "Family"})
+      conn = get(conn, ~p"/api/auth/invite/#{raw}")
+      body = json_response(conn, 200)
+      assert body["valid"] == true
+      assert body["label"] == "Family"
+    end
+
+    test "reports invalid for an unknown token (non-enumerating)", %{conn: conn} do
+      conn = get(conn, ~p"/api/auth/invite/garbage")
+      assert json_response(conn, 200)["valid"] == false
+    end
+  end
 end

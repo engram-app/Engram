@@ -128,6 +128,9 @@ defmodule EngramWeb.Router do
     post "/login", LocalAuthController, :login
     post "/refresh", LocalAuthController, :refresh
     post "/logout", LocalAuthController, :logout
+
+    # Public preview — confirms an invite is valid + shows its label before signup.
+    get "/invite/:token", LocalAuthController, :invite_preview
   end
 
   # User-scoped authenticated endpoints (no vault context needed)
