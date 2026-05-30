@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiError } from '@/api/client'
+import { cn } from '@/lib/utils'
 import { adminApi, type AdminUser } from './api'
 
 export default function MembersTab({ currentUserId }: { currentUserId: number }) {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(true)
   const [pendingDelete, setPendingDelete] = useState<number | null>(null)
+  // One open at a time keeps the table calm. null = all collapsed.
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   // Shown once on issue; cleared by Done. Not persisted anywhere.
   const [resetUrl, setResetUrl] = useState<string | null>(null)
 
@@ -30,7 +33,6 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
       await fn()
       await refresh()
     } catch (e) {
-      // last_admin → friendlier copy; everything else → backend message.
       const raw = e instanceof ApiError ? e.message : 'unknown error'
       const friendly = raw === 'last_admin' ? "Can't remove the last admin." : raw
       toast.error(`${label}: ${friendly}`)
@@ -63,6 +65,11 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
   async function copy(url: string) {
     await navigator.clipboard.writeText(url)
     toast.success('Copied to clipboard')
+  }
+
+  function toggleExpanded(id: number) {
+    setExpandedId((cur) => (cur === id ? null : id))
+    setPendingDelete(null)
   }
 
   return (
@@ -109,80 +116,123 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
               <th className="py-2 pr-2 font-medium">Role</th>
               <th className="py-2 pr-2 font-medium">Status</th>
               <th className="py-2 pr-2 font-medium">Last active</th>
-              <th />
+              <th className="w-8" />
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => (
-              <tr key={u.id} className="border-t border-border">
-                <td className="py-2 pr-2">{u.email}</td>
-                <td className="py-2 pr-2">{u.role}</td>
-                <td className="py-2 pr-2">{u.suspended ? 'suspended' : 'active'}</td>
-                <td className="py-2 pr-2">
-                  {u.last_active ? new Date(u.last_active).toLocaleDateString() : '—'}
-                </td>
-                <td className="py-2 text-right">
-                  {pendingDelete === u.id ? (
-                    <span className="inline-flex items-center gap-1">
-                      <span className="text-xs text-muted-foreground">
-                        Remove {u.email} + their vault data?
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => remove(u)}
-                        className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPendingDelete(null)}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
-                      >
-                        Cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="inline-flex gap-1">
-                      <button
-                        type="button"
-                        onClick={() => toggleRole(u)}
-                        disabled={u.id === currentUserId}
-                        title={u.id === currentUserId ? 'Cannot change your own role' : undefined}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
-                      >
-                        {u.role === 'admin' ? 'Demote' : 'Promote'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleSuspend(u)}
-                        disabled={u.id === currentUserId}
-                        title={u.id === currentUserId ? 'Cannot suspend yourself' : undefined}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
-                      >
-                        {u.suspended ? 'Unsuspend' : 'Suspend'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => issueReset(u)}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
-                      >
-                        Reset link
-                      </button>
-                      {u.id !== currentUserId && (
-                        <button
-                          type="button"
-                          onClick={() => setPendingDelete(u.id)}
-                          className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          Remove
-                        </button>
+            {users.map((u) => {
+              const isSelf = u.id === currentUserId
+              const isExpanded = expandedId === u.id
+              return (
+                <Fragment key={u.id}>
+                  <tr
+                    className={cn(
+                      'cursor-pointer border-t border-border transition-colors',
+                      isSelf && 'bg-primary/5',
+                      isExpanded ? 'bg-accent/50' : 'hover:bg-accent/30',
+                    )}
+                    onClick={() => toggleExpanded(u.id)}
+                  >
+                    <td className="py-2 pr-2">
+                      <span className="text-foreground">{u.email}</span>
+                      {isSelf && (
+                        <span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
+                          you
+                        </span>
                       )}
-                    </span>
+                    </td>
+                    <td className="py-2 pr-2">{u.role}</td>
+                    <td className="py-2 pr-2">
+                      {u.suspended ? (
+                        <span className="text-destructive">suspended</span>
+                      ) : (
+                        'active'
+                      )}
+                    </td>
+                    <td className="py-2 pr-2">
+                      {u.last_active ? new Date(u.last_active).toLocaleDateString() : '—'}
+                    </td>
+                    <td className="py-2 text-right">
+                      <span
+                        aria-hidden
+                        className="inline-block text-muted-foreground transition-transform"
+                        style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                      >
+                        ▸
+                      </span>
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr className="border-t border-border bg-accent/20">
+                      <td colSpan={5} className="px-2 py-3">
+                        {pendingDelete === u.id ? (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <span className="text-xs text-muted-foreground">
+                              Remove {u.email} + their vault data?
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => remove(u)}
+                              className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingDelete(null)}
+                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleRole(u)}
+                              disabled={isSelf}
+                              title={isSelf ? 'Cannot change your own role' : undefined}
+                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
+                            >
+                              {u.role === 'admin' ? 'Demote' : 'Promote'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => issueReset(u)}
+                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
+                            >
+                              Reset link
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleSuspend(u)}
+                              disabled={isSelf}
+                              title={isSelf ? 'Cannot suspend yourself' : undefined}
+                              className={cn(
+                                'rounded-md border border-destructive/40 bg-background px-3 py-1 text-xs font-medium text-destructive',
+                                'hover:bg-destructive/10',
+                                'disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:opacity-50 disabled:hover:bg-background',
+                              )}
+                            >
+                              {u.suspended ? 'Unsuspend' : 'Suspend'}
+                            </button>
+                            {!isSelf && (
+                              <button
+                                type="button"
+                                onClick={() => setPendingDelete(u.id)}
+                                className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
                   )}
-                </td>
-              </tr>
-            ))}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       )}
