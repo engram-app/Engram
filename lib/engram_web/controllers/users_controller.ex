@@ -3,6 +3,8 @@ defmodule EngramWeb.UsersController do
 
   def me(conn, _params) do
     user = conn.assigns.current_user
-    json(conn, %{user: %{id: user.id, email: user.email}})
+    # `role` is included so the SPA admin gate can decide whether to render the
+    # self-host Administration section (paired with `config.authProvider`).
+    json(conn, %{user: %{id: user.id, email: user.email, role: user.role}})
   end
 end
