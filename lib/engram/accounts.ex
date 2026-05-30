@@ -160,6 +160,36 @@ defmodule Engram.Accounts do
 
   defp maybe_close_bootstrap(false), do: :ok
 
+  @max_display_name_chars 80
+
+  @doc """
+  Updates the editable profile fields on a user. Currently just `display_name`.
+  Empty/whitespace string clears the field (stored as nil).
+  """
+  def update_profile(%User{} = user, attrs) do
+    user
+    |> profile_changeset(attrs)
+    |> Repo.update(skip_tenant_check: true)
+  end
+
+  defp profile_changeset(user, attrs) do
+    normalized =
+      case Map.get(attrs, :display_name) || Map.get(attrs, "display_name") do
+        nil -> nil
+        "" -> nil
+        val when is_binary(val) ->
+          case String.trim(val) do
+            "" -> nil
+            trimmed -> trimmed
+          end
+        _ -> nil
+      end
+
+    user
+    |> Ecto.Changeset.change(%{display_name: normalized})
+    |> Ecto.Changeset.validate_length(:display_name, max: @max_display_name_chars)
+  end
+
   @doc "Sets a new bcrypt password hash for a user (local auth)."
   def update_password(%User{} = user, new_password)
       when is_binary(new_password) and byte_size(new_password) >= 8 and
