@@ -158,12 +158,12 @@ function ConnectionCard({
           <small className="text-muted-foreground">{subtitle}</small>
         </header>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-3 text-sm text-muted-foreground">
-          {connection.vault_id != null && (
-            <>
-              <dt>Vault:</dt>
-              <dd>{connection.vault_name ?? `#${connection.vault_id}`}</dd>
-            </>
-          )}
+          <dt>Vault:</dt>
+          <dd>
+            {connection.vault_id == null
+              ? 'All vaults'
+              : (connection.vault_name ?? `#${connection.vault_id}`)}
+          </dd>
           {connection.last_used_at && (
             <>
               <dt>Last active:</dt>
