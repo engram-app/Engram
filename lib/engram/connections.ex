@@ -17,11 +17,12 @@ defmodule Engram.Connections do
   """
 
   import Ecto.Query
-  alias Engram.Accounts.ApiKey
+  alias Engram.Accounts.{ApiKey, User}
   alias Engram.Auth.DeviceRefreshToken
   alias Engram.Connections.LogoAllowlist
   alias Engram.OAuth.{Client, RefreshToken}
   alias Engram.Repo
+  alias Engram.Vaults
 
   @type kind :: :obsidian | :mcp
 
@@ -140,6 +141,7 @@ defmodule Engram.Connections do
           verified: boolean(),
           logo: String.t() | nil,
           vault_id: integer() | nil,
+          vault_name: String.t() | nil,
           scope: String.t() | nil,
           last_used_at: DateTime.t() | nil,
           connected_at: DateTime.t() | nil,
@@ -148,9 +150,15 @@ defmodule Engram.Connections do
           redirect_uris: [String.t()]
         }
 
-  @spec list_for_user(integer()) :: [connection_view()]
-  def list_for_user(user_id) do
-    (oauth_rows(user_id) ++ device_rows(user_id) ++ pat_rows(user_id))
+  @spec list_for_user(User.t()) :: [connection_view()]
+  def list_for_user(%User{} = user) do
+    # Vault names are stored encrypted; bulk-decrypt once via the Vaults
+    # context (RLS+tenant-scoped) and post-merge by id, rather than joining
+    # at SQL level.
+    vault_names = user |> Vaults.list_vaults() |> Map.new(&{&1.id, &1.name})
+
+    (oauth_rows(user.id) ++ device_rows(user.id) ++ pat_rows(user.id))
+    |> Enum.map(&Map.put(&1, :vault_name, &1.vault_id && Map.get(vault_names, &1.vault_id)))
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
   end
 

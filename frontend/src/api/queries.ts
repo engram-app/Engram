@@ -331,6 +331,7 @@ export interface Connection {
   verified: boolean
   logo: string | null
   vault_id: number | null
+  vault_name: string | null
   scope: string | null
   last_used_at: string | null
   connected_at: string | null

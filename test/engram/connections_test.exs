@@ -145,7 +145,7 @@ defmodule Engram.ConnectionsTest do
                  vault_id: vid
                }
              ] =
-               Connections.list_for_user(user.id)
+               Connections.list_for_user(user)
 
       assert cid == client.client_id
       assert vid == vault.id
@@ -156,7 +156,7 @@ defmodule Engram.ConnectionsTest do
       insert(:api_key, user: user, name: "my-script")
 
       assert [%{kind: :pat, name: "my-script", client_id: nil, key_id: kid, redirect_uris: []}] =
-               Connections.list_for_user(user.id)
+               Connections.list_for_user(user)
 
       assert is_integer(kid)
     end
@@ -181,7 +181,7 @@ defmodule Engram.ConnectionsTest do
         last_used_at: newer
       )
 
-      rows = Connections.list_for_user(user.id)
+      rows = Connections.list_for_user(user)
       names = Enum.map(rows, & &1.name)
       assert names == ["B", "A"]
     end
@@ -197,7 +197,7 @@ defmodule Engram.ConnectionsTest do
         revoked_at: now
       )
 
-      assert Connections.list_for_user(user.id) == []
+      assert Connections.list_for_user(user) == []
     end
 
     test "includes device refresh token families as kind=:obsidian" do
@@ -206,7 +206,7 @@ defmodule Engram.ConnectionsTest do
       family_id = Ecto.UUID.generate()
       insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
 
-      rows = Connections.list_for_user(user.id)
+      rows = Connections.list_for_user(user)
       assert [row] = rows
 
       assert row.kind == :obsidian
@@ -228,7 +228,7 @@ defmodule Engram.ConnectionsTest do
       insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
       insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
 
-      rows = Connections.list_for_user(user.id)
+      rows = Connections.list_for_user(user)
       assert length(rows) == 1
     end
 
@@ -238,7 +238,7 @@ defmodule Engram.ConnectionsTest do
       now = DateTime.utc_now(:second)
       insert(:device_refresh_token, user: user, vault: vault, revoked_at: now)
 
-      assert Connections.list_for_user(user.id) == []
+      assert Connections.list_for_user(user) == []
     end
 
     test "device rows: excludes expired device tokens from listing" do
@@ -250,7 +250,7 @@ defmodule Engram.ConnectionsTest do
 
       insert(:device_refresh_token, user: user, vault: vault, expires_at: expired_at)
 
-      assert Connections.list_for_user(user.id) == []
+      assert Connections.list_for_user(user) == []
     end
   end
 

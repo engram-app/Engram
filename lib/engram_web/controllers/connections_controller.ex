@@ -14,7 +14,7 @@ defmodule EngramWeb.ConnectionsController do
 
   def index(conn, _params) do
     user = conn.assigns.current_user
-    json(conn, Enum.map(Connections.list_for_user(user.id), &serialize/1))
+    json(conn, Enum.map(Connections.list_for_user(user), &serialize/1))
   end
 
   def delete_oauth(conn, %{"client_id" => client_id} = params) do
@@ -105,6 +105,7 @@ defmodule EngramWeb.ConnectionsController do
       verified: row.verified,
       logo: row.logo,
       vault_id: row.vault_id,
+      vault_name: row.vault_name,
       scope: row.scope,
       last_used_at: row.last_used_at,
       connected_at: row.connected_at,

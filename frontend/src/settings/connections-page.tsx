@@ -161,7 +161,7 @@ function ConnectionCard({
           {connection.vault_id != null && (
             <>
               <dt>Vault:</dt>
-              <dd>{connection.vault_id}</dd>
+              <dd>{connection.vault_name ?? `#${connection.vault_id}`}</dd>
             </>
           )}
           {connection.last_used_at && (
