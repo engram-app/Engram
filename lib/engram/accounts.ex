@@ -172,18 +172,6 @@ defmodule Engram.Accounts do
     |> Repo.update(skip_tenant_check: true)
   end
 
-  @doc """
-  Number of non-deleted, non-suspended users with admin role. Used to block
-  the last admin from self-deleting via DELETE /api/me.
-  """
-  def count_active_admins do
-    from(u in User,
-      where: u.role == "admin" and is_nil(u.deleted_at) and is_nil(u.suspended_at),
-      select: count(u.id)
-    )
-    |> Repo.one(skip_tenant_check: true)
-  end
-
   defp profile_changeset(user, attrs) do
     user
     |> Ecto.Changeset.cast(attrs, [:display_name])
