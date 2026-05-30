@@ -70,7 +70,7 @@ export default function InvitesTab() {
     <section className="space-y-6">
       <form
         onSubmit={create}
-        className="grid grid-cols-1 gap-3 rounded-md border border-border p-4 sm:grid-cols-[1fr_auto_auto_auto]"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto_auto]"
       >
         <label className="text-sm">
           <span className="mb-1 block text-xs font-medium text-muted-foreground">
