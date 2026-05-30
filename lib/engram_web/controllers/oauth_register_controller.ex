@@ -52,7 +52,10 @@ defmodule EngramWeb.OAuthRegisterController do
       response_types: client.response_types,
       token_endpoint_auth_method: client.token_endpoint_auth_method,
       software_id: client.software_id,
-      software_version: client.software_version
+      software_version: client.software_version,
+      logo_uri: client.logo_uri,
+      tos_uri: client.tos_uri,
+      policy_uri: client.policy_uri
     }
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
   end

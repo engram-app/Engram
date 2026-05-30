@@ -272,6 +272,98 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
     end
   end
 
+  describe "POST /oauth/register — RFC 7591 §2 metadata URIs (#282)" do
+    test "persists + echoes logo_uri, tos_uri, policy_uri when all three are HTTPS", %{conn: conn} do
+      params = %{
+        "redirect_uris" => ["https://x/cb"],
+        "client_name" => "Claude",
+        "logo_uri" => "https://cdn.example.com/logo.png",
+        "tos_uri" => "https://example.com/terms",
+        "policy_uri" => "https://example.com/privacy"
+      }
+
+      conn = post(conn, "/oauth/register", params)
+      body = json_response(conn, 201)
+
+      assert body["logo_uri"] == params["logo_uri"]
+      assert body["tos_uri"] == params["tos_uri"]
+      assert body["policy_uri"] == params["policy_uri"]
+
+      assert {:ok, client} = Engram.OAuth.get_client(body["client_id"])
+      assert client.logo_uri == params["logo_uri"]
+      assert client.tos_uri == params["tos_uri"]
+      assert client.policy_uri == params["policy_uri"]
+    end
+
+    test "all three URI fields are optional (nullable)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "client_name" => "Claude"
+        })
+
+      body = json_response(conn, 201)
+      refute Map.has_key?(body, "logo_uri")
+      refute Map.has_key?(body, "tos_uri")
+      refute Map.has_key?(body, "policy_uri")
+    end
+
+    test "rejects http logo_uri (HTTPS required)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "logo_uri" => "http://example.com/logo.png"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    test "rejects http tos_uri (HTTPS required)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "tos_uri" => "http://example.com/terms"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    test "rejects http policy_uri (HTTPS required)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "policy_uri" => "http://example.com/privacy"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    test "rejects javascript: scheme on any metadata URI", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "logo_uri" => "javascript:alert(1)"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    test "rejects garbage non-URI string", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "tos_uri" => "not a url"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+  end
+
   describe "POST /oauth/register — rate limit" do
     test "returns 429 after 10 registrations from same IP in a minute", %{conn: conn} do
       Application.put_env(:engram, :rate_limit_override, 10)

@@ -29,11 +29,19 @@ defmodule Engram.OAuth.Client do
     field :software_id, :string
     field :software_version, :string
 
+    # RFC 7591 §2 optional metadata. HTTPS-only per #282.
+    field :logo_uri, :string
+    field :tos_uri, :string
+    field :policy_uri, :string
+
     timestamps(type: :utc_datetime_usec)
   end
 
   @cast_fields ~w(redirect_uris client_name scope grant_types response_types
-                  token_endpoint_auth_method software_id software_version)a
+                  token_endpoint_auth_method software_id software_version
+                  logo_uri tos_uri policy_uri)a
+
+  @metadata_uri_fields ~w(logo_uri tos_uri policy_uri)a
 
   def registration_changeset(client, attrs) do
     client
@@ -55,7 +63,31 @@ defmodule Engram.OAuth.Client do
     # persisted and emitted in DCR telemetry, so cap to bound row/metadata size.
     |> validate_length(:software_id, max: 255)
     |> validate_length(:software_version, max: 255)
+    |> validate_metadata_uris()
   end
+
+  defp validate_metadata_uris(changeset) do
+    Enum.reduce(@metadata_uri_fields, changeset, fn field, acc ->
+      validate_change(acc, field, fn ^field, value ->
+        case parse_https_uri(value) do
+          :ok -> []
+          {:error, msg} -> [{field, msg}]
+        end
+      end)
+    end)
+  end
+
+  defp parse_https_uri(value) when is_binary(value) do
+    case URI.new(value) do
+      {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" -> :ok
+      {:ok, %URI{scheme: "https"}} -> {:error, "missing host"}
+      {:ok, %URI{scheme: nil}} -> {:error, "missing scheme"}
+      {:ok, %URI{scheme: scheme}} -> {:error, "scheme must be https, got #{scheme}"}
+      {:error, _} -> {:error, "invalid URI"}
+    end
+  end
+
+  defp parse_https_uri(_), do: {:error, "must be a string"}
 
   defp ensure_redirect_uris_present(changeset) do
     case get_field(changeset, :redirect_uris) do
