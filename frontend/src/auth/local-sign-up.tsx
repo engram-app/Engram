@@ -64,6 +64,21 @@ export default function LocalSignUp() {
     }
   }
 
+  // While bootstrap is still in flight, render a card-shaped placeholder
+  // so the layout doesn't shift and we don't flash the default form before
+  // swapping in the mode-specific empty state.
+  if (bootstrap === undefined) {
+    return (
+      <AuthLayout>
+        <div
+          aria-busy
+          aria-label="Loading"
+          className="h-[420px] w-full max-w-sm rounded-2xl border border-border bg-card shadow-sm sm:p-8"
+        />
+      </AuthLayout>
+    )
+  }
+
   // Gate the form when registration is administratively blocked. Only kicks
   // in after bootstrap closes — during bootstrap the operator is allowed
   // through regardless of mode (claim window).

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ROUTES } from '../routes'
 import { safeReturnTo } from './safe-return-to'
 import { useAuthAdapter } from './use-auth-adapter'
-import { useBootstrap } from './use-bootstrap'
+import { useBootstrap, type BootstrapState } from './use-bootstrap'
 import AuthLayout from './auth-layout'
 import { Button } from '@/components/ui/button'
 import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
@@ -106,16 +106,21 @@ export default function LocalSignIn() {
           {loading ? 'Signing in…' : 'Sign in'}
         </Button>
 
-        <SignUpFooter mode={bootstrap?.registration_mode} />
+        <SignUpFooter bootstrap={bootstrap} />
       </form>
     </AuthLayout>
   )
 }
 
-// Mode-aware sign-up prompt. `undefined` means we haven't loaded bootstrap
-// yet (or AUTH_PROVIDER=clerk) — fall back to the open-mode link so SaaS
-// behavior is unchanged and there's no awkward empty-state flash.
-function SignUpFooter({ mode }: { mode?: 'open' | 'invite_only' | 'closed' }) {
+// Mode-aware sign-up prompt. While bootstrap is `undefined` we render an
+// invisible placeholder line of the same height — preserves layout and
+// avoids the default→correct copy flash on first paint. `null` means
+// Clerk / 404 / network error: fall back to the open-mode link.
+function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
+  if (bootstrap === undefined) {
+    return <p aria-hidden className="invisible text-center text-sm">&nbsp;</p>
+  }
+  const mode = bootstrap?.registration_mode
   if (mode === 'invite_only') {
     return (
       <p className="text-center text-sm text-muted-foreground">

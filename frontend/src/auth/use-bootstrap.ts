@@ -5,21 +5,42 @@ export interface Bootstrap {
   registration_mode: 'open' | 'invite_only' | 'closed'
 }
 
-// Fetch self-host bootstrap state on mount. 404 (Clerk) → null, treated as
-// "not self-host" by callers. Errors → null so the page just renders normally.
-export function useBootstrap(): Bootstrap | null {
-  const [state, setState] = useState<Bootstrap | null>(null)
+// Discriminates "still fetching" from "loaded but no data". A `null` result
+// means we definitively know there is no self-host bootstrap (404 / Clerk /
+// network error → fall back to defaults). `undefined` means "don't render
+// mode-dependent UI yet" — UI shows a skeleton/placeholder until this
+// resolves, avoiding the default→correct flash on every navigation.
+export type BootstrapState = Bootstrap | null | undefined
+
+// Cache the fetch promise at module scope. The bootstrap answer doesn't
+// change during a session (a self-host admin flipping mode in another tab
+// is rare enough not to be worth invalidating for); caching means the
+// second time any auth page mounts, the value is already there and there's
+// no loading state at all.
+let cached: Bootstrap | null | undefined
+let inflight: Promise<Bootstrap | null> | null = null
+
+function fetchBootstrap(): Promise<Bootstrap | null> {
+  if (inflight) return inflight
+  inflight = fetch('/api/auth/bootstrap')
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((b: Bootstrap | null) => {
+      cached = b
+      return b
+    })
+  return inflight
+}
+
+export function useBootstrap(): BootstrapState {
+  const [state, setState] = useState<BootstrapState>(cached)
 
   useEffect(() => {
+    if (cached !== undefined) return
     let cancelled = false
-    fetch('/api/auth/bootstrap')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((b: Bootstrap | null) => {
-        if (!cancelled) setState(b)
-      })
-      .catch(() => {
-        if (!cancelled) setState(null)
-      })
+    fetchBootstrap().then((b) => {
+      if (!cancelled) setState(b)
+    })
     return () => {
       cancelled = true
     }
