@@ -117,12 +117,12 @@ describe('ConnectionsPage', () => {
     expect(screen.getByRole('heading', { name: /API keys/i })).toBeInTheDocument()
   })
 
-  it('shows the obsidian connection with verified subtitle', () => {
+  it('shows the obsidian connection name and omits the unverified badge', () => {
     mockConnections.splice(0, mockConnections.length, baseObs, basePat)
     mockTier = 'starter'
     renderPage()
     expect(screen.getByText(/Obsidian Vault Sync/i)).toBeInTheDocument()
-    expect(screen.getByText(/verified/i)).toBeInTheDocument()
+    expect(screen.queryByText(/unverified/i)).not.toBeInTheDocument()
   })
 
   it('shows the PAT in the api-keys section', () => {
@@ -160,7 +160,7 @@ describe('ConnectionsPage', () => {
     mockConnections.splice(0, mockConnections.length, baseMcp)
     mockTier = 'starter'
     renderPage()
-    expect(screen.getByText(/Unverified client/i)).toBeInTheDocument()
+    expect(screen.getByText(/unverified/i)).toBeInTheDocument()
     expect(screen.getByText(/Claude Desktop/i)).toBeInTheDocument()
   })
 })

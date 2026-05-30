@@ -136,81 +136,91 @@ function ConnectionCard({
   connection: Connection
   onRevoke: () => void
 }) {
-  const subtitle = connection.verified
-    ? `${connection.software_version ? connection.software_version + ' · ' : ''}verified`
-    : 'Unverified client'
+  const vaultLabel =
+    connection.vault_id == null
+      ? 'All vaults'
+      : (connection.vault_name ?? `#${connection.vault_id}`)
 
   return (
-    <article className="rounded-lg border border-border bg-card p-4 flex gap-4">
-      {connection.logo ? (
-        <img src={connection.logo} alt="" className="size-10 rounded" />
-      ) : (
-        <div
-          className="size-10 rounded bg-muted flex items-center justify-center text-muted-foreground"
-          aria-hidden
+    <details className="group rounded-lg border border-border bg-card open:pb-3">
+      <summary className="flex cursor-pointer items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
+        {connection.logo ? (
+          <img src={connection.logo} alt="" className="size-8 shrink-0 rounded" />
+        ) : (
+          <div
+            className="flex size-8 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+            aria-hidden
+          >
+            <Plug className="size-4" />
+          </div>
+        )}
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {connection.name ?? 'Unnamed'}
+          {!connection.verified && (
+            <span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
+              unverified
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-sm text-muted-foreground">{vaultLabel}</span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault()
+            onRevoke()
+          }}
+          className="shrink-0 text-sm text-destructive hover:text-destructive/80"
         >
-          <Plug className="size-5" />
-        </div>
-      )}
-      <div className="flex-1 space-y-1">
-        <header className="flex items-baseline gap-2">
-          <h3 className="font-medium">{connection.name ?? 'Unnamed'}</h3>
-          <small className="text-muted-foreground">{subtitle}</small>
-        </header>
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-3 text-sm text-muted-foreground">
-          <dt>Vault:</dt>
-          <dd>
-            {connection.vault_id == null
-              ? 'All vaults'
-              : (connection.vault_name ?? `#${connection.vault_id}`)}
-          </dd>
-          {connection.last_used_at && (
-            <>
-              <dt>Last active:</dt>
-              <dd>{new Date(connection.last_used_at).toLocaleString()}</dd>
-            </>
-          )}
-          {connection.scope && (
-            <>
-              <dt>Scopes:</dt>
-              <dd>{connection.scope}</dd>
-            </>
-          )}
-        </dl>
-        <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer">Details</summary>
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-3 mt-1">
-            <dt>Identifier:</dt>
-            <dd className="font-mono break-all">{connection.client_id ?? connection.key_id}</dd>
-            {connection.first_ip && (
-              <>
-                <dt>First IP:</dt>
-                <dd>{connection.first_ip}</dd>
-              </>
-            )}
-            {connection.first_user_agent && (
-              <>
-                <dt>User agent:</dt>
-                <dd className="break-all">{connection.first_user_agent}</dd>
-              </>
-            )}
-            {connection.redirect_uris.length > 0 && (
-              <>
-                <dt>Redirects:</dt>
-                <dd>{connection.redirect_uris.join(', ')}</dd>
-              </>
-            )}
-          </dl>
-        </details>
-      </div>
-      <button
-        type="button"
-        onClick={onRevoke}
-        className="self-start text-sm text-destructive hover:text-destructive/80"
-      >
-        Revoke
-      </button>
-    </article>
+          Revoke
+        </button>
+      </summary>
+      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground">
+        {connection.software_version && (
+          <>
+            <dt>Version:</dt>
+            <dd>{connection.software_version}</dd>
+          </>
+        )}
+        {connection.connected_at && (
+          <>
+            <dt>Connected:</dt>
+            <dd>{new Date(connection.connected_at).toLocaleString()}</dd>
+          </>
+        )}
+        {connection.last_used_at && (
+          <>
+            <dt>Last active:</dt>
+            <dd>{new Date(connection.last_used_at).toLocaleString()}</dd>
+          </>
+        )}
+        {connection.scope && (
+          <>
+            <dt>Scopes:</dt>
+            <dd>{connection.scope}</dd>
+          </>
+        )}
+        <dt>Identifier:</dt>
+        <dd className="break-all font-mono">{connection.client_id ?? connection.key_id}</dd>
+        {connection.first_ip && (
+          <>
+            <dt>First IP:</dt>
+            <dd>{connection.first_ip}</dd>
+          </>
+        )}
+        {connection.first_user_agent && (
+          <>
+            <dt>User agent:</dt>
+            <dd className="break-all">{connection.first_user_agent}</dd>
+          </>
+        )}
+        {connection.redirect_uris.length > 0 && (
+          <>
+            <dt>Redirects:</dt>
+            <dd className="break-all">{connection.redirect_uris.join(', ')}</dd>
+          </>
+        )}
+      </dl>
+    </details>
   )
 }
 
