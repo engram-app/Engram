@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import SettingsLayout from './settings-layout'
 
 vi.mock('../theme/theme-toggle', () => ({ default: () => null }))
@@ -10,14 +11,19 @@ vi.mock('../config', () => ({
 }))
 
 function renderAt(path: string) {
+  // SettingsLayout now calls useMe(); give it a query client with retry off so
+  // an unmocked /api/me fetch fails fast rather than retrying through the test.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/settings" element={<SettingsLayout />}>
-          <Route path="api-keys" element={<p>api keys body</p>} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/settings" element={<SettingsLayout />}>
+            <Route path="api-keys" element={<p>api keys body</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 

@@ -5,6 +5,7 @@ import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
 import { config } from './config'
+import AdminPanel from './features/admin/AdminPanel'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
@@ -91,6 +92,10 @@ export const router = createBrowserRouter(
                 { path: 'api-keys', element: <ApiKeysPage /> },
                 ...(config.billingEnabled
                   ? [{ path: 'billing', element: <BillingPage /> }]
+                  : []),
+                // Self-host only — AdminPanel runs its own role gate too.
+                ...(config.authProvider === 'local'
+                  ? [{ path: 'admin', element: <AdminPanel /> }]
                   : []),
               ],
             },

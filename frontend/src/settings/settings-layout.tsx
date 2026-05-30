@@ -10,6 +10,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { useMe } from '../api/queries'
 import { config } from '../config'
 import AppHeader from '../layout/app-header'
 import AuthBackdrop from '../layout/auth-backdrop'
@@ -46,7 +47,11 @@ function SettingsNavList({
 }
 
 export default function SettingsLayout() {
-  const sections = buildSettingsSections(config.authProvider, config.billingEnabled)
+  // Role drives the Administration entry (self-host only). Cached by react-query,
+  // so other tabs that call useMe() pay no extra request.
+  const { data: me } = useMe()
+  const isAdmin = me?.role === 'admin'
+  const sections = buildSettingsSections(config.authProvider, config.billingEnabled, isAdmin)
   const [navOpen, setNavOpen] = useState(false)
 
   return (
