@@ -26,7 +26,11 @@ import OnboardBillingPage from './onboarding/onboard-billing-page'
 
 // Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
 // stays out of the main chunk for local self-host builds.
-const AccountPage = lazy(() => import('./settings/account-page'))
+const AccountPage = lazy(() =>
+  config.authProvider === 'clerk'
+    ? import('./settings/account-page')
+    : import('./settings/account-page-local'),
+)
 
 export const router = createBrowserRouter(
   [
@@ -71,26 +75,19 @@ export const router = createBrowserRouter(
                 {
                   index: true,
                   element: (
-                    <Navigate
-                      to={config.authProvider === 'clerk' ? 'account' : 'api-keys'}
-                      replace
-                    />
+                    <Navigate to="account" replace />
                   ),
                 },
-                ...(config.authProvider === 'clerk'
-                  ? [
-                      {
-                        path: 'account',
-                        element: (
-                          <Suspense
-                            fallback={<p className="text-muted-foreground">Loading…</p>}
-                          >
-                            <AccountPage />
-                          </Suspense>
-                        ),
-                      },
-                    ]
-                  : []),
+                {
+                  path: 'account',
+                  element: (
+                    <Suspense
+                      fallback={<p className="text-muted-foreground">Loading…</p>}
+                    >
+                      <AccountPage />
+                    </Suspense>
+                  ),
+                },
                 { path: 'vaults', element: <VaultsPage /> },
                 { path: 'api-keys', element: <ApiKeysPage /> },
                 ...(config.billingEnabled
