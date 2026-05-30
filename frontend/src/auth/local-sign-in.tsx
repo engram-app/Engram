@@ -106,13 +106,36 @@ export default function LocalSignIn() {
           {loading ? 'Signing in…' : 'Sign in'}
         </Button>
 
-        <p className="text-center text-sm text-muted-foreground">
-          Don't have an account?{' '}
-          <Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
-            Sign up
-          </Link>
-        </p>
+        <SignUpFooter mode={bootstrap?.registration_mode} />
       </form>
     </AuthLayout>
+  )
+}
+
+// Mode-aware sign-up prompt. `undefined` means we haven't loaded bootstrap
+// yet (or AUTH_PROVIDER=clerk) — fall back to the open-mode link so SaaS
+// behavior is unchanged and there's no awkward empty-state flash.
+function SignUpFooter({ mode }: { mode?: 'open' | 'invite_only' | 'closed' }) {
+  if (mode === 'invite_only') {
+    return (
+      <p className="text-center text-sm text-muted-foreground">
+        Sign-ups require an invite link. Contact your admin to request one.
+      </p>
+    )
+  }
+  if (mode === 'closed') {
+    return (
+      <p className="text-center text-sm text-muted-foreground">
+        Sign-ups are closed on this instance.
+      </p>
+    )
+  }
+  return (
+    <p className="text-center text-sm text-muted-foreground">
+      Don't have an account?{' '}
+      <Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
+        Sign up
+      </Link>
+    </p>
   )
 }

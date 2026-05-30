@@ -64,6 +64,46 @@ export default function LocalSignUp() {
     }
   }
 
+  // Gate the form when registration is administratively blocked. Only kicks
+  // in after bootstrap closes — during bootstrap the operator is allowed
+  // through regardless of mode (claim window).
+  const gated =
+    bootstrap && !bootstrap.bootstrap_pending
+      ? bootstrap.registration_mode === 'closed'
+        ? 'closed'
+        : bootstrap.registration_mode === 'invite_only' && !invite
+          ? 'need_invite'
+          : null
+      : null
+
+  if (gated) {
+    return (
+      <AuthLayout>
+        <section
+          className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
+          role="status"
+        >
+          <div className="flex flex-col items-center gap-2 text-center">
+            <img src="/engram-mark.svg" alt="Engram" className="size-12" />
+            <h1 className={heading}>
+              {gated === 'closed' ? 'Sign-ups are closed' : 'Invite required'}
+            </h1>
+          </div>
+          <p className="text-center text-sm text-muted-foreground">
+            {gated === 'closed'
+              ? 'This Engram instance is not accepting new accounts. Contact your admin if you think this is a mistake.'
+              : 'Sign-ups on this instance require an invite link. Contact your admin to request one — they can generate one from Settings → Administration.'}
+          </p>
+          <p className="text-center text-sm text-muted-foreground">
+            <Link to={ROUTES.SIGN_IN} className="font-medium text-primary hover:underline">
+              Back to sign in
+            </Link>
+          </p>
+        </section>
+      </AuthLayout>
+    )
+  }
+
   return (
     <AuthLayout>
       <form
