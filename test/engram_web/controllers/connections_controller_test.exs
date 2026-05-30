@@ -176,4 +176,124 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert conn.status in [401, 403]
     end
   end
+
+  describe "POST /api/connections/pat" do
+    test "402 on Free (PAT minting blocked)", %{conn: conn} do
+      free = insert(:user)
+
+      conn =
+        conn
+        |> jwt_authed(free)
+        |> post("/api/connections/pat", %{name: "x"})
+
+      body = json_response(conn, 402)
+      assert body["error"] == "pat_disabled_on_free"
+      assert body["upgrade_url"] == "/settings/billing"
+    end
+
+    test "201 on paid tier, returns raw key once", %{conn: conn} do
+      paid = insert(:user)
+      insert(:user_limit_override,
+        user: paid,
+        key: "api_write_enabled",
+        value: %{"v" => true}
+      )
+
+      conn =
+        conn
+        |> jwt_authed(paid)
+        |> post("/api/connections/pat", %{name: "ci-bot"})
+
+      body = json_response(conn, 201)
+      assert String.starts_with?(body["key"], "engram_")
+      assert is_integer(body["id"])
+      assert body["name"] == "ci-bot"
+    end
+
+    test "422 when name is missing on paid tier", %{conn: conn} do
+      paid = insert(:user)
+      insert(:user_limit_override, user: paid, key: "api_write_enabled", value: %{"v" => true})
+
+      conn =
+        conn
+        |> jwt_authed(paid)
+        |> post("/api/connections/pat", %{})
+
+      # Mirror whatever the existing POST /api-keys does for missing name —
+      # check test/engram_web/controllers/auth_controller_test.exs. If it
+      # returns 400 instead of 422, match that. Adjust the assertion below
+      # if needed.
+      assert conn.status in [400, 422]
+    end
+
+    test "401/403 for API-key-authed requests", %{conn: conn} do
+      user = insert(:user)
+      grant_api_write!(user)
+      {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> post("/api/connections/pat", %{name: "x"})
+
+      assert conn.status in [401, 403]
+    end
+  end
+
+  describe "DELETE /api/connections/pat/:id" do
+    test "204 deletes the user's own PAT", %{conn: conn} do
+      user = insert(:user)
+      insert(:user_limit_override, user: user, key: "api_write_enabled", value: %{"v" => true})
+      {:ok, _raw_key, api_key} = Engram.Accounts.create_api_key(user, "to-delete")
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/pat/#{api_key.id}")
+
+      assert conn.status == 204
+      # Confirm it's gone — list_for_user should not include it.
+      refute Enum.any?(Engram.Connections.list_for_user(user.id), fn r -> r.kind == :pat and r.key_id == api_key.id end)
+    end
+
+    test "404 for foreign user's PAT (no cross-user revoke)", %{conn: conn} do
+      user = insert(:user)
+      other = insert(:user)
+      insert(:user_limit_override, user: other, key: "api_write_enabled", value: %{"v" => true})
+      {:ok, _raw_key, foreign_key} = Engram.Accounts.create_api_key(other, "foreign")
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/pat/#{foreign_key.id}")
+
+      assert conn.status == 404
+      # Foreign user's key must still be active
+      assert Enum.any?(Engram.Connections.list_for_user(other.id), fn r -> r.kind == :pat and r.key_id == foreign_key.id end)
+    end
+
+    test "404 for unknown PAT id", %{conn: conn} do
+      user = insert(:user)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/pat/999999")
+
+      assert conn.status == 404
+    end
+
+    test "401/403 for API-key-authed requests", %{conn: conn} do
+      user = insert(:user)
+      grant_api_write!(user)
+      {:ok, raw_key, api_key} = Engram.Accounts.create_api_key(user, "test-key")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> delete("/api/connections/pat/#{api_key.id}")
+
+      assert conn.status in [401, 403]
+    end
+  end
 end

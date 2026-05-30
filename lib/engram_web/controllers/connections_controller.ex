@@ -10,6 +10,8 @@ defmodule EngramWeb.ConnectionsController do
   use EngramWeb, :controller
   alias Engram.Connections
 
+  plug EngramWeb.Plugs.EnforcePatCreation when action in [:create_pat]
+
   def index(conn, _params) do
     user = conn.assigns.current_user
     json(conn, Enum.map(Connections.list_for_user(user.id), &serialize/1))
@@ -27,6 +29,41 @@ defmodule EngramWeb.ConnectionsController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "not_found"})
+    end
+  end
+
+  def create_pat(conn, params) do
+    user = conn.assigns.current_user
+    name = Map.get(params, "name") || Map.get(params, :name)
+
+    if is_nil(name) or name == "" do
+      conn
+      |> put_status(:unprocessable_entity)
+      |> json(%{errors: %{name: ["can't be blank"]}})
+    else
+      case Engram.Accounts.create_api_key(user, name) do
+        {:ok, raw_key, api_key} ->
+          conn
+          |> put_status(:created)
+          |> json(%{key: raw_key, id: api_key.id, name: api_key.name})
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{errors: EngramWeb.format_errors(changeset)})
+      end
+    end
+  end
+
+  def delete_pat(conn, %{"id" => id_str}) do
+    user = conn.assigns.current_user
+
+    with {id, ""} <- Integer.parse(id_str),
+         :ok <- Engram.Accounts.revoke_api_key(user, id) do
+      send_resp(conn, 204, "")
+    else
+      {:error, :not_found} -> conn |> put_status(:not_found) |> json(%{error: "not_found"})
+      _ -> conn |> put_status(:not_found) |> json(%{error: "not_found"})
     end
   end
 
