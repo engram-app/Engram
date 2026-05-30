@@ -70,18 +70,29 @@ defmodule Engram.ConnectionsTest do
     test "returns oauth connections grouped by client_id with logo info" do
       user = insert_user()
       vault = insert(:vault, user: user)
-      client = insert(:oauth_client,
-        kind: "mcp",
-        software_id: "anthropic-claude-desktop",
-        client_name: "Claude Desktop"
-      )
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: "anthropic-claude-desktop",
+          client_name: "Claude Desktop"
+        )
+
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: client.client_id,
         vault_id: vault.id
       )
 
-      assert [%{kind: :mcp, client_id: cid, name: "Claude Desktop", verified: true, vault_id: vid}] =
+      assert [
+               %{
+                 kind: :mcp,
+                 client_id: cid,
+                 name: "Claude Desktop",
+                 verified: true,
+                 vault_id: vid
+               }
+             ] =
                Connections.list_for_user(user.id)
 
       assert cid == client.client_id
@@ -107,10 +118,15 @@ defmodule Engram.ConnectionsTest do
 
       # client_a older, client_b newer — B should sort first regardless of alphabetic order
       insert(:oauth_refresh_token,
-        user_id: user.id, client_id: client_a.client_id, last_used_at: older
+        user_id: user.id,
+        client_id: client_a.client_id,
+        last_used_at: older
       )
+
       insert(:oauth_refresh_token,
-        user_id: user.id, client_id: client_b.client_id, last_used_at: newer
+        user_id: user.id,
+        client_id: client_b.client_id,
+        last_used_at: newer
       )
 
       rows = Connections.list_for_user(user.id)
@@ -122,6 +138,7 @@ defmodule Engram.ConnectionsTest do
       user = insert_user()
       client = insert(:oauth_client, kind: "mcp")
       now = DateTime.utc_now() |> DateTime.truncate(:second)
+
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: client.client_id,
@@ -172,7 +189,9 @@ defmodule Engram.ConnectionsTest do
     test "returns :not_found for foreign client" do
       user = insert_user()
       stranger_client_id = Ecto.UUID.generate()
-      assert {:error, :not_found} = Connections.revoke_oauth_family(user.id, stranger_client_id, nil)
+
+      assert {:error, :not_found} =
+               Connections.revoke_oauth_family(user.id, stranger_client_id, nil)
     end
   end
 end

@@ -11,7 +11,11 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       {:ok, conn: conn, user: user, obs: obs_client, mcp: mcp_client}
     end
 
-    test "passes when below cap (Free user, no existing connections)", %{conn: conn, user: user, obs: client} do
+    test "passes when below cap (Free user, no existing connections)", %{
+      conn: conn,
+      user: user,
+      obs: client
+    } do
       conn =
         conn
         |> Map.put(:method, "POST")
@@ -23,7 +27,11 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       refute conn.halted
     end
 
-    test "halts 402 at cap with full body (Free user, 1 existing obsidian connection)", %{conn: conn, user: user, obs: client} do
+    test "halts 402 at cap with full body (Free user, 1 existing obsidian connection)", %{
+      conn: conn,
+      user: user,
+      obs: client
+    } do
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
 
       conn =
@@ -88,7 +96,11 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       assert conn.status == 400
     end
 
-    test "passes when limits_enforced is false (self-host / unlimited tier)", %{conn: conn, user: user, mcp: client} do
+    test "passes when limits_enforced is false (self-host / unlimited tier)", %{
+      conn: conn,
+      user: user,
+      mcp: client
+    } do
       # Disable enforcement — simulates self-host bypass or unlimited tier.
       # effective_limit/2 returns :unlimited when enforced? is false.
       prev = Application.get_env(:engram, :limits_enforced)
@@ -124,7 +136,10 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       end
     end
 
-    test "passes when oauth_clients.kind is an unexpected value (fails open + logs)", %{conn: conn, user: user} do
+    test "passes when oauth_clients.kind is an unexpected value (fails open + logs)", %{
+      conn: conn,
+      user: user
+    } do
       import ExUnit.CaptureLog
 
       drift_client_id = Ecto.UUID.generate()

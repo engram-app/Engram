@@ -6,14 +6,24 @@ defmodule Engram.Connections.LogoAllowlist do
   """
 
   @allowlist %{
-    "engram-vault-sync" => %{logo: "/assets/clients/engram-vault-sync.svg", display_name: "Obsidian Vault Sync"},
-    "anthropic-claude-desktop" => %{logo: "/assets/clients/claude.svg", display_name: "Claude Desktop"},
+    "engram-vault-sync" => %{
+      logo: "/assets/clients/engram-vault-sync.svg",
+      display_name: "Obsidian Vault Sync"
+    },
+    "anthropic-claude-desktop" => %{
+      logo: "/assets/clients/claude.svg",
+      display_name: "Claude Desktop"
+    },
     "cursor.sh" => %{logo: "/assets/clients/cursor.svg", display_name: "Cursor"},
     "openai-chatgpt" => %{logo: "/assets/clients/chatgpt.svg", display_name: "ChatGPT"},
     "vscode-engram" => %{logo: "/assets/clients/vscode.svg", display_name: "VS Code (Engram)"}
   }
 
-  @spec lookup(String.t() | nil) :: %{verified: boolean(), logo: String.t() | nil, display_name: String.t() | nil}
+  @spec lookup(String.t() | nil) :: %{
+          verified: boolean(),
+          logo: String.t() | nil,
+          display_name: String.t() | nil
+        }
   def lookup(software_id) when is_binary(software_id) do
     case Map.get(@allowlist, software_id) do
       nil -> %{verified: false, logo: nil, display_name: nil}

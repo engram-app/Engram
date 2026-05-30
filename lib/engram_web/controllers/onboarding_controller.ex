@@ -65,5 +65,4 @@ defmodule EngramWeb.OnboardingController do
   def accept_terms(conn, _params) do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
-
 end

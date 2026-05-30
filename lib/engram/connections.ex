@@ -97,7 +97,8 @@ defmodule Engram.Connections do
 
   defp oauth_rows(user_id) do
     from(t in RefreshToken,
-      join: c in Client, on: c.client_id == t.client_id,
+      join: c in Client,
+      on: c.client_id == t.client_id,
       where: t.user_id == ^user_id,
       where: is_nil(t.revoked_at),
       # Consumed tokens are superseded by rotation; the current row is the

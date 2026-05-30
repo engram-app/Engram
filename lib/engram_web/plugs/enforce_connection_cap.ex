@@ -87,12 +87,18 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   # Resolve the billing cap for a user using literal LimitKey atoms so the
   # static lint can verify catalog membership at compile time. Unknown kinds
   # return :unlimited (falls open) and log a warning for observability.
-  defp cap_for_user(user, "obsidian"), do: Billing.effective_limit(user, :obsidian_connections_cap)
+  defp cap_for_user(user, "obsidian"),
+    do: Billing.effective_limit(user, :obsidian_connections_cap)
+
   defp cap_for_user(user, "mcp"), do: Billing.effective_limit(user, :mcp_connections_cap)
 
   defp cap_for_user(_user, other) do
     require Logger
-    Logger.warning("EnforceConnectionCap: unknown oauth_clients.kind value #{inspect(other)} — passing through as unlimited")
+
+    Logger.warning(
+      "EnforceConnectionCap: unknown oauth_clients.kind value #{inspect(other)} — passing through as unlimited"
+    )
+
     :unlimited
   end
 

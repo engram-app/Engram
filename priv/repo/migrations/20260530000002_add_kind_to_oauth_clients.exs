@@ -9,6 +9,7 @@ defmodule Engram.Repo.Migrations.AddKindToOauthClients do
     end
 
     create constraint(:oauth_clients, :oauth_clients_kind_check,
-             check: "kind IN ('mcp', 'obsidian')")
+             check: "kind IN ('mcp', 'obsidian')"
+           )
   end
 end

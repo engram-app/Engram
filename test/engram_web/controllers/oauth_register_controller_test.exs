@@ -390,7 +390,12 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
         })
 
       assert %{"client_id" => client_id} = json_response(conn, 201)
-      client = Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id), skip_tenant_check: true)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
       assert client.kind == "obsidian"
     end
 
@@ -402,7 +407,12 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
         })
 
       assert %{"client_id" => client_id} = json_response(conn, 201)
-      client = Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id), skip_tenant_check: true)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
       assert client.kind == "mcp"
     end
 
@@ -415,7 +425,12 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
         })
 
       assert %{"client_id" => client_id} = json_response(conn, 201)
-      client = Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id), skip_tenant_check: true)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
       assert client.kind == "mcp"
     end
 
@@ -429,14 +444,21 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
         })
 
       assert %{"client_id" => client_id} = json_response(conn, 201)
-      client = Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id), skip_tenant_check: true)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
       assert client.first_user_agent == "TestAgent/1.0"
       assert client.first_ip != nil
       # Test conn.remote_ip defaults to {127, 0, 0, 1}
       assert client.first_ip == "127.0.0.1"
     end
 
-    test "client-supplied first_ip and first_user_agent are overridden by server values", %{conn: conn} do
+    test "client-supplied first_ip and first_user_agent are overridden by server values", %{
+      conn: conn
+    } do
       conn =
         conn
         |> put_req_header("user-agent", "ServerStampedAgent/2.0")

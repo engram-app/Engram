@@ -28,11 +28,14 @@ defmodule EngramWeb.ConnectionsControllerTest do
   describe "GET /api/connections" do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
-      client = insert(:oauth_client,
-        kind: "mcp",
-        software_id: "anthropic-claude-desktop",
-        client_name: "Claude Desktop"
-      )
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: "anthropic-claude-desktop",
+          client_name: "Claude Desktop"
+        )
+
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
 
       # PAT rows: api_keys INSERT bypasses the tenant-gated SELECT check,
@@ -96,7 +99,12 @@ defmodule EngramWeb.ConnectionsControllerTest do
       user = insert(:user)
       vault = insert(:vault, user: user)
       client = insert(:oauth_client, kind: "mcp")
-      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, vault_id: vault.id)
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
 
       conn =
         conn
@@ -125,12 +133,25 @@ defmodule EngramWeb.ConnectionsControllerTest do
       user = insert(:user)
       vault = insert(:vault, user: user)
       client = insert(:oauth_client, kind: "mcp")
-      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, vault_id: vault.id)
 
-      conn1 = conn |> jwt_authed(user) |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      conn1 =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+
       assert conn1.status == 204
 
-      conn2 = build_conn() |> jwt_authed(user) |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+      conn2 =
+        build_conn()
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+
       assert conn2.status == 204
     end
 
@@ -193,6 +214,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "201 on paid tier, returns raw key once", %{conn: conn} do
       paid = insert(:user)
+
       insert(:user_limit_override,
         user: paid,
         key: "api_write_enabled",
@@ -253,7 +275,9 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       assert conn.status == 204
       # Confirm it's gone — list_for_user should not include it.
-      refute Enum.any?(Engram.Connections.list_for_user(user.id), fn r -> r.kind == :pat and r.key_id == api_key.id end)
+      refute Enum.any?(Engram.Connections.list_for_user(user.id), fn r ->
+               r.kind == :pat and r.key_id == api_key.id
+             end)
     end
 
     test "404 for foreign user's PAT (no cross-user revoke)", %{conn: conn} do
@@ -269,7 +293,9 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       assert conn.status == 404
       # Foreign user's key must still be active
-      assert Enum.any?(Engram.Connections.list_for_user(other.id), fn r -> r.kind == :pat and r.key_id == foreign_key.id end)
+      assert Enum.any?(Engram.Connections.list_for_user(other.id), fn r ->
+               r.kind == :pat and r.key_id == foreign_key.id
+             end)
     end
 
     test "404 for unknown PAT id", %{conn: conn} do

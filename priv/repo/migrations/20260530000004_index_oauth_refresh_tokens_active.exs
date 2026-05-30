@@ -9,6 +9,7 @@ defmodule Engram.Repo.Migrations.IndexOauthRefreshTokensActive do
     create index(:oauth_refresh_tokens, [:user_id, :client_id],
              where: "revoked_at IS NULL AND consumed_at IS NULL",
              name: :idx_oauth_refresh_tokens_user_client_active,
-             concurrently: true)
+             concurrently: true
+           )
   end
 end
