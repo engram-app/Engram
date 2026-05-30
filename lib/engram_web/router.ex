@@ -204,6 +204,11 @@ defmodule EngramWeb.Router do
     patch "/registration", RegistrationController, :update
 
     resources "/invites", InviteController, only: [:index, :create, :delete]
+
+    get "/users", UserController, :index
+    patch "/users/:id", UserController, :update
+    delete "/users/:id", UserController, :delete
+    post "/users/:id/password-reset", UserController, :password_reset
   end
 
   # OAuth public client metadata — surfaces `client_name` to the SPA
