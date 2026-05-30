@@ -15,7 +15,7 @@ defmodule Engram.ConnectionsTest do
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: mcp_client.client_id,
-        revoked_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        revoked_at: DateTime.utc_now(:second)
       )
 
       assert Connections.count_active(user.id, :mcp) == 1
@@ -48,7 +48,7 @@ defmodule Engram.ConnectionsTest do
     test "consumed and revoked tokens are excluded from active count" do
       user = insert_user()
       client = insert(:oauth_client, kind: "mcp")
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      now = DateTime.utc_now(:second)
 
       insert(:oauth_refresh_token,
         user_id: user.id,
@@ -137,7 +137,7 @@ defmodule Engram.ConnectionsTest do
     test "excludes revoked oauth grants" do
       user = insert_user()
       client = insert(:oauth_client, kind: "mcp")
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      now = DateTime.utc_now(:second)
 
       insert(:oauth_refresh_token,
         user_id: user.id,

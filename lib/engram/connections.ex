@@ -6,10 +6,10 @@ defmodule Engram.Connections do
   """
 
   import Ecto.Query
-  alias Engram.Repo
-  alias Engram.OAuth.{Client, RefreshToken}
   alias Engram.Accounts.ApiKey
   alias Engram.Connections.LogoAllowlist
+  alias Engram.OAuth.{Client, RefreshToken}
+  alias Engram.Repo
 
   @type kind :: :obsidian | :mcp
 
@@ -50,7 +50,7 @@ defmodule Engram.Connections do
   @spec revoke_oauth_family(integer(), String.t(), integer() | nil) ::
           :ok | {:error, :not_found}
   def revoke_oauth_family(user_id, client_id, vault_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now(:second)
 
     query =
       from(t in RefreshToken,
