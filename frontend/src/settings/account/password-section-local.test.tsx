@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const { logout, apiPost, navigate } = vi.hoisted(() => ({
@@ -18,6 +18,12 @@ vi.mock('../../api/client', () => ({
 vi.mock('react-router', () => ({ useNavigate: () => navigate }))
 
 import { PasswordSectionLocal } from './password-section-local'
+
+beforeEach(() => {
+  logout.mockReset().mockResolvedValue(undefined)
+  apiPost.mockReset().mockResolvedValue({ ok: true })
+  navigate.mockReset()
+})
 
 describe('PasswordSectionLocal', () => {
   it('blocks submit when new + confirm mismatch', async () => {
@@ -50,5 +56,20 @@ describe('PasswordSectionLocal', () => {
     )
     await waitFor(() => expect(logout).toHaveBeenCalled())
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/sign-in'))
+  })
+
+  it('surfaces backend error and does not sign out', async () => {
+    apiPost.mockReset().mockRejectedValueOnce(new Error('invalid_password'))
+    render(<PasswordSectionLocal />)
+    fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: 'wrongpass' } })
+    fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: 'newpass12' } })
+    fireEvent.change(screen.getByLabelText(/confirm new password/i), {
+      target: { value: 'newpass12' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /change password/i }))
+
+    expect(await screen.findByText(/invalid_password/i)).toBeInTheDocument()
+    expect(logout).not.toHaveBeenCalled()
+    expect(navigate).not.toHaveBeenCalled()
   })
 })

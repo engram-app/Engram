@@ -54,4 +54,19 @@ describe('DangerZoneSectionLocal', () => {
     expect(await screen.findByText(/only admin/i)).toBeInTheDocument()
     expect(logout).not.toHaveBeenCalled()
   })
+
+  it('shows incorrect-password error and does not log out', async () => {
+    deleteMutate.mockRejectedValueOnce(new Error('invalid_password'))
+    render(<DangerZoneSectionLocal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /delete account/i }))
+    fireEvent.change(await screen.findByLabelText(/password/i), {
+      target: { value: 'wrong' },
+    })
+    fireEvent.click(screen.getByLabelText(/i understand/i))
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    expect(await screen.findByText(/incorrect password/i)).toBeInTheDocument()
+    expect(logout).not.toHaveBeenCalled()
+  })
 })
