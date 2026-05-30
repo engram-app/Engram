@@ -88,12 +88,16 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
     setUser({ email: data.user.email })
   }, [])
 
-  const register = useCallback(async (email: string, password: string) => {
+  const register = useCallback(async (email: string, password: string, invite?: string) => {
+    // Self-host registration may be gated by invite_only mode; if the user
+    // arrived via `/signup?invite=…` we pass the token here so the backend
+    // can atomically redeem it.
+    const body = invite ? { email, password, invite } : { email, password }
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify(body),
     })
 
     if (!res.ok) {

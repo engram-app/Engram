@@ -1,5 +1,5 @@
 import { useState, useEffect, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ROUTES } from '../routes'
 import { useAuthAdapter } from './use-auth-adapter'
 import AuthLayout from './auth-layout'
@@ -7,9 +7,17 @@ import { Button } from '@/components/ui/button'
 import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
 import { cn } from '@/lib/utils'
 
+interface InvitePreview {
+  valid: boolean
+  label?: string | null
+}
+
 export default function LocalSignUp() {
   const { register, isSignedIn } = useAuthAdapter()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const invite = searchParams.get('invite') ?? ''
+  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -20,6 +28,18 @@ export default function LocalSignUp() {
   useEffect(() => {
     if (isSignedIn) navigate(ROUTES.HOME, { replace: true })
   }, [isSignedIn, navigate])
+
+  // Preview the invite (non-enumerating: bad/expired/revoked → {valid:false}).
+  useEffect(() => {
+    if (!invite) {
+      setInvitePreview(null)
+      return
+    }
+    fetch(`/api/auth/invite/${encodeURIComponent(invite)}`)
+      .then((r) => r.json())
+      .then((p: InvitePreview) => setInvitePreview(p))
+      .catch(() => setInvitePreview({ valid: false }))
+  }, [invite])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -34,7 +54,7 @@ export default function LocalSignUp() {
 
     try {
       if (!register) throw new Error('Registration not available for this auth provider')
-      await register(email, password)
+      await register(email, password, invite || undefined)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
     } finally {
@@ -52,6 +72,22 @@ export default function LocalSignUp() {
           <img src="/engram-mark.svg" alt="Engram" className="size-12" />
           <h1 className={heading}>Create your account</h1>
         </div>
+
+        {invite && invitePreview && (
+          invitePreview.valid ? (
+            <p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground">
+              You've been invited{invitePreview.label ? ` (${invitePreview.label})` : ''} —
+              finish below to join.
+            </p>
+          ) : (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-foreground"
+            >
+              This invite link is invalid, expired, or already used.
+            </p>
+          )
+        )}
 
         {error && (
           <p

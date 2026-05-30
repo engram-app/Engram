@@ -8,7 +8,7 @@ export interface AuthAdapter {
   getToken(): Promise<string | null>
 
   login?(email: string, password: string): Promise<void>
-  register?(email: string, password: string): Promise<void>
+  register?(email: string, password: string, invite?: string): Promise<void>
   logout(): Promise<void>
 
   /** Clerk renders its own SignIn/SignUp/UserButton; local mode uses custom components */
