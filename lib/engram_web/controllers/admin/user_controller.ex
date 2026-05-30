@@ -1,6 +1,7 @@
 defmodule EngramWeb.Admin.UserController do
   use EngramWeb, :controller
   alias Engram.Accounts
+  alias Engram.Accounts.PasswordReset
   alias Engram.Accounts.User
   alias Engram.Repo
 
@@ -42,9 +43,13 @@ defmodule EngramWeb.Admin.UserController do
     end
   end
 
-  # Implemented in Task D3.
-  def password_reset(conn, _params) do
-    conn |> put_status(501) |> json(%{error: "not_implemented"})
+  def password_reset(conn, %{"id" => id}) do
+    user = Repo.get!(User, id, skip_tenant_check: true)
+    {:ok, {raw, _tok}} = PasswordReset.issue(user, conn.assigns.current_user)
+
+    conn
+    |> put_status(:created)
+    |> json(%{token: raw, url: "#{conn.scheme}://#{conn.host}/reset-password?token=#{raw}"})
   end
 
   defp render_user(u) do

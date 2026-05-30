@@ -52,9 +52,11 @@ defmodule EngramWeb.Admin.UserControllerTest do
     assert json_response(conn, 409)["error"] == "last_admin"
   end
 
-  test "POST password-reset stub returns 501 until D3", %{conn: conn, admin: admin} do
+  test "POST /users/:id/password-reset returns a one-time link", %{conn: conn, admin: admin} do
     m = insert(:user, role: "member")
     conn = conn |> authenticate(admin) |> post(~p"/api/admin/users/#{m.id}/password-reset")
-    assert json_response(conn, 501)["error"] == "not_implemented"
+    body = json_response(conn, 201)
+    assert is_binary(body["token"])
+    assert String.contains?(body["url"], body["token"])
   end
 end
