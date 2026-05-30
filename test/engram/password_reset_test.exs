@@ -23,7 +23,7 @@ defmodule Engram.PasswordResetTest do
     admin = insert(:user, role: "admin")
     {:ok, {raw, tok}} = PasswordReset.issue(user, admin)
     assert is_binary(raw)
-    assert tok.token_hash == (:crypto.hash(:sha256, raw) |> Base.encode16(case: :lower))
+    assert tok.token_hash == :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
     assert is_nil(tok.used_at)
   end
 

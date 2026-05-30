@@ -9,7 +9,7 @@ defmodule Engram.InvitesTest do
   test "create_invite/2 returns a raw token shown once + hashed row", %{admin: admin} do
     {:ok, {raw, invite}} = Invites.create_invite(admin, %{})
     assert is_binary(raw) and byte_size(raw) > 20
-    assert invite.token_hash == (:crypto.hash(:sha256, raw) |> Base.encode16(case: :lower))
+    assert invite.token_hash == :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
     assert invite.max_uses == 1
     assert invite.use_count == 0
   end
