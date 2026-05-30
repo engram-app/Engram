@@ -168,65 +168,71 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
                     <tr className="border-t border-border bg-accent/20">
                       <td colSpan={5} className="px-4 py-4">
                         {pendingDelete === u.id ? (
-                          <div className="flex flex-wrap items-center justify-end gap-2">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
                             <span className="text-xs text-muted-foreground">
                               Remove {u.email} + their vault data?
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => remove(u)}
-                              className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setPendingDelete(null)}
-                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => toggleRole(u)}
-                              disabled={isSelf}
-                              title={isSelf ? 'Cannot change your own role' : undefined}
-                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
-                            >
-                              {u.role === 'admin' ? 'Demote' : 'Promote'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => issueReset(u)}
-                              className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
-                            >
-                              Reset link
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleSuspend(u)}
-                              disabled={isSelf}
-                              title={isSelf ? 'Cannot suspend yourself' : undefined}
-                              className={cn(
-                                'rounded-md border border-destructive/40 bg-background px-3 py-1 text-xs font-medium text-destructive',
-                                'hover:bg-destructive/10',
-                                'disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:opacity-50 disabled:hover:bg-background',
-                              )}
-                            >
-                              {u.suspended ? 'Unsuspend' : 'Suspend'}
-                            </button>
-                            {!isSelf && (
+                            <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => setPendingDelete(u.id)}
-                                className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                                onClick={() => setPendingDelete(null)}
+                                className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
                               >
-                                Remove
+                                Cancel
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                onClick={() => remove(u)}
+                                className="rounded-md bg-destructive px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-destructive/90"
+                              >
+                                Confirm remove
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleRole(u)}
+                                disabled={isSelf}
+                                title={isSelf ? 'Cannot change your own role' : undefined}
+                                className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
+                              >
+                                {u.role === 'admin' ? 'Demote to member' : 'Promote to admin'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => issueReset(u)}
+                                className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                              >
+                                Reset password
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleSuspend(u)}
+                                disabled={isSelf}
+                                title={isSelf ? 'Cannot suspend yourself' : undefined}
+                                className={cn(
+                                  'rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium text-destructive',
+                                  'hover:bg-destructive/10',
+                                  'disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:opacity-50 disabled:hover:bg-background',
+                                )}
+                              >
+                                {u.suspended ? 'Unsuspend' : 'Suspend'}
+                              </button>
+                              {!isSelf && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingDelete(u.id)}
+                                  className="rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10"
+                                >
+                                  Remove…
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                       </td>
