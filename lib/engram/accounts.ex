@@ -391,4 +391,88 @@ defmodule Engram.Accounts do
   defp hash_api_key(raw_key) do
     :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
   end
+
+  # ── Admin user management (self-host) ──────────────────────────
+
+  @doc "Lists active (non-deleted) users, newest first."
+  def list_users do
+    Repo.all(
+      from(u in User, where: is_nil(u.deleted_at), order_by: [desc: u.created_at]),
+      skip_tenant_check: true
+    )
+  end
+
+  @doc "Count of active (non-suspended, non-deleted) admins."
+  def active_admin_count do
+    Repo.aggregate(
+      from(u in User,
+        where: u.role == "admin" and is_nil(u.deleted_at) and is_nil(u.suspended_at)
+      ),
+      :count,
+      skip_tenant_check: true
+    )
+  end
+
+  @doc "Sets a user's role. Refuses to demote the last active admin."
+  def set_role(%User{} = user, role) when role in ~w(admin member) do
+    if demoting_last_admin?(user, role) do
+      {:error, :last_admin}
+    else
+      user
+      |> Ecto.Changeset.change(role: role)
+      |> Repo.update(skip_tenant_check: true)
+    end
+  end
+
+  defp demoting_last_admin?(%User{role: "admin"} = user, "member"),
+    do: is_nil(user.suspended_at) and is_nil(user.deleted_at) and active_admin_count() <= 1
+
+  defp demoting_last_admin?(_, _), do: false
+
+  @doc "Suspends a user (blocks login + refresh). Refuses the last active admin."
+  def suspend(%User{} = user) do
+    if would_orphan_admins?(user) do
+      {:error, :last_admin}
+    else
+      user
+      |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
+      |> Repo.update(skip_tenant_check: true)
+    end
+  end
+
+  @doc "Clears suspension."
+  def unsuspend(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(suspended_at: nil)
+    |> Repo.update(skip_tenant_check: true)
+  end
+
+  @doc "Soft-deletes a user. Refuses the last active admin."
+  def soft_delete_user(%User{} = user) do
+    if would_orphan_admins?(user) do
+      {:error, :last_admin}
+    else
+      user
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+      |> Repo.update(skip_tenant_check: true)
+    end
+  end
+
+  defp would_orphan_admins?(%User{role: "admin", suspended_at: nil, deleted_at: nil}),
+    do: active_admin_count() <= 1
+
+  defp would_orphan_admins?(_), do: false
+
+  @doc """
+  Spec §7 — enqueues a forced `CleanupVault` for every vault a user owns
+  (active + soft-deleted). Bypasses RLS + the `Vaults.list_vaults/1`
+  DEK-decrypt chain, since the purge only needs vault ids.
+  """
+  def purge_user_vaults(%User{id: user_id}) do
+    Repo.all(
+      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id),
+      skip_tenant_check: true
+    )
+    |> Enum.each(fn v -> Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) end)
+  end
 end
