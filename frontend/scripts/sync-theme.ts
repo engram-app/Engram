@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse, formatHex } from "culori";
 
 /* marketing var -> app var. Several app vars derive from one marketing var
  * (--input mirrors --border, --ring mirrors marketing --ring). App-only tokens
@@ -173,6 +174,56 @@ function syncLegal(marketingDir: string, appLegalDir: string, dryRun: boolean): 
   return actions;
 }
 
+const EMAIL_TOKEN_MAP: ReadonlyArray<readonly [marketing: string, elixir: string]> = [
+  ["secondary", "brand_purple"],
+  ["secondary-fg", "brand_purple_fg"],
+  ["fg", "text_primary"],
+  ["muted-fg", "text_muted"],
+  ["card", "surface_card"],
+];
+
+const SURFACE_PAGE_HEX = "#f5f5f7"; // email background, not in marketing tokens
+
+function oklchToHex(oklch: string): string {
+  const parsed = parse(oklch);
+  if (!parsed) die(`could not parse oklch value: ${oklch}`);
+  const hex = formatHex(parsed);
+  if (!hex) die(`could not format hex for: ${oklch}`);
+  return hex.toLowerCase();
+}
+
+function emailTokensElixir(light: Map<string, string>): string {
+  const lines: string[] = [];
+  lines.push(`defmodule Engram.Email.Tokens do`);
+  lines.push(`  @moduledoc """`);
+  lines.push(`  Generated from engram-marketing/src/styles/global.css :root block by`);
+  lines.push(`  \`bun scripts/sync-theme.ts\`. Do not edit by hand.`);
+  lines.push(``);
+  lines.push(`  Email clients support neither oklch() nor CSS custom properties, so the`);
+  lines.push(`  marketing oklch values are resolved to sRGB hex at sync time.`);
+  lines.push(`  """`);
+  lines.push(``);
+  for (const [mktVar, elixirFn] of EMAIL_TOKEN_MAP) {
+    const oklch = light.get(mktVar);
+    if (!oklch) die(`marketing token missing: --${mktVar}`);
+    const hex = oklchToHex(oklch);
+    lines.push(`  def ${elixirFn}, do: "${hex}"`);
+  }
+  lines.push(`  def surface_page, do: "${SURFACE_PAGE_HEX}"`);
+  lines.push(`end`);
+  lines.push(``);
+  return lines.join("\n");
+}
+
+function syncEmailTokens(light: Map<string, string>, appRoot: string, dryRun: boolean): string | null {
+  const dest = join(appRoot, "lib/engram/email/tokens.ex");
+  const next = emailTokensElixir(light);
+  const current = existsSync(dest) ? readFileSync(dest, "utf8") : "";
+  if (current === next) return null;
+  if (!dryRun) writeFileSync(dest, next);
+  return "lib/engram/email/tokens.ex";
+}
+
 function main() {
   const dryRun = process.argv.includes("--dry-run");
   const marketingDir = findMarketingDir();
@@ -195,6 +246,7 @@ function main() {
 
   const assetActions = syncAssets(marketingDir, join(appRoot, "public"), dryRun);
   const legalActions = syncLegal(marketingDir, join(appRoot, "src/legal/versions"), dryRun);
+  const tokensAction = syncEmailTokens(light, join(appRoot, ".."), dryRun);
 
   console.log(`sync-theme: source = ${marketingDir}${dryRun ? "  (dry run)" : ""}`);
   for (const c of changes) {
@@ -202,19 +254,21 @@ function main() {
   }
   for (const a of assetActions) console.log(`  [asset] ${a} ${dryRun ? "(would copy)" : "copied"}`);
   for (const l of legalActions) console.log(`  [legal] ${l} ${dryRun ? "(would copy)" : "copied"}`);
+  if (tokensAction) console.log(`  [email-tokens] ${tokensAction} ${dryRun ? "(would write)" : "written"}`);
 
-  if (changes.length === 0 && assetActions.length === 0 && legalActions.length === 0) {
+  if (changes.length === 0 && assetActions.length === 0 && legalActions.length === 0 && !tokensAction) {
     console.log("  already in sync");
     return;
   }
+  const emailTokenCount = tokensAction ? 1 : 0;
   if (!dryRun) {
     writeFileSync(appCssPath, appCss);
     console.log(
-      `sync-theme: wrote ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s)`,
+      `sync-theme: wrote ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s), ${emailTokenCount} email-token file(s)`,
     );
   } else {
     console.log(
-      `sync-theme: ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s) pending`,
+      `sync-theme: ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s), ${emailTokenCount} email-token file(s) pending`,
     );
   }
 }

@@ -119,6 +119,67 @@ defmodule Engram.MailerTest do
     end
   end
 
+  describe "send_welcome/1 — content assertions" do
+    test "subject is 'Welcome to Engram'" do
+      user = insert(:user, email: "user@example.com", display_name: "Sam")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, _html, _opts ->
+        assert subject == "Welcome to Engram"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "body greets the user by display_name" do
+      user = insert(:user, email: "user@example.com", display_name: "Sam")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        assert html =~ "Welcome to Engram, Sam"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "body falls back to 'there' when display_name is nil" do
+      user = insert(:user, email: "user@example.com", display_name: nil)
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        assert html =~ "Welcome to Engram, there"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "body contains the install CTA link" do
+      user = insert(:user, email: "user@example.com", display_name: "Sam")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        assert html =~ "https://community.obsidian.md/plugins/engram-vault-sync",
+               "expected install CTA href"
+
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "body references the memory framing, not just sync" do
+      user = insert(:user, email: "user@example.com", display_name: "Sam")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
+        assert html =~ "memory",
+               "expected the memory-layer framing in the welcome body"
+
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+  end
+
   describe "send_vault_deletion_notice/4" do
     test "returns :ok and includes the manage link, vault name, and purge date" do
       user = insert(:user, email: "u@example.com")
