@@ -730,7 +730,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: "Run API-only tests"
         working-directory: e2e
-        run: python3 -m pytest tests/api_only/ --ignore=tests/api_only/test_60_local_auth.py --ignore=tests/api_only/test_62_local_account_settings.py -v --timeout=180 -p no:cacheprovider --no-header
+        run: python3 -m pytest tests/api_only/ --ignore=tests/api_only/local -v --timeout=180 -p no:cacheprovider --no-header
         env:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
