@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const current = { id: 'sess_current', latestActivity: { deviceType: 'Mac', browserName: 'Chrome' }, revoke: vi.fn() }
 const other = { id: 'sess_other', latestActivity: { deviceType: 'iPhone', browserName: 'Safari' }, revoke: vi.fn().mockResolvedValue({}) }
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react', () => ({
   useSessionList: () => ({ isLoaded: true, sessions: [current, other] }),
   useSession: () => ({ session: { id: 'sess_current' } }),
 }))

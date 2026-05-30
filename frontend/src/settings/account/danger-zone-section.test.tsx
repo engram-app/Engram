@@ -1,17 +1,17 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { toast } from 'sonner'
-import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
+import { isReverificationCancelledError } from '@clerk/react/errors'
 import { makeUser } from './section-test-helpers'
 
 const signOut = vi.fn().mockResolvedValue({})
 let user = makeUser()
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react', () => ({
   useUser: () => ({ user, isLoaded: true }),
   useReverification: (fn: unknown) => fn,
   useClerk: () => ({ signOut }),
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({
+vi.mock('@clerk/react/errors', () => ({
   isClerkAPIResponseError: () => false,
   isReverificationCancelledError: vi.fn(() => false),
 }))

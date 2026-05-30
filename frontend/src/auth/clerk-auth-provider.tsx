@@ -1,5 +1,5 @@
-import { ClerkProvider, useAuth, useClerk } from '@clerk/clerk-react'
-import { dark } from '@clerk/themes'
+import { ClerkProvider, useAuth, useClerk } from "@clerk/react"
+import { dark } from "@clerk/themes"
 import { useCallback, useEffect, useMemo } from 'react'
 import { AuthContext, type AuthAdapter } from './auth-context'
 import { rememberSignupUser } from './signup-rejection'

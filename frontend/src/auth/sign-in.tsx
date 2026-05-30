@@ -9,7 +9,7 @@ const isClerk = config.authProvider === 'clerk'
 
 const ClerkSignIn = isClerk
   ? lazy(() =>
-      import('@clerk/clerk-react').then((mod) => ({
+      import('@clerk/react').then((mod) => ({
         default: ({ returnTo }: { returnTo: string }) => (
           <mod.SignIn routing="hash" forceRedirectUrl={returnTo} />
         ),

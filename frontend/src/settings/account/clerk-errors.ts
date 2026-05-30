@@ -1,4 +1,4 @@
-import { isClerkAPIResponseError } from '@clerk/clerk-react/errors'
+import { isClerkAPIResponseError } from '@clerk/react/errors'
 
 // Surface Clerk's actual validation message instead of a generic fallback.
 // Clerk API errors carry errors[].longMessage/message (e.g. a 422 explaining

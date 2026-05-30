@@ -7,6 +7,9 @@ const { register } = vi.hoisted(() => ({ register: vi.fn().mockResolvedValue(und
 vi.mock('./use-auth-adapter', () => ({
   useAuthAdapter: () => ({ register, isSignedIn: false }),
 }))
+vi.mock('./use-bootstrap', () => ({
+  useBootstrap: () => null,
+}))
 
 function renderPage() {
   return render(

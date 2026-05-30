@@ -19,7 +19,7 @@
   },
   "keywords": [],
   "dependencies": {
-    "@clerk/clerk-react": "^5.61.4",
+    "@clerk/react": "^6.7.2",
     "@clerk/themes": "^2.4.57",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/state": "^6.6.0",
