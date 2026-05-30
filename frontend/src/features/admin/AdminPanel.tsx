@@ -29,7 +29,7 @@ export default function AdminPanel() {
   }
 
   return (
-    <article className="space-y-8">
+    <article className="space-y-10">
       <header>
         <h1 className="text-xl font-semibold text-foreground">Administration</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -41,21 +41,27 @@ export default function AdminPanel() {
         <h2 id="members-heading" className="text-sm font-semibold text-foreground">
           Members
         </h2>
-        <MembersTab currentUserId={me.id} />
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <MembersTab currentUserId={me.id} />
+        </div>
       </section>
 
       <section aria-labelledby="invites-heading" className="space-y-3">
         <h2 id="invites-heading" className="text-sm font-semibold text-foreground">
           Invites
         </h2>
-        <InvitesTab />
+        <div className="rounded-lg border border-border bg-card p-4 sm:p-6">
+          <InvitesTab />
+        </div>
       </section>
 
       <section aria-labelledby="registration-heading" className="space-y-3">
         <h2 id="registration-heading" className="text-sm font-semibold text-foreground">
           Registration
         </h2>
-        <RegistrationTab />
+        <div className="rounded-lg border border-border bg-card p-4 sm:p-6">
+          <RegistrationTab />
+        </div>
       </section>
     </article>
   )

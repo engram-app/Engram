@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiError } from '@/api/client'
@@ -112,11 +113,11 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-muted-foreground">
             <tr>
-              <th className="py-2 pr-2 font-medium">Email</th>
-              <th className="py-2 pr-2 font-medium">Role</th>
-              <th className="py-2 pr-2 font-medium">Status</th>
-              <th className="py-2 pr-2 font-medium">Last active</th>
-              <th className="w-8" />
+              <th className="py-3 pl-4 pr-2 font-medium">Email</th>
+              <th className="py-3 pr-2 font-medium">Role</th>
+              <th className="py-3 pr-2 font-medium">Status</th>
+              <th className="py-3 pr-2 font-medium">Last active</th>
+              <th className="w-10" />
             </tr>
           </thead>
           <tbody>
@@ -133,7 +134,7 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
                     )}
                     onClick={() => toggleExpanded(u.id)}
                   >
-                    <td className="py-2 pr-2">
+                    <td className="py-3 pl-4 pr-2">
                       <span className="text-foreground">{u.email}</span>
                       {isSelf && (
                         <span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
@@ -141,30 +142,31 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
                         </span>
                       )}
                     </td>
-                    <td className="py-2 pr-2">{u.role}</td>
-                    <td className="py-2 pr-2">
+                    <td className="py-3 pr-2">{u.role}</td>
+                    <td className="py-3 pr-2">
                       {u.suspended ? (
                         <span className="text-destructive">suspended</span>
                       ) : (
                         'active'
                       )}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className="py-3 pr-2">
                       {u.last_active ? new Date(u.last_active).toLocaleDateString() : '—'}
                     </td>
-                    <td className="py-2 text-right">
-                      <span
+                    <td className="py-3 pl-2 pr-4 text-right">
+                      <ChevronRight
                         aria-hidden
-                        className="inline-block text-muted-foreground transition-transform"
-                        style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-                      >
-                        ▸
-                      </span>
+                        strokeWidth={2.5}
+                        className={cn(
+                          'inline-block size-5 text-muted-foreground transition-transform duration-150',
+                          isExpanded && 'rotate-90 text-foreground',
+                        )}
+                      />
                     </td>
                   </tr>
                   {isExpanded && (
                     <tr className="border-t border-border bg-accent/20">
-                      <td colSpan={5} className="px-2 py-3">
+                      <td colSpan={5} className="px-4 py-4">
                         {pendingDelete === u.id ? (
                           <div className="flex flex-wrap items-center justify-end gap-2">
                             <span className="text-xs text-muted-foreground">
