@@ -1,0 +1,115 @@
+name: frontend major updates
+
+# Surface JS deps with a newer MAJOR than the current caret-range allows.
+# `bun outdated` only walks within the existing semver range, so a v5→v6
+# package rename (e.g. @clerk/clerk-react → @clerk/react) stays invisible
+# until a CVE forces it. This job runs npm-check-updates weekly and opens
+# a single tracking issue listing the drift. Closing the issue is the
+# signal that the next bump should happen.
+
+on:
+  schedule:
+    - cron: '17 13 * * 1'  # Mon 13:17 UTC — off-peak, post-weekend
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run npm-check-updates and filter to major bumps
+        id: scan
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          # ncu has no --target major; it gives the latest of each pkg.
+          # Post-filter to drop minor/patch by comparing leading version
+          # segment of current (package.json caret) vs proposed range.
+          raw=$(bunx npm-check-updates --target latest --jsonUpgraded 2>/dev/null || echo '{}')
+          cur=$(jq -s '.[0].dependencies + .[0].devDependencies' package.json)
+          majors=$(echo "$raw" | jq --argjson cur "$cur" '
+            to_entries
+            | map(select(
+                (($cur[.key] // "") | gsub("[\\^~>=<]"; "") | split(".")[0]) !=
+                (.value             | gsub("[\\^~>=<]"; "") | split(".")[0])
+              ))
+            | from_entries
+          ')
+
+          if [ "$majors" = '{}' ] || [ -z "$majors" ]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "No major drift."
+            exit 0
+          fi
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+
+          # Markdown table: pkg | current caret | proposed
+          {
+            echo "table<<EOF"
+            echo "| Package | Current | Proposed major |"
+            echo "|---|---|---|"
+            echo "$majors" | jq -r --argjson cur "$cur" \
+              'to_entries[] | "| `\(.key)` | `\($cur[.key] // "?")` | `\(.value)` |"'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find or update tracking issue
+        if: steps.scan.outputs.drift == 'true'
+        uses: actions/github-script@v8
+        env:
+          DRIFT_TABLE: ${{ steps.scan.outputs.table }}
+        with:
+          script: |
+            const title = 'chore(deps): frontend major-version drift'
+            const body = [
+              'Weekly `npm-check-updates --target major` scan in `frontend/` found packages with a newer major than the current caret-range allows.',
+              '',
+              process.env.DRIFT_TABLE,
+              '',
+              '## Why this exists',
+              '',
+              '`bun outdated` only walks within the existing semver caret, so a v5→v6 package rename stays invisible until a CVE forces the bump (see PR #356 / Clerk).',
+              '',
+              '## Action',
+              '',
+              'Review each entry — bumps may require code changes, migration guides, or be intentionally pinned. Close this issue once handled; the next scan opens a fresh one if drift remains.',
+              '',
+              `Scan: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n')
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'deps,frontend',
+              per_page: 100,
+            })
+            const match = existing.find((i) => i.title === title)
+
+            if (match) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              })
+              core.info(`Updated existing issue #${match.number}`)
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['deps', 'frontend'],
+              })
+              core.info(`Opened issue #${created.number}`)
+            }
