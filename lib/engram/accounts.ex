@@ -151,6 +151,30 @@ defmodule Engram.Accounts do
     {:error, :password_too_short}
   end
 
+  @doc "Sets a new bcrypt password hash for a user (local auth)."
+  def update_password(%User{} = user, new_password)
+      when is_binary(new_password) and byte_size(new_password) >= 8 and
+             byte_size(new_password) <= @max_password_bytes do
+    user
+    |> Ecto.Changeset.change(password_hash: Bcrypt.hash_pwd_salt(new_password))
+    |> Repo.update(skip_tenant_check: true)
+  end
+
+  def update_password(_user, pw) when is_binary(pw) and byte_size(pw) < 8,
+    do: {:error, :password_too_short}
+
+  def update_password(_user, pw) when is_binary(pw),
+    do: {:error, :password_too_long}
+
+  @doc "Spec §8/§10 — revokes all of a user's active refresh tokens (logout-everywhere)."
+  def revoke_all_user_tokens(%User{id: user_id}) do
+    now = DateTime.utc_now(:second)
+
+    RefreshToken
+    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+  end
+
   def verify_password(email, password) do
     normalized_email = email |> String.trim() |> String.downcase()
 
