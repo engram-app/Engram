@@ -21,15 +21,19 @@ defmodule Engram.Mailer do
 
   require Logger
 
+  @install_url "https://engram.page/install"
+
   def send_welcome(%User{email: email} = user) do
     name = Template.esc(greeting_name(user))
 
     body = """
-    <mj-text font-size="18px" font-weight="600">Welcome to Engram, #{name}!</mj-text>
-    <mj-text>Your account is ready. Engram keeps your Obsidian vault synced across
-    every device, with full-text and semantic search over everything you write.</mj-text>
-    <mj-text>To get started, install the Engram plugin in Obsidian and connect it
-    to your account — your notes start syncing immediately.</mj-text>
+    <mj-text font-size="18px" font-weight="600">Welcome to Engram, #{name}.</mj-text>
+    <mj-text>Your account is ready. Engram keeps your Obsidian vault synced
+    across every device — and turns those notes into searchable, structured
+    memory you can hand to any AI tool you use.</mj-text>
+    <mj-text>To get started, install the Engram plugin in Obsidian and connect
+    it to your account. Your notes start syncing immediately.</mj-text>
+    <mj-button href="#{@install_url}" background-color="#{Engram.Email.Tokens.brand_purple()}" color="#{Engram.Email.Tokens.brand_purple_fg()}">Install the Engram plugin</mj-button>
     <mj-text>— The Engram team</mj-text>
     """
 
