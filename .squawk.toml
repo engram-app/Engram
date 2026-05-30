@@ -1,31 +1,13 @@
 # squawk lints the DDL of migrations new on each branch
-# (see priv/repo/lint_migrations.sh). These rules structurally conflict
-# with Ecto's generated SQL or the repo's conventions, so they're excluded —
-# everything else (ban-drop-column, adding-required-field, renaming-column,
-# changing-column-type, disallowed-unique-constraint, etc.) still gates the build.
+# (see priv/repo/lint_migrations.sh). These two rules structurally conflict
+# with Ecto's generated migration SQL, so they're excluded — everything else
+# (ban-drop-column, adding-required-field, renaming-column, changing-column-type,
+# disallowed-unique-constraint, etc.) still gates the build.
 #
-#   require-timeout-settings         — Ecto migrations never emit
-#     `SET lock_timeout` / `SET statement_timeout`; those are managed outside
-#     the migration SQL.
-#   prefer-robust-stmts              — Ecto wraps each migration in a
-#     transaction (invisible once the SQL is flattened) and reruns via the
-#     schema_migrations table, and this rule also flags every
-#     `CREATE INDEX CONCURRENTLY` for a missing `IF NOT EXISTS` that Ecto
-#     does not generate.
-#   prefer-timestamp-tz              — the repo standardizes on Ecto's
-#     `:utc_datetime[_usec]` types, which compile to `timestamp`. Adopting
-#     `timestamptz` for some tables would create schema-wide inconsistency
-#     (e.g. `users.suspended_at` as timestamptz while `users.created_at` is
-#     timestamp). A project-wide migration to timestamptz can flip both
-#     this exclusion and every existing column in one pass.
-#   require-concurrent-index-creation — protects against AccessExclusiveLock
-#     on populated tables during deploy. Indexes added inside a CREATE TABLE
-#     migration are on brand-new empty tables — zero lock contention. The
-#     rule is over-applied to fresh tables and would force every CREATE TABLE
-#     migration to split + `@disable_ddl_transaction true` for no benefit.
-excluded_rules = [
-  "require-timeout-settings",
-  "prefer-robust-stmts",
-  "prefer-timestamp-tz",
-  "require-concurrent-index-creation"
-]
+#   require-timeout-settings — Ecto migrations never emit `SET lock_timeout` /
+#     `SET statement_timeout`; those are managed outside the migration SQL.
+#   prefer-robust-stmts      — Ecto wraps each migration in a transaction
+#     (invisible once the SQL is flattened) and reruns via the schema_migrations
+#     table, and this rule also flags every `CREATE INDEX CONCURRENTLY` for a
+#     missing `IF NOT EXISTS` that Ecto does not generate.
+excluded_rules = ["require-timeout-settings", "prefer-robust-stmts"]
