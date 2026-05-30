@@ -3,6 +3,7 @@ defmodule EngramWeb.LocalAuthController do
 
   alias Engram.Accounts
   alias Engram.Auth.Providers.Local
+  alias Engram.Instance
   alias Engram.Invites
 
   @refresh_cookie_base [
@@ -17,42 +18,76 @@ defmodule EngramWeb.LocalAuthController do
     Keyword.put(@refresh_cookie_base, :secure, secure)
   end
 
-  def register(conn, %{"email" => email, "password" => password})
+  def register(conn, %{"email" => email, "password" => password} = params)
       when is_binary(email) and is_binary(password) do
-    # Normalize timing: always run bcrypt even if we'll fail on duplicate email
-    case Local.register_user(email, password, %{}) do
-      {:ok, %{external_id: ext_id, email: user_email}} ->
-        with {:ok, user} <- Accounts.find_by_external_id(ext_id),
-             {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
-             {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
-          conn
-          |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
-          |> put_status(:created)
-          |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
-        else
+    case check_registration_allowed(Map.get(params, "invite")) do
+      :ok ->
+        # Normalize timing: always run bcrypt even if we'll fail on duplicate email
+        case Local.register_user(email, password, %{}) do
+          {:ok, %{external_id: ext_id, email: user_email}} ->
+            with {:ok, user} <- Accounts.find_by_external_id(ext_id),
+                 {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
+                 {:ok, raw_refresh, _record} <- Accounts.create_refresh_token(user) do
+              conn
+              |> put_resp_cookie("refresh_token", raw_refresh, refresh_cookie_opts(conn))
+              |> put_status(:created)
+              |> json(%{access_token: access_token, user: %{email: user.email, role: user.role}})
+            else
+              {:error, _} ->
+                conn |> put_status(500) |> json(%{error: "session_creation_failed"})
+            end
+
+          {:error, :password_too_short} ->
+            conn |> put_status(422) |> json(%{error: "password_too_short"})
+
+          {:error, :password_too_long} ->
+            conn |> put_status(422) |> json(%{error: "password_too_long"})
+
+          {:error, %Ecto.Changeset{}} ->
+            # Unique constraint or other validation failure — normalize timing
+            Bcrypt.no_user_verify()
+            conn |> put_status(422) |> json(%{error: "registration_failed"})
+
           {:error, _} ->
-            conn |> put_status(500) |> json(%{error: "session_creation_failed"})
+            conn |> put_status(422) |> json(%{error: "registration_failed"})
         end
 
-      {:error, :password_too_short} ->
-        conn |> put_status(422) |> json(%{error: "password_too_short"})
-
-      {:error, :password_too_long} ->
-        conn |> put_status(422) |> json(%{error: "password_too_long"})
-
-      {:error, %Ecto.Changeset{}} ->
-        # Unique constraint or other validation failure — normalize timing
+      {:error, status, code} ->
         Bcrypt.no_user_verify()
-        conn |> put_status(422) |> json(%{error: "registration_failed"})
-
-      {:error, _} ->
-        conn |> put_status(422) |> json(%{error: "registration_failed"})
+        conn |> put_status(status) |> json(%{error: code})
     end
   end
 
   def register(conn, _params) do
     conn |> put_status(422) |> json(%{error: "email and password required"})
   end
+
+  # Claim-window first: the first user is always allowed and becomes admin
+  # inside `Accounts.create_user_with_password/2` (advisory-locked). Race note:
+  # the invite is redeemed BEFORE user creation; if creation then fails on a
+  # duplicate email the invite is already consumed — acceptable for v1.
+  defp check_registration_allowed(invite) do
+    if Accounts.first_user?() do
+      :ok
+    else
+      case Instance.registration_mode() do
+        "open" -> :ok
+        "closed" -> {:error, 403, "registration_closed"}
+        "invite_only" -> check_invite(invite)
+      end
+    end
+  end
+
+  defp check_invite(nil), do: {:error, 403, "invite_required"}
+
+  defp check_invite(token) when is_binary(token) do
+    case Invites.redeem(token) do
+      {:ok, _invite} -> :ok
+      {:error, :invalid} -> {:error, 403, "invite_invalid"}
+    end
+  end
+
+  defp check_invite(_), do: {:error, 403, "invite_invalid"}
 
   def login(conn, %{"email" => email, "password" => password}) do
     case Local.authenticate_credentials(email, password) do

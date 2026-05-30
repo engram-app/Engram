@@ -16,6 +16,12 @@ defmodule Engram.Accounts do
 
   def get_user(id), do: Repo.get(User, id, skip_tenant_check: true)
 
+  @doc """
+  True if no users exist yet — the claim window. While open, registration
+  bypasses the mode gate and the first user becomes admin.
+  """
+  def first_user?, do: Repo.aggregate(User, :count, skip_tenant_check: true) == 0
+
   # ── Clerk Auth ─────────────────────────────────────────────────
 
   @doc """
