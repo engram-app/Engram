@@ -25,6 +25,6 @@ defmodule EngramWeb.Plugs.RequireAdmin do
     end
   end
 
-  defp admin?(%{role: "admin", suspended_at: nil}), do: true
+  defp admin?(%{role: "admin", suspended_at: nil, deleted_at: nil}), do: true
   defp admin?(_), do: false
 end

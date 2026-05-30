@@ -24,6 +24,7 @@ defmodule EngramWeb.Admin.UserController do
       {:ok, u} -> json(conn, %{user: admin_view(u)})
       {:error, :last_admin} -> conn |> put_status(409) |> json(%{error: "last_admin"})
       {:error, :no_op} -> conn |> put_status(422) |> json(%{error: "no_op"})
+      {:error, :invalid_role} -> conn |> put_status(422) |> json(%{error: "invalid_role"})
       {:error, _} -> conn |> put_status(422) |> json(%{error: "update_failed"})
     end
   end
@@ -45,11 +46,16 @@ defmodule EngramWeb.Admin.UserController do
 
   def password_reset(conn, %{"id" => id}) do
     user = Repo.get!(User, id, skip_tenant_check: true)
-    {:ok, {raw, _tok}} = PasswordReset.issue(user, conn.assigns.current_user)
 
-    conn
-    |> put_status(:created)
-    |> json(%{token: raw, url: "#{conn.scheme}://#{conn.host}/reset-password?token=#{raw}"})
+    case PasswordReset.issue(user, conn.assigns.current_user) do
+      {:ok, {raw, _tok}} ->
+        conn
+        |> put_status(:created)
+        |> json(%{token: raw, url: "#{conn.scheme}://#{conn.host}/reset-password?token=#{raw}"})
+
+      {:error, _cs} ->
+        conn |> put_status(422) |> json(%{error: "reset_issue_failed"})
+    end
   end
 
   defp admin_view(u) do

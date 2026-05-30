@@ -147,14 +147,18 @@ export default function MembersTab({ currentUserId }: { currentUserId: number })
                       <button
                         type="button"
                         onClick={() => toggleRole(u)}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
+                        disabled={u.id === currentUserId}
+                        title={u.id === currentUserId ? 'Cannot change your own role' : undefined}
+                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
                       >
                         {u.role === 'admin' ? 'Demote' : 'Promote'}
                       </button>
                       <button
                         type="button"
                         onClick={() => toggleSuspend(u)}
-                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent"
+                        disabled={u.id === currentUserId}
+                        title={u.id === currentUserId ? 'Cannot suspend yourself' : undefined}
+                        className="rounded-md border border-border bg-background px-3 py-1 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background"
                       >
                         {u.suspended ? 'Unsuspend' : 'Suspend'}
                       </button>

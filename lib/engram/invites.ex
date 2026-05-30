@@ -60,9 +60,14 @@ defmodule Engram.Invites do
     # redeemer that already pushed use_count to max_uses. Ecto's `:returning`
     # opt isn't honored on update_all, so re-fetch the row after a successful
     # count (still race-free — only the row we successfully inc'd matches).
+    # Re-fetch filters revoked_at so a concurrent revoke between UPDATE and
+    # SELECT doesn't surface a revoked row.
     case Repo.update_all(query, inc: [use_count: 1]) do
-      {1, _} -> {:ok, Repo.one(from i in Invite, where: i.token_hash == ^hash)}
-      _ -> {:error, :invalid}
+      {1, _} ->
+        {:ok, Repo.one(from(i in Invite, where: i.token_hash == ^hash and is_nil(i.revoked_at)))}
+
+      _ ->
+        {:error, :invalid}
     end
   end
 

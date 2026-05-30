@@ -451,14 +451,23 @@ defmodule Engram.Accounts do
 
   @doc "Sets a user's role. Refuses to demote the last active admin."
   def set_role(%User{} = user, role) when role in ~w(admin member) do
-    if demoting_last_admin?(user, role) do
-      {:error, :last_admin}
-    else
-      user
-      |> Ecto.Changeset.change(role: role)
-      |> Repo.update(skip_tenant_check: true)
-    end
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if demoting_last_admin?(user, role) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(role: role)
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
   end
+
+  def set_role(%User{}, _role), do: {:error, :invalid_role}
 
   defp demoting_last_admin?(%User{role: "admin"} = user, "member"),
     do: is_nil(user.suspended_at) and is_nil(user.deleted_at) and active_admin_count() <= 1
@@ -467,13 +476,20 @@ defmodule Engram.Accounts do
 
   @doc "Suspends a user (blocks login + refresh). Refuses the last active admin."
   def suspend(%User{} = user) do
-    if would_orphan_admins?(user) do
-      {:error, :last_admin}
-    else
-      user
-      |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
-      |> Repo.update(skip_tenant_check: true)
-    end
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if would_orphan_admins?(user) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
   end
 
   @doc "Clears suspension."
@@ -485,13 +501,38 @@ defmodule Engram.Accounts do
 
   @doc "Soft-deletes a user. Refuses the last active admin."
   def soft_delete_user(%User{} = user) do
-    if would_orphan_admins?(user) do
-      {:error, :last_admin}
-    else
-      user
-      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
-      |> Repo.update(skip_tenant_check: true)
-    end
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if would_orphan_admins?(user) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
+  end
+
+  # Serializes admin-count-sensitive ops (set_role/suspend/soft_delete) against
+  # each other via the same advisory lock that gates bootstrap. Without it,
+  # two concurrent demotes of different admins could each pass the
+  # active_admin_count <= 1 check and leave zero admins.
+  defp with_admin_lock(fun) do
+    Repo.transaction(
+      fn ->
+        _ =
+          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+            @admin_bootstrap_lock
+          ])
+
+        fun.()
+      end,
+      skip_tenant_check: true
+    )
   end
 
   defp would_orphan_admins?(%User{role: "admin", suspended_at: nil, deleted_at: nil}),
