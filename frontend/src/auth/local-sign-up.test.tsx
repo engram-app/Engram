@@ -35,6 +35,6 @@ describe('LocalSignUp', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret123' } })
     fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'secret123' } })
     fireEvent.click(screen.getByRole('button', { name: /create account/i }))
-    await waitFor(() => expect(register).toHaveBeenCalledWith('a@b.com', 'secret123'))
+    await waitFor(() => expect(register).toHaveBeenCalledWith('a@b.com', 'secret123', undefined))
   })
 })

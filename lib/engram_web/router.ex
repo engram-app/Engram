@@ -14,6 +14,10 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  pipeline :require_admin do
+    plug EngramWeb.Plugs.RequireAdmin
+  end
+
   pipeline :oauth_api do
     plug :accepts, ["json"]
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
@@ -124,6 +128,15 @@ defmodule EngramWeb.Router do
     post "/login", LocalAuthController, :login
     post "/refresh", LocalAuthController, :refresh
     post "/logout", LocalAuthController, :logout
+
+    # Public preview — confirms an invite is valid + shows its label before signup.
+    get "/invite/:token", LocalAuthController, :invite_preview
+
+    # Public self-host bootstrap probe — drives first-run UX on the sign-in/up pages.
+    get "/bootstrap", LocalAuthController, :bootstrap
+
+    # Public reset — the one-time token is itself the credential.
+    post "/password/reset", PasswordController, :reset
   end
 
   # User-scoped authenticated endpoints (no vault context needed)
@@ -138,6 +151,9 @@ defmodule EngramWeb.Router do
     # User info
     get "/user/storage", StorageController, :index
     get "/me", UsersController, :me
+
+    # Authenticated password change (old + new). Reset (token-gated) is public.
+    post "/auth/password/change", PasswordController, :change
 
     # Device flow authorization (authenticated — web app confirms)
     post "/auth/device/authorize", DeviceAuthController, :authorize
@@ -183,6 +199,25 @@ defmodule EngramWeb.Router do
     # JWT after the React consent UI is approved. Returns JSON
     # `{redirect_uri: "..."}` so the SPA can `window.location.assign`.
     post "/oauth/authorize/consent", OAuthAuthorizeController, :consent
+  end
+
+  # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
+  # 403 for non-admins. There is no named `:authenticated` pipeline, so we list
+  # EngramWeb.Plugs.Auth explicitly. Invite/user routes are added in their own
+  # phases (B4/C4); only registration-mode routes exist for now.
+  scope "/api/admin", EngramWeb.Admin, as: :admin do
+    pipe_through [:api, EngramWeb.Plugs.Auth, :require_admin]
+
+    get "/registration", RegistrationController, :show
+    # PATCH (not PUT): the frontend `api` client exposes get/post/patch/del, no put.
+    patch "/registration", RegistrationController, :update
+
+    resources "/invites", InviteController, only: [:index, :create, :delete]
+
+    get "/users", UserController, :index
+    patch "/users/:id", UserController, :update
+    delete "/users/:id", UserController, :delete
+    post "/users/:id/password-reset", UserController, :password_reset
   end
 
   # OAuth public client metadata — surfaces `client_name` to the SPA

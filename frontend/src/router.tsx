@@ -5,6 +5,8 @@ import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import BillingPage from './billing/billing-page'
 import { config } from './config'
+import AdminPanel from './features/admin/AdminPanel'
+import ResetPasswordPage from './features/auth/ResetPasswordPage'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
@@ -31,6 +33,8 @@ export const router = createBrowserRouter(
     // Public routes
     { path: ROUTES.SIGN_IN, element: <SignInPage /> },
     { path: ROUTES.SIGN_UP, element: <SignUpPage /> },
+    // Public reset — the one-time token IS the credential.
+    { path: '/reset-password', element: <ResetPasswordPage /> },
 
     // Authenticated routes
     {
@@ -91,6 +95,10 @@ export const router = createBrowserRouter(
                 { path: 'api-keys', element: <ApiKeysPage /> },
                 ...(config.billingEnabled
                   ? [{ path: 'billing', element: <BillingPage /> }]
+                  : []),
+                // Self-host only — AdminPanel runs its own role gate too.
+                ...(config.authProvider === 'local'
+                  ? [{ path: 'admin', element: <AdminPanel /> }]
                   : []),
               ],
             },

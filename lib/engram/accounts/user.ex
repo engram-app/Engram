@@ -20,6 +20,7 @@ defmodule Engram.Accounts.User do
     field :dek_rotation_locked_at, :utc_datetime_usec
     field :phone_verified_at, :utc_datetime_usec
     field :deleted_at, :utc_datetime_usec
+    field :suspended_at, :utc_datetime_usec
     field :inactivity_warning_60_at, :utc_datetime_usec
     field :inactivity_warning_80_at, :utc_datetime_usec
     field :founder_code_redeemed_at, :utc_datetime_usec

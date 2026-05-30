@@ -33,4 +33,11 @@ describe('buildSettingsSections', () => {
     const labels = buildSettingsSections('local', false).map((s) => s.label)
     expect(labels).toContain('Vaults')
   })
+
+  it('appends Administration only for self-host admins', () => {
+    expect(buildSettingsSections('local', false, true).map((s) => s.to)).toContain('admin')
+    expect(buildSettingsSections('local', false, false).map((s) => s.to)).not.toContain('admin')
+    // Clerk never gets the self-host admin section.
+    expect(buildSettingsSections('clerk', true, true).map((s) => s.to)).not.toContain('admin')
+  })
 })

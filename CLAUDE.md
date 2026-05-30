@@ -168,6 +168,7 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/aws-kms-provider-integration.md` | Tier-4 / Phase F roadmap for KMS provider routing |
 | `docs/context/followup-show-attachments-in-tree.md` | One-feature follow-up tracker |
 | `docs/context/local-supabase-audit.md` | Throwaway local Supabase stack to run Studio Security/Performance Advisors against the Engram schema (AVX2 CLI build, encrypted-seed, RLS role grant, boot-canary gotchas) |
+| `docs/context/spa-state-injection.md` | How Phoenix ships server-known state into `window.__ENGRAM_CONFIG__` so the React SPA can render first-paint-correct UI without a fetch round-trip — the recipe for adding new injected fields, dev vs prod behavior, gotchas (NOT real SSR; see #353) |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS

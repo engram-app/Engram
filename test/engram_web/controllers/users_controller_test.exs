@@ -17,6 +17,11 @@ defmodule EngramWeb.UsersControllerTest do
       assert email == user.email
     end
 
+    test "includes role so the SPA admin gate can read it", %{conn: conn, user: user} do
+      conn = get(conn, "/api/me")
+      assert json_response(conn, 200)["user"]["role"] == user.role
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn

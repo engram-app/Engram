@@ -2,6 +2,13 @@ export interface EngramConfig {
   authProvider: 'local' | 'clerk'
   clerkPublishableKey: string
   billingEnabled: boolean
+  // Self-host SSR-injected bootstrap state. `null` under Clerk; `undefined`
+  // when the config script didn't ship one (Vite dev, older Phoenix build),
+  // in which case useBootstrap() falls back to fetching /api/auth/bootstrap.
+  bootstrap?: {
+    bootstrap_pending: boolean
+    registration_mode: 'open' | 'invite_only' | 'closed'
+  } | null
 }
 
 const VALID_PROVIDERS = ['local', 'clerk'] as const
@@ -15,6 +22,7 @@ export function loadConfig(): EngramConfig {
       authProvider: injected.authProvider as 'local' | 'clerk',
       clerkPublishableKey: (injected.clerkPublishableKey as string) ?? '',
       billingEnabled: injected.billingEnabled === true,
+      bootstrap: injected.bootstrap as EngramConfig['bootstrap'],
     }
   }
 

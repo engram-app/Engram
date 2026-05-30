@@ -107,28 +107,34 @@ defmodule Engram.Accounts do
 
     Repo.transaction(
       fn ->
-        # Serialize bootstrap admin check so only one concurrent signup can win
+        # Serialize bootstrap claim so two concurrent first-time signups can't
+        # both become admin. The second one enters the tx after the first
+        # commits, sees bootstrap_pending? == false, and is created as member.
         _ =
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
             @admin_bootstrap_lock
           ])
 
-        role = if Repo.aggregate(User, :count) == 0, do: "admin", else: "member"
+        bootstrap_pending = Engram.Instance.bootstrap_pending?()
+        role = if bootstrap_pending, do: "admin", else: "member"
 
-        case %User{
-               email: cleaned_email,
-               normalized_email: normalized,
-               external_id: external_id,
-               password_hash: password_hash,
-               role: role
-             }
-             |> Ecto.Changeset.change()
-             |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
-             |> Ecto.Changeset.unique_constraint(:normalized_email,
-               name: :users_normalized_email_index
-             )
-             |> Repo.insert(skip_tenant_check: true) do
-          {:ok, user} -> user
+        with {:ok, user} <-
+               %User{
+                 email: cleaned_email,
+                 normalized_email: normalized,
+                 external_id: external_id,
+                 password_hash: password_hash,
+                 role: role
+               }
+               |> Ecto.Changeset.change()
+               |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
+               |> Ecto.Changeset.unique_constraint(:normalized_email,
+                 name: :users_normalized_email_index
+               )
+               |> Repo.insert(skip_tenant_check: true),
+             :ok <- maybe_close_bootstrap(bootstrap_pending) do
+          user
+        else
           {:error, changeset} -> Repo.rollback(changeset)
         end
       end,
@@ -145,14 +151,52 @@ defmodule Engram.Accounts do
     {:error, :password_too_short}
   end
 
+  defp maybe_close_bootstrap(true) do
+    case Engram.Instance.mark_bootstrap_complete() do
+      {:ok, _} -> :ok
+      {:error, cs} -> {:error, cs}
+    end
+  end
+
+  defp maybe_close_bootstrap(false), do: :ok
+
+  @doc "Sets a new bcrypt password hash for a user (local auth)."
+  def update_password(%User{} = user, new_password)
+      when is_binary(new_password) and byte_size(new_password) >= 8 and
+             byte_size(new_password) <= @max_password_bytes do
+    user
+    |> Ecto.Changeset.change(password_hash: Bcrypt.hash_pwd_salt(new_password))
+    |> Repo.update(skip_tenant_check: true)
+  end
+
+  def update_password(_user, pw) when is_binary(pw) and byte_size(pw) < 8,
+    do: {:error, :password_too_short}
+
+  def update_password(_user, pw) when is_binary(pw),
+    do: {:error, :password_too_long}
+
+  @doc "Spec §8/§10 — revokes all of a user's active refresh tokens (logout-everywhere)."
+  def revoke_all_user_tokens(%User{id: user_id}) do
+    now = DateTime.utc_now(:second)
+
+    RefreshToken
+    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+  end
+
   def verify_password(email, password) do
     normalized_email = email |> String.trim() |> String.downcase()
 
     case Repo.one(from(u in User, where: u.email == ^normalized_email), skip_tenant_check: true) do
       %User{password_hash: hash} = user when is_binary(hash) ->
-        if Bcrypt.verify_pass(password, hash),
-          do: {:ok, user},
-          else: {:error, :invalid_credentials}
+        # Spec §10: block suspended/deleted at the login chokepoint. Check after
+        # password verification so timing matches the wrong-password path.
+        cond do
+          not Bcrypt.verify_pass(password, hash) -> {:error, :invalid_credentials}
+          not is_nil(user.suspended_at) -> {:error, :suspended}
+          not is_nil(user.deleted_at) -> {:error, :deleted}
+          true -> {:ok, user}
+        end
 
       %User{password_hash: nil} ->
         Bcrypt.no_user_verify()
@@ -211,6 +255,13 @@ defmodule Engram.Accounts do
                   Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id),
                     skip_tenant_check: true
                   )
+
+                # Spec §10: same guard as the login chokepoint (verify_password).
+                cond do
+                  not is_nil(user.suspended_at) -> Repo.rollback(:suspended)
+                  not is_nil(user.deleted_at) -> Repo.rollback(:deleted)
+                  true -> :ok
+                end
 
                 case create_refresh_token(user, token.family_id) do
                   {:ok, new_raw, new_record} -> {user, new_raw, new_record}
@@ -384,5 +435,130 @@ defmodule Engram.Accounts do
 
   defp hash_api_key(raw_key) do
     :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
+  end
+
+  # ── Admin user management (self-host) ──────────────────────────
+
+  @doc "Lists active (non-deleted) users, newest first."
+  def list_users do
+    Repo.all(
+      from(u in User, where: is_nil(u.deleted_at), order_by: [desc: u.created_at]),
+      skip_tenant_check: true
+    )
+  end
+
+  @doc "Count of active (non-suspended, non-deleted) admins."
+  def active_admin_count do
+    Repo.aggregate(
+      from(u in User,
+        where: u.role == "admin" and is_nil(u.deleted_at) and is_nil(u.suspended_at)
+      ),
+      :count,
+      skip_tenant_check: true
+    )
+  end
+
+  @doc "Sets a user's role. Refuses to demote the last active admin."
+  def set_role(%User{} = user, role) when role in ~w(admin member) do
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if demoting_last_admin?(user, role) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(role: role)
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
+  end
+
+  def set_role(%User{}, _role), do: {:error, :invalid_role}
+
+  defp demoting_last_admin?(%User{role: "admin"} = user, "member"),
+    do: is_nil(user.suspended_at) and is_nil(user.deleted_at) and active_admin_count() <= 1
+
+  defp demoting_last_admin?(_, _), do: false
+
+  @doc "Suspends a user (blocks login + refresh). Refuses the last active admin."
+  def suspend(%User{} = user) do
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if would_orphan_admins?(user) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
+  end
+
+  @doc "Clears suspension."
+  def unsuspend(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(suspended_at: nil)
+    |> Repo.update(skip_tenant_check: true)
+  end
+
+  @doc "Soft-deletes a user. Refuses the last active admin."
+  def soft_delete_user(%User{} = user) do
+    with_admin_lock(fn ->
+      user = Repo.reload!(user, skip_tenant_check: true)
+
+      if would_orphan_admins?(user) do
+        Repo.rollback(:last_admin)
+      else
+        case user
+             |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+             |> Repo.update(skip_tenant_check: true) do
+          {:ok, u} -> u
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end
+    end)
+  end
+
+  # Serializes admin-count-sensitive ops (set_role/suspend/soft_delete) against
+  # each other via the same advisory lock that gates bootstrap. Without it,
+  # two concurrent demotes of different admins could each pass the
+  # active_admin_count <= 1 check and leave zero admins.
+  defp with_admin_lock(fun) do
+    Repo.transaction(
+      fn ->
+        _ =
+          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+            @admin_bootstrap_lock
+          ])
+
+        fun.()
+      end,
+      skip_tenant_check: true
+    )
+  end
+
+  defp would_orphan_admins?(%User{role: "admin", suspended_at: nil, deleted_at: nil}),
+    do: active_admin_count() <= 1
+
+  defp would_orphan_admins?(_), do: false
+
+  @doc """
+  Spec §7 — enqueues a forced `CleanupVault` for every vault a user owns
+  (active + soft-deleted). Bypasses RLS + the `Vaults.list_vaults/1`
+  DEK-decrypt chain, since the purge only needs vault ids.
+  """
+  def purge_user_vaults(%User{id: user_id}) do
+    Repo.all(
+      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id),
+      skip_tenant_check: true
+    )
+    |> Enum.each(fn v -> Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) end)
   end
 end

@@ -45,6 +45,27 @@ defmodule EngramWeb.SpaControllerTest do
     assert body =~ ~s("billingEnabled":)
   end
 
+  test "GET / injects self-host bootstrap state so auth pages render without a flash",
+       %{conn: conn} do
+    prev = Application.get_env(:engram, :auth_provider)
+    Application.put_env(:engram, :auth_provider, :local)
+    on_exit(fn -> Application.put_env(:engram, :auth_provider, prev || :local) end)
+
+    body = conn |> get("/") |> response(200)
+    assert body =~ ~s("bootstrap":{)
+    assert body =~ ~s("bootstrap_pending":)
+    assert body =~ ~s("registration_mode":)
+  end
+
+  test "GET / does not inject bootstrap state under Clerk (SaaS)", %{conn: conn} do
+    prev = Application.get_env(:engram, :auth_provider)
+    Application.put_env(:engram, :auth_provider, :clerk)
+    on_exit(fn -> Application.put_env(:engram, :auth_provider, prev || :local) end)
+
+    body = conn |> get("/") |> response(200)
+    assert body =~ ~s("bootstrap":null)
+  end
+
   test "GET /oauth/consent renders SPA (consent UI route)", %{conn: conn} do
     conn = get(conn, "/oauth/consent")
     assert conn.status == 200

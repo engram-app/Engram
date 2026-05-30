@@ -64,10 +64,24 @@ defmodule EngramWeb.SpaController do
           raise "Invalid :auth_provider config: #{inspect(other)}"
       end
 
+    # Self-host only — embed the bootstrap probe so the sign-in/sign-up
+    # pages render mode-aware UI on first paint (no fetch round-trip,
+    # no default→correct flash). Clerk gets nil; the frontend falls back
+    # to the public /api/auth/bootstrap endpoint when this is missing
+    # (Vite dev server, version skew).
+    bootstrap =
+      if provider == "local" do
+        %{
+          bootstrap_pending: Engram.Instance.bootstrap_pending?(),
+          registration_mode: Engram.Instance.registration_mode()
+        }
+      end
+
     config = %{
       authProvider: provider,
       clerkPublishableKey: Application.get_env(:engram, :clerk_publishable_key, ""),
-      billingEnabled: Application.get_env(:engram, :billing_enabled, false) == true
+      billingEnabled: Application.get_env(:engram, :billing_enabled, false) == true,
+      bootstrap: bootstrap
     }
 
     json =

@@ -8,6 +8,7 @@ export interface SettingsSection {
 export function buildSettingsSections(
   authProvider: EngramConfig['authProvider'],
   billingEnabled: boolean,
+  isAdmin = false,
 ): SettingsSection[] {
   const sections: SettingsSection[] = [
     { to: 'vaults', label: 'Vaults' },
@@ -15,6 +16,10 @@ export function buildSettingsSections(
   ]
   if (billingEnabled) {
     sections.push({ to: 'billing', label: 'Billing' })
+  }
+  // Self-host only: admins manage members/invites/registration here.
+  if (authProvider === 'local' && isAdmin) {
+    sections.push({ to: 'admin', label: 'Administration' })
   }
   if (authProvider === 'clerk') {
     return [{ to: 'account', label: 'Account' }, ...sections]

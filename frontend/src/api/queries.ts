@@ -43,6 +43,7 @@ export interface SearchResult {
 export interface User {
   id: number
   email: string
+  role: 'admin' | 'member'
 }
 
 // Query hooks
