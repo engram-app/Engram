@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { Plug } from 'lucide-react'
 import {
   type Connection,
   type CreatedApiKey,
@@ -139,7 +140,12 @@ function ConnectionCard({
       {connection.logo ? (
         <img src={connection.logo} alt="" className="size-10 rounded" />
       ) : (
-        <div className="size-10 rounded bg-muted" aria-hidden />
+        <div
+          className="size-10 rounded bg-muted flex items-center justify-center text-muted-foreground"
+          aria-hidden
+        >
+          <Plug className="size-5" />
+        </div>
       )}
       <div className="flex-1 space-y-1">
         <header className="flex items-baseline gap-2">
