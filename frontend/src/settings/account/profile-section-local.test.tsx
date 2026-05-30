@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const updateMutate = vi.fn().mockResolvedValue({ user: { display_name: 'Sam' } })
-const meData = { user: { id: 1, email: 'me@example.com', role: 'member', display_name: 'Old' } }
+const meData = { id: 1, email: 'me@example.com', role: 'member', display_name: 'Old' }
 
 vi.mock('../../api/queries', () => ({
   useMe: () => ({ data: meData }),

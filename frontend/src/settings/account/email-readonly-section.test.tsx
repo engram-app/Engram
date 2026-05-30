@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
-const meData = { user: { id: 1, email: 'me@example.com', role: 'member', display_name: null } }
+const meData = { id: 1, email: 'me@example.com', role: 'member', display_name: null }
 vi.mock('../../api/queries', () => ({ useMe: () => ({ data: meData }) }))
 
 import { EmailReadonlySection } from './email-readonly-section'

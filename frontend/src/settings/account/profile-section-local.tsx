@@ -10,7 +10,7 @@ const inputClass =
 export function ProfileSectionLocal() {
   const { data } = useMe()
   const update = useUpdateProfile()
-  const current = data?.user.display_name ?? ''
+  const current = data?.display_name ?? ''
   const [value, setValue] = useState(current)
 
   useEffect(() => {

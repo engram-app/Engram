@@ -6,7 +6,7 @@ import { SettingsSectionCard } from './section-card'
 
 export function EmailReadonlySection() {
   const { data } = useMe()
-  const email = data?.user.email ?? ''
+  const email = data?.email ?? ''
 
   async function copy() {
     try {
