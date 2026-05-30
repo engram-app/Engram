@@ -169,6 +169,7 @@ defmodule EngramWeb.Router do
       post "/api-keys", AuthController, :create_api_key
       delete "/api-keys/:id", AuthController, :revoke_api_key
       get "/connections", ConnectionsController, :index
+      delete "/connections/oauth/:client_id", ConnectionsController, :delete_oauth
     end
 
     # Vault management (user-level, not vault-scoped)

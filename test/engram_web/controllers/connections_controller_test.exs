@@ -90,4 +90,90 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert json_response(conn, 200) == []
     end
   end
+
+  describe "DELETE /api/connections/oauth/:client_id" do
+    test "revokes the family for the current user (vault-scoped)", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, vault_id: vault.id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+
+      assert conn.status == 204
+      assert Engram.Connections.count_active(user.id, :mcp) == 0
+    end
+
+    test "revokes all vaults when vault_id is omitted (device-flow grant)", %{conn: conn} do
+      user = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, vault_id: nil)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}")
+
+      assert conn.status == 204
+      assert Engram.Connections.count_active(user.id, :mcp) == 0
+    end
+
+    test "is idempotent — second revoke returns 204", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, vault_id: vault.id)
+
+      conn1 = conn |> jwt_authed(user) |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+      assert conn1.status == 204
+
+      conn2 = build_conn() |> jwt_authed(user) |> delete("/api/connections/oauth/#{client.client_id}?vault_id=#{vault.id}")
+      assert conn2.status == 204
+    end
+
+    test "returns 404 for an unknown client_id", %{conn: conn} do
+      user = insert(:user)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{Ecto.UUID.generate()}")
+
+      assert conn.status == 404
+      body = Phoenix.ConnTest.json_response(conn, 404)
+      assert body["error"] == "not_found"
+    end
+
+    test "returns 404 for a foreign user's client (no cross-user revoke)", %{conn: conn} do
+      user = insert(:user)
+      other = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: other.id, client_id: client.client_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}")
+
+      assert conn.status == 404
+      # And the foreign user's grant must still be active
+      assert Engram.Connections.count_active(other.id, :mcp) == 1
+    end
+
+    test "returns 401/403 for API-key-authed requests", %{conn: conn} do
+      user = insert(:user)
+      grant_api_write!(user)
+      {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> delete("/api/connections/oauth/#{Ecto.UUID.generate()}")
+
+      assert conn.status in [401, 403]
+    end
+  end
 end
