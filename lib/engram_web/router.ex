@@ -199,6 +199,8 @@ defmodule EngramWeb.Router do
     get "/registration", RegistrationController, :show
     # PATCH (not PUT): the frontend `api` client exposes get/post/patch/del, no put.
     patch "/registration", RegistrationController, :update
+
+    resources "/invites", InviteController, only: [:index, :create, :delete]
   end
 
   # OAuth public client metadata — surfaces `client_name` to the SPA
