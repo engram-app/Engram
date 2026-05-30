@@ -170,6 +170,7 @@ defmodule EngramWeb.Router do
       delete "/api-keys/:id", AuthController, :revoke_api_key
       get "/connections", ConnectionsController, :index
       delete "/connections/oauth/:client_id", ConnectionsController, :delete_oauth
+      delete "/connections/device/:family_id", ConnectionsController, :delete_device
       post "/connections/pat", ConnectionsController, :create_pat
       delete "/connections/pat/:id", ConnectionsController, :delete_pat
     end

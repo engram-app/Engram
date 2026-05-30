@@ -157,6 +157,7 @@ defmodule Engram.Factory do
     %Engram.Auth.DeviceRefreshToken{
       token_hash:
         sequence(:token_hash, &"hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(16))}"),
+      family_id: Ecto.UUID.generate(),
       user: build(:user),
       vault: build(:vault),
       expires_at:

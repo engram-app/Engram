@@ -55,6 +55,20 @@ defmodule EngramWeb.ConnectionsController do
     end
   end
 
+  def delete_device(conn, %{"family_id" => family_id}) do
+    user = conn.assigns.current_user
+
+    case Connections.revoke_device_family(user.id, family_id) do
+      :ok ->
+        send_resp(conn, 204, "")
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found"})
+    end
+  end
+
   def delete_pat(conn, %{"id" => id_str}) do
     user = conn.assigns.current_user
 

@@ -64,6 +64,58 @@ defmodule Engram.ConnectionsTest do
 
       assert Connections.count_active(user.id, :mcp) == 0
     end
+
+    test "count_active(:obsidian) counts device_refresh_token families" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      family = Ecto.UUID.generate()
+
+      # Two tokens in the same family — should collapse to 1
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family)
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family)
+
+      assert Connections.count_active(user.id, :obsidian) == 1
+    end
+
+    test "count_active(:obsidian) sums oauth obsidian + device families" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      obs_client = insert(:oauth_client, kind: "obsidian")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: obs_client.client_id)
+      insert(:device_refresh_token, user: user, vault: vault)
+
+      # 1 oauth obsidian family + 1 device family = 2
+      assert Connections.count_active(user.id, :obsidian) == 2
+    end
+
+    test "count_active(:obsidian) excludes revoked device tokens" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      now = DateTime.utc_now(:second)
+      insert(:device_refresh_token, user: user, vault: vault, revoked_at: now)
+
+      assert Connections.count_active(user.id, :obsidian) == 0
+    end
+
+    test "count_active(:obsidian) excludes expired device tokens" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+
+      expired_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      insert(:device_refresh_token, user: user, vault: vault, expires_at: expired_at)
+
+      assert Connections.count_active(user.id, :obsidian) == 0
+    end
+
+    test "count_active(:mcp) does not count device tokens" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      insert(:device_refresh_token, user: user, vault: vault)
+
+      assert Connections.count_active(user.id, :mcp) == 0
+    end
   end
 
   describe "list_for_user/1" do
@@ -147,6 +199,59 @@ defmodule Engram.ConnectionsTest do
 
       assert Connections.list_for_user(user.id) == []
     end
+
+    test "includes device refresh token families as kind=:obsidian" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      rows = Connections.list_for_user(user.id)
+      assert [row] = rows
+
+      assert row.kind == :obsidian
+      assert row.client_id == family_id
+      assert row.name == "Obsidian Vault Sync"
+      assert row.software_id == "engram-vault-sync"
+      assert row.verified == true
+      assert row.logo == "/assets/clients/engram-vault-sync.svg"
+      assert row.vault_id == vault.id
+      assert row.key_id == nil
+      assert row.redirect_uris == []
+    end
+
+    test "device rows: multiple tokens in one family surface as a single connection" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      rows = Connections.list_for_user(user.id)
+      assert length(rows) == 1
+    end
+
+    test "device rows: excludes revoked device tokens from listing" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      now = DateTime.utc_now(:second)
+      insert(:device_refresh_token, user: user, vault: vault, revoked_at: now)
+
+      assert Connections.list_for_user(user.id) == []
+    end
+
+    test "device rows: excludes expired device tokens from listing" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+
+      expired_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      insert(:device_refresh_token, user: user, vault: vault, expires_at: expired_at)
+
+      assert Connections.list_for_user(user.id) == []
+    end
   end
 
   describe "revoke_oauth_family/3" do
@@ -192,6 +297,52 @@ defmodule Engram.ConnectionsTest do
 
       assert {:error, :not_found} =
                Connections.revoke_oauth_family(user.id, stranger_client_id, nil)
+    end
+  end
+
+  describe "revoke_device_family/2" do
+    test "sets revoked_at on all active tokens for (user, family)" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      assert :ok = Connections.revoke_device_family(user.id, family_id)
+      assert Connections.count_active(user.id, :obsidian) == 0
+    end
+
+    test "is idempotent — second revoke returns :ok" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      assert :ok = Connections.revoke_device_family(user.id, family_id)
+      assert :ok = Connections.revoke_device_family(user.id, family_id)
+    end
+
+    test "returns :not_found for a family the user does not own" do
+      user = insert_user()
+      foreign_family_id = Ecto.UUID.generate()
+
+      assert {:error, :not_found} =
+               Connections.revoke_device_family(user.id, foreign_family_id)
+    end
+
+    test "does not revoke another user's same family_id" do
+      user = insert_user()
+      other = insert_user()
+      vault = insert(:vault, user: other)
+      family_id = Ecto.UUID.generate()
+
+      insert(:device_refresh_token, user: other, vault: vault, family_id: family_id)
+
+      # Revoking for `user` must fail since the family belongs to `other`
+      assert {:error, :not_found} = Connections.revoke_device_family(user.id, family_id)
+      # And other user's connection is still active
+      assert Connections.count_active(other.id, :obsidian) == 1
     end
   end
 end

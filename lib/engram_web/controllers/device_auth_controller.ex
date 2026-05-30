@@ -4,6 +4,10 @@ defmodule EngramWeb.DeviceAuthController do
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
+  # Gate new plugin connections at the per-tier obsidian cap. Only on
+  # :authorize — start/token/refresh do not mint new connection families.
+  plug EngramWeb.Plugs.EnforceDeviceCap when action in [:authorize]
+
   @verification_path "/link"
 
   def start(conn, params) do

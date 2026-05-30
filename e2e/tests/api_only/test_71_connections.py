@@ -430,3 +430,207 @@ async def test_free_tier_pat_minting_blocked(clerk_client):
         assert body["upgrade_url"] == "/settings/billing"
     finally:
         clerk_client.delete_user(clerk_user_id)
+
+
+# ── Device-flow helpers ───────────────────────────────────────────────────────
+
+
+def device_start(client_id: str = "e2e-plugin") -> dict:
+    """POST /api/auth/device — initiate device flow. Returns JSON body."""
+    resp = requests.post(
+        f"{API_URL}/auth/device",
+        json={"client_id": client_id},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def device_authorize(jwt_token: str, user_code: str, vault_id: int) -> requests.Response:
+    """POST /api/auth/device/authorize — confirm device from user side.
+    Returns the raw Response so callers can check 402 cap responses.
+    """
+    return requests.post(
+        f"{API_URL}/auth/device/authorize",
+        json={"user_code": user_code, "vault_id": vault_id},
+        headers={"Authorization": f"Bearer {jwt_token}"},
+        timeout=10,
+    )
+
+
+def device_token_poll(device_code: str, *, max_attempts: int = 10) -> dict:
+    """POST /api/auth/device/token — poll until 200 (authorized) or give up."""
+    import time
+
+    for _ in range(max_attempts):
+        resp = requests.post(
+            f"{API_URL}/auth/device/token",
+            json={"device_code": device_code},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 428:
+            time.sleep(0.5)
+            continue
+        resp.raise_for_status()
+
+    raise TimeoutError(f"device_token_poll: still pending after {max_attempts} attempts")
+
+
+def create_vault(jwt_token: str, name: str) -> int:
+    """POST /api/vaults — create a vault. Returns vault_id (int)."""
+    resp = requests.post(
+        f"{API_URL}/vaults",
+        json={"name": name},
+        headers={"Authorization": f"Bearer {jwt_token}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def revoke_device(jwt_token: str, family_id: str) -> int:
+    """DELETE /api/connections/device/:family_id. Returns HTTP status code."""
+    resp = requests.delete(
+        f"{API_URL}/connections/device/{family_id}",
+        headers={"Authorization": f"Bearer {jwt_token}"},
+        timeout=10,
+    )
+    return resp.status_code
+
+
+def _set_obsidian_cap(email: str, cap: int) -> None:
+    """Set obsidian_connections_cap override via docker exec SQL."""
+    sql = (
+        f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
+        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
+        f"'obsidian_connections_cap', '{{\"v\": {cap}}}'::jsonb, 'e2e-test', 'e2e') "
+        f"ON CONFLICT (user_id, key) DO UPDATE "
+        f"SET value = EXCLUDED.value, set_at = NOW()"
+    )
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+            "psql", "-U", "engram", "-d", "engram", "-c", sql,
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_set_obsidian_cap failed: {result.stderr.strip()}")
+
+
+def _lift_rps_cap(email: str) -> None:
+    """Set api_rps_cap=1000 so test requests aren't 429'd."""
+    sql = (
+        f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
+        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
+        f"'api_rps_cap', '{{\"v\": 1000}}'::jsonb, 'e2e-test', 'e2e') "
+        f"ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, set_at = NOW()"
+    )
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+            "psql", "-U", "engram", "-d", "engram", "-c", sql,
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_lift_rps_cap failed: {result.stderr.strip()}")
+
+
+# ── Device-flow tests ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_device_flow_connection_appears_in_list(clerk_client):
+    """Full device-flow happy path:
+
+    1. POST /api/auth/device → user_code
+    2. POST /api/auth/device/authorize (JWT) → ok
+    3. POST /api/auth/device/token poll → access+refresh tokens
+    4. GET /api/connections → obsidian row with verified=true + family_id as client_id
+    5. DELETE /api/connections/device/:family_id → 204
+    6. GET /api/connections → obsidian row gone
+    """
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    try:
+        vault_id = create_vault(jwt, f"e2e-vault-{_ts()}")
+
+        # 1. Start device flow
+        start = device_start("e2e-obsidian-plugin")
+        device_code = start["device_code"]
+        user_code = start["user_code"]
+
+        # 2. User authorizes in browser (simulated with JWT)
+        auth_resp = device_authorize(jwt, user_code, vault_id)
+        assert auth_resp.status_code == 200, (
+            f"authorize failed: {auth_resp.status_code} {auth_resp.text}"
+        )
+
+        # 3. Plugin polls for tokens
+        tokens = device_token_poll(device_code)
+        assert "access_token" in tokens
+        assert "refresh_token" in tokens
+
+        # 4. Connections listing includes the device row
+        rows = list_connections(jwt)
+        obsidian = [r for r in rows if r["kind"] == "obsidian"]
+        assert len(obsidian) == 1, f"expected 1 obsidian connection, got {len(obsidian)}"
+
+        row = obsidian[0]
+        assert row["verified"] is True, "device-flow connection should be verified"
+        assert row["name"] == "Obsidian Vault Sync"
+        assert row["software_id"] == "engram-vault-sync"
+        family_id = row["client_id"]
+        assert family_id is not None, "family_id should be set as client_id"
+
+        # 5. Delete the connection
+        status = revoke_device(jwt, family_id)
+        assert status == 204, f"expected 204 on device revoke, got {status}"
+
+        # 6. Gone from list
+        rows_after = list_connections(jwt)
+        obsidian_after = [r for r in rows_after if r["kind"] == "obsidian"]
+        assert obsidian_after == [], (
+            f"obsidian connection still listed after revoke: {obsidian_after}"
+        )
+
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_free_tier_cap_blocks_second_device_authorize(clerk_client):
+    """Free-tier device cap (obsidian_connections_cap=1):
+    first plugin authorize succeeds, second authorize returns 402.
+    """
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    _set_obsidian_cap(email, 1)
+    _lift_rps_cap(email)
+    try:
+        vault_id = create_vault(jwt, f"e2e-vault-{_ts()}")
+
+        # First device flow → succeeds (0 < cap of 1)
+        start1 = device_start("plugin-install-1")
+        auth1 = device_authorize(jwt, start1["user_code"], vault_id)
+        assert auth1.status_code == 200, (
+            f"first authorize should succeed, got {auth1.status_code}: {auth1.text}"
+        )
+        device_token_poll(start1["device_code"])  # mint the refresh token family
+
+        # Second device flow → 402 (1 >= cap of 1)
+        start2 = device_start("plugin-install-2")
+        auth2 = device_authorize(jwt, start2["user_code"], vault_id)
+        assert auth2.status_code == 402, (
+            f"second authorize should be 402, got {auth2.status_code}: {auth2.text}"
+        )
+        body = auth2.json()
+        assert body["error"] == "connection_cap_reached"
+        assert body["kind"] == "obsidian"
+        assert body["current"] == 1
+        assert body["limit"] == 1
+        assert body["upgrade_url"] == "/settings/billing"
+    finally:
+        clerk_client.delete_user(clerk_user_id)

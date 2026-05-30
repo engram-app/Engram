@@ -92,6 +92,25 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       assert json_response(conn, 200) == []
     end
+
+    test "includes device refresh token connections as kind=obsidian", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> get("/api/connections")
+
+      body = json_response(conn, 200)
+      obs = Enum.find(body, fn r -> r["kind"] == "obsidian" end)
+      assert obs["name"] == "Obsidian Vault Sync"
+      assert obs["verified"] == true
+      assert obs["client_id"] == family_id
+      assert obs["software_id"] == "engram-vault-sync"
+    end
   end
 
   describe "DELETE /api/connections/oauth/:client_id" do
@@ -193,6 +212,86 @@ defmodule EngramWeb.ConnectionsControllerTest do
         conn
         |> put_req_header("authorization", "Bearer #{raw_key}")
         |> delete("/api/connections/oauth/#{Ecto.UUID.generate()}")
+
+      assert conn.status in [401, 403]
+    end
+  end
+
+  describe "DELETE /api/connections/device/:family_id" do
+    test "204 revokes the user's own device family", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/device/#{family_id}")
+
+      assert conn.status == 204
+      assert Engram.Connections.count_active(user.id, :obsidian) == 0
+    end
+
+    test "204 is idempotent — second revoke also returns 204", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      conn1 =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/device/#{family_id}")
+
+      assert conn1.status == 204
+
+      conn2 =
+        build_conn()
+        |> jwt_authed(user)
+        |> delete("/api/connections/device/#{family_id}")
+
+      assert conn2.status == 204
+    end
+
+    test "404 for unknown family_id", %{conn: conn} do
+      user = insert(:user)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/device/#{Ecto.UUID.generate()}")
+
+      assert conn.status == 404
+      assert json_response(conn, 404)["error"] == "not_found"
+    end
+
+    test "404 for another user's device family (no cross-user revoke)", %{conn: conn} do
+      user = insert(:user)
+      other = insert(:user)
+      vault = insert(:vault, user: other)
+      family_id = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: other, vault: vault, family_id: family_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/device/#{family_id}")
+
+      assert conn.status == 404
+      # Other user's connection must still be active
+      assert Engram.Connections.count_active(other.id, :obsidian) == 1
+    end
+
+    test "401/403 for API-key-authed requests", %{conn: conn} do
+      user = insert(:user)
+      grant_api_write!(user)
+      {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> delete("/api/connections/device/#{Ecto.UUID.generate()}")
 
       assert conn.status in [401, 403]
     end
