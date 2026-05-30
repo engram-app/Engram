@@ -66,6 +66,50 @@ defmodule Engram.ConnectionsTest do
     end
   end
 
+  describe "list_for_user/1" do
+    test "returns oauth connections grouped by client_id with logo info" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client,
+        kind: "mcp",
+        software_id: "anthropic-claude-desktop",
+        client_name: "Claude Desktop"
+      )
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      assert [%{kind: :mcp, client_id: cid, name: "Claude Desktop", verified: true, vault_id: vid}] =
+               Connections.list_for_user(user.id)
+
+      assert cid == client.client_id
+      assert vid == vault.id
+    end
+
+    test "includes PATs as kind=:pat" do
+      user = insert_user()
+      insert(:api_key, user: user, name: "my-script")
+
+      rows = Connections.list_for_user(user.id)
+      assert Enum.any?(rows, fn r -> r.kind == :pat and r.name == "my-script" end)
+    end
+
+    test "excludes revoked oauth grants" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        revoked_at: now
+      )
+
+      assert Connections.list_for_user(user.id) == []
+    end
+  end
+
   describe "revoke_oauth_family/3" do
     test "sets revoked_at on all rows for (user, client, vault)" do
       user = insert_user()

@@ -8,6 +8,8 @@ defmodule Engram.Connections do
   import Ecto.Query
   alias Engram.Repo
   alias Engram.OAuth.{Client, RefreshToken}
+  alias Engram.Accounts.ApiKey
+  alias Engram.Connections.LogoAllowlist
 
   @type kind :: :obsidian | :mcp
 
@@ -69,6 +71,101 @@ defmodule Engram.Connections do
       {_, _} -> :ok
     end
   end
+
+  @type connection_view :: %{
+          kind: :obsidian | :mcp | :pat,
+          client_id: String.t() | nil,
+          key_id: integer() | nil,
+          name: String.t() | nil,
+          software_id: String.t() | nil,
+          software_version: String.t() | nil,
+          verified: boolean(),
+          logo: String.t() | nil,
+          vault_id: integer() | nil,
+          scope: String.t() | nil,
+          last_used_at: DateTime.t() | nil,
+          connected_at: DateTime.t() | nil,
+          first_user_agent: String.t() | nil,
+          first_ip: String.t() | nil,
+          redirect_uris: [String.t()]
+        }
+
+  @spec list_for_user(integer()) :: [connection_view()]
+  def list_for_user(user_id) do
+    oauth_rows(user_id) ++ pat_rows(user_id)
+  end
+
+  defp oauth_rows(user_id) do
+    from(t in RefreshToken,
+      join: c in Client, on: c.client_id == t.client_id,
+      where: t.user_id == ^user_id,
+      where: is_nil(t.revoked_at),
+      where: is_nil(t.consumed_at),
+      order_by: [desc: coalesce(t.last_used_at, t.inserted_at)],
+      distinct: [t.client_id, t.vault_id],
+      select: {t, c}
+    )
+    |> Repo.all()
+    |> Enum.map(fn {t, c} ->
+      logo = LogoAllowlist.lookup(c.software_id)
+
+      %{
+        kind: String.to_existing_atom(c.kind),
+        client_id: c.client_id,
+        key_id: nil,
+        name: logo.display_name || c.client_name,
+        software_id: c.software_id,
+        software_version: c.software_version,
+        verified: logo.verified,
+        logo: logo.logo,
+        vault_id: t.vault_id,
+        scope: t.scope,
+        last_used_at: t.last_used_at,
+        connected_at: t.inserted_at,
+        first_user_agent: c.first_user_agent,
+        first_ip: format_inet(c.first_ip),
+        redirect_uris: c.redirect_uris || []
+      }
+    end)
+  end
+
+  defp pat_rows(user_id) do
+    {:ok, keys} =
+      Repo.with_tenant(user_id, fn ->
+        from(k in ApiKey,
+          where: k.user_id == ^user_id,
+          order_by: [desc: coalesce(k.last_used, k.created_at)],
+          select: k
+        )
+        |> Repo.all()
+      end)
+
+    Enum.map(keys, fn k ->
+      %{
+        kind: :pat,
+        client_id: nil,
+        key_id: k.id,
+        name: k.name,
+        software_id: nil,
+        software_version: nil,
+        verified: false,
+        logo: nil,
+        vault_id: nil,
+        scope: nil,
+        last_used_at: k.last_used,
+        connected_at: k.created_at,
+        first_user_agent: nil,
+        first_ip: nil,
+        redirect_uris: []
+      }
+    end)
+  end
+
+  # Inet fields are currently stored as :string (see Task 7 TODO).
+  # This helper survives the eventual switch to %Postgrex.INET{} struct.
+  defp format_inet(nil), do: nil
+  defp format_inet(%{__struct__: Postgrex.INET} = inet), do: to_string(:inet.ntoa(inet.address))
+  defp format_inet(s) when is_binary(s), do: s
 
   # Returns true if `user_id` has any refresh token (of any state) for
   # `client_id`, confirming the client belongs to this user.
