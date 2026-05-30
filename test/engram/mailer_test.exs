@@ -159,6 +159,7 @@ defmodule Engram.MailerTest do
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
         assert html =~ "https://engram.page/install",
                "expected install CTA href"
+
         :ok
       end)
 
@@ -171,6 +172,7 @@ defmodule Engram.MailerTest do
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
         assert html =~ "memory",
                "expected the memory-layer framing in the welcome body"
+
         :ok
       end)
 

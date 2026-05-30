@@ -16,6 +16,7 @@ defmodule Engram.Email.TokensTest do
         ] do
       test "#{fun}/0 returns valid hex" do
         value = apply(Tokens, unquote(fun), [])
+
         assert value =~ @hex_regex,
                "expected lowercase #rrggbb hex from Tokens.#{unquote(fun)}, got: #{inspect(value)}"
       end
