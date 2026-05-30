@@ -31,7 +31,7 @@ defmodule Engram.Workers.RotateUserDek do
     max_attempts: 3,
     unique: [
       keys: [:user_id],
-      states: [:available, :scheduled, :executing, :retryable]
+      states: :incomplete
     ]
 
   alias Engram.Crypto.UserDekRotation

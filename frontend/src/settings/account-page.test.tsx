@@ -2,14 +2,14 @@ import { render, screen } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
 import { makeUser } from './account/section-test-helpers'
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react', () => ({
   useUser: () => ({ user: makeUser(), isLoaded: true }),
   useReverification: (fn: unknown) => fn,
   useSessionList: () => ({ isLoaded: true, sessions: [] }),
   useSession: () => ({ session: { id: 'sess_current' } }),
   useClerk: () => ({ signOut: vi.fn().mockResolvedValue({}) }),
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({
+vi.mock('@clerk/react/errors', () => ({
   isClerkAPIResponseError: () => false,
   isReverificationCancelledError: () => false,
 }))

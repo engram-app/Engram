@@ -21,7 +21,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   use Oban.Worker,
     queue: :crypto_backfill,
     max_attempts: 5,
-    unique: [keys: [:user_id, :vault_id, :scope], states: [:available, :scheduled]]
+    unique: [keys: [:user_id, :vault_id, :scope], states: :incomplete]
 
   import Ecto.Query
 

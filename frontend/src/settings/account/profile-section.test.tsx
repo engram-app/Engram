@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { makeUser } from './section-test-helpers'
 
 const user = makeUser()
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react', () => ({
   useUser: () => ({ user, isLoaded: true }),
   useReverification: (fn: unknown) => fn,
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({
+vi.mock('@clerk/react/errors', () => ({
   isClerkAPIResponseError: () => false,
   isReverificationCancelledError: () => false,
 }))

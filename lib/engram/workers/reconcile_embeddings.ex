@@ -17,7 +17,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 1,
-    unique: [period: 300, states: [:available, :scheduled, :executing]]
+    unique: [period: 300, states: :incomplete]
 
   import Ecto.Query
 

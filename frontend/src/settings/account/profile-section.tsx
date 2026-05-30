@@ -1,6 +1,6 @@
 import { useRef } from 'react'
-import { useUser, useReverification } from '@clerk/clerk-react'
-import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
+import { useUser, useReverification } from "@clerk/react"
+import { isReverificationCancelledError } from '@clerk/react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { clerkErrorMessage } from './clerk-errors'

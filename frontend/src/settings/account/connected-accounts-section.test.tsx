@@ -1,16 +1,16 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
+import { isReverificationCancelledError } from '@clerk/react/errors'
 import { makeUser } from './section-test-helpers'
 
 const googleAcct = { id: 'ext_1', provider: 'google', emailAddress: 'ada@gmail.com', destroy: vi.fn().mockResolvedValue({}) }
 let user = makeUser({ externalAccounts: [googleAcct] })
 
-vi.mock('@clerk/clerk-react', () => ({
+vi.mock('@clerk/react', () => ({
   useUser: () => ({ user, isLoaded: true }),
   useReverification: (fn: unknown) => fn,
 }))
-vi.mock('@clerk/clerk-react/errors', () => ({
+vi.mock('@clerk/react/errors', () => ({
   isClerkAPIResponseError: () => false,
   isReverificationCancelledError: vi.fn(() => false),
 }))

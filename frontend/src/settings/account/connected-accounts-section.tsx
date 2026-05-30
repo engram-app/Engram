@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import { useUser, useReverification } from '@clerk/clerk-react'
-import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
+import { useUser, useReverification } from "@clerk/react"
+import { isReverificationCancelledError } from '@clerk/react/errors'
 import type { OAuthStrategy } from '@clerk/shared/types'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ const PROVIDERS: Record<string, { name: string; icon: ReactNode }> = {
 
 function meta(raw: string) {
   const key = raw.replace(/^oauth_/, '')
-  return PROVIDERS[key] ?? { name: key.replace(/^\w/, (c) => c.toUpperCase()), icon: null }
+  return PROVIDERS[key] ?? { name: key.replace(/^\w/, (c) => c.toUpperCase()), icon: null };
 }
 
 export function ConnectedAccountsSection({ providers }: { providers: OAuthStrategy[] }) {

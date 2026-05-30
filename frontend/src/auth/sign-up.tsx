@@ -6,7 +6,7 @@ const isClerk = config.authProvider === 'clerk'
 
 const ClerkSignUpPage = isClerk
   ? lazy(() =>
-      import('@clerk/clerk-react').then((mod) => ({
+      import('@clerk/react').then((mod) => ({
         default: () => (
           <AuthLayout>
             <mod.SignUp routing="hash" forceRedirectUrl="/" />

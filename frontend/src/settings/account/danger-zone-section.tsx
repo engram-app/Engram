@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useUser, useReverification, useClerk } from '@clerk/clerk-react'
-import { isReverificationCancelledError } from '@clerk/clerk-react/errors'
+import { useUser, useReverification, useClerk } from "@clerk/react"
+import { isReverificationCancelledError } from '@clerk/react/errors'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ROUTES } from '@/routes'

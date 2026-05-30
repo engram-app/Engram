@@ -24,7 +24,7 @@ defmodule Engram.Workers.RotateUserMasterKey do
     max_attempts: 5,
     unique: [
       keys: [:user_id, :target_version],
-      states: [:available, :scheduled, :executing, :retryable]
+      states: :incomplete
     ]
 
   alias Engram.Crypto.MasterRotation
