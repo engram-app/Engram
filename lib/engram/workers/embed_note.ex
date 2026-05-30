@@ -19,7 +19,7 @@ defmodule Engram.Workers.EmbedNote do
     unique: [
       period: 60,
       keys: [:note_id],
-      states: [:available, :scheduled]
+      states: :incomplete
     ]
 
   import Ecto.Query

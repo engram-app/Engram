@@ -25,7 +25,7 @@ defmodule Engram.Workers.MigrateUserProvider do
     max_attempts: 5,
     unique: [
       keys: [:user_id, :target_provider],
-      states: [:available, :scheduled, :executing, :retryable]
+      states: :incomplete
     ]
 
   alias Engram.Crypto.ProviderMigration
