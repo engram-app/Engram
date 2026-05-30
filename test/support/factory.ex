@@ -175,4 +175,35 @@ defmodule Engram.Factory do
       user_agent: nil
     }
   end
+
+  def oauth_client_factory do
+    %Engram.OAuth.Client{
+      # client_id is @primary_key {:client_id, :binary_id, autogenerate: true};
+      # ExMachina insert will auto-generate it — no need to set here.
+      client_secret_hash: nil,
+      redirect_uris: ["http://127.0.0.1:51234/cb"],
+      client_name: sequence(:client_name, &"Client #{&1}"),
+      scope: "notes:read",
+      kind: "mcp",
+      software_id: nil,
+      software_version: nil,
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"]
+    }
+  end
+
+  def oauth_refresh_token_factory do
+    %Engram.OAuth.RefreshToken{
+      token_hash:
+        sequence(:rt_hash, &"rt_hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(8))}"),
+      family_id: Ecto.UUID.generate(),
+      client_id: Ecto.UUID.generate(),
+      user_id: nil,
+      vault_id: nil,
+      scope: "notes:read",
+      expires_at:
+        DateTime.add(DateTime.utc_now(), 90 * 24 * 3600, :second) |> DateTime.truncate(:second)
+    }
+  end
 end

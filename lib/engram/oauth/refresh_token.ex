@@ -24,6 +24,12 @@ defmodule Engram.OAuth.RefreshToken do
     field :revoked_at, :utc_datetime
     field :consumed_at, :utc_datetime
 
+    # Read-only tracking fields populated at token-rotation time.
+    # last_used_ip is :string for the same reason as Client.first_ip — the DB
+    # column is inet but Postgrex.INET is not an Ecto primitive.
+    field :last_used_at, :utc_datetime_usec
+    field :last_used_ip, :string
+
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
