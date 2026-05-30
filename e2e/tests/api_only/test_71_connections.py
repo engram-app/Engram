@@ -16,6 +16,8 @@ Requires:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import os
 import secrets
@@ -43,12 +45,16 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping connections tests",
 )
 
-# ── Static PKCE verifier/challenge pair (precomputed, reuse across tests) ──────
-# SHA-256(verifier) encoded as base64url = challenge; reusing across tests is
-# fine because each test has its own client + code — PKCE only guards the
-# single exchange round-trip.
-_PKCE_VERIFIER = "u3GsdZbQyOgNVgMLcXp5gI4j5R0v9V_KqXgsxk8eU1A"
-_PKCE_CHALLENGE = "3-V4eXkQDYZkUmwd-Y9eM9Q9j7-mVc1MQB-AwYj7Lp8"
+# ── PKCE verifier/challenge pair ─────────────────────────────────────────────
+# Computed at module load: SHA-256(verifier) base64url-encoded = challenge.
+# Reused across tests since each test has its own client + code — PKCE only
+# guards the single exchange round-trip.
+_PKCE_VERIFIER = secrets.token_urlsafe(32)
+_PKCE_CHALLENGE = (
+    base64.urlsafe_b64encode(hashlib.sha256(_PKCE_VERIFIER.encode()).digest())
+    .rstrip(b"=")
+    .decode()
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -153,8 +159,8 @@ def _extract_code(redirect_uri: str) -> str:
     return parse_qs(urlparse(redirect_uri).query)["code"][0]
 
 
-def _make_clerk_user(clerk_client) -> tuple[str, str]:
-    """Create a fresh Clerk user + Engram DB row. Returns (clerk_user_id, jwt_token).
+def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
+    """Create a fresh Clerk user + Engram DB row. Returns (clerk_user_id, jwt_token, email).
 
     The user is NOT granted api_write/rps overrides — they keep Free-tier
     defaults. Callers that need paid-tier behaviour must call
