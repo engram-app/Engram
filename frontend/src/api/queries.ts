@@ -44,6 +44,7 @@ export interface User {
   id: number
   email: string
   role: 'admin' | 'member'
+  display_name: string | null
 }
 
 // Query hooks
@@ -119,6 +120,25 @@ export function useMe() {
     queryKey: ['me'],
     queryFn: () => api.get<{ user: User }>('/me'),
     select: (data) => data.user,
+  })
+}
+
+export function useUpdateProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { display_name: string | null }) =>
+      api.patch<{ user: User }>('/me', body),
+    onSuccess: (data) => {
+      qc.setQueryData(['me'], data)
+    },
+  })
+}
+
+export function useDeleteSelf() {
+  return useMutation<void, Error, { password: string }>({
+    mutationFn: async ({ password }) => {
+      await api.del<void>(`/me?password=${encodeURIComponent(password)}`)
+    },
   })
 }
 
