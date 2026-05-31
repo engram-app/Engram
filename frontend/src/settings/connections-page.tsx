@@ -84,8 +84,8 @@ export default function ConnectionsPage() {
               AI integrations →
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other MCP-aware
-              clients.
+              Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps
+              that support custom integrations.
             </p>
           </a>
           <a
@@ -98,8 +98,7 @@ export default function ConnectionsPage() {
               MCP protocol →
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Build a custom integration against Engram's MCP server — tool list, auth flow,
-              endpoint URL.
+              For developers building their own AI integration with Engram.
             </p>
           </a>
         </nav>

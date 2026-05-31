@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import ConnectionsPage from './connections-page'
@@ -163,8 +163,11 @@ describe('ConnectionsPage', () => {
     mockConnections.splice(0, mockConnections.length, baseMcp)
     mockTier = 'starter'
     renderPage()
-    expect(screen.getByText(/unverified/i)).toBeInTheDocument()
-    expect(screen.getByText(/Claude Desktop/i)).toBeInTheDocument()
+    // "Claude Desktop" also appears in the header docs blurb, so scope to
+    // the AI-tools section.
+    const section = screen.getByRole('region', { name: /AI tools/i })
+    expect(within(section).getByText(/unverified/i)).toBeInTheDocument()
+    expect(within(section).getByText(/Claude Desktop/i)).toBeInTheDocument()
   })
 
   it('uses singular "Vault:" for obsidian and plural "Vaults:" for mcp cards', () => {
