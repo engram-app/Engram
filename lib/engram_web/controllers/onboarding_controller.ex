@@ -65,4 +65,27 @@ defmodule EngramWeb.OnboardingController do
   def accept_terms(conn, _params) do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
+
+  # FTUX questionnaire submit. Body shape:
+  #   { uses_obsidian: bool, tools: [string] }
+  # The Onboarding context owns validation (catalog membership + non-empty
+  # + boolean type); we render its error atom verbatim as the JSON error
+  # so the SPA can switch on a stable string instead of a translated message.
+  def set_profile(conn, %{"uses_obsidian" => uses_obsidian, "tools" => tools})
+      when is_list(tools) do
+    case Onboarding.set_profile(conn.assigns.current_user, %{
+           uses_obsidian: uses_obsidian,
+           tools: tools
+         }) do
+      {:ok, user} ->
+        conn |> put_status(:created) |> json(user.onboarding_profile)
+
+      {:error, reason} when reason in [:invalid_uses_obsidian, :empty_tools, :invalid_tool] ->
+        conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
+    end
+  end
+
+  def set_profile(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "missing_fields"})
+  end
 end

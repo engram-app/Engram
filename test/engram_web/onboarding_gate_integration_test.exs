@@ -51,6 +51,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   test "GET /api/folders returns 200 after onboarding completes", %{conn: conn, user: user} do
     {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
+    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
     conn = get(conn, "/api/folders")
     assert conn.status == 200
