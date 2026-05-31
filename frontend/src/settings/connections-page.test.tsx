@@ -202,7 +202,7 @@ describe('ConnectionsPage', () => {
     mockTier = 'starter'
     renderPage()
     // Click the revoke button in the obsidian card summary.
-    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0]!)
     // Modal renders with the connection name in the title.
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText(/Revoke "Obsidian Vault Sync"\?/)).toBeInTheDocument()
@@ -222,7 +222,7 @@ describe('ConnectionsPage', () => {
     mockConnections.splice(0, mockConnections.length, baseMcp)
     mockTier = 'starter'
     renderPage()
-    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0]!)
     const confirmButton = screen
       .getAllByRole('button', { name: /^Revoke$/ })
       .find((b) => b.closest('[role="dialog"]'))!
@@ -237,7 +237,7 @@ describe('ConnectionsPage', () => {
     mockConnections.splice(0, mockConnections.length, basePat)
     mockTier = 'starter'
     renderPage()
-    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0]!)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

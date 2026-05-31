@@ -73,6 +73,24 @@ export default function ConnectionsPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Manage what's connected to your Engram account.
         </p>
+        <nav aria-label="Connection documentation" className="mt-3 flex flex-wrap gap-x-4 text-sm">
+          <a
+            href="https://engram.page/docs/integrations/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary hover:underline"
+          >
+            AI integrations →
+          </a>
+          <a
+            href="https://engram.page/docs/mcp/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary hover:underline"
+          >
+            MCP docs →
+          </a>
+        </nav>
       </header>
 
       <section aria-labelledby="obs-h">
