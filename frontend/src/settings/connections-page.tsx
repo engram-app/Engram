@@ -143,26 +143,30 @@ function ConnectionCard({
 
   return (
     <details className="group rounded-lg border border-border bg-card open:pb-3">
-      <summary className="flex cursor-pointer items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer items-center gap-3 px-3 py-3 [&::-webkit-details-marker]:hidden">
         {connection.logo ? (
-          <img src={connection.logo} alt="" className="size-8 shrink-0 rounded" />
+          <img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
         ) : (
           <div
-            className="flex size-8 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+            className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
             aria-hidden
           >
-            <Plug className="size-4" />
+            <Plug className="size-5" />
           </div>
         )}
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {connection.name ?? 'Unnamed'}
-          {!connection.verified && (
-            <span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
-              unverified
-            </span>
-          )}
-        </span>
-        <span className="shrink-0 text-sm text-muted-foreground">{vaultLabel}</span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">
+            {connection.name ?? 'Unnamed'}
+            {!connection.verified && (
+              <span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
+                unverified
+              </span>
+            )}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            <em>Connected vaults:</em> {vaultLabel}
+          </div>
+        </div>
         <button
           type="button"
           onClick={(e) => {
