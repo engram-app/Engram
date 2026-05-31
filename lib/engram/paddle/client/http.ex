@@ -118,6 +118,41 @@ defmodule Engram.Paddle.Client.HTTP do
   end
 
   @impl true
+  def list_subscriptions(%DateTime{} = since) do
+    with {:ok, api_key} <- fetch_api_key() do
+      iso = DateTime.to_iso8601(since)
+      url = base_url() <> "/subscriptions"
+      params = [{"updated_at[GTE]", iso}, {"per_page", 200}]
+      list_pages(url, params, headers(api_key), [])
+    end
+  end
+
+  defp list_pages(url, params, headers, acc) do
+    case Req.get(url, params: params, headers: headers, receive_timeout: 15_000) do
+      {:ok, %Req.Response{status: 200, body: %{"data" => data} = body}} when is_list(data) ->
+        case get_in(body, ["meta", "pagination", "next"]) do
+          nil ->
+            {:ok, Enum.reverse([data | acc]) |> List.flatten()}
+
+          "" ->
+            {:ok, Enum.reverse([data | acc]) |> List.flatten()}
+
+          next_url when is_binary(next_url) ->
+            # Paddle's `next` is a fully-qualified URL with all query params
+            # encoded — don't pass `params:` again or Req appends them.
+            list_pages(next_url, [], headers, [data | acc])
+        end
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        log_non_2xx("subscriptions-list", status, body)
+        {:error, {:paddle_error, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def get_update_payment_transaction(subscription_id) when is_binary(subscription_id) do
     with {:ok, api_key} <- fetch_api_key() do
       url =
