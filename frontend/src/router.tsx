@@ -23,6 +23,8 @@ import OnboardLayout from './onboarding/onboard-layout'
 import OnboardRedirect from './onboarding/onboard-redirect'
 import AgreementPage from './onboarding/agreement-page'
 import OnboardBillingPage from './onboarding/onboard-billing-page'
+import { OnboardingShell } from './onboarding/onboarding-shell'
+import { Outlet } from 'react-router'
 
 // Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
 // stays out of the main chunk for local self-host builds.
@@ -61,11 +63,23 @@ export const router = createBrowserRouter(
           element: <OnboardingGate />,
           children: [
             {
-              element: <AppLayout />,
+              // OnboardingShell wraps the dashboard tree so the tour offer,
+              // first-vault modal, and checklist only mount on the main app
+              // surface — NOT on /settings/*, /device-link, or /oauth.
+              element: (
+                <OnboardingShell>
+                  <Outlet />
+                </OnboardingShell>
+              ),
               children: [
-                { path: ROUTES.HOME, element: <Dashboard /> },
-                { path: '/note/*', element: <NotePage /> },
-                { path: '/search', element: <SearchPage /> },
+                {
+                  element: <AppLayout />,
+                  children: [
+                    { path: ROUTES.HOME, element: <Dashboard /> },
+                    { path: '/note/*', element: <NotePage /> },
+                    { path: '/search', element: <SearchPage /> },
+                  ],
+                },
               ],
             },
             {

@@ -99,17 +99,22 @@ function DesktopLayout() {
                   <PanelLeftClose />
                 </Button>
               </div>
-              <ScrollArea className="flex-1">
+              <ScrollArea className="flex-1" data-tour="folder-tree">
                 <FolderTree />
               </ScrollArea>
               <FolderActions />
-              <VaultSwitcher />
+              <section data-tour="sidebar-vaults">
+                <VaultSwitcher />
+              </section>
             </div>
           </FolderTreeProvider>
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel id="main" defaultSize="60%" minSize="30%">
-          <main className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground">
+          <main
+            className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground"
+            data-tour="note-viewer"
+          >
             {leftCollapsed && (
               <Button
                 variant="ghost"

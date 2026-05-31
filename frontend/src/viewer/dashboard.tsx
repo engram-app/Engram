@@ -80,17 +80,21 @@ export default function Dashboard() {
 
   if (folder) {
     return (
-      <>
+      <section data-tour="dashboard-root">
         <header className="mb-4">
           <h2 className="text-base font-semibold text-gray-800 dark:text-gray-200">{folder}</h2>
         </header>
         <FolderNotes folder={folder} />
-      </>
+      </section>
     )
   }
 
   return (
-    <section aria-label="Welcome" className="flex h-full flex-col items-center justify-center text-center">
+    <section
+      aria-label="Welcome"
+      className="flex h-full flex-col items-center justify-center text-center"
+      data-tour="dashboard-root"
+    >
       <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Welcome to Engram</h2>
       <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
         Select a folder from the sidebar to browse your notes.
