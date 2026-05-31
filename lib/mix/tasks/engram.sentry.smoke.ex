@@ -20,11 +20,12 @@ defmodule Mix.Tasks.Engram.Sentry.Smoke do
   def run(_argv) do
     Mix.Task.run("app.start")
 
-    Sentry.capture_message(
-      "engram.sentry.smoke — pipeline test",
-      level: :error,
-      tags: %{smoke_marker: "engram.sentry.smoke"}
-    )
+    _ =
+      Sentry.capture_message(
+        "engram.sentry.smoke — pipeline test",
+        level: :error,
+        tags: %{smoke_marker: "engram.sentry.smoke"}
+      )
 
     Process.sleep(1_500)
 
