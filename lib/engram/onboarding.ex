@@ -17,6 +17,16 @@ defmodule Engram.Onboarding do
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
 
+  # FTUX questionnaire tool catalog. Add new clients here in lockstep with
+  # the frontend constants (see frontend/src/onboarding/questionnaire/tools.ts).
+  # Renames are MIGRATIONS — old slugs in user rows won't be auto-rewritten.
+  @valid_tools ~w(claude chatgpt web_only claude_code cursor continue_cline other_mcp)
+
+  @doc """
+  Returns the canonical list of valid tool slugs accepted by `set_profile/2`.
+  """
+  def valid_tools, do: @valid_tools
+
   @doc """
   Record that `user` accepted Terms of Service version `tos_version` (pinned by
   `tos_hash`) and Privacy Policy version `privacy_version` (pinned by
@@ -141,12 +151,14 @@ defmodule Engram.Onboarding do
       accepted_tos = accepted_version(user, @terms_document)
       terms_ok = accepted_satisfies?(accepted_tos, floor)
       subscription_ok = Billing.active?(user)
-      next = next_step(terms_ok, subscription_ok)
+      profile_complete = profile_complete?(user)
+      next = next_step(terms_ok, subscription_ok, profile_complete)
 
       %{
         enabled: true,
         terms_ok: terms_ok,
         subscription_ok: subscription_ok,
+        profile_complete: profile_complete,
         current_tos_version: current_tos,
         current_privacy_version: current_privacy,
         terms_notice: notice(@terms_document, current_tos, accepted_tos),
@@ -154,6 +166,58 @@ defmodule Engram.Onboarding do
       }
     else
       %{enabled: false, next_step: :done}
+    end
+  end
+
+  @doc """
+  Store the FTUX questionnaire answers on `user.onboarding_profile`. Validates
+  `uses_obsidian` is a boolean, `tools` is non-empty, and every tool slug
+  belongs to `valid_tools/0`. Stamps `completed_at` so `status/1` flips
+  `profile_complete: true` and (when terms+subscription are ok) `next_step: :done`.
+
+  Returns `{:ok, %User{}}` or `{:error, atom}` where atom is one of
+  `:invalid_uses_obsidian | :empty_tools | :invalid_tool`.
+  """
+  def set_profile(user, %{uses_obsidian: uses_obsidian, tools: tools}) when is_list(tools) do
+    cond do
+      not is_boolean(uses_obsidian) ->
+        {:error, :invalid_uses_obsidian}
+
+      tools == [] ->
+        {:error, :empty_tools}
+
+      Enum.any?(tools, &(&1 not in @valid_tools)) ->
+        {:error, :invalid_tool}
+
+      true ->
+        profile = %{
+          "uses_obsidian" => uses_obsidian,
+          "tools" => tools,
+          "completed_at" => DateTime.utc_now(:second) |> DateTime.to_iso8601()
+        }
+
+        user
+        |> Ecto.Changeset.change(onboarding_profile: profile)
+        |> Repo.update(skip_tenant_check: true)
+    end
+  end
+
+  # Re-read the column rather than trusting the caller's struct — callers that
+  # just ran `set_profile/2` and then `status/1` would otherwise see a stale
+  # `nil` and the gate would stick on `:profile` even after a successful save.
+  defp profile_complete?(user) do
+    import Ecto.Query
+
+    profile =
+      from(u in Engram.Accounts.User,
+        where: u.id == ^user.id,
+        select: u.onboarding_profile
+      )
+      |> Repo.one(skip_tenant_check: true)
+
+    case profile do
+      %{"completed_at" => ts} when is_binary(ts) -> true
+      _ -> false
     end
   end
 
@@ -209,7 +273,8 @@ defmodule Engram.Onboarding do
     |> Repo.one(skip_tenant_check: true)
   end
 
-  defp next_step(false, _), do: :agreement
-  defp next_step(true, false), do: :billing
-  defp next_step(true, true), do: :done
+  defp next_step(false, _, _), do: :agreement
+  defp next_step(true, false, _), do: :billing
+  defp next_step(true, true, false), do: :profile
+  defp next_step(true, true, true), do: :done
 end

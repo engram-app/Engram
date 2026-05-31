@@ -130,10 +130,11 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=done when terms accepted and active subscription exists" do
+    test "next_step=done when terms accepted, active subscription, profile set" do
       user = insert(:user)
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
@@ -148,10 +149,11 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=done when terms accepted and past_due subscription exists" do
+    test "next_step=done when terms accepted, past_due subscription, profile set" do
       user = insert(:user)
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "past_due")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
@@ -378,6 +380,146 @@ defmodule Engram.OnboardingTest do
       VersionCache.invalidate_all()
 
       refute Onboarding.status(user).terms_ok
+    end
+  end
+
+  describe "set_profile/2" do
+    setup do
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      VersionCache.invalidate_all()
+
+      on_exit(fn ->
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+        VersionCache.invalidate_all()
+      end)
+
+      :ok
+    end
+
+    test "stores uses_obsidian + tools + completed_at on the user" do
+      user = insert(:user)
+
+      assert {:ok, updated} =
+               Onboarding.set_profile(user, %{
+                 uses_obsidian: true,
+                 tools: ["claude", "claude_code"]
+               })
+
+      assert updated.onboarding_profile["uses_obsidian"] == true
+      assert updated.onboarding_profile["tools"] == ["claude", "claude_code"]
+      assert updated.onboarding_profile["completed_at"] != nil
+    end
+
+    test "rejects empty tools list" do
+      user = insert(:user)
+
+      assert {:error, :empty_tools} =
+               Onboarding.set_profile(user, %{uses_obsidian: false, tools: []})
+    end
+
+    test "rejects unknown tool slug" do
+      user = insert(:user)
+
+      assert {:error, :invalid_tool} =
+               Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["telepathy"]})
+    end
+
+    test "accepts every known tool slug" do
+      user = insert(:user)
+
+      tools = ~w(claude chatgpt web_only claude_code cursor continue_cline other_mcp)
+
+      assert {:ok, updated} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: tools})
+      assert updated.onboarding_profile["tools"] == tools
+    end
+
+    test "rejects non-boolean uses_obsidian" do
+      user = insert(:user)
+
+      assert {:error, :invalid_uses_obsidian} =
+               Onboarding.set_profile(user, %{uses_obsidian: "yes", tools: ["claude"]})
+    end
+  end
+
+  describe "status/1 profile gate (next_step :profile comes after :billing)" do
+    setup do
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      VersionCache.invalidate_all()
+
+      on_exit(fn ->
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+        VersionCache.invalidate_all()
+      end)
+
+      :ok
+    end
+
+    test "next_step :profile when terms + subscription ok but profile incomplete" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "trialing")
+
+      assert %{
+               terms_ok: true,
+               subscription_ok: true,
+               profile_complete: false,
+               next_step: :profile
+             } = Onboarding.status(user)
+    end
+
+    test "next_step :done once profile is set" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "trialing")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["web_only"]})
+
+      assert %{profile_complete: true, next_step: :done} = Onboarding.status(user)
+    end
+
+    test "next_step :billing still wins over :profile when subscription missing" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      assert %{next_step: :billing, profile_complete: false} = Onboarding.status(user)
+    end
+
+    test "next_step :agreement still wins when terms not accepted" do
+      user = insert(:user)
+      insert(:subscription, user: user, status: "trialing")
+
+      assert %{next_step: :agreement} = Onboarding.status(user)
     end
   end
 

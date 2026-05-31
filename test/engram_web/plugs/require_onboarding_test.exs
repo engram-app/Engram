@@ -43,40 +43,58 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     refute conn.halted
   end
 
-  test "halts 403 with missing=[terms,subscription] when both gates fail", %{conn: conn} do
+  test "halts 403 with missing=[profile,subscription,terms] when all three gates fail",
+       %{conn: conn} do
     user = insert(:user)
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["error"] == "onboarding_required"
-    assert Enum.sort(body["missing"]) == ["subscription", "terms"]
+    assert Enum.sort(body["missing"]) == ["profile", "subscription", "terms"]
   end
 
-  test "halts 403 with missing=[subscription] when only subscription is missing", %{conn: conn} do
+  test "halts 403 with missing=[profile,subscription] when only terms is satisfied",
+       %{conn: conn} do
     user = insert(:user)
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
-    assert body["missing"] == ["subscription"]
+    assert Enum.sort(body["missing"]) == ["profile", "subscription"]
   end
 
-  test "halts 403 with missing=[terms] when only terms is missing", %{conn: conn} do
+  test "halts 403 with missing=[profile,terms] when only subscription is satisfied",
+       %{conn: conn} do
     user = insert(:user)
     insert(:subscription, user: user, status: "trialing")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
-    assert body["missing"] == ["terms"]
+    assert body["missing"] == ["profile", "terms"]
   end
 
-  test "passes through when both gates are satisfied", %{conn: conn} do
+  test "halts 403 with missing=[profile] when terms+subscription ok but profile incomplete",
+       %{conn: conn} do
     user = insert(:user)
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    assert conn.halted
+    assert conn.status == 403
+    body = Phoenix.ConnTest.json_response(conn, 403)
+    assert body["missing"] == ["profile"]
+    assert body["next_step"] == "profile"
+  end
+
+  test "passes through when all three gates (terms+subscription+profile) are satisfied",
+       %{conn: conn} do
+    user = insert(:user)
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    insert(:subscription, user: user, status: "trialing")
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
   end

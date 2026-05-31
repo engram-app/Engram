@@ -54,6 +54,7 @@ defmodule EngramWeb.OnboardingControllerTest do
     test "returns next_step=done for fully onboarded user", %{conn: conn, user: user} do
       {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
+      {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
@@ -174,6 +175,77 @@ defmodule EngramWeb.OnboardingControllerTest do
     test "returns 422 when fields are missing", %{conn: conn} do
       conn = post(conn, "/api/onboarding/accept-terms", %{"tos_version" => "2026-05-19"})
       assert json_response(conn, 422)["error"] == "missing_fields"
+    end
+  end
+
+  describe "PATCH /api/onboarding/profile" do
+    test "returns 201 and persists profile on user", %{conn: conn, user: user} do
+      conn =
+        patch(conn, "/api/onboarding/profile", %{
+          "uses_obsidian" => true,
+          "tools" => ["claude", "claude_code"]
+        })
+
+      body = json_response(conn, 201)
+      assert body["uses_obsidian"] == true
+      assert body["tools"] == ["claude", "claude_code"]
+      assert is_binary(body["completed_at"])
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.onboarding_profile["uses_obsidian"] == true
+      assert reloaded.onboarding_profile["tools"] == ["claude", "claude_code"]
+    end
+
+    test "returns 422 invalid_tool for unknown tool slug", %{conn: conn} do
+      conn =
+        patch(conn, "/api/onboarding/profile", %{
+          "uses_obsidian" => false,
+          "tools" => ["telepathy"]
+        })
+
+      assert json_response(conn, 422)["error"] == "invalid_tool"
+    end
+
+    test "returns 422 empty_tools when tools list is empty", %{conn: conn} do
+      conn = patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => false, "tools" => []})
+      assert json_response(conn, 422)["error"] == "empty_tools"
+    end
+
+    test "returns 422 invalid_uses_obsidian when uses_obsidian is not a boolean", %{conn: conn} do
+      conn =
+        patch(conn, "/api/onboarding/profile", %{
+          "uses_obsidian" => "yes",
+          "tools" => ["claude"]
+        })
+
+      assert json_response(conn, 422)["error"] == "invalid_uses_obsidian"
+    end
+
+    test "returns 422 missing_fields when uses_obsidian or tools are absent", %{conn: conn} do
+      conn = patch(conn, "/api/onboarding/profile", %{"tools" => ["claude"]})
+      assert json_response(conn, 422)["error"] == "missing_fields"
+    end
+  end
+
+  describe "GET /api/onboarding/status returns profile fields" do
+    test "includes profile_complete=false for a new user", %{conn: conn} do
+      conn = get(conn, "/api/onboarding/status")
+      body = json_response(conn, 200)
+      assert body["profile_complete"] == false
+    end
+
+    test "includes profile_complete=true after PATCH /profile", %{conn: conn} do
+      conn1 =
+        patch(conn, "/api/onboarding/profile", %{
+          "uses_obsidian" => false,
+          "tools" => ["web_only"]
+        })
+
+      assert conn1.status == 201
+
+      conn2 = get(conn, "/api/onboarding/status")
+      body = json_response(conn2, 200)
+      assert body["profile_complete"] == true
     end
   end
 end
