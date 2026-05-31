@@ -12,6 +12,14 @@ import {
 } from '../api/queries'
 import { ApiError } from '../api/client'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -199,46 +207,41 @@ function ConnectionCard({
       : (connection.vault_name ?? `#${connection.vault_id}`)
 
   return (
-    <details className="group rounded-lg border border-border bg-card open:pb-3">
-      <summary className="flex cursor-pointer items-center gap-3 px-3 py-3 [&::-webkit-details-marker]:hidden">
-        {connection.logo ? (
-          <img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
-        ) : (
-          <div
-            className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
-            aria-hidden
-          >
-            <Plug className="size-5" />
+    <article className="group flex items-start rounded-lg border border-border bg-card">
+      {/* <details> wraps the summary + expanded dl. The Revoke button is a
+          sibling, not a descendant of <summary> — interactive descendants of
+          <summary> aren't allowed by the HTML spec, and Firefox/Safari skip
+          Tab focus on them. */}
+      <details className="min-w-0 flex-1 open:pb-3">
+        <summary className="flex cursor-pointer items-center gap-3 px-3 py-3 [&::-webkit-details-marker]:hidden">
+          {connection.logo ? (
+            <img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
+          ) : (
+            <div
+              className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+              aria-hidden
+            >
+              <Plug className="size-5" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-medium">
+              {connection.name ?? 'Unnamed'}
+              {!connection.verified && (
+                <span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
+                  unverified
+                </span>
+              )}
+            </div>
+            <div className="truncate text-xs text-muted-foreground">
+              <strong className="font-semibold">
+                {connection.kind === 'obsidian' ? 'Vault:' : 'Vaults:'}
+              </strong>{' '}
+              {vaultLabel}
+            </div>
           </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">
-            {connection.name ?? 'Unnamed'}
-            {!connection.verified && (
-              <span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
-                unverified
-              </span>
-            )}
-          </div>
-          <div className="truncate text-xs text-muted-foreground">
-            <strong className="font-semibold">
-              {connection.kind === 'obsidian' ? 'Vault:' : 'Vaults:'}
-            </strong>{' '}
-            {vaultLabel}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault()
-            onRevoke()
-          }}
-          className="shrink-0 text-sm text-destructive hover:text-destructive/80"
-        >
-          Revoke
-        </button>
-      </summary>
-      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground [&_dt]:font-semibold">
+        </summary>
+        <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground [&_dt]:font-semibold">
         {connection.software_version && (
           <>
             <dt>Version:</dt>
@@ -283,8 +286,16 @@ function ConnectionCard({
             <dd className="break-all">{connection.redirect_uris.join(', ')}</dd>
           </>
         )}
-      </dl>
-    </details>
+        </dl>
+      </details>
+      <button
+        type="button"
+        onClick={onRevoke}
+        className="shrink-0 self-center p-3 text-sm text-destructive hover:text-destructive/80"
+      >
+        Revoke
+      </button>
+    </article>
   )
 }
 
@@ -644,27 +655,42 @@ function ConfirmRevokeModal({
   }
 
   return (
-    <ModalShell title={`Revoke "${name}"?`} onClose={submitting ? () => {} : onClose}>
-      <p className="mb-4 text-sm text-muted-foreground">{description}</p>
-      {error && (
-        <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      )}
-      <footer className="flex justify-end gap-3">
-        <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={handleConfirm}
-          disabled={submitting}
-        >
-          {submitting ? 'Revoking…' : 'Revoke'}
-        </Button>
-      </footer>
-    </ModalShell>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        // Esc + outside-click route through here; ignore while the mutation
+        // is in flight so the user can't accidentally close mid-request.
+        if (!open && !submitting) onClose()
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Revoke "{name}"?</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        {error && (
+          <p
+            className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={submitting}
+          >
+            {submitting ? 'Revoking…' : 'Revoke'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -380,7 +380,7 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
   end
 
   describe "POST /oauth/register — kind + provenance stamping" do
-    test "DCR with kind=obsidian persists kind=obsidian", %{conn: conn} do
+    test "DCR rejects kind=obsidian (only device-flow Obsidian is supported)", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{
           "client_name" => "Engram Vault Sync",
@@ -389,14 +389,9 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
           "kind" => "obsidian"
         })
 
-      assert %{"client_id" => client_id} = json_response(conn, 201)
-
-      client =
-        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
-          skip_tenant_check: true
-        )
-
-      assert client.kind == "obsidian"
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+      assert body["error_description"] =~ "obsidian"
     end
 
     test "DCR without kind defaults to mcp", %{conn: conn} do

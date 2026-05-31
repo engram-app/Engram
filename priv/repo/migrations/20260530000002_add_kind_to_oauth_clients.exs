@@ -5,7 +5,7 @@ defmodule Engram.Repo.Migrations.AddKindToOauthClients do
     alter table(:oauth_clients) do
       add :kind, :string, null: false, default: "mcp"
       add :first_user_agent, :text
-      add :first_ip, :inet
+      add :first_ip, :text
     end
 
     create constraint(:oauth_clients, :oauth_clients_kind_check,

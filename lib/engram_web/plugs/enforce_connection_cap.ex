@@ -56,6 +56,18 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
           limit when is_integer(limit) ->
             current = Connections.count_active(user.id, kind_atom(kind_str))
 
+            # Telemetry breadcrumb for the TOCTOU race documented above: when
+            # current == limit - 1, two concurrent consents can both pass.
+            # Emitting here lets us measure the race frequency before paying
+            # the cost of an advisory lock.
+            if current == limit - 1 do
+              :telemetry.execute(
+                [:engram, :connections, :near_cap],
+                %{current: current, limit: limit},
+                %{user_id: user.id, kind: kind_str}
+              )
+            end
+
             if current < limit do
               conn
             else

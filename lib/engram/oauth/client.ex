@@ -7,6 +7,8 @@ defmodule Engram.OAuth.Client do
   use Ecto.Schema
   import Ecto.Changeset
 
+  require Logger
+
   @primary_key {:client_id, :binary_id, autogenerate: true}
   # Only public PKCE clients are supported until confidential-client minting
   # ships (Phase 4). Reject client_secret_* to avoid handing back a 201 with
@@ -76,13 +78,25 @@ defmodule Engram.OAuth.Client do
     |> validate_metadata_uris()
   end
 
-  # DCR is a forgiving public endpoint. Unknown or absent kind values silently
-  # default to "mcp" — bad actors sending kind: "garbage" get a client with
-  # kind: "mcp", no 400 error.
+  # DCR is a public endpoint:
+  #   - "mcp" passes through.
+  #   - "obsidian" is rejected: revoke routing in the Connections UI assumes
+  #     all Obsidian grants are device-flow today. Until a DCR-minted Obsidian
+  #     client has an `auth_path` discriminator, accepting one would silently
+  #     break the revoke button.
+  #   - Anything else: log + default to "mcp" so legitimate typos aren't
+  #     hostile UX, but we can grep the logs for "kind drift" later.
   defp coerce_kind(changeset) do
     case get_field(changeset, :kind) do
-      k when k in ["mcp", "obsidian"] -> changeset
-      _ -> put_change(changeset, :kind, "mcp")
+      "mcp" ->
+        changeset
+
+      "obsidian" ->
+        add_error(changeset, :kind, "obsidian clients must use the device flow")
+
+      other ->
+        Logger.info("DCR: unknown kind #{inspect(other)}; defaulting to mcp")
+        put_change(changeset, :kind, "mcp")
     end
   end
 
