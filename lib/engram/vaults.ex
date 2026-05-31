@@ -49,6 +49,7 @@ defmodule Engram.Vaults do
             |> case do
               {:ok, v} ->
                 emit_vault_count(user.id, :created)
+                _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
                 {:ok, decrypt_vault_if_needed(v, user)}
 
               other ->
