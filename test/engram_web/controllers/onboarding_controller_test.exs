@@ -176,4 +176,64 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert json_response(conn, 422)["error"] == "missing_fields"
     end
   end
+
+  describe "GET /api/onboarding/status payload extensions" do
+    test "includes actions list and vault_count", %{conn: conn, user: user} do
+      :ok = Engram.Onboarding.record_action(user.id, :first_vault_created)
+      {:ok, _vault} = Engram.Vaults.create_vault(user, %{name: "Demo"})
+
+      resp = conn |> get("/api/onboarding/status") |> json_response(200)
+
+      assert "first_vault_created" in resp["actions"]
+      assert resp["vault_count"] == 1
+    end
+
+    test "actions defaults to [] and vault_count to 0 for new user", %{conn: conn} do
+      resp = conn |> get("/api/onboarding/status") |> json_response(200)
+      assert resp["actions"] == []
+      assert resp["vault_count"] == 0
+    end
+  end
+
+  describe "POST /api/onboarding/actions" do
+    test "records a valid action and is idempotent", %{conn: conn, user: user} do
+      assert %{"status" => "ok"} =
+               conn
+               |> post("/api/onboarding/actions", %{"action" => "tour_offered_skipped"})
+               |> json_response(200)
+
+      assert %{"status" => "ok"} =
+               conn
+               |> post("/api/onboarding/actions", %{"action" => "tour_offered_skipped"})
+               |> json_response(200)
+
+      assert ["tour_offered_skipped"] = Engram.Onboarding.list_actions(user.id)
+    end
+
+    test "rejects unknown action with 422", %{conn: conn} do
+      assert %{"error" => _} =
+               conn
+               |> post("/api/onboarding/actions", %{"action" => "bogus"})
+               |> json_response(422)
+    end
+
+    test "401 when unauthenticated" do
+      conn = Phoenix.ConnTest.build_conn()
+
+      assert conn
+             |> post("/api/onboarding/actions", %{"action" => "tour_completed"})
+             |> response(401)
+    end
+
+    test "multi-tenant — cannot insert for another user", %{conn: conn, user: user} do
+      other_user = insert(:user)
+
+      conn
+      |> post("/api/onboarding/actions", %{"action" => "tour_completed"})
+      |> json_response(200)
+
+      assert ["tour_completed"] = Engram.Onboarding.list_actions(user.id)
+      assert [] = Engram.Onboarding.list_actions(other_user.id)
+    end
+  end
 end

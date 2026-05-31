@@ -18,8 +18,26 @@ defmodule EngramWeb.OnboardingController do
           |> Map.update!(:next_step, &Atom.to_string/1)
           |> reject_nil_notice()
       end
+      |> Map.put(:actions, Onboarding.list_actions(user.id))
+      |> Map.put(:vault_count, Engram.Vaults.count_for(user))
 
     json(conn, payload)
+  end
+
+  def record(conn, %{"action" => action}) when is_binary(action) do
+    user = conn.assigns.current_user
+
+    case Onboarding.record_action(user.id, action) do
+      :ok ->
+        json(conn, %{status: "ok"})
+
+      {:error, %Ecto.Changeset{}} ->
+        conn |> put_status(422) |> json(%{error: "invalid_action"})
+    end
+  end
+
+  def record(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "missing_action"})
   end
 
   # Drop terms_notice from the wire when there's nothing to notify.
