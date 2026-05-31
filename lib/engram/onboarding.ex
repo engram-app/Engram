@@ -10,6 +10,7 @@ defmodule Engram.Onboarding do
   alias Engram.Billing
   alias Engram.Legal
   alias Engram.Legal.VersionCache
+  alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
@@ -212,4 +213,38 @@ defmodule Engram.Onboarding do
   defp next_step(false, _), do: :agreement
   defp next_step(true, false), do: :billing
   defp next_step(true, true), do: :done
+
+  @doc """
+  Record an onboarding milestone for `user_id`. Idempotent — re-recording the
+  same action returns `:ok` with no extra row. Returns `{:error, changeset}`
+  only on enum/validation failure.
+  """
+  def record_action(user_id, action) when is_atom(action) do
+    record_action(user_id, Atom.to_string(action))
+  end
+
+  def record_action(user_id, action) when is_integer(user_id) and is_binary(action) do
+    %Action{}
+    |> Action.changeset(%{user_id: user_id, action: action})
+    |> Repo.insert(
+      on_conflict: :nothing,
+      conflict_target: [:user_id, :action],
+      skip_tenant_check: true
+    )
+    |> case do
+      {:ok, _} -> :ok
+      {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
+    end
+  end
+
+  @doc """
+  Return the set of onboarding actions recorded for `user_id` as a list of
+  string action names. Empty list for unknown user.
+  """
+  def list_actions(user_id) when is_integer(user_id) do
+    import Ecto.Query
+
+    from(a in Action, where: a.user_id == ^user_id, select: a.action)
+    |> Repo.all(skip_tenant_check: true)
+  end
 end

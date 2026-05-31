@@ -201,6 +201,7 @@ defmodule EngramWeb.Router do
     # so the wizard can actually function before completion.
     get "/onboarding/status", OnboardingController, :status
     post "/onboarding/accept-terms", OnboardingController, :accept_terms
+    post "/onboarding/actions", OnboardingController, :record
 
     # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
     # JWT after the React consent UI is approved. Returns JSON

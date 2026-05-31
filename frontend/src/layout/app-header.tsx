@@ -2,10 +2,19 @@ import { Link, NavLink } from 'react-router'
 import ThemeToggle from '../theme/theme-toggle'
 import UserMenu from './user-menu'
 
-function HeaderLink({ to, label }: { to: string; label: string }) {
+function HeaderLink({
+  to,
+  label,
+  dataTour,
+}: {
+  to: string
+  label: string
+  dataTour?: string
+}) {
   return (
     <NavLink
       to={to}
+      data-tour={dataTour}
       className={({ isActive }) =>
         `text-sm transition hover:text-foreground ${
           isActive ? 'font-medium text-foreground' : 'text-muted-foreground'
@@ -27,7 +36,7 @@ export default function AppHeader() {
         Engram
       </Link>
       <nav className="flex items-center gap-3" aria-label="Main navigation">
-        <HeaderLink to="/search" label="Search" />
+        <HeaderLink to="/search" label="Search" dataTour="search" />
         <ThemeToggle />
         <UserMenu />
       </nav>

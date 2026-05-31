@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { useActiveVaultId } from './active-vault'
+import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -51,31 +52,81 @@ export interface User {
 
 export function useFolders() {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['folders', vaultId],
     queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
     select: (data) => data.folders,
+    enabled: !demo?.active,
   })
+  if (demo?.active) {
+    const data: Folder[] = demo.folders.map((f) => ({
+      name: f.path,
+      count: demo.notes.filter((n) => n.folder_id === f.id).length,
+    }))
+    return { ...query, data, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: (data) => data.notes,
-    enabled: options?.enabled ?? folder.length > 0,
+    enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
   })
+  if (demo?.active) {
+    const matchFolder = demo.folders.find((f) => f.path === folder)
+    const notes: NoteSummary[] = matchFolder
+      ? demo.notes
+          .filter((n) => n.folder_id === matchFolder.id)
+          .map((n) => ({
+            path: n.path,
+            title: n.title,
+            folder: matchFolder.path,
+            tags: [],
+            version: 1,
+            mtime: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }))
+      : []
+    return { ...query, data: notes, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useNote(path: string) {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['note', vaultId, path],
     queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
-    enabled: !!path,
+    enabled: !demo?.active && !!path,
   })
+  if (demo?.active) {
+    const hit = demo.notes.find((n) => n.path === path)
+    if (!hit) return query
+    const folder = demo.folders.find((f) => f.id === hit.folder_id)
+    const now = new Date().toISOString()
+    const data: Note = {
+      path: hit.path,
+      title: hit.title,
+      folder: folder?.path ?? '',
+      tags: [],
+      version: 1,
+      mtime: now,
+      created_at: now,
+      updated_at: now,
+      content: hit.content,
+    }
+    return { ...query, data, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useUpdateNote() {
@@ -241,6 +292,14 @@ export function useBillingHistory(enabled: boolean) {
 
 // Onboarding types
 
+export type OnboardingAction =
+  | 'tour_offered_taken'
+  | 'tour_offered_skipped'
+  | 'tour_completed'
+  | 'first_vault_created'
+  | 'plugin_connected'
+  | 'ai_connected'
+
 export interface OnboardingStatus {
   enabled: boolean
   terms_ok?: boolean
@@ -248,6 +307,8 @@ export interface OnboardingStatus {
   current_tos_version?: string
   current_privacy_version?: string
   next_step: 'agreement' | 'billing' | 'done'
+  actions: OnboardingAction[]
+  vault_count: number
 }
 
 // Onboarding hooks
@@ -258,6 +319,16 @@ export function useOnboardingStatus() {
     queryFn: () => api.get<OnboardingStatus>('/onboarding/status'),
     staleTime: Infinity,
     refetchOnWindowFocus: true,
+  })
+}
+
+export function useRecordOnboardingAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (action: OnboardingAction) =>
+      api.post<{ status: string }>('/onboarding/actions', { action }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['onboarding', 'status'] }),
+    retry: 3,
   })
 }
 
@@ -432,11 +503,32 @@ export interface EncryptionProgress {
 // Vault hooks
 
 export function useVaults() {
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['vaults'],
     queryFn: () => api.get<{ vaults: Vault[] }>('/vaults'),
     select: (data) => data.vaults,
+    enabled: !demo?.active,
   })
+  if (demo?.active && demo.vault) {
+    const fake: Vault = {
+      id: -1,
+      name: demo.vault.name,
+      description: null,
+      slug: demo.vault.id,
+      is_default: true,
+      created_at: new Date(0).toISOString(),
+      encrypted: false,
+      encryption_status: 'none',
+      encrypted_at: null,
+      decrypt_requested_at: null,
+      last_toggle_at: null,
+      cooldown_days: null,
+      note_count: demo.notes.length,
+    }
+    return { ...query, data: [fake], isLoading: false, isPending: false, error: null } as typeof query
+  }
+  return query
 }
 
 export function useEncryptVault() {
@@ -505,6 +597,11 @@ export function useCreateVault() {
   return useMutation({
     mutationFn: (attrs: { name: string; description?: string }) =>
       api.post<{ vault: Vault }>('/vaults', attrs),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vaults'] })
+      // Backend records `first_vault_created` in Vaults.create_vault/2;
+      // refresh /status so the onboarding checklist ticks immediately.
+      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    },
   })
 }

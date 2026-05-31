@@ -302,6 +302,19 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  describe "plugin_connected onboarding hook" do
+    test "records plugin_connected on successful exchange" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("plugin")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+
+      {:ok, _tokens} = DeviceFlow.exchange_device_code(auth.device_code)
+
+      assert "plugin_connected" in Engram.Onboarding.list_actions(user.id)
+    end
+  end
+
   describe "cleanup_expired/0" do
     test "deletes expired device authorizations" do
       {:ok, auth} = DeviceFlow.start_device_flow("client_1")
