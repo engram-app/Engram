@@ -34,12 +34,15 @@ function useTierCaps() {
 
 // ── Page ──────────────────────────────────────────────────────
 
+type PendingRevoke = { name: string; description: string; onConfirm: () => void }
+
 export default function ConnectionsPage() {
   const { data: connections, isLoading, error } = useConnections()
   const caps = useTierCaps()
   const revokeOauth = useRevokeOauthConnection()
   const revokeDevice = useRevokeDeviceConnection()
   const revokePat = useRevokePat()
+  const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null)
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>
   if (error)
@@ -79,14 +82,17 @@ export default function ConnectionsPage() {
               <li key={`${c.kind}-${c.client_id}`}>
                 <ConnectionCard
                   connection={c}
-                  onRevoke={() => {
-                    if (window.confirm(`Revoke "${c.name}"? The plugin will lose access.`)) {
-                      // Obsidian uses device-flow exclusively today; route all Obsidian
-                      // revocations through the device endpoint. When MCP-style Obsidian
-                      // clients ship we will need a discriminator field from the backend.
-                      revokeDevice.mutate(c.client_id!)
-                    }
-                  }}
+                  onRevoke={() =>
+                    setPendingRevoke({
+                      name: c.name ?? 'this connection',
+                      description: 'The plugin will lose access to your vault.',
+                      // Obsidian uses device-flow exclusively today; route all
+                      // Obsidian revocations through the device endpoint. When
+                      // MCP-style Obsidian clients ship we will need a
+                      // discriminator field from the backend.
+                      onConfirm: () => revokeDevice.mutate(c.client_id!),
+                    })
+                  }
                 />
               </li>
             ))}
@@ -106,11 +112,13 @@ export default function ConnectionsPage() {
               <li key={`${c.kind}-${c.client_id}`}>
                 <ConnectionCard
                   connection={c}
-                  onRevoke={() => {
-                    if (window.confirm(`Revoke "${c.name}"?`)) {
-                      revokeOauth.mutate(c.client_id!)
-                    }
-                  }}
+                  onRevoke={() =>
+                    setPendingRevoke({
+                      name: c.name ?? 'this connection',
+                      description: 'This client will lose access to your account.',
+                      onConfirm: () => revokeOauth.mutate(c.client_id!),
+                    })
+                  }
                 />
               </li>
             ))}
@@ -121,8 +129,23 @@ export default function ConnectionsPage() {
       <PatSection
         pats={pats}
         canCreate={caps.apiWriteEnabled}
-        onRevoke={(id) => revokePat.mutate(id)}
+        onRevoke={(p) =>
+          setPendingRevoke({
+            name: p.name ?? 'this key',
+            description: 'This API key will stop working immediately and cannot be restored.',
+            onConfirm: () => revokePat.mutate(p.key_id!),
+          })
+        }
       />
+
+      {pendingRevoke && (
+        <ConfirmRevokeModal
+          name={pendingRevoke.name}
+          description={pendingRevoke.description}
+          onConfirm={pendingRevoke.onConfirm}
+          onClose={() => setPendingRevoke(null)}
+        />
+      )}
     </article>
   )
 }
@@ -250,7 +273,7 @@ function PatSection({
 }: {
   pats: Connection[]
   canCreate: boolean
-  onRevoke: (id: number) => void
+  onRevoke: (pat: Connection) => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
   const [newKey, setNewKey] = useState<{ key: string; id: number; name: string } | null>(null)
@@ -319,11 +342,7 @@ function PatSection({
                     <td className="px-4 py-3 text-right">
                       <button
                         type="button"
-                        onClick={() => {
-                          if (window.confirm(`Revoke "${p.name || 'this key'}"? This cannot be undone.`)) {
-                            onRevoke(p.key_id!)
-                          }
-                        }}
+                        onClick={() => onRevoke(p)}
                         className="text-sm text-destructive hover:text-destructive/80"
                       >
                         Revoke
@@ -556,6 +575,43 @@ async function copyToClipboard(text: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+function ConfirmRevokeModal({
+  name,
+  description,
+  onConfirm,
+  onClose,
+}: {
+  name: string
+  description: string
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <ModalShell title={`Revoke "${name}"?`} onClose={onClose}>
+      <p className="mb-6 text-sm text-muted-foreground">{description}</p>
+      <footer className="flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onConfirm()
+            onClose()
+          }}
+          className="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+        >
+          Revoke
+        </button>
+      </footer>
+    </ModalShell>
+  )
 }
 
 function ModalShell({
