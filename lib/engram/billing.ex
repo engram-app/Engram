@@ -14,6 +14,8 @@ defmodule Engram.Billing do
   alias Engram.Paddle.Client
   alias Engram.Repo
 
+  require Logger
+
   defmodule UnknownLimitKey do
     @moduledoc "Raised when a limit lookup uses an unknown atom or a string key."
     defexception [:key]

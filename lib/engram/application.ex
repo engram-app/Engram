@@ -5,6 +5,8 @@ defmodule Engram.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     Engram.Crypto.Config.validate!()
@@ -118,17 +120,31 @@ defmodule Engram.Application do
             config: %{
               metadata: [
                 :category,
-                :event_type,
-                :event_id,
-                :paddle_subscription_id,
                 :drift_kind,
-                :reason
+                :event_id,
+                :event_type,
+                :kind,
+                :paddle_price_id,
+                :paddle_subscription_id,
+                :queue,
+                :reason,
+                :reason_label,
+                :status,
+                :worker
               ]
             }
           })
 
+        Logger.info("sentry_handler_attached",
+          category: :boot,
+          reason_label: :dsn_present
+        )
+
       _ ->
-        :ok
+        Logger.warning("sentry_handler_not_attached",
+          category: :boot,
+          reason_label: :dsn_missing_or_empty
+        )
     end
   end
 

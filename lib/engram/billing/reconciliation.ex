@@ -26,6 +26,10 @@ defmodule Engram.Billing.Reconciliation do
 
   require Logger
 
+  # 2-minute tolerance covers NTP drift + Paddle → webhook → DB write
+  # propagation (parse_period_end/1 also truncates to seconds). Tighter
+  # values produced false-positive period_mismatch entries during
+  # sandbox smoke testing 2026-05-23.
   @period_skew_seconds 120
 
   @type drift_kind ::
@@ -169,7 +173,17 @@ defmodule Engram.Billing.Reconciliation do
          %DateTime{} = local_dt <- local.current_period_end do
       abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
     else
-      _ -> false
+      other ->
+        # Couldn't parse — treat as no-drift to avoid spamming Sentry
+        # on every reconciliation cycle when Paddle returns an
+        # unexpected shape, but warn so a contract change is visible.
+        Logger.warning("paddle_reconcile_period_unparseable",
+          category: :paddle_reconcile,
+          paddle_subscription_id: paddle_sub["id"],
+          reason: inspect(other)
+        )
+
+        false
     end
   end
 

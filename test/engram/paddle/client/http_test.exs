@@ -94,7 +94,7 @@ defmodule Engram.Paddle.Client.HTTPTest do
       end)
 
       assert {:ok, results} = HTTP.list_subscriptions(@since)
-      assert length(results) >= 1
+      assert results != []
       # And critically — it terminates.
     end
 

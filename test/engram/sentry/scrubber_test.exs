@@ -18,12 +18,13 @@ defmodule Engram.Sentry.ScrubberTest do
     test "drops event.request entirely (headers, cookies, query_string, data all gone)" do
       e =
         event(%{
-          request: request(
-            data: %{"customer_email" => "u@example.com"},
-            headers: %{"authorization" => "Bearer secret-token"},
-            cookies: "session=abc123",
-            query_string: "email=u@example.com"
-          )
+          request:
+            request(
+              data: %{"customer_email" => "u@example.com"},
+              headers: %{"authorization" => "Bearer secret-token"},
+              cookies: "session=abc123",
+              query_string: "email=u@example.com"
+            )
         })
 
       assert %Sentry.Event{request: nil} = Scrubber.scrub(e)

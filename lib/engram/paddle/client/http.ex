@@ -165,7 +165,14 @@ defmodule Engram.Paddle.Client.HTTP do
             else
               # Paddle's `next` is a fully-qualified URL with all query params
               # encoded — don't pass `params:` again or Req appends them.
-              list_pages(next_url, [], headers, [data | acc], MapSet.put(seen, next_url), page + 1)
+              list_pages(
+                next_url,
+                [],
+                headers,
+                [data | acc],
+                MapSet.put(seen, next_url),
+                page + 1
+              )
             end
         end
 
