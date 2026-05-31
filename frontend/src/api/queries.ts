@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { useActiveVaultId } from './active-vault'
+import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -51,31 +52,81 @@ export interface User {
 
 export function useFolders() {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['folders', vaultId],
     queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
     select: (data) => data.folders,
+    enabled: !demo?.active,
   })
+  if (demo?.active) {
+    const data: Folder[] = demo.folders.map((f) => ({
+      name: f.path,
+      count: demo.notes.filter((n) => n.folder_id === f.id).length,
+    }))
+    return { ...query, data, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: (data) => data.notes,
-    enabled: options?.enabled ?? folder.length > 0,
+    enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
   })
+  if (demo?.active) {
+    const matchFolder = demo.folders.find((f) => f.path === folder)
+    const notes: NoteSummary[] = matchFolder
+      ? demo.notes
+          .filter((n) => n.folder_id === matchFolder.id)
+          .map((n) => ({
+            path: n.path,
+            title: n.title,
+            folder: matchFolder.path,
+            tags: [],
+            version: 1,
+            mtime: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }))
+      : []
+    return { ...query, data: notes, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useNote(path: string) {
   const vaultId = useActiveVaultId()
-  return useQuery({
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
     queryKey: ['note', vaultId, path],
     queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
-    enabled: !!path,
+    enabled: !demo?.active && !!path,
   })
+  if (demo?.active) {
+    const hit = demo.notes.find((n) => n.path === path)
+    if (!hit) return query
+    const folder = demo.folders.find((f) => f.id === hit.folder_id)
+    const now = new Date().toISOString()
+    const data: Note = {
+      path: hit.path,
+      title: hit.title,
+      folder: folder?.path ?? '',
+      tags: [],
+      version: 1,
+      mtime: now,
+      created_at: now,
+      updated_at: now,
+      content: hit.content,
+    }
+    return { ...query, data, isLoading: false, isFetching: false, error: null }
+  }
+  return query
 }
 
 export function useUpdateNote() {
