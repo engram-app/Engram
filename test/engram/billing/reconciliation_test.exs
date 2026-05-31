@@ -74,7 +74,13 @@ defmodule Engram.Billing.ReconciliationTest do
       Engram.Paddle.ClientMock
       |> expect(:list_subscriptions, fn _since ->
         {:ok,
-         [paddle_sub(%{"id" => "sub_status", "customer_id" => "ctm_status", "status" => "past_due"})]}
+         [
+           paddle_sub(%{
+             "id" => "sub_status",
+             "customer_id" => "ctm_status",
+             "status" => "past_due"
+           })
+         ]}
       end)
 
       assert %{drift: [%{kind: :status_mismatch, subscription_id: "sub_status"}]} =

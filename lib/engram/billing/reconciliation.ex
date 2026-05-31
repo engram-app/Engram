@@ -50,7 +50,11 @@ defmodule Engram.Billing.Reconciliation do
     if Application.get_env(:engram, :billing_enabled, false) do
       do_run(days_back)
     else
-      Logger.info("paddle_reconcile_skipped", category: :paddle_reconcile, reason: :billing_disabled)
+      Logger.info("paddle_reconcile_skipped",
+        category: :paddle_reconcile,
+        reason: :billing_disabled
+      )
+
       %{paddle_total: 0, local_total: 0, drift: [], skipped: :billing_disabled}
     end
   end
