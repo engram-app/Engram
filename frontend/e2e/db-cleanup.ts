@@ -1,6 +1,11 @@
 import pg from 'pg'
 
-const TEST_EMAIL_PATTERNS = ['e2e-local-%@test.com', 'e2e-browser-%@test.com', 'e2e-theme-%@test.com']
+const TEST_EMAIL_PATTERNS = [
+  'e2e-local-%@test.com',
+  'e2e-browser-%@test.com',
+  'e2e-theme-%@test.com',
+  'e2e-live-%@test.com',
+]
 
 // Hosts safe to run DELETE against. Anything else aborts.
 // Extend via E2E_DB_CLEANUP_EXTRA_HOSTS (comma-separated) for self-hosted CI.
