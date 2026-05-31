@@ -455,9 +455,15 @@ defmodule Engram.Billing do
 
   @doc """
   Resolve a tier name (`"starter"` | `"pro"`) from a Paddle subscription
-  data map. Defaults to `"starter"` for unknown or missing prices so a
-  bogus price ID can't silently downgrade a customer (reconciliation
-  surfaces the mismatch separately).
+  data map. Defaults to `"starter"` for unknown or missing prices — but
+  loudly logs (`:error`) the unknown-price case so a misconfigured
+  PADDLE_*_PRICE_ID env var doesn't silently downgrade customers.
+
+  The reconciliation `tier_mismatch` check would otherwise miss this
+  failure mode entirely: both sides of the diff run through this
+  function, so an unknown price ID maps to `"starter"` on both sides
+  and produces no drift signal while the customer is silently treated
+  as starter.
   """
   @spec tier_from_subscription(map()) :: String.t()
   def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
@@ -467,9 +473,20 @@ defmodule Engram.Billing do
 
   defp tier_from_price_id(price_id) do
     cond do
-      price_id == Application.get_env(:engram, :paddle_starter_price_id) -> "starter"
-      price_id == Application.get_env(:engram, :paddle_pro_price_id) -> "pro"
-      true -> "starter"
+      price_id == Application.get_env(:engram, :paddle_starter_price_id) ->
+        "starter"
+
+      price_id == Application.get_env(:engram, :paddle_pro_price_id) ->
+        "pro"
+
+      true ->
+        Logger.error("paddle_unknown_price_id",
+          category: :paddle,
+          reason_label: :unknown_price_id,
+          paddle_price_id: price_id
+        )
+
+        "starter"
     end
   end
 
