@@ -73,7 +73,7 @@ function ShellInner({ children }: { children: ReactNode }) {
       {showVaultModal && !showTourOffer && (
         <CreateFirstVaultModal onCreated={() => setVaultModalHandled(true)} />
       )}
-      <ChecklistWidget onStartTour={startTour} />
+      {!tourActive && <ChecklistWidget onStartTour={startTour} />}
     </>
   )
 }

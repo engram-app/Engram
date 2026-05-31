@@ -108,13 +108,22 @@ function DesktopLayout() {
                 <FolderTree />
               </ScrollArea>
               <FolderActions />
-              <section
-                data-tour="sidebar-vaults"
-                className={
-                  demoActive ? 'flex min-h-32 flex-col justify-end' : undefined
-                }
-              >
+              <section className="relative">
                 <VaultSwitcher />
+                {/*
+                  The Joyride spotlight is computed from the target's bounding
+                  rect. Use an absolutely-positioned ghost that extends above
+                  the VaultSwitcher trigger so the cutout covers the dropdown
+                  menu when it opens upward — without taking real layout space
+                  (which would shove the FolderActions row up during the tour).
+                */}
+                {demoActive && (
+                  <div
+                    data-tour="sidebar-vaults"
+                    aria-hidden
+                    className="pointer-events-none absolute inset-x-0 bottom-0 -top-24"
+                  />
+                )}
               </section>
             </div>
           </FolderTreeProvider>

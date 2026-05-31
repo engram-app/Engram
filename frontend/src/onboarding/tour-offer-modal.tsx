@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { Button } from '../components/ui/button'
 
@@ -7,6 +8,11 @@ interface Props {
 }
 
 export function TourOfferModal({ onTake, onSkip }: Props) {
+  // Radix Dialog auto-focuses the first focusable child, which would be
+  // the Skip button (it comes first in DOM order for visual reasons).
+  // Steer focus to the primary CTA instead.
+  const primaryRef = useRef<HTMLButtonElement>(null)
+
   return (
     <Dialog
       open
@@ -14,7 +20,13 @@ export function TourOfferModal({ onTake, onSkip }: Props) {
         if (!o) onSkip()
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className="sm:max-w-md"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          primaryRef.current?.focus()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Want a quick tour?</DialogTitle>
           <DialogDescription>
@@ -25,7 +37,9 @@ export function TourOfferModal({ onTake, onSkip }: Props) {
           <Button variant="ghost" onClick={onSkip}>
             Skip
           </Button>
-          <Button onClick={onTake}>Take the tour</Button>
+          <Button ref={primaryRef} onClick={onTake}>
+            Take the tour
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
