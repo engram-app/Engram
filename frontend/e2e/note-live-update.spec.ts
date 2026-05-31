@@ -79,6 +79,15 @@ async function signIn(page: Page, email: string): Promise<void> {
   await expect(page).toHaveURL(/\/$/, { timeout: 10_000 })
 }
 
+async function seedActiveVault(page: Page, vaultId: number): Promise<void> {
+  // The SPA reads `engram.activeVaultId` from localStorage on mount; without
+  // this, queries fire without an X-Vault-Id header and the viewer can't
+  // resolve the note before the auto-switch effect races us.
+  await page.evaluate((id) => {
+    localStorage.setItem('engram.activeVaultId', String(id))
+  }, vaultId)
+}
+
 test.describe('SPA viewer live-update (#277)', () => {
   test('viewer re-renders when a remote client upserts the open note', async ({
     browser,
@@ -94,7 +103,8 @@ test.describe('SPA viewer live-update (#277)', () => {
     const page = await ctx.newPage()
     await signIn(page, email)
 
-    await page.goto(`/notes/${path}`)
+    await seedActiveVault(page, vault.id)
+    await page.goto(`/note/${path}`)
     await expect(page.getByText('First body.')).toBeVisible({ timeout: 10_000 })
 
     // Remote upsert (simulates plugin push / MCP write / other web tab Save).
@@ -120,7 +130,8 @@ test.describe('SPA viewer live-update (#277)', () => {
     const page = await ctx.newPage()
     await signIn(page, email)
 
-    await page.goto(`/notes/${path}`)
+    await seedActiveVault(page, vault.id)
+    await page.goto(`/note/${path}`)
     await expect(page.getByText('original text.')).toBeVisible({ timeout: 10_000 })
 
     // Switch into edit mode and type a local unsaved edit into CodeMirror.
