@@ -511,22 +511,24 @@ export function useVaults() {
     enabled: !demo?.active,
   })
   if (demo?.active && demo.vault) {
-    const fake: Vault = {
-      id: -1,
-      name: demo.vault.name,
+    const base = {
       description: null,
-      slug: demo.vault.id,
-      is_default: true,
       created_at: new Date(0).toISOString(),
       encrypted: false,
-      encryption_status: 'none',
+      encryption_status: 'none' as const,
       encrypted_at: null,
       decrypt_requested_at: null,
       last_toggle_at: null,
       cooldown_days: null,
       note_count: demo.notes.length,
     }
-    return { ...query, data: [fake], isLoading: false, isPending: false, error: null } as typeof query
+    // Two fake vaults so the VaultSwitcher renders its dropdown — the tour's
+    // first step is gated on a real switch between them. Notes are shared.
+    const vaults: Vault[] = [
+      { ...base, id: -1, name: demo.vault.name, slug: demo.vault.id, is_default: true },
+      { ...base, id: -2, name: 'Personal', slug: `${demo.vault.id}-personal`, is_default: false },
+    ]
+    return { ...query, data: vaults, isLoading: false, isPending: false, error: null } as typeof query
   }
   return query
 }

@@ -1,9 +1,13 @@
 import type { Step } from 'react-joyride'
 
-// Step indexes that require the user to interact with the highlighted target
-// before the tour advances. TourController hides the Next button on these
-// steps and listens for clicks on the target instead.
-export const GATED_STEP_INDEXES = new Set<number>([0])
+// Step indexes that require the user to perform a specific interaction
+// before the tour advances. Maps the step index → the window CustomEvent
+// name TourController should listen for. Steps in this map have their
+// footer hidden (via `buttons: []`) so the only way forward is the
+// configured interaction.
+export const GATED_STEPS: Record<number, string> = {
+  0: 'engram:vault-switched',
+}
 
 // react-joyride v3 renamed `disableBeacon` → `skipBeacon`. Lives in Options, so
 // declaring it at the step level just sets the per-step override.
@@ -12,12 +16,13 @@ export const tourSteps: Step[] = [
     target: '[data-tour="sidebar-vaults"]',
     title: 'Your vaults',
     content:
-      'A vault is a collection of notes. You can have many — click here to swap between them. Right now you’re looking at a demo.',
+      'A vault is a collection of notes. Open this menu and switch to another vault to continue — you can always swap back.',
     placement: 'right',
     skipBeacon: true,
     // Gated: empty buttons array hides the footer (v3 replaces `hideFooter`);
-    // blockTargetInteraction:false lets the click reach the underlying element.
-    // TourController watches for that click and advances the stepIndex.
+    // blockTargetInteraction:false lets clicks reach the dropdown trigger
+    // and items underneath. TourController listens for `engram:vault-switched`
+    // (dispatched by VaultSwitcher.onValueChange) and advances on real switch.
     buttons: [],
     blockTargetInteraction: false,
   },

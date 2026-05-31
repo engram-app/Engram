@@ -54,8 +54,17 @@ export default function VaultSwitcher() {
           <DropdownMenuRadioGroup
             value={String(active.id)}
             onValueChange={(v) => {
-              setActiveVaultId(Number(v))
+              const next = Number(v)
+              if (next === active.id) return
+              setActiveVaultId(next)
               qc.invalidateQueries()
+              // Onboarding tour gates step 0 on a real switch; emit a DOM
+              // event the controller can listen for without coupling layers.
+              window.dispatchEvent(
+                new CustomEvent('engram:vault-switched', {
+                  detail: { from: active.id, to: next },
+                }),
+              )
             }}
           >
             {vaults.map((v) => (
