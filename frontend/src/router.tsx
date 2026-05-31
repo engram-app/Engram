@@ -10,7 +10,7 @@ import ResetPasswordPage from './features/auth/ResetPasswordPage'
 import DeviceLinkPage from './device/device-link-page'
 import AppLayout from './layout/app-layout'
 import NotFoundPage from './not-found'
-import ApiKeysPage from './settings/api-keys-page'
+import ConnectionsPage from './settings/connections-page'
 import SettingsLayout from './settings/settings-layout'
 import VaultsPage from './settings/vaults-page'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
@@ -89,7 +89,8 @@ export const router = createBrowserRouter(
                   ),
                 },
                 { path: 'vaults', element: <VaultsPage /> },
-                { path: 'api-keys', element: <ApiKeysPage /> },
+                { path: 'connections', element: <ConnectionsPage /> },
+                { path: 'api-keys', element: <Navigate to="/settings/connections" replace /> },
                 ...(config.billingEnabled
                   ? [{ path: 'billing', element: <BillingPage /> }]
                   : []),

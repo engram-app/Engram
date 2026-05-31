@@ -24,10 +24,17 @@ defmodule Engram.OAuth.RefreshToken do
     field :revoked_at, :utc_datetime
     field :consumed_at, :utc_datetime
 
+    # Read-only tracking fields populated at token-rotation time.
+    field :last_used_at, :utc_datetime_usec
+    # Task 7 NOTE: :inet at the DB level may return %Postgrex.INET{} struct
+    # when loaded; verify round-trip before adding to @cast_fields, may need
+    # a custom Ecto type.
+    field :last_used_ip, :string
+
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at)a
+  @cast ~w(token_hash family_id client_id user_id vault_id scope expires_at last_used_at last_used_ip)a
   @required ~w(token_hash family_id client_id user_id expires_at)a
 
   def changeset(token, attrs) do

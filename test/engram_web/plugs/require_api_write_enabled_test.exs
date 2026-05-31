@@ -61,7 +61,7 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabledTest do
       assert conn.status == 402
       body = Phoenix.ConnTest.json_response(conn, 402)
       assert body["error"] == "api_write_not_available"
-      assert body["upgrade_url"] == "/billing"
+      assert body["upgrade_url"] == "/settings/billing"
     end
 
     test "halts 402 on DELETE /api/notes/foo", %{conn: conn, user: user, api_key: api_key} do

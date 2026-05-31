@@ -20,7 +20,12 @@ defmodule EngramWeb.BillingController do
             tier: sub.tier,
             current_period_end: sub.current_period_end
           }
-        end
+        end,
+      caps: %{
+        obsidian_connections: cap_json(Billing.effective_limit(user, :obsidian_connections_cap)),
+        mcp_connections: cap_json(Billing.effective_limit(user, :mcp_connections_cap)),
+        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled))
+      }
     })
   end
 
@@ -55,6 +60,13 @@ defmodule EngramWeb.BillingController do
   # Unknown/malformed override (e.g. a non-integer value) → treat as no cap
   # rather than 500 the endpoint.
   defp cap_json(_), do: nil
+
+  # Boolean LimitKey: :unlimited (limits disabled) opens the gate; explicit
+  # true/false flows through; anything else collapses to false to fail-closed.
+  defp bool_json(:unlimited), do: true
+  defp bool_json(true), do: true
+  defp bool_json(false), do: false
+  defp bool_json(_), do: false
 
   @doc """
   Customer-portal redirect. Without an `action` param this returns the generic

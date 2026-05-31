@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 19 catalog keys" do
+    test "returns the 21 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 19
+      assert length(keys) == 21
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -101,9 +101,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 57 tuples (19 keys × 3 tiers)" do
+    test "emits 63 tuples (21 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 57
+      assert length(tuples) == 63
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -118,6 +118,22 @@ defmodule Engram.Billing.LimitKeysTest do
   describe "tiers/0" do
     test "returns the three tier atoms" do
       assert LimitKeys.tiers() == [:free, :starter, :pro]
+    end
+  end
+
+  describe "connections caps" do
+    test "obsidian_connections_cap is 1 on free, nil on paid" do
+      assert LimitKeys.defined?(:obsidian_connections_cap)
+      assert LimitKeys.default_for(:obsidian_connections_cap, :free) == 1
+      assert LimitKeys.default_for(:obsidian_connections_cap, :starter) == nil
+      assert LimitKeys.default_for(:obsidian_connections_cap, :pro) == nil
+    end
+
+    test "mcp_connections_cap is 1 on free, nil on paid" do
+      assert LimitKeys.defined?(:mcp_connections_cap)
+      assert LimitKeys.default_for(:mcp_connections_cap, :free) == 1
+      assert LimitKeys.default_for(:mcp_connections_cap, :starter) == nil
+      assert LimitKeys.default_for(:mcp_connections_cap, :pro) == nil
     end
   end
 end

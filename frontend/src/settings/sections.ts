@@ -13,7 +13,7 @@ export function buildSettingsSections(
   const sections: SettingsSection[] = [
     { to: 'account', label: 'Account' },
     { to: 'vaults', label: 'Vaults' },
-    { to: 'api-keys', label: 'API Keys' },
+    { to: 'connections', label: 'Connections' },
   ]
 
   if (billingEnabled) {

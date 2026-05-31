@@ -3,6 +3,7 @@ defmodule EngramWeb.OnboardingController do
 
   alias Engram.Legal.VersionCache
   alias Engram.Onboarding
+  alias EngramWeb.RequestMeta
 
   def status(conn, _params) do
     user = conn.assigns.current_user
@@ -43,8 +44,8 @@ defmodule EngramWeb.OnboardingController do
 
     if ok do
       meta = %{
-        ip_address: format_ip(conn.remote_ip),
-        user_agent: get_user_agent(conn)
+        ip_address: RequestMeta.format_ip(conn.remote_ip),
+        user_agent: RequestMeta.get_user_agent(conn)
       }
 
       case Onboarding.accept_terms(conn.assigns.current_user, tv, th, pv, ph, meta) do
@@ -63,16 +64,5 @@ defmodule EngramWeb.OnboardingController do
 
   def accept_terms(conn, _params) do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
-  end
-
-  defp format_ip({a, b, c, d}), do: "#{a}.#{b}.#{c}.#{d}"
-  defp format_ip(tuple) when tuple_size(tuple) == 8, do: tuple |> :inet.ntoa() |> to_string()
-  defp format_ip(_), do: nil
-
-  defp get_user_agent(conn) do
-    case Plug.Conn.get_req_header(conn, "user-agent") do
-      [ua | _] -> ua
-      _ -> nil
-    end
   end
 end

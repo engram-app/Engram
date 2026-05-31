@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 57 tuples (19 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 63 tuples (21 keys × 3 tiers)
   """
 
   @catalog %{
@@ -50,7 +50,10 @@ defmodule Engram.Billing.LimitKeys do
     inactivity_delete_days: %{type: :integer, defaults: %{free: 90, starter: nil, pro: nil}},
     # Legacy keys preserved for back-compat with existing call sites
     cross_vault_search: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
-    vault_scoped_keys: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}}
+    vault_scoped_keys: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
+    # Connections caps — free tier capped at 1; paid tiers unlimited
+    obsidian_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    mcp_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}}
   }
 
   @keys Map.keys(@catalog)

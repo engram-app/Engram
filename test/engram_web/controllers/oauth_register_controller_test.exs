@@ -1,5 +1,6 @@
 defmodule EngramWeb.OAuthRegisterControllerTest do
   use EngramWeb.ConnCase, async: false
+  import Ecto.Query
 
   setup_all do
     on_exit(fn ->
@@ -375,6 +376,103 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
 
       conn = post(conn, "/oauth/register", %{"redirect_uris" => ["https://x/cb"]})
       assert conn.status == 429
+    end
+  end
+
+  describe "POST /oauth/register — kind + provenance stamping" do
+    test "DCR rejects kind=obsidian (only device-flow Obsidian is supported)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "client_name" => "Engram Vault Sync",
+          "software_id" => "engram-vault-sync",
+          "redirect_uris" => ["http://127.0.0.1:51234/cb"],
+          "kind" => "obsidian"
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+      assert body["error_description"] =~ "obsidian"
+    end
+
+    test "DCR without kind defaults to mcp", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "client_name" => "Some Client",
+          "redirect_uris" => ["http://127.0.0.1:51234/cb"]
+        })
+
+      assert %{"client_id" => client_id} = json_response(conn, 201)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
+      assert client.kind == "mcp"
+    end
+
+    test "DCR with unknown kind silently defaults to mcp (forgiving)", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "client_name" => "Some Client",
+          "redirect_uris" => ["http://127.0.0.1:51234/cb"],
+          "kind" => "garbage"
+        })
+
+      assert %{"client_id" => client_id} = json_response(conn, 201)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
+      assert client.kind == "mcp"
+    end
+
+    test "DCR stamps first_user_agent + first_ip from request", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("user-agent", "TestAgent/1.0")
+        |> post("/oauth/register", %{
+          "client_name" => "X",
+          "redirect_uris" => ["http://127.0.0.1:51234/cb"]
+        })
+
+      assert %{"client_id" => client_id} = json_response(conn, 201)
+
+      client =
+        Engram.Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+          skip_tenant_check: true
+        )
+
+      assert client.first_user_agent == "TestAgent/1.0"
+      assert client.first_ip != nil
+      # Test conn.remote_ip defaults to {127, 0, 0, 1}
+      assert client.first_ip == "127.0.0.1"
+    end
+
+    test "client-supplied first_ip and first_user_agent are overridden by server values", %{
+      conn: conn
+    } do
+      conn =
+        conn
+        |> put_req_header("user-agent", "ServerStampedAgent/2.0")
+        |> post("/oauth/register", %{
+          "client_name" => "Spoofer",
+          "redirect_uris" => ["http://127.0.0.1:51234/cb"],
+          # Hostile attempt — these should be ignored:
+          "first_ip" => "203.0.113.99",
+          "first_user_agent" => "ClientSpoofedAgent/0.0"
+        })
+
+      %{"client_id" => client_id} = json_response(conn, 201)
+      client = Engram.Repo.one!(from c in Engram.OAuth.Client, where: c.client_id == ^client_id)
+
+      # Server values must win — client-supplied values are silently dropped:
+      assert client.first_ip == "127.0.0.1"
+      assert client.first_user_agent == "ServerStampedAgent/2.0"
+      refute client.first_ip == "203.0.113.99"
+      refute client.first_user_agent == "ClientSpoofedAgent/0.0"
     end
   end
 end

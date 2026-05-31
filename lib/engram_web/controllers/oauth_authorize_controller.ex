@@ -18,6 +18,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
   """
   use EngramWeb, :controller
 
+  plug EngramWeb.Plugs.EnforceConnectionCap when action in [:consent]
+
   alias Engram.OAuth
 
   # Params we forward to the SPA consent route. RFC 8707 `resource` is

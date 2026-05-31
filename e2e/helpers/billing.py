@@ -21,9 +21,15 @@ CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres
 # whose Free defaults would prevent e2e from exercising the surface.
 # Tests that need to assert a specific gate (e.g. test_32 vault cap) set
 # their own override on top via their own SQL helper.
+#
+# -1 is the canonical "unlimited" sentinel (cap_json/-1 → null on the
+# wire; check_limit/-1 → :ok). A nil-valued override would fall through
+# to plan/tier defaults via wrap_lookup, so it does NOT unlock anything.
 TEST_USER_OVERRIDES = {
     "api_write_enabled": True,
     "api_rps_cap": 1000,
+    "obsidian_connections_cap": -1,
+    "mcp_connections_cap": -1,
 }
 
 

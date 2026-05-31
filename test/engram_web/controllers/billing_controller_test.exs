@@ -51,6 +51,37 @@ defmodule EngramWeb.BillingControllerTest do
       conn = build_conn() |> get("/api/billing/status")
       assert json_response(conn, 401)
     end
+
+    test "caps reflect free-tier defaults for connection limits", %{conn: conn} do
+      # The shared setup grants api_write_enabled=true via grant_api_write!/1
+      # (PAT auth precondition), so only obsidian/mcp connection caps still
+      # reflect the free-tier default of 1 here.
+      conn = get(conn, "/api/billing/status")
+      body = json_response(conn, 200)
+      assert body["caps"]["obsidian_connections"] == 1
+      assert body["caps"]["mcp_connections"] == 1
+      assert body["caps"]["api_write_enabled"] == true
+    end
+
+    test "explicit UserLimitOverride unlocks unlimited connection caps", %{
+      conn: conn,
+      user: user
+    } do
+      # -1 is the canonical "unlimited" sentinel; nil-in-override falls through
+      # to plan/tier defaults via wrap_lookup, so it would NOT unlock anything.
+      insert(:user_limit_override,
+        user: user,
+        key: "obsidian_connections_cap",
+        value: %{"v" => -1}
+      )
+
+      insert(:user_limit_override, user: user, key: "mcp_connections_cap", value: %{"v" => -1})
+
+      conn = get(conn, "/api/billing/status")
+      body = json_response(conn, 200)
+      assert body["caps"]["obsidian_connections"] == nil
+      assert body["caps"]["mcp_connections"] == nil
+    end
   end
 
   describe "GET /api/billing/config" do

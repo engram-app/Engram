@@ -61,6 +61,11 @@ export const api = {
 
   async del<T>(path: string): Promise<T> {
     const res = await authFetch(path, { method: 'DELETE' })
+    // 204 No Content is the conventional REST response for DELETE; tolerate
+    // empty bodies so callers don't have to differentiate.
+    if (res.status === 204 || res.headers.get('content-length') === '0') {
+      return undefined as T
+    }
     return res.json()
   },
 

@@ -7,7 +7,7 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabled do
 
   Free's default is `api_write_enabled = false` — Starter and Pro both
   default `true`. Rejection: HTTP 402 with
-  `{"error": "api_write_not_available", "upgrade_url": "/billing"}`.
+  `{"error": "api_write_not_available", "upgrade_url": "/settings/billing"}`.
 
   POST `/api/search` is explicitly exempt: it's a read despite being a
   POST (encrypted query body). All other non-GET routes on the
@@ -45,7 +45,7 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabled do
           402,
           Jason.encode!(%{
             error: "api_write_not_available",
-            upgrade_url: "/billing"
+            upgrade_url: "/settings/billing"
           })
         )
         |> halt()

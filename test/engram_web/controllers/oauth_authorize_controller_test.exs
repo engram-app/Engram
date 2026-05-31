@@ -288,7 +288,10 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       assert conn.status == 400
       json = Jason.decode!(conn.resp_body)
-      assert json["error"] == "invalid_client"
+      # EnforceConnectionCap fires before the controller and rejects unknown
+      # client_ids with this error code. The 400 code-leak-prevention guarantee
+      # still holds — we never redirect an unknown client.
+      assert json["error"] == "missing_or_invalid_client_id"
     end
 
     test "missing code_challenge returns redirect_uri with error in JSON", %{conn: conn} do
