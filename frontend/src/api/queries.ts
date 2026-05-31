@@ -597,6 +597,11 @@ export function useCreateVault() {
   return useMutation({
     mutationFn: (attrs: { name: string; description?: string }) =>
       api.post<{ vault: Vault }>('/vaults', attrs),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vaults'] })
+      // Backend records `first_vault_created` in Vaults.create_vault/2;
+      // refresh /status so the onboarding checklist ticks immediately.
+      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    },
   })
 }
