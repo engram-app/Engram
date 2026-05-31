@@ -240,8 +240,7 @@ defmodule Engram.Billing.ReconciliationTest do
       Engram.Paddle.ClientMock
       |> expect(:list_subscriptions, fn _since ->
         # HTTP layer truncated the list at the page cap.
-        {:partial,
-         [paddle_sub(%{"id" => "sub_partial", "customer_id" => "ctm_partial"})],
+        {:partial, [paddle_sub(%{"id" => "sub_partial", "customer_id" => "ctm_partial"})],
          :max_pages_exceeded}
       end)
 

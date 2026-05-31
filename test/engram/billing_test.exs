@@ -36,7 +36,10 @@ defmodule Engram.BillingTest do
         end)
 
       occurrences = log |> String.split("paddle_unknown_price_id") |> length() |> Kernel.-(1)
-      assert occurrences == 2, "expected 2 error logs (one per unique unknown id), got #{occurrences}"
+
+      assert occurrences == 2,
+             "expected 2 error logs (one per unique unknown id), got #{occurrences}"
+
       assert log =~ "pri_unknown_a"
       assert log =~ "pri_unknown_b"
     end
@@ -48,7 +51,9 @@ defmodule Engram.BillingTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert "starter" ==
-                   Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => starter_id}}]})
+                   Billing.tier_from_subscription(%{
+                     "items" => [%{"price" => %{"id" => starter_id}}]
+                   })
 
           assert "pro" ==
                    Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro_id}}]})
