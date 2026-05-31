@@ -136,18 +136,28 @@ jobs:
             exit 0
           fi
 
-          git fetch origin "${GITHUB_BASE_REF}" --depth=50 >/dev/null 2>&1
+          # Fail loud on fetch errors — silencing stderr would let a transient
+          # network failure produce a false-negative green run (the subsequent
+          # process-substitution `< <(git diff ...)` would silently see no
+          # input under `set -e` and the loop would report "OK").
+          if ! git fetch origin "${GITHUB_BASE_REF}" --depth=50 >/dev/null; then
+            echo "::error::Failed to fetch base ref origin/${GITHUB_BASE_REF}"
+            exit 1
+          fi
 
           failed=0
-          # --diff-filter=MTD: catch modifications, type changes, deletions.
-          # Renames surface as add+delete so the delete half is still flagged.
+          # --diff-filter=MTD catches modifications, type changes, and deletions.
+          # --no-renames disables git's default rename detection so a `git mv` of
+          # an already-applied migration decomposes into add+delete; the delete
+          # half then matches the filter and gets flagged. Without --no-renames,
+          # renames surface as status R and slip the check silently.
           while IFS= read -r file; do
             [ -z "$file" ] && continue
             if git cat-file -e "origin/${GITHUB_BASE_REF}:$file" 2>/dev/null; then
               echo "::error file=$file::Migration was modified in place. Applied migrations are immutable — write a NEW migration to amend the schema. (Bypass with PR label 'allow-migration-edit'.)"
               failed=1
             fi
-          done < <(git diff --name-only --diff-filter=MTD "origin/${GITHUB_BASE_REF}...HEAD" -- 'priv/repo/migrations/*.exs')
+          done < <(git diff --name-only --no-renames --diff-filter=MTD "origin/${GITHUB_BASE_REF}...HEAD" -- 'priv/repo/migrations/*.exs')
 
           if [ "$failed" -eq 0 ]; then
             echo "OK — no applied migrations modified in place."
