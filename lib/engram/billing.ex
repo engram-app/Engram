@@ -453,10 +453,17 @@ defmodule Engram.Billing do
 
   defp extract_user_id(_), do: :error
 
-  defp tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
+  @doc """
+  Resolve a tier name (`"starter"` | `"pro"`) from a Paddle subscription
+  data map. Defaults to `"starter"` for unknown or missing prices so a
+  bogus price ID can't silently downgrade a customer (reconciliation
+  surfaces the mismatch separately).
+  """
+  @spec tier_from_subscription(map()) :: String.t()
+  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
     do: tier_from_price_id(price_id)
 
-  defp tier_from_subscription(_), do: "starter"
+  def tier_from_subscription(_), do: "starter"
 
   defp tier_from_price_id(price_id) do
     cond do

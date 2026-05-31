@@ -45,6 +45,7 @@ config :engram, Oban,
      crontab: [
        {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
        {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
+       {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
        {"30 3 * * *", Engram.Workers.InactivityCleanup},
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
@@ -71,6 +72,8 @@ config :logger, :default_formatter,
     :category,
     :clerk_user_id,
     :column,
+    :drift_kind,
+    :duration_ms,
     :event_id,
     :event_type,
     :exception,
@@ -83,6 +86,7 @@ config :logger, :default_formatter,
     :method,
     :new_dek_version,
     :normalized_email_hash,
+    :paddle_subscription_id,
     :phase,
     :qdrant_id,
     :queue,
@@ -91,6 +95,7 @@ config :logger, :default_formatter,
     :request_id,
     :request_path,
     :request_query,
+    :result,
     :row_id,
     :status,
     :storage_key,
@@ -115,6 +120,16 @@ config :engram, :boot_canary_enabled, true
 # Rate limiter backend. Default ETS (per-node, single-node correct, no deps).
 # SaaS prod flips to :redis in runtime.exs when REDIS_URL is set (cluster-shared).
 config :engram, EngramWeb.RateLimiter, backend: :ets
+
+# Sentry — exception + error-log capture. DSN is wired in runtime.exs from
+# the SENTRY_DSN env var; an unset DSN disables capture (safe default for
+# self-host + dev + test). `before_send` strips PII from outgoing events.
+config :sentry,
+  environment_name: Mix.env(),
+  enable_source_code_context: true,
+  root_source_code_paths: [File.cwd!()],
+  context_lines: 5,
+  before_send: {Engram.Sentry.Scrubber, :scrub}
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

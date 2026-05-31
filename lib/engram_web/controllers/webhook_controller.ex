@@ -30,18 +30,42 @@ defmodule EngramWeb.WebhookController do
          {:ok, payload} <- read_body_once(conn),
          :ok <- verify_signature(payload, sig_header) do
       event = Jason.decode!(payload)
+      event_type = event["event_type"]
+      event_id = event["event_id"]
 
-      case Billing.upsert_from_paddle_event(event) do
+      Logger.metadata(
+        category: :paddle_webhook,
+        event_type: event_type,
+        event_id: event_id
+      )
+
+      Logger.info("paddle_webhook_received")
+
+      response =
+        :telemetry.span(
+          [:engram, :paddle, :webhook],
+          %{event_type: event_type, event_id: event_id},
+          fn ->
+            case Billing.upsert_from_paddle_event(event) do
+              {:ok, _} = ok ->
+                {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
+
+              {:error, reason} = err ->
+                Logger.error("paddle_webhook_handler_error",
+                  reason: format_reason(reason)
+                )
+
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+            end
+          end
+        )
+
+      case response do
         {:ok, _} ->
+          Logger.info("paddle_webhook_ok")
           json(conn, %{status: "ok"})
 
-        {:error, reason} ->
-          Logger.warning("Paddle webhook processing failed",
-            event_type: event["event_type"],
-            event_id: event["event_id"],
-            reason: format_reason(reason)
-          )
-
+        {:error, _} ->
           json(conn, %{status: "ok"})
       end
     else

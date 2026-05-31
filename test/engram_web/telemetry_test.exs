@@ -158,5 +158,20 @@ defmodule EngramWeb.TelemetryTest do
       assert "engram.oban.discarded.count" in names,
              "Oban jobs that exhausted max_attempts must be counted — non-zero is a triage signal"
     end
+
+    test "registers engram.paddle.webhook.start counter (#244)", %{names: names} do
+      assert "engram.paddle.webhook.start.count" in names,
+             "Each Paddle webhook entry must be counted so PromEx can attach"
+    end
+
+    test "registers engram.paddle.webhook.stop summary (#244)", %{names: names} do
+      assert "engram.paddle.webhook.stop.duration" in names,
+             "Webhook latency + result must be summarised so a PromEx histogram exposes the silent-200 path"
+    end
+
+    test "registers engram.paddle.webhook.exception counter (#244)", %{names: names} do
+      assert "engram.paddle.webhook.exception.count" in names,
+             "Webhook raises must be counted so PromEx + Sentry both see them"
+    end
   end
 end

@@ -10,6 +10,7 @@ defmodule Engram.Application do
     Engram.Crypto.Config.validate!()
     verify_spa_integrity!()
     install_log_redaction_filter()
+    maybe_attach_sentry_handler()
     EngramWeb.RequestLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
 
@@ -101,6 +102,34 @@ defmodule Engram.Application do
         :engram_redact,
         {&Engram.Logger.RedactFilter.filter/2, []}
       )
+  end
+
+  # Sentry capture pipeline. Attaches only when DSN is configured so self-host
+  # + dev + test stay no-op. The handler MUST be added after the redact filter
+  # so log payloads reaching Sentry are already redacted. Idempotent: a
+  # repeated boot (ExUnit) silently no-ops on duplicate handler id.
+  defp maybe_attach_sentry_handler do
+    case Application.get_env(:sentry, :dsn) do
+      dsn when is_binary(dsn) and dsn != "" ->
+        _ = :logger.remove_handler(:sentry_handler)
+
+        :ok =
+          :logger.add_handler(:sentry_handler, Sentry.LoggerHandler, %{
+            config: %{
+              metadata: [
+                :category,
+                :event_type,
+                :event_id,
+                :paddle_subscription_id,
+                :drift_kind,
+                :reason
+              ]
+            }
+          })
+
+      _ ->
+        :ok
+    end
   end
 
   defp clerk_strategy_child do

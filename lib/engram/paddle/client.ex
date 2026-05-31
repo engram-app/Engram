@@ -70,6 +70,17 @@ defmodule Engram.Paddle.Client do
   @callback get_update_payment_transaction(subscription_id :: String.t()) ::
               {:ok, map()} | {:error, term()}
 
+  @doc """
+  List subscriptions updated since the given DateTime, paginated.
+
+  Paddle endpoint: `GET /subscriptions?updated_at[GTE]={iso}&per_page=200`.
+  Follows `meta.pagination.next` until exhausted. Returns the flattened
+  list of decoded subscription `data` maps. Feeds the daily reconciliation
+  Oban worker (`Engram.Billing.Workers.PaddleReconcile`).
+  """
+  @callback list_subscriptions(since :: DateTime.t()) ::
+              {:ok, [map()]} | {:error, term()}
+
   @default_impl Engram.Paddle.Client.HTTP
 
   @doc "Returns the configured client implementation module."

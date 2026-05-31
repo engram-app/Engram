@@ -397,6 +397,12 @@ if phx_hosts do
     url: [host: phx_hosts.canonical_host, port: url_port, scheme: scheme]
 end
 
+if config_env() != :test do
+  # Sentry capture DSN. Unset → Sentry disables capture (self-host + dev).
+  # Set in prod + staging via SENTRY_DSN env var.
+  config :sentry, dsn: System.get_env("SENTRY_DSN")
+end
+
 if config_env() == :prod do
   # Boot-time guard against shipping a release whose index.html references
   # bundle hashes that don't exist on disk (stale Docker layer cache, etc).

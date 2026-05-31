@@ -116,6 +116,58 @@ For end-to-end frontend testing point Paddle.js at the sandbox by passing `envir
 - `test/engram_web/controllers/webhook_controller_test.exs` — full signature flow including replay protection.
 - `test/engram_web/controllers/billing_controller_test.exs` — `/api/billing/config` payload shape.
 
+## Monitoring (added 2026-05-31, #244)
+
+Four observability layers on the webhook + a daily reconciliation. Each is independent — losing one still gives signal from the other three.
+
+1. **Structured logs.** `Logger.metadata(category: :paddle_webhook, event_type:, event_id:)` is stamped on every webhook in `EngramWeb.WebhookController.paddle/2`. Entry + success log at `:info`; the swallowed-`{:error, _}` path (where we still 200 so Paddle stops retrying) logs at `:error` so Sentry's LoggerHandler captures it.
+
+2. **`:telemetry` span.** `:telemetry.span/3` wraps `Billing.upsert_from_paddle_event/1` and emits `[:engram, :paddle, :webhook, :start | :stop | :exception]` with `event_type`, `event_id`, and (on `:stop`) `result: :ok | :error`. Declared in `EngramWeb.Telemetry.metrics/0` so a future PromEx attach picks them up automatically.
+
+3. **Sentry capture.** DSN comes from `SENTRY_DSN`; unset disables (self-host + dev + test stay no-op). `Engram.Sentry.Scrubber` is wired as `:before_send` — strips `Sentry.Interfaces.Request.data` and recursively redacts any `extra`-map key matching email/phone/address/card/iban/pan/ssn. Smoke-test the pipeline on staging after deploy:
+
+       mix engram.sentry.smoke
+
+   Then look in the Sentry project for an event tagged `smoke_marker=engram.sentry.smoke`.
+
+4. **Daily reconciliation.** `Engram.Billing.Workers.PaddleReconcile` runs at 02:00 UTC and calls `Engram.Billing.Reconciliation.run(7)`. The module fetches `Engram.Paddle.Client.list_subscriptions/1` (Paddle API, paginated) and diffs every subscription updated in the last 7 days against the local `subscriptions` table. Detects four drift kinds:
+
+   | Kind | Meaning |
+   |------|---------|
+   | `:missing_local` | Paddle has the subscription, we don't (most likely silent-200 swallowed-error or a missed webhook). |
+   | `:status_mismatch` | `paddle.status != local.status`. |
+   | `:tier_mismatch` | Price ID maps to a different tier than `local.tier`. |
+   | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds. |
+
+   Each entry logs at `:error` (Sentry-captured). Worker always returns `:ok` — drift is *signal*, not job failure, so Oban shouldn't retry it.
+
+   Manual one-off:
+
+       mix engram.billing.reconcile --days 30
+
+   In a release shell (`bin/engram rpc`), Mix isn't available — inline the call: `Engram.Billing.Reconciliation.run(7)`.
+
+### Drift response runbook
+
+When you see `paddle_reconciliation_drift` in Sentry or the logs:
+
+1. Note `paddle_subscription_id` and `drift_kind`.
+2. `paddle get /subscriptions/<id>` (or the Paddle dashboard) to confirm Paddle's current state.
+3. Replay the missed webhook event:
+   - Paddle dashboard → Notifications → search by `subscription_id`.
+   - Click "Replay" on the relevant event. `Billing.upsert_from_paddle_event/1` is idempotent — replays are safe.
+4. Re-run `mix engram.billing.reconcile --days 7` to confirm the drift is resolved.
+
+If a replay doesn't clear the drift, the upserter itself is failing — pull its log (search `paddle_webhook_handler_error`, same `event_id`) for the root cause.
+
+### Self-host
+
+Both Sentry (`SENTRY_DSN` unset) and reconciliation (`:billing_enabled` false) no-op cleanly on self-host.
+
+### Follow-up (engram-infra)
+
+PromEx + Prometheus + alert rules are tracked separately on the engram-infra repo. When Prometheus exists, attaching PromEx will pick up the metric declarations in `EngramWeb.Telemetry` automatically.
+
 ## What this doc deliberately does not cover
 
 - Frontend wiring of Paddle.js (marketing site + app). Owned by the frontend rewrite.

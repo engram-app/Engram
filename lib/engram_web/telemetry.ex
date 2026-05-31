@@ -218,6 +218,33 @@ defmodule EngramWeb.Telemetry do
         tags: [:cache, :op],
         description:
           "Per-user cache (Redis/Valkey) store error — façade failed open to the DB read-through. Non-zero means the shared cache is degraded; investigate the store."
+      ),
+
+      # PR #244 — Paddle webhook reliability surfaces.
+      #
+      # Emitted via :telemetry.span/3 in EngramWeb.WebhookController.paddle/2.
+      # Declared here so a future reporter (PromEx) picks them up automatically.
+      counter("engram.paddle.webhook.start.count",
+        event_name: [:engram, :paddle, :webhook, :start],
+        measurement: :system_time,
+        tags: [:event_type],
+        description:
+          "One per Paddle webhook entry. Tag `:event_type` is the Paddle event name (e.g. `subscription.created`)."
+      ),
+      summary("engram.paddle.webhook.stop.duration",
+        event_name: [:engram, :paddle, :webhook, :stop],
+        measurement: :duration,
+        unit: {:native, :millisecond},
+        tags: [:event_type, :result],
+        description:
+          "Webhook handler latency. Tag `:result` (:ok | :error) distinguishes successful upsert from swallowed `{:error, _}` (silent-200 path)."
+      ),
+      counter("engram.paddle.webhook.exception.count",
+        event_name: [:engram, :paddle, :webhook, :exception],
+        measurement: :duration,
+        tags: [:event_type, :kind],
+        description:
+          "Webhook handler raised. Non-zero = Paddle will retry; investigate via Sentry trace + reconciliation drift."
       )
     ]
   end
