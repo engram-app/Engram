@@ -178,7 +178,7 @@ function ConnectionCard({
           Revoke
         </button>
       </summary>
-      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground">
+      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground [&_dt]:font-semibold">
         {connection.software_version && (
           <>
             <dt>Version:</dt>
