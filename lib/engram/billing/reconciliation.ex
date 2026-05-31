@@ -46,7 +46,12 @@ defmodule Engram.Billing.Reconciliation do
           paddle_total: non_neg_integer(),
           local_total: non_neg_integer(),
           drift: [drift_entry()],
-          skipped: nil | :billing_disabled | :fetch_failed,
+          skipped:
+            nil
+            | :billing_disabled
+            | :fetch_failed
+            | :max_pages_exceeded
+            | :pagination_loop,
           error: nil | term()
         }
 
@@ -75,29 +80,20 @@ defmodule Engram.Billing.Reconciliation do
 
     case Engram.Paddle.Client.impl().list_subscriptions(since) do
       {:ok, paddle_subs} ->
-        local_subs = recent_local_subscriptions(since)
-        local_by_paddle_id = Map.new(local_subs, &{&1.paddle_subscription_id, &1})
+        diff(paddle_subs, since, nil)
 
-        drift =
-          Enum.flat_map(paddle_subs, &classify(&1, local_by_paddle_id))
+      {:partial, paddle_subs, reason} when reason in [:max_pages_exceeded, :pagination_loop] ->
+        # HTTP layer truncated the list (page cap hit or Paddle returned a
+        # next URL we'd seen before). Diff what we have but surface the
+        # truncation so the Mix task printer doesn't show a clean-looking
+        # result — silent-truncation is the exact failure mode this PR
+        # exists to surface.
+        Logger.error("paddle_reconcile_partial_list",
+          category: :paddle_reconcile,
+          reason_label: reason
+        )
 
-        log_summary(paddle_subs, local_subs, drift)
-
-        Enum.each(drift, fn entry ->
-          Logger.error("paddle_reconciliation_drift",
-            category: :paddle_reconcile,
-            drift_kind: entry.kind,
-            paddle_subscription_id: entry.subscription_id
-          )
-        end)
-
-        %{
-          paddle_total: length(paddle_subs),
-          local_total: length(local_subs),
-          drift: drift,
-          skipped: nil,
-          error: nil
-        }
+        diff(paddle_subs, since, reason)
 
       {:error, reason} ->
         Logger.error("paddle_reconcile_fetch_failed",
@@ -117,6 +113,32 @@ defmodule Engram.Billing.Reconciliation do
           error: reason
         }
     end
+  end
+
+  defp diff(paddle_subs, since, skipped_reason) do
+    local_subs = recent_local_subscriptions(since)
+    local_by_paddle_id = Map.new(local_subs, &{&1.paddle_subscription_id, &1})
+
+    drift =
+      Enum.flat_map(paddle_subs, &classify(&1, local_by_paddle_id))
+
+    log_summary(paddle_subs, local_subs, drift)
+
+    Enum.each(drift, fn entry ->
+      Logger.error("paddle_reconciliation_drift",
+        category: :paddle_reconcile,
+        drift_kind: entry.kind,
+        paddle_subscription_id: entry.subscription_id
+      )
+    end)
+
+    %{
+      paddle_total: length(paddle_subs),
+      local_total: length(local_subs),
+      drift: drift,
+      skipped: skipped_reason,
+      error: nil
+    }
   end
 
   defp recent_local_subscriptions(since) do

@@ -236,6 +236,31 @@ defmodule Engram.Billing.ReconciliationTest do
                Reconciliation.run(7)
     end
 
+    test "surfaces :partial truncation as skipped: :max_pages_exceeded" do
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        # HTTP layer truncated the list at the page cap.
+        {:partial,
+         [paddle_sub(%{"id" => "sub_partial", "customer_id" => "ctm_partial"})],
+         :max_pages_exceeded}
+      end)
+
+      assert %{
+               drift: [%{kind: :missing_local, subscription_id: "sub_partial"}],
+               skipped: :max_pages_exceeded,
+               paddle_total: 1
+             } = Reconciliation.run(7)
+    end
+
+    test "surfaces :pagination_loop as skipped: :pagination_loop" do
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:partial, [], :pagination_loop}
+      end)
+
+      assert %{skipped: :pagination_loop, paddle_total: 0} = Reconciliation.run(7)
+    end
+
     test "tolerates period skew in both directions (symmetric ±2 minutes)" do
       user = insert(:user)
 

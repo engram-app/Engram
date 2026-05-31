@@ -139,7 +139,7 @@ defmodule Engram.Paddle.Client.HTTP do
       reason_label: :max_pages_exceeded
     )
 
-    {:ok, Enum.reverse(acc) |> List.flatten()}
+    {:partial, Enum.reverse(acc) |> List.flatten(), :max_pages_exceeded}
   end
 
   defp list_pages(url, params, headers, acc, seen, page) do
@@ -155,13 +155,14 @@ defmodule Engram.Paddle.Client.HTTP do
           next_url when is_binary(next_url) ->
             if MapSet.member?(seen, next_url) do
               # Paddle returned a `next` URL we've already fetched — would
-              # be an infinite loop. Stop and surface what we have.
+              # be an infinite loop. Stop and surface what we have, tagged
+              # so the caller treats it as drift signal, not a clean read.
               Logger.error("Paddle subscriptions-list pagination loop detected",
                 category: :paddle,
                 reason_label: :pagination_loop
               )
 
-              {:ok, Enum.reverse([data | acc]) |> List.flatten()}
+              {:partial, Enum.reverse([data | acc]) |> List.flatten(), :pagination_loop}
             else
               # Paddle's `next` is a fully-qualified URL with all query params
               # encoded — don't pass `params:` again or Req appends them.

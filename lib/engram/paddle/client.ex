@@ -74,12 +74,24 @@ defmodule Engram.Paddle.Client do
   List subscriptions updated since the given DateTime, paginated.
 
   Paddle endpoint: `GET /subscriptions?updated_at[GTE]={iso}&per_page=200`.
-  Follows `meta.pagination.next` until exhausted. Returns the flattened
-  list of decoded subscription `data` maps. Feeds the daily reconciliation
-  Oban worker (`Engram.Billing.Workers.PaddleReconcile`).
+  Follows `meta.pagination.next` until exhausted.
+
+  Returns:
+    * `{:ok, list}` — full pagination consumed
+    * `{:partial, list, :max_pages_exceeded}` — hard page-count cap hit;
+      list is whatever was collected. Callers MUST treat this as drift
+      signal, not a clean read.
+    * `{:partial, list, :pagination_loop}` — Paddle returned a `next` URL
+      we'd already fetched; broke the loop. Same caller contract.
+    * `{:error, reason}` — transport / non-2xx.
+
+  Feeds the daily reconciliation Oban worker
+  (`Engram.Billing.Workers.PaddleReconcile`).
   """
   @callback list_subscriptions(since :: DateTime.t()) ::
-              {:ok, [map()]} | {:error, term()}
+              {:ok, [map()]}
+              | {:partial, [map()], :max_pages_exceeded | :pagination_loop}
+              | {:error, term()}
 
   @default_impl Engram.Paddle.Client.HTTP
 

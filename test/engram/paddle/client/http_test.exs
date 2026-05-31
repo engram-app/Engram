@@ -76,10 +76,11 @@ defmodule Engram.Paddle.Client.HTTPTest do
       assert {:ok, [%{"id" => "sub_1"}]} = HTTP.list_subscriptions(@since)
     end
 
-    test "breaks the loop if the same next URL is returned twice", %{bypass: bypass} do
+    test "returns :partial with :pagination_loop tag when same next URL is returned twice",
+         %{bypass: bypass} do
       # Paddle returns the same next URL every time → would otherwise
-      # infinite-recurse. The seen-URL guard must stop and return what
-      # we've collected.
+      # infinite-recurse. The seen-URL guard must stop, return :partial
+      # tagged with :pagination_loop, and surface what we've collected.
       loop_url = "http://localhost:#{bypass.port}/subscriptions?cursor=loop"
 
       Bypass.expect(bypass, "GET", "/subscriptions", fn conn ->
@@ -93,9 +94,36 @@ defmodule Engram.Paddle.Client.HTTPTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(body))
       end)
 
-      assert {:ok, results} = HTTP.list_subscriptions(@since)
+      assert {:partial, results, :pagination_loop} = HTTP.list_subscriptions(@since)
       assert results != []
       # And critically — it terminates.
+    end
+
+    test "returns :partial with :max_pages_exceeded when Paddle keeps returning fresh next URLs",
+         %{bypass: bypass} do
+      # Bypass always returns a fresh next URL with the page number — the
+      # seen-URL guard never trips. The @max_pages 50 cap MUST stop it
+      # so the daily Oban worker can't be DoS'd by Paddle misbehavior.
+      base = "http://localhost:#{bypass.port}"
+      counter = :counters.new(1, [])
+
+      Bypass.expect(bypass, "GET", "/subscriptions", fn conn ->
+        n = :counters.get(counter, 1)
+        :counters.add(counter, 1, 1)
+
+        body = %{
+          "data" => [%{"id" => "sub_p#{n}"}],
+          "meta" => %{"pagination" => %{"next" => "#{base}/subscriptions?cursor=p#{n}"}}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      assert {:partial, results, :max_pages_exceeded} = HTTP.list_subscriptions(@since)
+      # Cap is @max_pages 50 — should hit it and stop.
+      assert length(results) >= 50
     end
 
     test "returns {:error, {:paddle_error, status}} on non-200", %{bypass: bypass} do
