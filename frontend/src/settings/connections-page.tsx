@@ -98,7 +98,7 @@ export default function ConnectionsPage() {
               MCP protocol →
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              For developers building their own AI integration with Engram.
+              Connect Engram anywhere that supports MCP.
             </p>
           </a>
         </nav>
