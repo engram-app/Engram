@@ -14,6 +14,8 @@ defmodule Engram.Billing do
   alias Engram.Paddle.Client
   alias Engram.Repo
 
+  require Logger
+
   defmodule UnknownLimitKey do
     @moduledoc "Raised when a limit lookup uses an unknown atom or a string key."
     defexception [:key]
@@ -456,13 +458,34 @@ defmodule Engram.Billing do
   defp tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
     do: tier_from_price_id(price_id)
 
-  defp tier_from_subscription(_), do: "starter"
+  defp tier_from_subscription(other) do
+    Logger.error("paddle subscription missing items[0].price.id; defaulting to free",
+      payload_keys: Map.keys(other || %{})
+    )
+
+    "free"
+  end
 
   defp tier_from_price_id(price_id) do
     cond do
-      price_id == Application.get_env(:engram, :paddle_starter_price_id) -> "starter"
-      price_id == Application.get_env(:engram, :paddle_pro_price_id) -> "pro"
-      true -> "starter"
+      price_id == Application.get_env(:engram, :paddle_starter_monthly_price_id) ->
+        "starter"
+
+      price_id == Application.get_env(:engram, :paddle_starter_annual_price_id) ->
+        "starter"
+
+      price_id == Application.get_env(:engram, :paddle_pro_monthly_price_id) ->
+        "pro"
+
+      price_id == Application.get_env(:engram, :paddle_pro_annual_price_id) ->
+        "pro"
+
+      true ->
+        Logger.error("unknown paddle price_id; defaulting to free",
+          price_id: price_id
+        )
+
+        "free"
     end
   end
 

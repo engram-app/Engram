@@ -23,7 +23,10 @@ vi.mock('../api/queries', () => ({
     data: {
       client_token: 'test_token',
       environment: 'sandbox',
-      price_ids: { starter: 'pri_starter', pro: 'pri_pro' },
+      price_ids: {
+        starter: { monthly: 'pri_starter_monthly', annual: 'pri_starter_annual' },
+        pro: { monthly: 'pri_pro_monthly', annual: 'pri_pro_annual' },
+      },
       customer_email: 'a@b.com',
       custom_data: { user_id: 1 },
     },

@@ -53,7 +53,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "id" => "sub_wh_create",
             "status" => "trialing",
             "customer_id" => "ctm_wh_create",
-            "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
             "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_1"}
           }
@@ -123,7 +123,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "id" => "sub_idempotent",
             "status" => "trialing",
             "customer_id" => "ctm_idempotent",
-            "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
             "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_first"}
           }
@@ -176,7 +176,7 @@ defmodule EngramWeb.WebhookControllerTest do
           "data" => %{
             "id" => "sub_never_created",
             "status" => "canceled",
-            "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
             "custom_data" => %{"user_id" => user.id}
           }
@@ -207,7 +207,7 @@ defmodule EngramWeb.WebhookControllerTest do
               "id" => "sub_activated",
               "status" => "trialing",
               "customer_id" => "ctm_a",
-              "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+              "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
               "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
               "custom_data" => %{"user_id" => user.id}
             }
@@ -222,7 +222,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "data" => %{
               "id" => "sub_activated",
               "status" => "active",
-              "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+              "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
               "current_billing_period" => %{"ends_at" => "2026-06-20T00:00:00Z"}
             }
           })
@@ -242,7 +242,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "id" => "sub_orphan",
             "status" => "trialing",
             "customer_id" => "ctm_orphan",
-            "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
             "custom_data" => %{}
           }
@@ -276,7 +276,7 @@ defmodule EngramWeb.WebhookControllerTest do
         "id" => "sub_replay_test",
         "status" => "trialing",
         "customer_id" => "ctm_replay_test",
-        "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+        "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
         "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
         "custom_data" => %{"user_id" => user.id, "affiliate_ref" => affiliate_ref}
       }

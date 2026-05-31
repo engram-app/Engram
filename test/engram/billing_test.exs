@@ -403,7 +403,7 @@ defmodule Engram.BillingTest do
           "status" => "trialing",
           "customer_id" => "ctm_paddle_1",
           "items" => [
-            %{"price" => %{"id" => "pri_starter_test"}, "status" => "trialing"}
+            %{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "trialing"}
           ],
           "current_billing_period" => %{
             "starts_at" => "2026-05-13T00:00:00Z",
@@ -431,7 +431,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_retry_1",
           "status" => "trialing",
           "customer_id" => "ctm_retry_1",
-          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
           "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_original"}
         }
@@ -464,7 +464,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_paddle_2",
           "status" => "active",
           "customer_id" => "ctm_paddle_2",
-          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-06-13T00:00:00Z"},
           "custom_data" => %{"user_id" => to_string(user.id)}
         }
@@ -480,7 +480,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_paddle_3",
           "status" => "trialing",
           "customer_id" => "ctm_paddle_3",
-          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
           "custom_data" => %{}
         }
@@ -499,7 +499,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_upd_1",
           "status" => "past_due",
           "customer_id" => "ctm_x",
-          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
         }
       }
@@ -518,7 +518,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_can_1",
           "status" => "canceled",
           "customer_id" => "ctm_x",
-          "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
         }
       }
@@ -533,7 +533,7 @@ defmodule Engram.BillingTest do
           "id" => "sub_does_not_exist",
           "status" => "active",
           "customer_id" => "ctm_x",
-          "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
         }
       }

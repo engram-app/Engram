@@ -91,8 +91,10 @@ defmodule EngramWeb.BillingControllerTest do
 
       assert body["client_token"] == "live_token_test_fake"
       assert body["environment"] == "sandbox"
-      assert body["price_ids"]["starter"] == "pri_starter_test"
-      assert body["price_ids"]["pro"] == "pri_pro_test"
+      assert body["price_ids"]["starter"]["monthly"] == "pri_starter_monthly_test"
+      assert body["price_ids"]["starter"]["annual"] == "pri_starter_annual_test"
+      assert body["price_ids"]["pro"]["monthly"] == "pri_pro_monthly_test"
+      assert body["price_ids"]["pro"]["annual"] == "pri_pro_annual_test"
       assert body["customer_email"] == user.email
       assert body["custom_data"]["user_id"] == user.id
     end
