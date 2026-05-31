@@ -164,7 +164,7 @@ function ConnectionCard({
             )}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            <em>Connected vaults:</em> {vaultLabel}
+            <strong className="font-semibold">Connected vaults:</strong> {vaultLabel}
           </div>
         </div>
         <button
