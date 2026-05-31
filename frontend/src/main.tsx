@@ -9,6 +9,7 @@ import { config } from './config'
 import { ThemeProvider } from './theme/theme-provider'
 import LoadingScreen from './layout/loading-screen'
 import './main.css'
+import 'driver.js/dist/driver.css'
 
 const isClerk = config.authProvider === 'clerk'
 
