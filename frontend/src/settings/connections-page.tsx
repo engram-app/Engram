@@ -11,6 +11,7 @@ import {
   useRevokePat,
 } from '../api/queries'
 import { ApiError } from '../api/client'
+import { Button } from '@/components/ui/button'
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -34,7 +35,11 @@ function useTierCaps() {
 
 // ── Page ──────────────────────────────────────────────────────
 
-type PendingRevoke = { name: string; description: string; onConfirm: () => void }
+type PendingRevoke = {
+  name: string
+  description: string
+  onConfirm: () => Promise<unknown>
+}
 
 export default function ConnectionsPage() {
   const { data: connections, isLoading, error } = useConnections()
@@ -90,7 +95,7 @@ export default function ConnectionsPage() {
                       // Obsidian revocations through the device endpoint. When
                       // MCP-style Obsidian clients ship we will need a
                       // discriminator field from the backend.
-                      onConfirm: () => revokeDevice.mutate(c.client_id!),
+                      onConfirm: () => revokeDevice.mutateAsync(c.client_id!),
                     })
                   }
                 />
@@ -116,7 +121,7 @@ export default function ConnectionsPage() {
                     setPendingRevoke({
                       name: c.name ?? 'this connection',
                       description: 'This client will lose access to your account.',
-                      onConfirm: () => revokeOauth.mutate(c.client_id!),
+                      onConfirm: () => revokeOauth.mutateAsync(c.client_id!),
                     })
                   }
                 />
@@ -133,7 +138,7 @@ export default function ConnectionsPage() {
           setPendingRevoke({
             name: p.name ?? 'this key',
             description: 'This API key will stop working immediately and cannot be restored.',
-            onConfirm: () => revokePat.mutate(p.key_id!),
+            onConfirm: () => revokePat.mutateAsync(p.key_id!),
           })
         }
       />
@@ -585,30 +590,50 @@ function ConfirmRevokeModal({
 }: {
   name: string
   description: string
-  onConfirm: () => void
+  onConfirm: () => Promise<unknown>
   onClose: () => void
 }) {
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleConfirm() {
+    setSubmitting(true)
+    setError(null)
+    try {
+      await onConfirm()
+      onClose()
+    } catch (e) {
+      setError(
+        e instanceof ApiError
+          ? `${e.status}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : 'Revoke failed',
+      )
+      setSubmitting(false)
+    }
+  }
+
   return (
-    <ModalShell title={`Revoke "${name}"?`} onClose={onClose}>
-      <p className="mb-6 text-sm text-muted-foreground">{description}</p>
+    <ModalShell title={`Revoke "${name}"?`} onClose={submitting ? () => {} : onClose}>
+      <p className="mb-4 text-sm text-muted-foreground">{description}</p>
+      {error && (
+        <p className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
       <footer className="flex justify-end gap-3">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
-        >
+        <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          onClick={() => {
-            onConfirm()
-            onClose()
-          }}
-          className="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+          variant="destructive"
+          onClick={handleConfirm}
+          disabled={submitting}
         >
-          Revoke
-        </button>
+          {submitting ? 'Revoking…' : 'Revoke'}
+        </Button>
       </footer>
     </ModalShell>
   )
