@@ -245,9 +245,16 @@ export interface OnboardingStatus {
   enabled: boolean
   terms_ok?: boolean
   subscription_ok?: boolean
+  profile_complete?: boolean
   current_tos_version?: string
   current_privacy_version?: string
-  next_step: 'agreement' | 'billing' | 'done'
+  next_step: 'agreement' | 'billing' | 'profile' | 'done'
+}
+
+export interface OnboardingProfile {
+  uses_obsidian: boolean
+  tools: string[]
+  completed_at: string
 }
 
 // Onboarding hooks
@@ -270,6 +277,17 @@ export function useAcceptTerms() {
       privacy_version: string
       privacy_hash: string
     }) => api.post<{ version: string; accepted_at: string }>('/onboarding/accept-terms', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    },
+  })
+}
+
+export function useSetOnboardingProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { uses_obsidian: boolean; tools: string[] }) =>
+      api.patch<OnboardingProfile>('/onboarding/profile', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },

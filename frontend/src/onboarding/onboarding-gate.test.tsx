@@ -22,6 +22,7 @@ function renderWith(status: ReturnType<typeof useOnboardingStatus>) {
           </Route>
           <Route path="/onboard/agreement" element={<div>agreement-step</div>} />
           <Route path="/onboard/billing" element={<div>billing-step</div>} />
+          <Route path="/onboard/profile" element={<div>profile-step</div>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -78,5 +79,20 @@ describe('OnboardingGate', () => {
       isError: false,
     } as never)
     expect(screen.getByText('billing-step')).toBeInTheDocument()
+  })
+
+  it('redirects to /onboard/profile when next_step=profile', () => {
+    renderWith({
+      data: {
+        enabled: true,
+        next_step: 'profile',
+        terms_ok: true,
+        subscription_ok: true,
+        profile_complete: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as never)
+    expect(screen.getByText('profile-step')).toBeInTheDocument()
   })
 })
