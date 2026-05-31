@@ -42,7 +42,8 @@ defmodule Engram.Billing.Reconciliation do
           paddle_total: non_neg_integer(),
           local_total: non_neg_integer(),
           drift: [drift_entry()],
-          skipped: nil | :billing_disabled
+          skipped: nil | :billing_disabled | :fetch_failed,
+          error: nil | term()
         }
 
   @spec run(pos_integer()) :: result()
@@ -55,7 +56,13 @@ defmodule Engram.Billing.Reconciliation do
         reason: :billing_disabled
       )
 
-      %{paddle_total: 0, local_total: 0, drift: [], skipped: :billing_disabled}
+      %{
+        paddle_total: 0,
+        local_total: 0,
+        drift: [],
+        skipped: :billing_disabled,
+        error: nil
+      }
     end
   end
 
@@ -84,7 +91,8 @@ defmodule Engram.Billing.Reconciliation do
           paddle_total: length(paddle_subs),
           local_total: length(local_subs),
           drift: drift,
-          skipped: nil
+          skipped: nil,
+          error: nil
         }
 
       {:error, reason} ->
@@ -93,7 +101,17 @@ defmodule Engram.Billing.Reconciliation do
           reason: inspect(reason)
         )
 
-        %{paddle_total: 0, local_total: 0, drift: [], skipped: nil}
+        # Distinguish a fetch failure from a clean run in the return
+        # shape so the Mix task printer + future callers can branch.
+        # Without this, drift: [] + paddle_total: 0 looks identical to
+        # 'Paddle has no recently-updated subs' to a half-asleep on-call.
+        %{
+          paddle_total: 0,
+          local_total: 0,
+          drift: [],
+          skipped: :fetch_failed,
+          error: reason
+        }
     end
   end
 

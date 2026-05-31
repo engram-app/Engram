@@ -174,15 +174,94 @@ defmodule Engram.Billing.ReconciliationTest do
     test "no-ops when billing disabled (self-host)" do
       Application.put_env(:engram, :billing_enabled, false)
 
-      assert %{drift: [], paddle_total: 0, local_total: 0, skipped: :billing_disabled} =
-               Reconciliation.run(7)
+      assert %{
+               drift: [],
+               paddle_total: 0,
+               local_total: 0,
+               skipped: :billing_disabled,
+               error: nil
+             } = Reconciliation.run(7)
     end
 
-    test "returns empty drift when Paddle list_subscriptions errors" do
+    test "returns skipped: :fetch_failed with reason when Paddle list_subscriptions errors" do
       Engram.Paddle.ClientMock
       |> expect(:list_subscriptions, fn _since -> {:error, :timeout} end)
 
-      assert %{drift: [], paddle_total: 0, local_total: 0} = Reconciliation.run(7)
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{
+                   drift: [],
+                   paddle_total: 0,
+                   local_total: 0,
+                   skipped: :fetch_failed,
+                   error: :timeout
+                 } = Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconcile_fetch_failed"
+      assert log =~ "[error]"
+    end
+
+    test "reports only the highest-priority drift kind when multiple apply (status > tier > period)" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_multi",
+        paddle_customer_id: "ctm_multi",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_multi",
+             "customer_id" => "ctm_multi",
+             # status drift
+             "status" => "past_due",
+             # tier drift
+             "items" => [%{"price" => %{"id" => "pri_pro_test"}}],
+             # period drift
+             "current_billing_period" => %{"ends_at" => "2027-01-01T00:00:00Z"}
+           })
+         ]}
+      end)
+
+      # cond ordering in classify/2 stops at status_mismatch first.
+      assert %{drift: [%{kind: :status_mismatch, subscription_id: "sub_multi"}]} =
+               Reconciliation.run(7)
+    end
+
+    test "tolerates period skew in both directions (symmetric ±2 minutes)" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_skew_back",
+        paddle_customer_id: "ctm_skew_back",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_skew_back",
+             "customer_id" => "ctm_skew_back",
+             # 1 minute EARLIER — also within tolerance (abs())
+             "current_billing_period" => %{"ends_at" => "2026-06-29T23:59:00Z"}
+           })
+         ]}
+      end)
+
+      assert %{drift: []} = Reconciliation.run(7)
     end
   end
 end
