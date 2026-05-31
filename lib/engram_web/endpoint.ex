@@ -7,6 +7,16 @@ defmodule EngramWeb.Endpoint do
     ],
     longpoll: false
 
+  # Origin-allowlist probe — no auth, no channels. Reuses the same
+  # check_origin MFA as the main socket so the smoke validates the
+  # exact allowlist used by UserSocket. See EngramWeb.OriginProbeSocket
+  # moduledoc and engram-infra ops/post-apply-smoke/ws.sh.
+  socket "/socket/origin-probe", EngramWeb.OriginProbeSocket,
+    websocket: [
+      check_origin: {__MODULE__, :check_origin, []}
+    ],
+    longpoll: false
+
   @doc false
   # Phoenix.Socket.Transport invokes this MFA with `URI.parse(origin)`, so we must
   # normalize the URI back to a `scheme://host[:port]` string before comparing
