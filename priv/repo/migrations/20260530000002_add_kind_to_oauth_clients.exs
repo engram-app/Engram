@@ -13,4 +13,5 @@ defmodule Engram.Repo.Migrations.AddKindToOauthClients do
            )
   end
 end
+
 # Throwaway test: deliberate in-place edit to verify migrations-immutable lint blocks (DO NOT MERGE)
