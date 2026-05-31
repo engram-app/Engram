@@ -6,14 +6,18 @@ export default function OnboardLayout() {
   const { logout } = useAuthAdapter()
   const { pathname } = useLocation()
 
-  const stepNumber = pathname.endsWith('/billing') ? 2 : 1
+  const stepNumber = pathname.endsWith('/profile')
+    ? 3
+    : pathname.endsWith('/billing')
+      ? 2
+      : 1
 
   return (
     <AuthShell
       navLabel="Onboarding"
       actions={
         <>
-          <p className="text-sm text-muted-foreground">Step {stepNumber} of 2</p>
+          <p className="text-sm text-muted-foreground">Step {stepNumber} of 3</p>
           <button
             type="button"
             onClick={() => logout()}
