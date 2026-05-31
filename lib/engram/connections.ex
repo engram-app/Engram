@@ -270,7 +270,7 @@ defmodule Engram.Connections do
     end)
   end
 
-  # first_ip is stored as :text (migration 20260530000005 converted from :inet).
+  # first_ip is stored as :text (migration 20260530000020 converted from :inet).
   defp format_inet(nil), do: nil
   defp format_inet(s) when is_binary(s), do: s
 
