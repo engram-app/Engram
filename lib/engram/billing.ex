@@ -482,13 +482,28 @@ defmodule Engram.Billing do
         "pro"
 
       true ->
-        Logger.error("paddle_unknown_price_id",
-          category: :paddle,
-          reason_label: :unknown_price_id,
-          paddle_price_id: price_id
-        )
-
+        log_unknown_price_id_once(price_id)
         "starter"
+    end
+  end
+
+  # Dedupe per-process. Reconciliation iterates every Paddle sub and
+  # webhook handlers run in their own request process — without this
+  # guard, a misconfigured PADDLE_*_PRICE_ID env var would fire N logs
+  # per reconciliation cycle (one per Paddle sub) and burn Sentry quota.
+  # With the guard: one log per unique unknown price ID per process,
+  # which is the actionable signal.
+  defp log_unknown_price_id_once(price_id) do
+    seen = Process.get(:engram_unknown_price_ids_seen, MapSet.new())
+
+    unless MapSet.member?(seen, price_id) do
+      Logger.error("paddle_unknown_price_id",
+        category: :paddle,
+        reason_label: :unknown_price_id,
+        paddle_price_id: price_id
+      )
+
+      Process.put(:engram_unknown_price_ids_seen, MapSet.put(seen, price_id))
     end
   end
 

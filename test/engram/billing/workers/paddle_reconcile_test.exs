@@ -23,6 +23,38 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
     assert :ok = perform_job(PaddleReconcile, %{})
   end
 
+  test "perform/1 emits [:engram, :paddle, :reconcile, :run] with outcome tag" do
+    ref =
+      :telemetry_test.attach_event_handlers(
+        self(),
+        [[:engram, :paddle, :reconcile, :run]]
+      )
+
+    Engram.Paddle.ClientMock
+    |> expect(:list_subscriptions, fn _since -> {:ok, []} end)
+
+    assert :ok = perform_job(PaddleReconcile, %{})
+
+    assert_received {[:engram, :paddle, :reconcile, :run], ^ref,
+                     %{paddle_total: 0, drift_count: 0}, %{outcome: :ok}}
+  end
+
+  test "perform/1 surfaces :partial outcome via telemetry" do
+    ref =
+      :telemetry_test.attach_event_handlers(
+        self(),
+        [[:engram, :paddle, :reconcile, :run]]
+      )
+
+    Engram.Paddle.ClientMock
+    |> expect(:list_subscriptions, fn _since -> {:partial, [], :max_pages_exceeded} end)
+
+    assert :ok = perform_job(PaddleReconcile, %{})
+
+    assert_received {[:engram, :paddle, :reconcile, :run], ^ref, _,
+                     %{outcome: :max_pages_exceeded}}
+  end
+
   test "perform/1 returns :ok even when drift is detected (drift is signal, not failure)" do
     Engram.Paddle.ClientMock
     |> expect(:list_subscriptions, fn _since ->

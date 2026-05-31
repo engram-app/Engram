@@ -173,5 +173,10 @@ defmodule EngramWeb.TelemetryTest do
       assert "engram.paddle.webhook.exception.count" in names,
              "Webhook raises must be counted so PromEx + Sentry both see them"
     end
+
+    test "registers engram.paddle.reconcile.run counter with :outcome tag (#244)", %{names: names} do
+      assert "engram.paddle.reconcile.run.count" in names,
+             "Daily reconciliation outcome must be counted so silent truncation is alertable without log parsing"
+    end
   end
 end

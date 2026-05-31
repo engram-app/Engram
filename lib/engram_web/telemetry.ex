@@ -245,6 +245,13 @@ defmodule EngramWeb.Telemetry do
         tags: [:event_type, :kind],
         description:
           "Webhook handler raised. Non-zero = Paddle will retry; investigate via Sentry trace + reconciliation drift."
+      ),
+      counter("engram.paddle.reconcile.run.count",
+        event_name: [:engram, :paddle, :reconcile, :run],
+        measurement: :paddle_total,
+        tags: [:outcome],
+        description:
+          "Daily reconciliation runs by outcome. `outcome` is :ok | :billing_disabled | :fetch_failed | :max_pages_exceeded | :pagination_loop. Non-:ok counts = silent-truncation rate; page if sustained."
       )
     ]
   end
