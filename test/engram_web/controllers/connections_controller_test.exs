@@ -374,7 +374,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       assert conn.status == 204
       # Confirm it's gone — list_for_user should not include it.
-      refute Enum.any?(Engram.Connections.list_for_user(user.id), fn r ->
+      refute Enum.any?(Engram.Connections.list_for_user(user), fn r ->
                r.kind == :pat and r.key_id == api_key.id
              end)
     end
@@ -392,7 +392,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       assert conn.status == 404
       # Foreign user's key must still be active
-      assert Enum.any?(Engram.Connections.list_for_user(other.id), fn r ->
+      assert Enum.any?(Engram.Connections.list_for_user(other), fn r ->
                r.kind == :pat and r.key_id == foreign_key.id
              end)
     end

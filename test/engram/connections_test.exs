@@ -252,6 +252,47 @@ defmodule Engram.ConnectionsTest do
 
       assert Connections.list_for_user(user) == []
     end
+
+    test "vault_name resolves to the decrypted vault name" do
+      user = insert_user()
+      # create_vault drives the real encryption pipeline so list_vaults/1 can
+      # decrypt the name back. The factory-built :vault has random ciphertext
+      # which would decrypt to nil — that's the "vault gone" path tested below.
+      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Personal"})
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        vault_id: vault.id,
+        client_id: client.client_id
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert row.vault_id == vault.id
+      assert row.vault_name == "Personal"
+    end
+
+    test "vault_name is nil when the connection references an unknown vault" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+
+      # Factory inserts a vault row but its ciphertext is random, so
+      # Vaults.list_vaults logs a decrypt failure + returns the vault without
+      # a :name. The merge step then yields vault_name: nil — the same shape
+      # the frontend sees when a vault was soft-deleted between the grant and
+      # the page render.
+      stale = insert(:vault, user: user)
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        vault_id: stale.id,
+        client_id: client.client_id
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert row.vault_id == stale.id
+      assert row.vault_name == nil
+    end
   end
 
   describe "revoke_oauth_family/3" do

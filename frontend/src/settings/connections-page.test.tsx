@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import ConnectionsPage from './connections-page'
@@ -10,6 +10,9 @@ import ConnectionsPage from './connections-page'
 
 const mockConnections: import('../api/queries').Connection[] = []
 let mockTier: string = 'starter'
+const mockRevokeDevice = vi.fn().mockResolvedValue(undefined)
+const mockRevokeOauth = vi.fn().mockResolvedValue(undefined)
+const mockRevokePat = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('../api/queries', async () => {
   const actual = await vi.importActual<typeof import('../api/queries')>('../api/queries')
@@ -21,9 +24,9 @@ vi.mock('../api/queries', async () => {
       error: null,
     }),
     useBillingStatus: () => ({ data: { tier: mockTier } }),
-    useRevokeOauthConnection: () => ({ mutate: vi.fn() }),
-    useRevokeDeviceConnection: () => ({ mutate: vi.fn() }),
-    useRevokePat: () => ({ mutate: vi.fn() }),
+    useRevokeOauthConnection: () => ({ mutate: vi.fn(), mutateAsync: mockRevokeOauth }),
+    useRevokeDeviceConnection: () => ({ mutate: vi.fn(), mutateAsync: mockRevokeDevice }),
+    useRevokePat: () => ({ mutate: vi.fn(), mutateAsync: mockRevokePat }),
     useCreatePat: () => ({
       mutate: vi.fn(),
       mutateAsync: vi.fn(),
@@ -162,5 +165,82 @@ describe('ConnectionsPage', () => {
     renderPage()
     expect(screen.getByText(/unverified/i)).toBeInTheDocument()
     expect(screen.getByText(/Claude Desktop/i)).toBeInTheDocument()
+  })
+
+  it('uses singular "Vault:" for obsidian and plural "Vaults:" for mcp cards', () => {
+    // PATs are rendered in a separate table without a Vault label, so this
+    // exercises only the card-layout obsidian + mcp rows.
+    mockConnections.splice(
+      0,
+      mockConnections.length,
+      { ...baseObs, vault_name: 'Personal' },
+      baseMcp,
+    )
+    mockTier = 'starter'
+    renderPage()
+    expect(screen.getByText('Vault:')).toBeInTheDocument()
+    expect(screen.getByText(/Personal/)).toBeInTheDocument()
+    // MCP card: plural + "All vaults" since baseMcp.vault_id is null
+    expect(screen.getByText('Vaults:')).toBeInTheDocument()
+    expect(screen.getByText(/All vaults/)).toBeInTheDocument()
+  })
+
+  it('falls back to #<id> when vault_name is missing', () => {
+    mockConnections.splice(0, mockConnections.length, {
+      ...baseObs,
+      vault_id: 42,
+      vault_name: null,
+    })
+    mockTier = 'starter'
+    renderPage()
+    expect(screen.getByText(/#42/)).toBeInTheDocument()
+  })
+
+  it('opens the revoke modal and calls mutateAsync on confirm', async () => {
+    mockRevokeDevice.mockClear()
+    mockConnections.splice(0, mockConnections.length, baseObs)
+    mockTier = 'starter'
+    renderPage()
+    // Click the revoke button in the obsidian card summary.
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    // Modal renders with the connection name in the title.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText(/Revoke "Obsidian Vault Sync"\?/)).toBeInTheDocument()
+    // Confirm button = the second one (first is the in-card trigger that
+    // opened this modal, now hidden behind the dialog).
+    const confirmButton = screen
+      .getAllByRole('button', { name: /^Revoke$/ })
+      .find((b) => b.closest('[role="dialog"]'))!
+    fireEvent.click(confirmButton)
+    await waitFor(() => expect(mockRevokeDevice).toHaveBeenCalledWith('family-1'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('keeps modal open and surfaces error message when revoke fails', async () => {
+    mockRevokeOauth.mockClear()
+    mockRevokeOauth.mockRejectedValueOnce(new Error('Boom'))
+    mockConnections.splice(0, mockConnections.length, baseMcp)
+    mockTier = 'starter'
+    renderPage()
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    const confirmButton = screen
+      .getAllByRole('button', { name: /^Revoke$/ })
+      .find((b) => b.closest('[role="dialog"]'))!
+    fireEvent.click(confirmButton)
+    await waitFor(() => expect(screen.getByText('Boom')).toBeInTheDocument())
+    // Dialog still mounted so the user can retry or cancel.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('cancel button closes the modal without invoking the mutation', () => {
+    mockRevokePat.mockClear()
+    mockConnections.splice(0, mockConnections.length, basePat)
+    mockTier = 'starter'
+    renderPage()
+    fireEvent.click(screen.getAllByRole('button', { name: /^Revoke$/ })[0])
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(mockRevokePat).not.toHaveBeenCalled()
   })
 })
