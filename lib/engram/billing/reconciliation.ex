@@ -19,12 +19,12 @@ defmodule Engram.Billing.Reconciliation do
       from `local.current_period_end` by more than `@period_skew_seconds`.
   """
 
-  require Logger
-
   import Ecto.Query
 
   alias Engram.Billing.Subscription
   alias Engram.Repo
+
+  require Logger
 
   @period_skew_seconds 120
 

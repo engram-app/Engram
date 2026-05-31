@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.Billing.Reconcile do
+  @shortdoc "Reconcile local subscriptions against Paddle"
+
   @moduledoc """
   Reconcile the local `subscriptions` table against Paddle.
 
@@ -13,9 +15,8 @@ defmodule Mix.Tasks.Engram.Billing.Reconcile do
 
       Engram.Billing.Reconciliation.run(7)
   """
-  use Mix.Task
 
-  @shortdoc "Reconcile local subscriptions against Paddle"
+  use Mix.Task
 
   @impl Mix.Task
   def run(args) do
@@ -24,8 +25,7 @@ defmodule Mix.Tasks.Engram.Billing.Reconcile do
 
     Mix.Task.run("app.start")
 
-    days
-    |> Engram.Billing.Reconciliation.run()
-    |> IO.inspect(label: "reconciliation result")
+    result = Engram.Billing.Reconciliation.run(days)
+    Mix.shell().info("reconciliation result: " <> inspect(result, pretty: true))
   end
 end

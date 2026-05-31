@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.Sentry.Smoke do
+  @shortdoc "Send one synthetic Sentry capture to verify the pipeline"
+
   @moduledoc """
   Smoke-test the Sentry pipeline end-to-end. Captures one event with a
   known marker so an operator can confirm the project ID + DSN + scrubber
@@ -11,9 +13,8 @@ defmodule Mix.Tasks.Engram.Sentry.Smoke do
   Then check the Sentry project for an event with
   `tags.smoke_marker = "engram.sentry.smoke"`.
   """
-  use Mix.Task
 
-  @shortdoc "Send one synthetic Sentry capture to verify the pipeline"
+  use Mix.Task
 
   @impl Mix.Task
   def run(_argv) do
