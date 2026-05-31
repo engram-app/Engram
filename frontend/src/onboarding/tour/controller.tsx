@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Joyride, type EventData, type Step, STATUS, EVENTS, ACTIONS } from 'react-joyride'
 import { tourSteps, GATED_STEPS } from './steps'
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function TourController({ active, onExit, setReachedEnd }: Props) {
+  const navigate = useNavigate()
   // Stash callbacks behind refs so React-Joyride's event handler always sees
   // the latest closures without us re-mounting on every parent render.
   const onExitRef = useRef(onExit)
@@ -25,6 +27,17 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
   useEffect(() => {
     if (active) setStepIndex(0)
   }, [active])
+
+  // The final step targets `[data-tour="dashboard-root"]` which only exists
+  // on the dashboard route. If the user opened a demo note during step 1,
+  // we're on /note/... and Joyride times out waiting for that target.
+  // Bounce back to / when we land on the final step.
+  useEffect(() => {
+    if (!active) return
+    if (stepIndex === tourSteps.length - 1) {
+      navigate('/', { replace: true })
+    }
+  }, [active, stepIndex, navigate])
 
   // Gated steps: hide the Next button + advance only when the user performs
   // the configured interaction. The step declares which window CustomEvent
@@ -45,8 +58,11 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
     if (type === EVENTS.STEP_AFTER) {
       if (action === ACTIONS.NEXT) {
         if (index === tourSteps.length - 1) {
+          // Push stepIndex out of range so joyride transitions to
+          // STATUS.FINISHED and cleans up its overlay/spotlight elements.
+          // We then exit via the status branch below.
           setReachedEndRef.current(true)
-          onExitRef.current(true)
+          setStepIndex(tourSteps.length)
           return
         }
         setStepIndex(index + 1)

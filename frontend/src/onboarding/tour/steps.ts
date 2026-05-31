@@ -7,7 +7,8 @@ import type { Step } from 'react-joyride'
 // configured interaction.
 export const GATED_STEPS: Record<number, string> = {
   0: 'engram:vault-switched',
-  2: 'engram:note-opened',
+  1: 'engram:note-opened',
+  2: 'engram:edit-mode-entered',
 }
 
 // react-joyride v3 renamed `disableBeacon` → `skipBeacon`. Lives in Options, so
@@ -29,17 +30,9 @@ export const tourSteps: Step[] = [
   },
   {
     target: '[data-tour="folder-tree"]',
-    title: 'Folders mirror your filesystem',
-    content:
-      'The folder structure here matches what lives in your Obsidian vault on disk.',
-    placement: 'right',
-    skipBeacon: true,
-  },
-  {
-    target: '[data-tour="folder-tree"]',
     title: 'Open a note',
     content:
-      'Expand a folder, then click any note to open it. Engram renders the full Obsidian-style markdown — wikilinks, callouts, math, mermaid.',
+      'Real files and folders that sync across every device. Your AI tools read from the same files. Expand one and click any note.',
     placement: 'right',
     skipBeacon: true,
     // Gated on `engram:note-opened` — NotePage dispatches this when it
@@ -48,9 +41,29 @@ export const tourSteps: Step[] = [
     blockTargetInteraction: false,
   },
   {
+    target: '[data-tour="note-tabs"]',
+    title: 'Swap between Preview and Edit mode',
+    content: 'Click Edit to keep going.',
+    placement: 'left',
+    skipBeacon: true,
+    // Gated on `engram:edit-mode-entered` — NotePage dispatches this when
+    // the tab switches to "edit". See controller.tsx + GATED_STEPS.
+    buttons: [],
+    blockTargetInteraction: false,
+  },
+  {
+    target: '[data-tour="note-editor"]',
+    title: 'Edit in plain markdown',
+    content:
+      'Type markdown directly. Saved changes sync everywhere your files live.',
+    placement: 'left',
+    skipBeacon: true,
+  },
+  {
     target: '[data-tour="search"]',
     title: 'Search everything',
-    content: 'Full-text + semantic search across every note in every vault.',
+    content:
+      'Ask in your own words and Engram surfaces the notes that fit — even if they don’t use the same exact words.',
     placement: 'bottom',
     skipBeacon: true,
   },
