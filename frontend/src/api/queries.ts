@@ -241,6 +241,14 @@ export function useBillingHistory(enabled: boolean) {
 
 // Onboarding types
 
+export type OnboardingAction =
+  | 'tour_offered_taken'
+  | 'tour_offered_skipped'
+  | 'tour_completed'
+  | 'first_vault_created'
+  | 'plugin_connected'
+  | 'ai_connected'
+
 export interface OnboardingStatus {
   enabled: boolean
   terms_ok?: boolean
@@ -248,6 +256,8 @@ export interface OnboardingStatus {
   current_tos_version?: string
   current_privacy_version?: string
   next_step: 'agreement' | 'billing' | 'done'
+  actions: OnboardingAction[]
+  vault_count: number
 }
 
 // Onboarding hooks
@@ -258,6 +268,16 @@ export function useOnboardingStatus() {
     queryFn: () => api.get<OnboardingStatus>('/onboarding/status'),
     staleTime: Infinity,
     refetchOnWindowFocus: true,
+  })
+}
+
+export function useRecordOnboardingAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (action: OnboardingAction) =>
+      api.post<{ status: string }>('/onboarding/actions', { action }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['onboarding', 'status'] }),
+    retry: 3,
   })
 }
 
