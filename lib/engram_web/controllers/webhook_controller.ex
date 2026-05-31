@@ -46,16 +46,43 @@ defmodule EngramWeb.WebhookController do
           [:engram, :paddle, :webhook],
           %{event_type: event_type, event_id: event_id},
           fn ->
-            case Billing.upsert_from_paddle_event(event) do
-              {:ok, _} = ok ->
-                {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
+            try do
+              case Billing.upsert_from_paddle_event(event) do
+                {:ok, _} = ok ->
+                  {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
 
-              {:error, reason} = err ->
-                Logger.error("paddle_webhook_handler_error",
-                  reason: format_reason(reason)
+                {:error, reason} = err ->
+                  Logger.error("paddle_webhook_handler_error",
+                    reason: format_reason(reason)
+                  )
+
+                  {err, %{event_type: event_type, event_id: event_id, result: :error}}
+              end
+            rescue
+              error ->
+                # If upsert_from_paddle_event/1 raises (Repo down, behaviour
+                # mis-wired, malformed payload that escapes pattern match):
+                # log structurally with stacktrace, capture in Sentry, then
+                # surface as {:error, :exception} so the :telemetry stop
+                # event fires with result: :error (instead of :exception,
+                # which dashboards built on stop.duration miss). Silent-200
+                # ack still goes to Paddle; reconciliation catches any
+                # resulting drift within 24h.
+                stacktrace = __STACKTRACE__
+
+                Logger.error("paddle_webhook_handler_exception",
+                  reason: Exception.message(error),
+                  kind: error.__struct__
                 )
 
-                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+                _ =
+                  Sentry.capture_exception(error,
+                    stacktrace: stacktrace,
+                    extra: %{event_type: event_type, event_id: event_id}
+                  )
+
+                {{:error, :exception},
+                 %{event_type: event_type, event_id: event_id, result: :error}}
             end
           end
         )

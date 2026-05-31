@@ -277,6 +277,41 @@ defmodule EngramWeb.WebhookControllerTest do
                        }}
     end
 
+    test "emits :telemetry.span with result: :error on handler failure", %{conn: conn} do
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:engram, :paddle, :webhook, :stop]]
+        )
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.created",
+          "event_id" => "ntf_err_result",
+          "data" => %{
+            "id" => "sub_err_result",
+            "status" => "trialing",
+            "customer_id" => "ctm_err_result",
+            "items" => [%{"price" => %{"id" => "pri_starter_test"}}],
+            "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
+            # Missing user_id → Billing.upsert_from_paddle_event/1 returns
+            # {:error, :missing_user_id} → :stop fires with result: :error.
+            "custom_data" => %{}
+          }
+        })
+
+      ts = System.system_time(:second)
+      sig_header = "ts=#{ts};h1=#{sign(ts, payload)}"
+
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("paddle-signature", sig_header)
+      |> post("/webhooks/paddle", payload)
+
+      assert_received {[:engram, :paddle, :webhook, :stop], ^ref, %{duration: _},
+                       %{event_id: "ntf_err_result", result: :error}}
+    end
+
     test "subscription.created with missing custom_data.user_id returns 200 and creates no row",
          %{conn: conn} do
       payload =
