@@ -272,8 +272,14 @@ export function useAcceptTerms() {
       privacy_version: string
       privacy_hash: string
     }) => api.post<{ version: string; accepted_at: string }>('/onboarding/accept-terms', body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    // `await` is load-bearing: callers (agreement-page) navigate to /onboard
+    // immediately after the mutation resolves, and OnboardRedirect reads cached
+    // status to pick the next step. Without awaiting the refetch, the stale
+    // `next_step: 'agreement'` bounces the user back to the same page and
+    // they're forced to accept twice. invalidateQueries returns a Promise that
+    // settles when active queries have refetched — await it.
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },
   })
 }
