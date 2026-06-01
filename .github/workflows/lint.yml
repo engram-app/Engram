@@ -8,7 +8,7 @@ on:
 jobs:
   todo-drift:
     name: TODO drift
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - uses: actions/checkout@v6
 
@@ -49,7 +49,7 @@ jobs:
 
   claude-md-staleness:
     name: CLAUDE.md staleness
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - uses: actions/checkout@v6
 
@@ -102,7 +102,7 @@ jobs:
 
   migrations-immutable:
     name: migrations immutable
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     # Block in-place edits to already-applied migrations. Triggering incident:
     # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
     # to :text after FastRaid prod had already run the :inet version, leaving

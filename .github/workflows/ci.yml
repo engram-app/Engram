@@ -369,7 +369,7 @@ jobs:
     # Skip on Dependabot PRs — they can't bump app version, and the `ci`
     # aggregate already treats `skipped` as OK for version-check.
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -1582,7 +1582,7 @@ jobs:
   ci:
     if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
     needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
         run: |
@@ -1657,7 +1657,7 @@ jobs:
   report-cached-pass-to-plugin:
     if: github.event_name == 'repository_dispatch' && needs.fingerprint.outputs.e2e-cache-hit == 'true'
     needs: fingerprint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Generate App token
         id: app-token
@@ -1870,7 +1870,7 @@ jobs:
       && needs.build-and-publish-image.result == 'success'
       && github.ref == 'refs/heads/main'
       && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
 
