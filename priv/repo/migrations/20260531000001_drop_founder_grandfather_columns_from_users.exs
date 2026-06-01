@@ -9,10 +9,26 @@ defmodule Engram.Repo.Migrations.DropFounderGrandfatherColumnsFromUsers do
   #
   # Prod probe 2026-05-31 (FastRaid engram-saas-postgres): 3326 users, 0
   # non-null on either column. Drop is non-destructive at probe time.
-  def change do
+  #
+  # Uses raw `execute/1` with an inline `-- squawk-ignore ban-drop-column`
+  # comment because the lint script (priv/repo/lint_migrations.sh) runs
+  # squawk against the rendered DDL — Ecto's `remove/2` form yields
+  # `ALTER TABLE users DROP COLUMN ...` which trips `ban-drop-column`. The
+  # drop is intentional and verified safe (zero non-null rows in prod) so
+  # the ignore is correct here, not policy weakening.
+  def up do
+    execute """
+    -- squawk-ignore ban-drop-column
+    ALTER TABLE users
+      DROP COLUMN founder_code_redeemed_at,
+      DROP COLUMN og_grandfather_redeemed_at
+    """
+  end
+
+  def down do
     alter table(:users) do
-      remove :founder_code_redeemed_at, :utc_datetime_usec
-      remove :og_grandfather_redeemed_at, :utc_datetime_usec
+      add :founder_code_redeemed_at, :utc_datetime_usec
+      add :og_grandfather_redeemed_at, :utc_datetime_usec
     end
   end
 end
