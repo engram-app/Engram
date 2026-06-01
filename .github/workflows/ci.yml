@@ -645,13 +645,25 @@ jobs:
           echo "Ollama check started (PID $!)"
 
           # --- Qdrant reachability check (background) ---
-          # SlowRaid (10.0.20.201) hosts persistent Qdrant with AVX2 for binary quantization
+          # SlowRaid (10.0.20.201) hosts persistent Qdrant with AVX2 for binary quantization.
+          # Runner VM (10.20.99.x) → SlowRaid host has intermittent connectivity (shim-br0 /
+          # MASQUERADE routing race per docs/context/runner-vm-setup.md gotcha #1). A single-shot
+          # probe sometimes fails even though Qdrant is up — retry 6× over 30s before giving up.
           (
-            if curl -sf http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
-              echo "Qdrant OK (SlowRaid AVX2)"
+            ok=false
+            for attempt in $(seq 1 6); do
+              if curl -sf --max-time 5 http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
+                echo "Qdrant OK (SlowRaid AVX2) — attempt ${attempt}"
+                ok=true
+                break
+              fi
+              echo "attempt ${attempt}: Qdrant probe failed; retrying in 5s…"
+              sleep 5
+            done
+            if $ok; then
               touch "${MARKER_PREFIX}-qdrant.marker"
             else
-              echo "ERROR: Qdrant on SlowRaid not reachable — binary quantization tests will fail"
+              echo "ERROR: Qdrant on SlowRaid not reachable after 6 attempts — binary quantization tests will fail"
               touch "${MARKER_PREFIX}-qdrant-failed.marker"
             fi
           ) > "${MARKER_PREFIX}-qdrant.log" 2>&1 &
