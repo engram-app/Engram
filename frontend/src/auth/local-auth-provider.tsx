@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AuthContext, type AuthAdapter } from './auth-context'
+import { useClearQueryCacheOnUserChange } from './use-clear-query-cache-on-user-change'
 import { setTokenGetter } from '../api/client'
+import { queryClient } from '../api/query-client'
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
   try {
@@ -69,6 +71,8 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
   useEffect(() => {
     setTokenGetter(getToken)
   }, [getToken])
+
+  useClearQueryCacheOnUserChange(queryClient, user?.email)
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await fetch('/api/auth/login', {
