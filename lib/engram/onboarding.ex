@@ -151,7 +151,8 @@ defmodule Engram.Onboarding do
       accepted_tos = accepted_version(user, @terms_document)
       terms_ok = accepted_satisfies?(accepted_tos, floor)
       subscription_ok = Billing.active?(user)
-      profile_complete = profile_complete?(user)
+      profile = current_profile(user)
+      profile_complete = profile_complete?(profile)
       next = next_step(terms_ok, subscription_ok, profile_complete)
 
       %{
@@ -159,6 +160,7 @@ defmodule Engram.Onboarding do
         terms_ok: terms_ok,
         subscription_ok: subscription_ok,
         profile_complete: profile_complete,
+        profile: profile,
         current_tos_version: current_tos,
         current_privacy_version: current_privacy,
         terms_notice: notice(@terms_document, current_tos, accepted_tos),
@@ -205,21 +207,18 @@ defmodule Engram.Onboarding do
   # Re-read the column rather than trusting the caller's struct — callers that
   # just ran `set_profile/2` and then `status/1` would otherwise see a stale
   # `nil` and the gate would stick on `:profile` even after a successful save.
-  defp profile_complete?(user) do
+  defp current_profile(user) do
     import Ecto.Query
 
-    profile =
-      from(u in Engram.Accounts.User,
-        where: u.id == ^user.id,
-        select: u.onboarding_profile
-      )
-      |> Repo.one(skip_tenant_check: true)
-
-    case profile do
-      %{"completed_at" => ts} when is_binary(ts) -> true
-      _ -> false
-    end
+    from(u in Engram.Accounts.User,
+      where: u.id == ^user.id,
+      select: u.onboarding_profile
+    )
+    |> Repo.one(skip_tenant_check: true)
   end
+
+  defp profile_complete?(%{"completed_at" => ts}) when is_binary(ts), do: true
+  defp profile_complete?(_), do: false
 
   # Cache-first read of the user's latest accepted version for a document.
   defp accepted_version(user, document) do

@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useSetOnboardingProfile } from '../api/queries'
+import {
+  useCreateVault,
+  useSetOnboardingProfile,
+  useVaults,
+} from '../api/queries'
 import { Checkbox } from '@/components/ui/checkbox'
 import AuthPanel from '@/layout/auth-panel'
 import { heading, selectableRow } from '@/lib/ui-classes'
@@ -11,6 +15,8 @@ type Screen = 'obsidian' | 'tools'
 export default function OnboardProfilePage() {
   const navigate = useNavigate()
   const { mutateAsync, isPending, error } = useSetOnboardingProfile()
+  const createVault = useCreateVault()
+  const { data: vaults } = useVaults()
   const [screen, setScreen] = useState<Screen>('obsidian')
   const [usesObsidian, setUsesObsidian] = useState<boolean | null>(null)
   const [tools, setTools] = useState<Set<string>>(new Set())
@@ -31,6 +37,19 @@ export default function OnboardProfilePage() {
   async function submit() {
     if (usesObsidian == null || tools.size === 0) return
     await mutateAsync({ uses_obsidian: usesObsidian, tools: Array.from(tools) })
+
+    // "Starting fresh" branch → ensure the user lands on a real vault, not
+    // an empty CreateFirstVaultModal that would re-pop on the dashboard.
+    // Obsidian users get their vault on first plugin sync, so skip here.
+    const noVaults = (vaults ?? []).length === 0
+    if (!usesObsidian && noVaults) {
+      try {
+        await createVault.mutateAsync({ name: 'My Vault' })
+      } catch {
+        // Non-fatal: the existing first-vault flow on the dashboard will
+        // recover. Don't block the user on a transient vault-create error.
+      }
+    }
     navigate('/', { replace: true })
   }
 

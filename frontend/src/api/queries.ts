@@ -248,6 +248,9 @@ export interface OnboardingStatus {
   terms_ok?: boolean
   subscription_ok?: boolean
   profile_complete?: boolean
+  // Echoed back once `set_profile/2` has run — drives the personalized
+  // setup cards on the dashboard. Absent until the questionnaire is done.
+  profile?: OnboardingProfile
   current_tos_version?: string
   current_privacy_version?: string
   next_step: 'agreement' | 'billing' | 'profile' | 'done'
@@ -296,8 +299,12 @@ export function useSetOnboardingProfile() {
   return useMutation({
     mutationFn: (body: { uses_obsidian: boolean; tools: string[] }) =>
       api.patch<OnboardingProfile>('/onboarding/profile', body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+    // AWAIT the invalidation so mutateAsync resolves only after
+    // ['onboarding','status'] has refetched. Without the await,
+    // OnboardingGate reads the still-cached next_step: "profile"
+    // immediately after navigate('/') and bounces back here.
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },
   })
 }

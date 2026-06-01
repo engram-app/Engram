@@ -17,6 +17,7 @@ defmodule EngramWeb.OnboardingController do
           s
           |> Map.update!(:next_step, &Atom.to_string/1)
           |> reject_nil_notice()
+          |> reject_empty_profile()
       end
 
     json(conn, payload)
@@ -25,6 +26,14 @@ defmodule EngramWeb.OnboardingController do
   # Drop terms_notice from the wire when there's nothing to notify.
   defp reject_nil_notice(%{terms_notice: nil} = s), do: Map.delete(s, :terms_notice)
   defp reject_nil_notice(s), do: s
+
+  # Drop profile from the wire until the user has actually saved one — keeps
+  # the questionnaire-incomplete payload identical to its pre-profile shape.
+  defp reject_empty_profile(%{profile: nil} = s), do: Map.delete(s, :profile)
+  defp reject_empty_profile(%{profile: profile} = s) when map_size(profile) == 0,
+    do: Map.delete(s, :profile)
+
+  defp reject_empty_profile(s), do: s
 
   def accept_terms(conn, %{
         "tos_version" => tv,

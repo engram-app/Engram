@@ -247,5 +247,24 @@ defmodule EngramWeb.OnboardingControllerTest do
       body = json_response(conn2, 200)
       assert body["profile_complete"] == true
     end
+
+    test "echoes the saved profile in status payload for personalized cards",
+         %{conn: conn} do
+      patch(conn, "/api/onboarding/profile", %{
+        "uses_obsidian" => true,
+        "tools" => ["claude", "cursor"]
+      })
+
+      body = json_response(get(conn, "/api/onboarding/status"), 200)
+      assert body["profile"]["uses_obsidian"] == true
+      assert body["profile"]["tools"] == ["claude", "cursor"]
+      assert is_binary(body["profile"]["completed_at"])
+    end
+
+    test "omits profile key entirely when no profile has been saved",
+         %{conn: conn} do
+      body = json_response(get(conn, "/api/onboarding/status"), 200)
+      refute Map.has_key?(body, "profile")
+    end
   end
 end
