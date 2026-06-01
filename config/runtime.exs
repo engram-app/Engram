@@ -279,8 +279,22 @@ if config_env() != :test do
     config :engram, :paddle_client_token, token
   end
 
-  config :engram, :paddle_starter_price_id, System.get_env("PADDLE_STARTER_PRICE_ID")
-  config :engram, :paddle_pro_price_id, System.get_env("PADDLE_PRO_PRICE_ID")
+  config :engram,
+         :paddle_starter_monthly_price_id,
+         System.get_env("PADDLE_STARTER_MONTHLY_PRICE_ID")
+
+  config :engram,
+         :paddle_starter_annual_price_id,
+         System.get_env("PADDLE_STARTER_ANNUAL_PRICE_ID")
+
+  config :engram,
+         :paddle_pro_monthly_price_id,
+         System.get_env("PADDLE_PRO_MONTHLY_PRICE_ID")
+
+  config :engram,
+         :paddle_pro_annual_price_id,
+         System.get_env("PADDLE_PRO_ANNUAL_PRICE_ID")
+
   config :engram, :paddle_env, System.get_env("PADDLE_ENV", "sandbox")
 end
 

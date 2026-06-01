@@ -90,8 +90,10 @@ config :engram, :clerk_issuer, nil
 config :engram, :paddle_api_key, "pdl_apns_test_fake"
 config :engram, :paddle_notification_secret, "pdl_ntfn_test_fake"
 config :engram, :paddle_client_token, "live_token_test_fake"
-config :engram, :paddle_starter_price_id, "pri_starter_test"
-config :engram, :paddle_pro_price_id, "pri_pro_test"
+config :engram, :paddle_starter_monthly_price_id, "pri_starter_monthly_test"
+config :engram, :paddle_starter_annual_price_id, "pri_starter_annual_test"
+config :engram, :paddle_pro_monthly_price_id, "pri_pro_monthly_test"
+config :engram, :paddle_pro_annual_price_id, "pri_pro_annual_test"
 config :engram, :paddle_env, "sandbox"
 config :engram, :paddle_client, Engram.Paddle.ClientMock
 

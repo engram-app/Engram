@@ -172,8 +172,8 @@ export interface BillingConfig {
   client_token: string
   environment: 'sandbox' | 'production'
   price_ids: {
-    starter: string
-    pro: string
+    starter: { monthly: string; annual: string }
+    pro: { monthly: string; annual: string }
   }
   customer_email: string
   custom_data: {
@@ -182,6 +182,8 @@ export interface BillingConfig {
   // Maximum number of active vaults the user may have, or null for unlimited.
   vaults_cap: number | null
 }
+
+export type BillingCadence = 'monthly' | 'annual'
 
 export function useBillingConfig() {
   return useQuery({

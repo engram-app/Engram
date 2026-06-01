@@ -41,8 +41,14 @@ defmodule EngramWeb.BillingController do
       client_token: Application.get_env(:engram, :paddle_client_token),
       environment: Application.get_env(:engram, :paddle_env, "sandbox"),
       price_ids: %{
-        starter: Application.get_env(:engram, :paddle_starter_price_id),
-        pro: Application.get_env(:engram, :paddle_pro_price_id)
+        starter: %{
+          monthly: Application.get_env(:engram, :paddle_starter_monthly_price_id),
+          annual: Application.get_env(:engram, :paddle_starter_annual_price_id)
+        },
+        pro: %{
+          monthly: Application.get_env(:engram, :paddle_pro_monthly_price_id),
+          annual: Application.get_env(:engram, :paddle_pro_annual_price_id)
+        }
       },
       customer_email: user.email,
       custom_data: %{user_id: user.id},
