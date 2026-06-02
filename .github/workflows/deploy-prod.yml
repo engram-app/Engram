@@ -53,6 +53,7 @@ jobs:
         run: |
           if ! command -v aws >/dev/null 2>&1; then
             curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            rm -rf /tmp/awscli
             unzip -q /tmp/awscliv2.zip -d /tmp/awscli
             /tmp/awscli/aws/install \
               --install-dir "$HOME/.aws-cli" \
