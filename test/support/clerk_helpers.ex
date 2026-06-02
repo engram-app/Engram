@@ -42,7 +42,7 @@ defmodule Engram.ClerkHelpers do
   def clerk_claims(clerk_user_id, opts \\ []) do
     now = :os.system_time(:second)
 
-    %{
+    base = %{
       "sub" => clerk_user_id,
       "iss" => Keyword.get(opts, :issuer, @issuer),
       "iat" => now - 10,
@@ -50,6 +50,11 @@ defmodule Engram.ClerkHelpers do
       "nbf" => now - 10,
       "email" => Keyword.get(opts, :email, "clerk-user@example.com")
     }
+
+    case Keyword.fetch(opts, :azp) do
+      {:ok, azp} -> Map.put(base, "azp", azp)
+      :error -> base
+    end
   end
 
   @doc """
