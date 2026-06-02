@@ -81,6 +81,7 @@ defmodule EngramWeb.SpaController do
       authProvider: provider,
       clerkPublishableKey: Application.get_env(:engram, :clerk_publishable_key, ""),
       billingEnabled: Application.get_env(:engram, :billing_enabled, false) == true,
+      clerkWaitlistMode: Application.get_env(:engram, :clerk_waitlist_mode, false) == true,
       bootstrap: bootstrap
     }
 

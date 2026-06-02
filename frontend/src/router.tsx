@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from 'react-router'
 import AuthGuard from './auth/auth-guard'
 import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
+import WaitlistPage from './auth/waitlist'
 import BillingPage from './billing/billing-page'
 import { config } from './config'
 import AdminPanel from './features/admin/AdminPanel'
@@ -37,6 +38,7 @@ export const router = createBrowserRouter(
     // Public routes
     { path: ROUTES.SIGN_IN, element: <SignInPage /> },
     { path: ROUTES.SIGN_UP, element: <SignUpPage /> },
+    { path: ROUTES.WAITLIST, element: <WaitlistPage /> },
     // Public reset — the one-time token IS the credential.
     { path: '/reset-password', element: <ResetPasswordPage /> },
 

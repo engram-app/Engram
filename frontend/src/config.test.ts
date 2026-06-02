@@ -26,4 +26,19 @@ describe('loadConfig', () => {
     inject({ authProvider: 'local', clerkPublishableKey: '', billingEnabled: 'yes' })
     expect(loadConfig().billingEnabled).toBe(false)
   })
+
+  it('reads clerkWaitlistMode=true from injected config', () => {
+    inject({ authProvider: 'clerk', clerkPublishableKey: 'pk_test', clerkWaitlistMode: true })
+    expect(loadConfig().clerkWaitlistMode).toBe(true)
+  })
+
+  it('treats a missing clerkWaitlistMode as false', () => {
+    inject({ authProvider: 'clerk', clerkPublishableKey: 'pk_test' })
+    expect(loadConfig().clerkWaitlistMode).toBe(false)
+  })
+
+  it('coerces non-boolean clerkWaitlistMode to false (never truthy-by-accident)', () => {
+    inject({ authProvider: 'clerk', clerkPublishableKey: 'pk_test', clerkWaitlistMode: 'yes' })
+    expect(loadConfig().clerkWaitlistMode).toBe(false)
+  })
 })

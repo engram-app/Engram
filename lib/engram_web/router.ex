@@ -318,6 +318,7 @@ defmodule EngramWeb.Router do
     get "/", SpaController, :index
     get "/sign-in", SpaController, :index
     get "/sign-up", SpaController, :index
+    get "/waitlist", SpaController, :index
     get "/link", SpaController, :index
     get "/search", SpaController, :index
     get "/billing", SpaController, :index

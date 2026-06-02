@@ -2,6 +2,10 @@ export interface EngramConfig {
   authProvider: 'local' | 'clerk'
   clerkPublishableKey: string
   billingEnabled: boolean
+  // Mirrors Clerk Dashboard "Waitlist" sign-up mode. UI flips "Sign up"
+  // CTAs to /waitlist and passes waitlistUrl to <SignIn />. The dashboard
+  // flag is the actual enforcement; this is presentational only.
+  clerkWaitlistMode: boolean
   // Self-host SSR-injected bootstrap state. `null` under Clerk; `undefined`
   // when the config script didn't ship one (Vite dev, older Phoenix build),
   // in which case useBootstrap() falls back to fetching /api/auth/bootstrap.
@@ -22,6 +26,7 @@ export function loadConfig(): EngramConfig {
       authProvider: injected.authProvider as 'local' | 'clerk',
       clerkPublishableKey: (injected.clerkPublishableKey as string) ?? '',
       billingEnabled: injected.billingEnabled === true,
+      clerkWaitlistMode: injected.clerkWaitlistMode === true,
       bootstrap: injected.bootstrap as EngramConfig['bootstrap'],
     }
   }
@@ -38,6 +43,7 @@ export function loadConfig(): EngramConfig {
     authProvider: (import.meta.env.VITE_AUTH_PROVIDER as 'local' | 'clerk') ?? 'local',
     clerkPublishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '',
     billingEnabled: import.meta.env.VITE_BILLING_ENABLED === 'true',
+    clerkWaitlistMode: import.meta.env.VITE_CLERK_WAITLIST_MODE === 'true',
   }
 }
 

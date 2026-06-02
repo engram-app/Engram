@@ -6,6 +6,7 @@ export const ROUTES = {
   HOME: '/',
   SIGN_IN: '/sign-in',
   SIGN_UP: '/sign-up',
+  WAITLIST: '/waitlist',
   DEVICE_LINK: '/link',
   OAUTH_CONSENT: '/oauth/consent',
 } as const
