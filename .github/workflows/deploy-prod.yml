@@ -1,0 +1,120 @@
+name: Deploy prod
+
+# Pushing a `release-v*` git tag triggers this workflow, which
+# registers a new ECS task definition pinning the image built for
+# the tagged commit and rolls the service to that revision.
+#
+# Release recipe:
+#   git tag release-v0.5.234 <commit>   # commit must already be on main
+#   git push origin release-v0.5.234
+#
+# Rollback recipe (same trigger, points at older commit):
+#   git tag release-v0.5.234-rollback <last-known-good-sha>
+#   git push origin release-v0.5.234-rollback
+#
+# OIDC trust on the ecs_deploy role is scoped to refs/tags/release-v*
+# only — neither main nor feature branches can assume it.
+on:
+  push:
+    tags: ['release-v*']
+
+concurrency:
+  group: deploy-prod
+  # Never abort a deploy mid-flight. Tags queue serially.
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER: engram-prod
+  SERVICE: engram-saas-prod
+  TASK_FAMILY: engram-saas-prod
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image tag from tagged commit
+        id: tags
+        run: |
+          # github.sha is the commit the release tag points at.
+          SHA=$(git rev-parse --short=7 "${{ github.sha }}")
+          echo "image_tag=sha-$SHA" >> "$GITHUB_OUTPUT"
+          echo "release=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Deploying $GITHUB_REF_NAME → image sha-$SHA"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify image exists in ECR
+        env:
+          IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
+        run: |
+          # Fail loudly if build-ecr.yml hasn't run for this commit
+          # yet (e.g. tag pushed before main CI finished).
+          aws ecr describe-images \
+            --repository-name engram-saas-prod \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --query 'imageDetails[0].imagePushedAt' --output text
+
+      - name: Register new task definition pinning the image
+        id: register
+        env:
+          IMAGE: ${{ vars.AWS_ECR_REPOSITORY }}:${{ steps.tags.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # Clone the live task def, mutate the image, drop the
+          # response-only fields that register-task-definition rejects
+          # on input.
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition' \
+            > /tmp/td.json
+          jq --arg img "$IMAGE" '
+            .containerDefinitions[0].image = $img
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' /tmp/td.json > /tmp/td-new.json
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "file:///tmp/td-new.json" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$NEW_ARN" >> "$GITHUB_OUTPUT"
+          echo "Registered: $NEW_ARN"
+
+      - name: Update service
+        env:
+          NEW_TD: ${{ steps.register.outputs.task_def_arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$NEW_TD" \
+            --query 'service.deployments[0].id' --output text
+
+      - name: Wait for service stable
+        run: |
+          # Default timeout is 10min (40 polls × 15s). For a 2-task
+          # service that's plenty; if it blows past, the deploy is
+          # genuinely broken and the operator should investigate.
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Deploy succeeded"
+            echo ""
+            echo "- Release tag: \`${{ steps.tags.outputs.release }}\`"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Image: \`${{ vars.AWS_ECR_REPOSITORY }}:${{ steps.tags.outputs.image_tag }}\`"
+            echo "- Task def: \`${{ steps.register.outputs.task_def_arn }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
