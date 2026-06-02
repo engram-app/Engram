@@ -49,17 +49,23 @@ jobs:
           fi
 
       - name: Install AWS CLI v2 if missing
-        # Self-hosted runner pool doesn't ship awscli by default.
+        # Self-hosted runner pool doesn't ship awscli by default and
+        # the runner user has no passwordless sudo. Install into
+        # $HOME/.aws-cli (userspace) and add the bin dir to GITHUB_PATH.
         # Idempotent via command -v check — persists across runs since
-        # the isolated runner VM keeps /usr/local/aws-cli between jobs.
+        # the isolated runner VM keeps $HOME between jobs.
         run: |
           if ! command -v aws >/dev/null 2>&1; then
             curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
             unzip -q /tmp/awscliv2.zip -d /tmp/awscli
-            sudo /tmp/awscli/aws/install
+            /tmp/awscli/aws/install \
+              --install-dir "$HOME/.aws-cli" \
+              --bin-dir "$HOME/.aws-cli/bin"
             rm -rf /tmp/awscliv2.zip /tmp/awscli
           fi
-          aws --version
+          # GITHUB_PATH prepends to PATH for all subsequent steps.
+          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
+          "$HOME/.aws-cli/bin/aws" --version
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
