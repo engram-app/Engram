@@ -48,6 +48,16 @@ jobs:
           echo "release=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "Deploying $GITHUB_REF_NAME → image sha-$SHA"
 
+      - name: Install AWS CLI v2 if missing
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
+            sudo /tmp/awscli/aws/install
+            rm -rf /tmp/awscliv2.zip /tmp/awscli
+          fi
+          aws --version
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:

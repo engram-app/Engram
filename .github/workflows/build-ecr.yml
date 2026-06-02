@@ -48,6 +48,19 @@ jobs:
             echo "Tagging with: sha-$SHA"
           fi
 
+      - name: Install AWS CLI v2 if missing
+        # Self-hosted runner pool doesn't ship awscli by default.
+        # Idempotent via command -v check — persists across runs since
+        # the isolated runner VM keeps /usr/local/aws-cli between jobs.
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
+            sudo /tmp/awscli/aws/install
+            rm -rf /tmp/awscliv2.zip /tmp/awscli
+          fi
+          aws --version
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
