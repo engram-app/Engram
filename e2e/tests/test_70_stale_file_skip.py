@@ -71,12 +71,15 @@ async def test_stale_local_accepts_remote(vault_a, cdp_a, api_sync):
 
     try:
         # ------------------------------------------------------------------ #
-        # Step 2: Write a stale local copy to vault A and backdate its mtime #
-        # to 2 hours ago — well past STALE_THRESHOLD_S (3600 s).            #
+        # Step 2: Write a stale local copy to vault A.                       #
+        # NOTE: os.utime() is deferred until AFTER Obsidian has indexed the  #
+        # file (Step 3b). Reasoning: on file creation, Obsidian's watcher    #
+        # fires asynchronously; some watcher paths touch the file's mtime    #
+        # (e.g. metadata-cache writes back) which clobbers an early          #
+        # os.utime(). Running os.utime() AFTER the index is confirmed makes  #
+        # it the last thing to touch the file before we read the disk stat.  #
         # ------------------------------------------------------------------ #
         write_note(vault_a, path, local_content)
-        two_hours_ago = time.time() - 2 * _STALE_THRESHOLD_S
-        os.utime(str(vault_a / path), (two_hours_ago, two_hours_ago))
 
         # ------------------------------------------------------------------ #
         # Step 3: Clear the in-memory sync hash for this path so the engine  #
@@ -97,37 +100,50 @@ async def test_stale_local_accepts_remote(vault_a, cdp_a, api_sync):
         )
 
         # ------------------------------------------------------------------ #
-        # Step 3b: Make Obsidian's *cached* TFile.stat.mtime reflect the       #
-        # backdated value deterministically.  The staleness branch reads       #
-        # existing.stat.mtime (Obsidian's in-memory cache — src/sync.ts ~1376),#
-        # NOT the on-disk mtime.  Obsidian's file-watcher does not reliably    #
-        # observe a metadata-only os.utime() (no content change) within a      #
-        # bounded window, so *passively* waiting for the cache to refresh is a #
-        # seeding race (issue #343).  Instead force the cache to match the     #
-        # authoritative on-disk stat: read app.vault.adapter.stat() (a direct  #
-        # disk read → the backdated value) and write it onto the cached        #
-        # TFile.stat.  We poll only for the TFile to be *indexed* — new-file   #
-        # creation IS reliably observed by the watcher; the metadata reconcile #
-        # itself is deterministic.                                             #
+        # Step 3a: Wait until Obsidian has indexed the new file.             #
+        # New-file creation IS reliably observed by the watcher, but its     #
+        # post-creation handling sometimes writes back to disk (mtime reset).#
+        # We poll only for `getFileByPath` to return non-null — after that   #
+        # we have a stable handle and can safely backdate.                   #
         # ------------------------------------------------------------------ #
-        seed_age_s = None
-        for _ in range(40):  # up to ~10 s — waiting only for the file to be indexed
-            seed_age_s = await cdp_a.evaluate(
-                "(async () => {"
-                f"  const f = app.vault.getFileByPath({path!r});"
-                "  if (!f) return null;"  # not indexed by Obsidian yet → retry
-                f"  const s = await app.vault.adapter.stat({path!r});"
-                "  if (!s) return null;"
-                "  f.stat.mtime = s.mtime;"
-                "  f.stat.ctime = s.ctime;"
-                "  f.stat.size = s.size;"
-                "  return (Date.now() - f.stat.mtime) / 1000;"
-                "})()",
-                await_promise=True,
+        for _ in range(40):  # up to ~10 s
+            indexed = await cdp_a.evaluate(
+                f"app.vault.getFileByPath({path!r}) !== null"
             )
-            if seed_age_s is not None:
+            if indexed:
                 break
             await asyncio.sleep(0.25)
+        assert indexed, (
+            "Obsidian never indexed the test file within 10s. "
+            "This is the seeding precondition, not the behavior under test (issue #343)."
+        )
+
+        # ------------------------------------------------------------------ #
+        # Step 3b: Backdate mtime on disk AFTER the file is indexed, then    #
+        # force the cached TFile.stat to match. With Obsidian's watcher work #
+        # already settled for this path, os.utime() is the last write to the #
+        # inode's metadata before adapter.stat() reads it back.              #
+        #                                                                    #
+        # The staleness branch reads existing.stat.mtime (Obsidian's         #
+        # in-memory cache — src/sync.ts ~1376), NOT the on-disk mtime, so    #
+        # we copy the authoritative disk stat onto the cached TFile.stat.    #
+        # ------------------------------------------------------------------ #
+        two_hours_ago = time.time() - 2 * _STALE_THRESHOLD_S
+        os.utime(str(vault_a / path), (two_hours_ago, two_hours_ago))
+
+        seed_age_s = await cdp_a.evaluate(
+            "(async () => {"
+            f"  const f = app.vault.getFileByPath({path!r});"
+            "  if (!f) return null;"
+            f"  const s = await app.vault.adapter.stat({path!r});"
+            "  if (!s) return null;"
+            "  f.stat.mtime = s.mtime;"
+            "  f.stat.ctime = s.ctime;"
+            "  f.stat.size = s.size;"
+            "  return (Date.now() - f.stat.mtime) / 1000;"
+            "})()",
+            await_promise=True,
+        )
 
         assert seed_age_s is not None and seed_age_s > _STALE_THRESHOLD_S, (
             "Could not seed a stale cached stat.mtime for the test file: the TFile was "
