@@ -49,14 +49,18 @@ jobs:
           echo "Deploying $GITHUB_REF_NAME → image sha-$SHA"
 
       - name: Install AWS CLI v2 if missing
+        # Userspace install — runner user has no passwordless sudo.
         run: |
           if ! command -v aws >/dev/null 2>&1; then
             curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
             unzip -q /tmp/awscliv2.zip -d /tmp/awscli
-            sudo /tmp/awscli/aws/install
+            /tmp/awscli/aws/install \
+              --install-dir "$HOME/.aws-cli" \
+              --bin-dir "$HOME/.aws-cli/bin"
             rm -rf /tmp/awscliv2.zip /tmp/awscli
           fi
-          aws --version
+          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
+          "$HOME/.aws-cli/bin/aws" --version
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
