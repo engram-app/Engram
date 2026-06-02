@@ -1,3 +1,6 @@
+# squawk-ignore-file — schema-restore DDL; squawk parser does not handle the
+# advanced syntax in a full structure dump (FORCE ROW LEVEL SECURITY,
+# sequences, ALTER ... OWNER). The schema diff gate guards correctness.
 defmodule Engram.Repo.Migrations.Baseline do
   @moduledoc """
   Single baseline migration. Replaces 67 historical migrations collapsed on
@@ -31,14 +34,14 @@ defmodule Engram.Repo.Migrations.Baseline do
   """
 
   def up do
-    repo().query!(@engram_app_role_sql, [], log: false)
+    repo().query!(@engram_app_role_sql, [])
 
     path = Path.join(:code.priv_dir(:engram), "repo/structure.sql")
 
     path
     |> File.read!()
     |> split_statements()
-    |> Enum.each(fn stmt -> repo().query!(stmt, [], log: false) end)
+    |> Enum.each(fn stmt -> repo().query!(stmt, []) end)
   end
 
   def down do
