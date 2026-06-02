@@ -35,15 +35,29 @@ if config_env() != :test do
       config :engram, :storage, Engram.Storage.S3
       config :engram, :storage_bucket, System.get_env("STORAGE_BUCKET", "engram-attachments")
 
-      config :ex_aws,
-        access_key_id: System.get_env("STORAGE_ACCESS_KEY_ID"),
-        secret_access_key: System.get_env("STORAGE_SECRET_ACCESS_KEY"),
-        region: System.get_env("STORAGE_REGION", "auto")
+      # Explicit static creds (Tigris, MinIO, self-host) — only set
+      # when STORAGE_ACCESS_KEY_ID is present. On AWS ECS Fargate
+      # leaving these unset lets ex_aws fall back to the task role via
+      # the AWS_CONTAINER_CREDENTIALS_RELATIVE_URI metadata endpoint.
+      if System.get_env("STORAGE_ACCESS_KEY_ID") do
+        config :ex_aws,
+          access_key_id: System.fetch_env!("STORAGE_ACCESS_KEY_ID"),
+          secret_access_key: System.fetch_env!("STORAGE_SECRET_ACCESS_KEY"),
+          region: System.get_env("STORAGE_REGION", "auto")
+      else
+        config :ex_aws,
+          region: System.get_env("STORAGE_REGION", System.get_env("AWS_REGION", "us-east-1"))
+      end
 
-      config :ex_aws, :s3,
-        scheme: System.get_env("STORAGE_SCHEME", "https://"),
-        host: System.get_env("STORAGE_HOST"),
-        port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
+      # Endpoint override (Tigris, MinIO) — only when STORAGE_HOST is
+      # set. AWS-native S3 leaves this unset so ex_aws uses its default
+      # regional endpoint.
+      if System.get_env("STORAGE_HOST") do
+        config :ex_aws, :s3,
+          scheme: System.get_env("STORAGE_SCHEME", "https://"),
+          host: System.fetch_env!("STORAGE_HOST"),
+          port: String.to_integer(System.get_env("STORAGE_PORT", "443"))
+      end
 
     "database" ->
       config :engram, :storage, Engram.Storage.Database
@@ -413,13 +427,22 @@ if config_env() != :test do
       aws_kms_key_id: System.fetch_env!("AWS_KMS_KEY_ID"),
       aws_kms_region: System.fetch_env!("AWS_REGION")
 
-    # Scoped to :ex_aws, :kms so we don't overwrite the global :ex_aws creds
-    # that the S3 storage backend (Fly Tigris) configured above with
-    # STORAGE_ACCESS_KEY_ID/STORAGE_SECRET_ACCESS_KEY/STORAGE_REGION.
-    config :ex_aws, :kms,
-      access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
-      secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
-      region: System.fetch_env!("AWS_REGION")
+    # Scoped to :ex_aws, :kms so KMS creds don't overwrite the global
+    # :ex_aws creds that the S3 storage backend (Fly Tigris / MinIO)
+    # may have configured above.
+    #
+    # Explicit static creds (Fly with an AWS access key for KMS, local
+    # dev) — only set when AWS_ACCESS_KEY_ID is present. On AWS ECS
+    # Fargate leaving these unset lets ex_aws fall back to the task
+    # role via AWS_CONTAINER_CREDENTIALS_RELATIVE_URI.
+    if System.get_env("AWS_ACCESS_KEY_ID") do
+      config :ex_aws, :kms,
+        access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
+        secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
+        region: System.fetch_env!("AWS_REGION")
+    else
+      config :ex_aws, :kms, region: System.fetch_env!("AWS_REGION")
+    end
   end
 end
 
