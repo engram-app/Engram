@@ -478,17 +478,33 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  config :engram, Engram.Repo,
-    # ssl: true,
-    url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-    # For machines with several cores, consider starting multiple pools of `pool_size`
-    # pool_count: 4,
-    socket_options: maybe_ipv6,
-    # T3.0.2 — defense-in-depth. Prevents Ecto SQL params (path, folder,
-    # tags, wrapped DEK on UPDATE) from hitting :debug logs if anyone
-    # bumps prod log level. Audit-only; prod log level today is :info.
-    log: false
+  # DATABASE_SSL=true enables TLS to the Postgres server. Required by
+  # AWS RDS (pg_hba.conf rejects "no encryption" connections);
+  # self-host MinIO/local Postgres typically has no SSL configured so
+  # default is false. `verify: :verify_none` skips peer cert chain
+  # validation — the RDS root CA isn't bundled into the Alpine image
+  # and traffic is already inside the prod VPC, so peer auth adds no
+  # meaningful confidentiality beyond what TLS-on-the-wire provides.
+  database_ssl_opts =
+    if System.get_env("DATABASE_SSL") in ~w(true 1) do
+      [ssl: true, ssl_opts: [verify: :verify_none]]
+    else
+      []
+    end
+
+  config :engram,
+         Engram.Repo,
+         [
+           url: database_url,
+           pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+           # For machines with several cores, consider starting multiple pools of `pool_size`
+           # pool_count: 4,
+           socket_options: maybe_ipv6,
+           # T3.0.2 — defense-in-depth. Prevents Ecto SQL params (path, folder,
+           # tags, wrapped DEK on UPDATE) from hitting :debug logs if anyone
+           # bumps prod log level. Audit-only; prod log level today is :info.
+           log: false
+         ] ++ database_ssl_opts
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
