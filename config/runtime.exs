@@ -226,6 +226,24 @@ if auth_provider == :clerk do
   if wh_secret = System.get_env("CLERK_WEBHOOK_SECRET") do
     config :engram, :clerk_webhook_secret, String.trim(wh_secret)
   end
+
+  # Optional `azp` (Authorized Party) allowlist. Comma-separated origins, e.g.
+  # "https://app.engram.page,https://staging.engram.page". Empty/unset →
+  # passthrough — mirrors @clerk/backend's `assertAuthorizedPartiesClaim` so
+  # self-host Clerk users aren't forced to configure it just to get auth working.
+  clerk_authorized_parties =
+    case System.get_env("CLERK_AUTHORIZED_PARTIES") do
+      nil ->
+        []
+
+      raw ->
+        raw
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+    end
+
+  config :engram, :clerk_authorized_parties, clerk_authorized_parties
 end
 
 # Pricing v2 §A — phone-verification gate on EmbedNote worker. Default off so

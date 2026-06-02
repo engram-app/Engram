@@ -3,7 +3,8 @@ defmodule Engram.Auth.ClerkToken do
   Verifies Clerk JWTs using JWKS-fetched public keys.
 
   Uses joken_jwks to automatically fetch and cache Clerk's public signing keys.
-  Validates: signature (RS256 via JWKS), expiry, not-before, issuer.
+  Validates: signature (RS256 via JWKS), expiry, not-before, issuer, and
+  (when configured) the `azp` (Authorized Party) claim against an allowlist.
   """
 
   use Joken.Config
@@ -25,8 +26,29 @@ defmodule Engram.Auth.ClerkToken do
   Verifies a Clerk JWT and returns `{:ok, claims}` or `{:error, reason}`.
   """
   def verify_clerk_jwt(token) do
-    verify_and_validate(token)
+    with {:ok, claims} <- verify_and_validate(token),
+         :ok <- validate_authorized_party(claims) do
+      {:ok, claims}
+    end
   rescue
     _ -> {:error, :invalid_token}
+  end
+
+  # Mirrors @clerk/backend's `assertAuthorizedPartiesClaim`: empty allowlist
+  # is passthrough; otherwise the `azp` claim must be present and a member.
+  defp validate_authorized_party(claims) do
+    case Application.get_env(:engram, :clerk_authorized_parties, []) do
+      [] ->
+        :ok
+
+      parties when is_list(parties) ->
+        case Map.get(claims, "azp") do
+          azp when is_binary(azp) ->
+            if azp in parties, do: :ok, else: {:error, :invalid_azp}
+
+          _ ->
+            {:error, :invalid_azp}
+        end
+    end
   end
 end
