@@ -244,6 +244,17 @@ if auth_provider == :clerk do
     end
 
   config :engram, :clerk_authorized_parties, clerk_authorized_parties
+
+  # Waitlist mode mirrors the Clerk Dashboard sign-up mode (Restrictions →
+  # Waitlist). The dashboard flag is the actual gate — Clerk's API rejects
+  # non-approved signups regardless of frontend. This var only adjusts the
+  # SPA UI: replaces the "Sign up" CTA with a /waitlist route and tells
+  # <SignIn /> where the waitlist lives (Clerk requires waitlistUrl). Keep
+  # in sync with the dashboard; flipping one without the other = broken UX
+  # but never an open signup hole.
+  if System.get_env("CLERK_WAITLIST_MODE") in ["1", "true"] do
+    config :engram, :clerk_waitlist_mode, true
+  end
 end
 
 # Pricing v2 §A — phone-verification gate on EmbedNote worker. Default off so
