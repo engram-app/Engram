@@ -23,13 +23,26 @@ if [ -z "$base_version" ]; then
   exit 1
 fi
 
-n=$(find "$MIG_DIR" -maxdepth 1 -name '*.exs' -printf '%f\n' \
-  | grep -oE '^[0-9]{14}' | sort -u | awk -v b="$base_version" '$0 > b' | wc -l)
+mapfile -t new_versions < <(
+  find "$MIG_DIR" -maxdepth 1 -name '*.exs' -printf '%f\n' \
+    | grep -oE '^[0-9]{14}' | sort -u | awk -v b="$base_version" '$0 > b'
+)
+n=${#new_versions[@]}
 
 if [ "$n" -eq 0 ]; then
   echo "rollback test: no migrations newer than $BASE_REF — nothing to check"
   exit 0
 fi
+
+# Skip if any new migration carries `# rollback-irreversible`. Used for
+# schema-restore baselines whose `down` raises by design — there is no
+# sensible reversal of "blow away everything and reinstall the dump."
+for v in "${new_versions[@]}"; do
+  if grep -q "# rollback-irreversible" "$MIG_DIR"/${v}_*.exs 2>/dev/null; then
+    echo "rollback test: skipping — ${v} carries # rollback-irreversible marker"
+    exit 0
+  fi
+done
 
 echo "rollback test: $n new migration(s) — migrate → rollback → re-migrate"
 mix ecto.migrate

@@ -1,6 +1,10 @@
 # squawk-ignore-file — schema-restore DDL; squawk parser does not handle the
 # advanced syntax in a full structure dump (FORCE ROW LEVEL SECURITY,
 # sequences, ALTER ... OWNER). The schema diff gate guards correctness.
+#
+# rollback-irreversible — `down` raises by design. There is no sensible
+# reversal of "blow away everything and reinstall the dump." Pre-launch
+# operation; redo by `mix ecto.drop && mix ecto.create && mix ecto.migrate`.
 defmodule Engram.Repo.Migrations.Baseline do
   @moduledoc """
   Single baseline migration. Replaces 67 historical migrations collapsed on
