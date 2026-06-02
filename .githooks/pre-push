@@ -7,9 +7,30 @@
 
 set -euo pipefail
 
+# Skip the whole hook when the push contains only tag refs. Tag pushes
+# target already-merged commits (release-v* triggers prod deploys), so
+# the branch version-bump policy below doesn't apply.
+#
+# pre-push receives one line per ref on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# Empty stdin means no refs are being pushed — also safe to skip.
+pushing_only_tags=true
+have_any_ref=false
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  have_any_ref=true
+  if [[ "$remote_ref" != refs/tags/* ]]; then
+    pushing_only_tags=false
+    break
+  fi
+done
+
+if [ "$have_any_ref" = "true" ] && [ "$pushing_only_tags" = "true" ]; then
+  exit 0
+fi
+
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 
-# Allow main, tags, and detached HEAD to push freely.
+# Allow main and detached HEAD to push freely.
 if [ "$current_branch" = "main" ] || [ "$current_branch" = "HEAD" ]; then
   exit 0
 fi
