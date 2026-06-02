@@ -20,7 +20,12 @@ on:
       - "revert/**"
       - "security/**"
       - "test/**"
-    tags-ignore: ["v*"]
+    # `v*` covers semver release tags applied for marketing/audit.
+    # `release-v*` is the deploy trigger — CI already ran on the
+    # merge commit the tag points at, no need to rerun (and the
+    # version-check job mistakenly fires on the tag because the
+    # mix.exs version still matches main).
+    tags-ignore: ["v*", "release-v*"]
   repository_dispatch:
     types: [plugin-e2e-trigger]
   workflow_dispatch:
