@@ -989,6 +989,11 @@ jobs:
             sleep 1
           done
           MIX_ENV=test mix ecto.create
+          # Idempotent cluster bootstrap (engram_app role + DEFAULT
+          # PRIVILEGES). Must run BEFORE migrate — baseline migration's
+          # structure dump references engram_app in GRANT statements.
+          # Mirrors prod entrypoint.sh ordering.
+          MIX_ENV=test mix engram.prepare_database
           MIX_ENV=test mix ecto.migrate
           # Ensure Tailwind binary is valid (cache prune can corrupt native deps)
           mix tailwind.install 2>/dev/null || true
@@ -1539,6 +1544,8 @@ jobs:
             sleep 1
           done
           mix ecto.create
+          # See unit-tests job comment — prepare_database must precede migrate.
+          mix engram.prepare_database
           mix ecto.migrate
           # Ensure Tailwind binary is valid (cache prune can corrupt native deps).
           # Mirror of unit-tests fix — Playwright's webServer boots Phoenix
