@@ -48,25 +48,34 @@ jobs:
             echo "Tagging with: sha-$SHA"
           fi
 
-      - name: Install AWS CLI v2 if missing
-        # Self-hosted runner pool doesn't ship awscli by default and
-        # the runner user has no passwordless sudo. Install into
-        # $HOME/.aws-cli (userspace) and add the bin dir to GITHUB_PATH.
-        # Idempotent via command -v check — persists across runs since
-        # the isolated runner VM keeps $HOME between jobs.
+      - name: Install AWS CLI v2 (idempotent)
+        # Self-hosted runner pool doesn't ship awscli + the runner user
+        # has no passwordless sudo. Install into $HOME/.aws-cli (userspace)
+        # and add the bin dir to GITHUB_PATH every run.
+        #
+        # The `[ ! -x "$BIN" ]` path-based check is more reliable than
+        # `command -v aws` — GITHUB_PATH additions don't persist across
+        # runs, so a PATH-shaped check fails even on a runner where
+        # awscli is already present at the expected $HOME/.aws-cli path.
+        #
+        # `--update` makes `aws/install` idempotent even when an existing
+        # install is present (otherwise it errors with "Found preexisting
+        # AWS CLI installation"). The path check above keeps the fast
+        # path; --update is the safety net for race conditions.
         run: |
-          if ! command -v aws >/dev/null 2>&1; then
+          BIN="$HOME/.aws-cli/bin/aws"
+          if [ ! -x "$BIN" ]; then
             curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
             rm -rf /tmp/awscli
             unzip -q /tmp/awscliv2.zip -d /tmp/awscli
             /tmp/awscli/aws/install \
               --install-dir "$HOME/.aws-cli" \
-              --bin-dir "$HOME/.aws-cli/bin"
+              --bin-dir "$HOME/.aws-cli/bin" \
+              --update
             rm -rf /tmp/awscliv2.zip /tmp/awscli
           fi
-          # GITHUB_PATH prepends to PATH for all subsequent steps.
           echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
-          "$HOME/.aws-cli/bin/aws" --version
+          "$BIN" --version
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
