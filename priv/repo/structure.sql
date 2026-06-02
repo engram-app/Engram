@@ -2596,18 +2596,12 @@ GRANT SELECT,USAGE ON SEQUENCE public.vaults_id_seq TO engram_app;
 
 
 --
--- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: -
+-- DEFAULT PRIVILEGES are wired by Engram.Release.prepare_database/0
+-- (CURRENT_USER-bound) instead of being baked into the dump. The
+-- prior `ALTER DEFAULT PRIVILEGES FOR ROLE engram` form assumed the
+-- dev superuser was named `engram`, which breaks on RDS where the
+-- master is `engram_admin`. Keep this dump role-name-portable.
 --
-
-ALTER DEFAULT PRIVILEGES FOR ROLE engram IN SCHEMA public GRANT SELECT,USAGE ON SEQUENCES TO engram_app;
-
-
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE engram IN SCHEMA public GRANT SELECT,INSERT,DELETE,UPDATE ON TABLES TO engram_app;
-
 
 --
 -- PostgreSQL database dump complete

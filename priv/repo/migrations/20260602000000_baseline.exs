@@ -19,27 +19,18 @@ defmodule Engram.Repo.Migrations.Baseline do
   Running against a non-empty schema fails because every `CREATE TABLE` in
   structure.sql is unconditional.
 
-  The `engram_app` runtime role (used by `Repo.with_tenant/2` to enforce RLS)
-  is created here idempotently. In dev/CI the role survives `mix ecto.drop`
-  (cluster-level), but a fresh CI postgres container has no roles and needs
-  this step to succeed before the dumped GRANT statements can reference it.
+  Prerequisite: `Engram.Release.prepare_database/0` must run first.
+  It creates the `engram_app` runtime role that the structure dump's
+  GRANT statements reference. Cluster-scoped bootstrap was moved out
+  of this migration so envs don't bake in role names (release task is
+  CURRENT_USER-portable; the prior `ALTER DEFAULT PRIVILEGES FOR ROLE
+  engram` in the dump assumed the dev superuser was named `engram`,
+  which broke on RDS where the master is `engram_admin`).
   """
 
   use Ecto.Migration
 
-  @engram_app_role_sql """
-  DO $$
-  BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_app') THEN
-      CREATE ROLE engram_app NOINHERIT LOGIN PASSWORD 'engram_app';
-    END IF;
-  END
-  $$;
-  """
-
   def up do
-    repo().query!(@engram_app_role_sql, [])
-
     path = Path.join(:code.priv_dir(:engram), "repo/structure.sql")
 
     path

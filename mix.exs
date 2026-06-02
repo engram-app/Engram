@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.302",
+      version: "0.5.303",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -129,9 +129,22 @@ defmodule Engram.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup"],
-      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
+      # `engram.prepare_database` mirrors the prod `entrypoint.sh`:
+      # cluster-level role/grant bootstrap runs BEFORE migrations so
+      # the baseline dump's GRANT statements to engram_app resolve.
+      "ecto.setup": [
+        "ecto.create",
+        "engram.prepare_database",
+        "ecto.migrate",
+        "run priv/repo/seeds.exs"
+      ],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: [
+        "ecto.create --quiet",
+        "engram.prepare_database",
+        "ecto.migrate --quiet",
+        "test"
+      ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
       "assets.deploy": ["phx.digest"]
     ]
