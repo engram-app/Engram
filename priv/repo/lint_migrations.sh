@@ -40,6 +40,18 @@ if [ "${#new_versions[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# Skip lint entirely if any new migration file carries the
+# `# squawk-ignore-file` marker. Used for schema-restore baselines whose
+# rendered DDL is the entire schema (FORCE ROW LEVEL SECURITY, sequences,
+# ALTER ... OWNER, etc.) — squawk's parser chokes on the advanced syntax
+# and the lint adds no value over the existing schema diff gate.
+for v in "${new_versions[@]}"; do
+  if grep -q "# squawk-ignore-file" "$MIG_DIR"/${v}_*.exs 2>/dev/null; then
+    echo "squawk: skipping — ${v} carries # squawk-ignore-file marker"
+    exit 0
+  fi
+done
+
 echo "squawk: linting new migrations: ${new_versions[*]}"
 
 # Bring the throwaway DB up to the base branch state, then render only the new
