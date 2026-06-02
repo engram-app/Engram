@@ -90,6 +90,16 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
+  test "GET /waitlist renders SPA (Clerk waitlist UI route)", %{conn: conn} do
+    # /waitlist is reachable from outside the app (Clerk waitlist invitation
+    # emails, marketing CTAs, bookmarks). The router uses an explicit SPA
+    # whitelist, so /waitlist must be listed or external links 404.
+    conn = get(conn, "/waitlist")
+    assert conn.status == 200
+    assert response(conn, 200) =~ "<!DOCTYPE html>"
+    assert response(conn, 200) =~ "<div id=\"root\">"
+  end
+
   test "SPA responses include x-frame-options: DENY (clickjacking guard)", %{conn: conn} do
     # Critical for /oauth/consent — the consent UI must not be embeddable.
     conn = get(conn, "/oauth/consent")
