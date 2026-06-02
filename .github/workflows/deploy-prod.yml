@@ -1,43 +1,42 @@
 name: Deploy prod
 
-# Pushing a `release-v*` git tag triggers this workflow, which
-# registers a new ECS task definition pinning the image built for
-# the tagged commit and rolls the service to that revision.
+# Pushing a `release-v*` git tag triggers this workflow, which opens a
+# PR in engram-app/engram-infra rewriting the `engram_image_tag`
+# default in `main/envs/prod/variables.tf` to the `sha-<7>` of the
+# tagged commit. On merge, engram-infra's CI `terraform (prod)` job
+# applies the change: a new ECS task definition is registered with the
+# pinned image, and the engram-saas-prod service rolls onto it.
+#
+# This is the GitOps mirror of the staging-fastraid `bump-infra-tfvars`
+# pattern (engram/.github/workflows/ci.yml). Image tag = desired state
+# in git; engram-infra is the reconciler.
 #
 # Release recipe:
 #   git tag release-v0.5.234 <commit>   # commit must already be on main
 #   git push origin release-v0.5.234
 #
-# Rollback recipe (same trigger, points at older commit):
-#   git tag release-v0.5.234-rollback <last-known-good-sha>
-#   git push origin release-v0.5.234-rollback
-#
-# OIDC trust on the ecs_deploy role is scoped to refs/tags/release-v*
-# only — neither main nor feature branches can assume it.
+# Rollback recipe (forward-roll — no separate workflow):
+#   git tag release-v0.5.235 <last-known-good-sha-on-main>
+#   git push origin release-v0.5.235
 on:
   push:
     tags: ['release-v*']
 
 concurrency:
+  # Serialize deploys globally so two release tags can't race the same
+  # bot-PR branch in engram-infra.
   group: deploy-prod
-  # Never abort a deploy mid-flight. Tags queue serially.
   cancel-in-progress: false
 
 permissions:
-  id-token: write
   contents: read
 
-env:
-  AWS_REGION: us-east-1
-  CLUSTER: engram-prod
-  SERVICE: engram-saas-prod
-  TASK_FAMILY: engram-saas-prod
-
 jobs:
-  deploy:
+  open-infra-pr:
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout engram (tagged commit)
+        uses: actions/checkout@v6
 
       - name: Compute image tag from tagged commit
         id: tags
@@ -48,90 +47,136 @@ jobs:
           echo "release=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "Deploying $GITHUB_REF_NAME → image sha-$SHA"
 
-      - name: Install AWS CLI v2 (idempotent)
-        # See build-ecr.yml for the rationale on path-based check + --update.
-        run: |
-          BIN="$HOME/.aws-cli/bin/aws"
-          if [ ! -x "$BIN" ]; then
-            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-            rm -rf /tmp/awscli
-            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
-            /tmp/awscli/aws/install \
-              --install-dir "$HOME/.aws-cli" \
-              --bin-dir "$HOME/.aws-cli/bin" \
-              --update
-            rm -rf /tmp/awscliv2.zip /tmp/awscli
-          fi
-          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
-          "$BIN" --version
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      # Mint a short-lived installation token for the engram-infra-tf
+      # GitHub App, scoped to engram-app/engram-infra only. Required
+      # permissions on engram-infra:
+      #   - contents: read & write   (push branch)
+      #   - pull-requests: read & write   (open PR + auto-merge)
+      # Same App + secrets already used by the staging `bump-infra-tfvars`
+      # job in ci.yml.
+      - name: Generate engram-infra App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
         with:
-          role-to-assume: ${{ vars.AWS_ECS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: engram-infra
 
-      - name: Verify image exists in ECR
+      - name: Checkout engram-infra
+        uses: actions/checkout@v6
+        with:
+          repository: engram-app/engram-infra
+          token: ${{ steps.app-token.outputs.token }}
+          path: engram-infra
+          ref: main
+          # peter-evans/create-pull-request@v8 sets its own
+          # Authorization header on push; persist-credentials=true would
+          # leave the checkout's basic-auth extraheader in git config,
+          # and the second header triggers GitHub's "Duplicate header:
+          # Authorization" 400. See the matching note in ci.yml's
+          # bump-infra-tfvars job.
+          persist-credentials: false
+
+      - name: Rewrite engram_image_tag default in variables.tf
+        id: rewrite
         env:
           IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
         run: |
-          # Fail loudly if build-ecr.yml hasn't run for this commit
-          # yet (e.g. tag pushed before main CI finished).
-          aws ecr describe-images \
-            --repository-name engram-saas-prod \
-            --image-ids "imageTag=$IMAGE_TAG" \
-            --query 'imageDetails[0].imagePushedAt' --output text
+          python3 - <<'PY'
+          import os
+          import re
 
-      - name: Register new task definition pinning the image
-        id: register
+          path = "engram-infra/main/envs/prod/variables.tf"
+          image_tag = os.environ["IMAGE_TAG"]
+          gh_output = os.environ["GITHUB_OUTPUT"]
+
+          text = open(path).read()
+          # Anchored on the variable block name so adding other
+          # `default = ` lines elsewhere in the file is safe.
+          pattern = re.compile(
+              r'(variable\s+"engram_image_tag"[^}]*?default\s*=\s*)"[^"]+"',
+              re.DOTALL,
+          )
+          new, count = pattern.subn(rf'\g<1>"{image_tag}"', text)
+          if count != 1:
+              raise SystemExit(
+                  f"expected exactly 1 engram_image_tag block, got {count}; "
+                  "variables.tf shape changed — adjust the regex"
+              )
+          open(path, "w").write(new)
+          with open(gh_output, "a") as f:
+              f.write("rewrote=true\n")
+          print(f"rewrote engram_image_tag default → {image_tag}")
+          PY
+
+          echo "::group::variables.tf after rewrite"
+          cat engram-infra/main/envs/prod/variables.tf
+          echo "::endgroup::"
+
+      - name: Open / update PR in engram-infra
+        id: open-pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          path: engram-infra
+          token: ${{ steps.app-token.outputs.token }}
+          # Branch is reused across deploys (matches staging pattern).
+          # Each new release force-pushes the branch with the latest
+          # sha-tag; a still-open PR is updated in place rather than
+          # piling up duplicates.
+          branch: bot/bump-engram-prod
+          delete-branch: true
+          # engram-infra's ruleset enforces required_signatures = true.
+          # sign-commits routes through the GraphQL createCommitOnBranch
+          # mutation so GitHub auto-signs on behalf of the App.
+          sign-commits: true
+          commit-message: |
+            chore(prod): bump engram image to ${{ steps.tags.outputs.image_tag }}
+
+            Automated bump from engram-app/Engram release ${{ steps.tags.outputs.release }}.
+          title: "chore(prod): bump engram image to ${{ steps.tags.outputs.image_tag }}"
+          body: |
+            Automated bump from engram-app/Engram release `${{ steps.tags.outputs.release }}`.
+
+            Source commit: ${{ github.repository }}@${{ github.sha }}
+
+            Bumps `engram_image_tag` default in `main/envs/prod/variables.tf` to **`${{ steps.tags.outputs.image_tag }}`**.
+
+            ## What this triggers
+
+            On merge, `.github/workflows/ci.yml` `terraform (prod)` runs `terraform apply -auto-approve`. The new task definition revision pins the engram-saas-prod container image to `${{ vars.AWS_ECR_REPOSITORY || 'engram-saas-prod' }}:${{ steps.tags.outputs.image_tag }}`, and the ECS service rolls onto it.
+
+            ## Review
+
+            Auto-generated; if `variables.tf` has any non-image diff, treat as a regex regression and investigate before merging.
+          labels: |
+            automated
+            tf-image-bump
+
+      - name: Enable auto-merge on bot PR
+        # Auto-merge queues the PR for merge once required checks pass.
+        # engram-infra has `allow_auto_merge=true` in repos.tf.
+        if: steps.open-pr.outputs.pull-request-number != ''
         env:
-          IMAGE: ${{ vars.AWS_ECR_REPOSITORY }}:${{ steps.tags.outputs.image_tag }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
         run: |
-          set -euo pipefail
-          # Clone the live task def, mutate the image, drop the
-          # response-only fields that register-task-definition rejects
-          # on input.
-          aws ecs describe-task-definition \
-            --task-definition "$TASK_FAMILY" \
-            --query 'taskDefinition' \
-            > /tmp/td.json
-          jq --arg img "$IMAGE" '
-            .containerDefinitions[0].image = $img
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                  .compatibilities, .registeredAt, .registeredBy)
-          ' /tmp/td.json > /tmp/td-new.json
-          NEW_ARN=$(aws ecs register-task-definition \
-            --cli-input-json "file:///tmp/td-new.json" \
-            --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "task_def_arn=$NEW_ARN" >> "$GITHUB_OUTPUT"
-          echo "Registered: $NEW_ARN"
-
-      - name: Update service
-        env:
-          NEW_TD: ${{ steps.register.outputs.task_def_arn }}
-        run: |
-          aws ecs update-service \
-            --cluster "$CLUSTER" \
-            --service "$SERVICE" \
-            --task-definition "$NEW_TD" \
-            --query 'service.deployments[0].id' --output text
-
-      - name: Wait for service stable
-        run: |
-          # Default timeout is 10min (40 polls × 15s). For a 2-task
-          # service that's plenty; if it blows past, the deploy is
-          # genuinely broken and the operator should investigate.
-          aws ecs wait services-stable \
-            --cluster "$CLUSTER" \
-            --services "$SERVICE"
+          gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
 
       - name: Summary
+        env:
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.open-pr.outputs.pull-request-url }}
         run: |
           {
-            echo "## Deploy succeeded"
+            echo "## GitOps PR opened"
             echo ""
             echo "- Release tag: \`${{ steps.tags.outputs.release }}\`"
             echo "- Commit: ${{ github.sha }}"
-            echo "- Image: \`${{ vars.AWS_ECR_REPOSITORY }}:${{ steps.tags.outputs.image_tag }}\`"
-            echo "- Task def: \`${{ steps.register.outputs.task_def_arn }}\`"
+            echo "- Image tag: \`${{ steps.tags.outputs.image_tag }}\`"
+            if [ -n "$PR_NUMBER" ]; then
+              echo "- engram-infra PR: [#${PR_NUMBER}](${PR_URL}) (auto-merge enabled)"
+            else
+              echo "- No PR opened (no diff — image already at this tag)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -2,14 +2,17 @@
 
 When to read this: shipping code to `app.engram.page`, rolling back a bad deploy, or debugging the deploy pipeline.
 
-## How it works
+## How it works (GitOps)
 
-Two-stage pipeline split into two GitHub Actions workflows in this repo:
+Two-stage pipeline. Image build lives in this repo; image-tag selection lives in [engram-infra](https://github.com/engram-app/engram-infra). **The live image tag is reconcilable from git** — `var.engram_image_tag` in `engram-infra/main/envs/prod/variables.tf` is the source of truth.
 
-1. **`build-ecr.yml`** — runs on every push to `main`. Builds the Docker image and pushes to ECR tagged `sha-<7chars>`. The image sits in ECR; **nothing rolls.**
-2. **`deploy-prod.yml`** — runs only when a `release-v*` git tag is pushed. Clones the live task definition, swaps in the image for the tagged commit, registers a new revision, and `update-service` rolls the cluster.
+1. **`build-ecr.yml`** (this repo) — runs on every push to `main`. Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
 
-OIDC IAM trust enforces the boundary: the build role (`engram-saas-prod-ecr-push`) trusts `refs/heads/main` + `refs/tags/v*` only; the deploy role (`engram-saas-prod-ecs-deploy`) trusts `refs/tags/release-v*` only. Build can never accidentally roll, deploy can never accidentally push an image.
+2. **`deploy-prod.yml`** (this repo) — runs only when a `release-v*` git tag is pushed. Opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, enables auto-merge.
+
+3. **engram-infra `terraform (prod)`** (engram-infra `.github/workflows/ci.yml`, `matrix: env: [staging, prod]`) — runs `terraform apply -auto-approve` on push to main. The new image tag flows into `aws_ecs_task_definition.engram`; a new revision is registered; `aws_ecs_service.engram` rolls onto it.
+
+The OIDC build role (`engram-saas-prod-ecr-push`) trusts `refs/heads/main` + `refs/tags/v*` only — build can never accidentally roll. The deploy workflow no longer assumes any AWS role: it only opens a cross-repo PR via the `engram-infra-tf` GitHub App.
 
 ## Release recipe
 
@@ -26,22 +29,28 @@ git tag release-v0.5.234
 git push origin release-v0.5.234
 ```
 
-The deploy workflow takes ~3-5 min: register task def → update-service → `wait services-stable`. Watch in the Actions tab.
+The deploy workflow takes ~30 seconds to open the engram-infra PR. End-to-end (PR open → auto-merge after CI → `terraform apply` → service stable) is typically ~5-8 min depending on engram-infra CI latency.
+
+Watch the chain:
+
+1. **engram** Actions tab → `Deploy prod` → link to bot PR in step summary
+2. **engram-infra** PR → CI greenlights → auto-merge fires
+3. **engram-infra** Actions tab → `terraform (prod)` → apply log
+4. **AWS** → `aws ecs describe-services` shows new task def revision
 
 ## Rollback recipe
 
-Rollback is a forward-roll to a known-good image. Same trigger mechanism — push a release tag pointing at the older commit:
+Rollback is a forward-roll: push a new release tag pointing at the older commit. Same workflow, no special path.
 
 ```bash
-# Find the last good commit (whichever sha-<7> image you want back live)
+# Find the last good commit
 GOOD_SHA=abc1234
 
-# Tag with a -rollback suffix for audit clarity (any release-v* matches)
-git tag release-v0.5.234-rollback $GOOD_SHA
-git push origin release-v0.5.234-rollback
+git tag release-v0.5.235 $GOOD_SHA
+git push origin release-v0.5.235
 ```
 
-The workflow registers a fresh task def revision pinning that old image and rolls the service. Task def history in ECS becomes the deploy log — `aws ecs list-task-definitions --family-prefix engram-saas-prod` shows every deploy in order.
+The workflow opens an engram-infra PR bumping the var to that older `sha-<7>`. On merge, TF registers a fresh revision pinning the old image and the service rolls back. Task def history in ECS becomes the deploy log — `aws ecs list-task-definitions --family-prefix engram-saas-prod` shows every revision in order.
 
 ## Inspect deploy state
 
@@ -61,16 +70,36 @@ aws ecs list-task-definitions --family-prefix engram-saas-prod --sort DESC --max
 aws ecr describe-images --repository-name engram-saas-prod \
   --query 'sort_by(imageDetails,&imagePushedAt)[-10:].[imageTags[0],imagePushedAt]' \
   --output table
+
+# Current source of truth for live image:
+gh api repos/engram-app/engram-infra/contents/main/envs/prod/variables.tf \
+  --jq '.content' | base64 -d | grep -A2 engram_image_tag
 ```
 
-Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsheet.md` in engram-infra). For deploy/rollback CLI access (write), use the IAM Roles Anywhere break-glass path documented there.
+Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsheet.md` in engram-infra).
 
 ## Failure modes
 
-- **`deploy-prod.yml` step "Verify image exists in ECR" fails** — `build-ecr.yml` hasn't finished for that commit yet, or the commit was never on main. Wait for build to finish, or check the commit is reachable from `origin/main`.
-- **`wait services-stable` times out (10 min)** — task is crash-looping. Check CloudWatch Logs `/ecs/engram-saas-prod`, then roll back via the rollback recipe.
-- **`Register new task definition` fails with `iam:PassRole`** — the ecs_deploy role's PassRole permission is conditional on `iam:PassedToService = ecs-tasks.amazonaws.com`. If the task def's `executionRoleArn` or `taskRoleArn` references a role outside `engram-saas-prod-ecs-{execution,task}`, fix the upstream TF in engram-infra `main/envs/prod/ecs_iam.tf`.
+- **`deploy-prod.yml` step "Rewrite engram_image_tag default" fails** — regex regression. Check `main/envs/prod/variables.tf` shape in engram-infra; the workflow expects exactly one `variable "engram_image_tag"` block with a `default = "..."` line.
+- **Bot PR opens but doesn't auto-merge** — engram-infra CI failing (typically tflint or terraform plan). Open the PR, read the failing check, fix root cause in engram-infra. The bot will reuse the `bot/bump-engram-prod` branch on the next release tag.
+- **`terraform apply` on engram-infra fails on `ResourceNotFoundException`** — `sha-<7>` image isn't in ECR. `build-ecr.yml` for that commit hasn't finished (or never ran). Confirm with `aws ecr describe-images`; rerun build-ecr if needed.
+- **Service crash-loops after deploy** — task running but health checks fail. Check CloudWatch Logs `/ecs/engram-saas-prod`, then forward-roll to the last-known-good `sha-<7>` via a new release tag.
+- **App token mint step 403s** — `engram-infra-tf` App permissions changed. Required: `contents: read & write` + `pull-requests: read & write` on engram-infra. Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf.
 
-## Why not merge-to-deploy?
+## Break-glass: manual AWS deploy
+
+The GitOps path is the only sanctioned route. If engram-infra CI is wedged AND a deploy must ship NOW, an operator with prod admin credentials (Roles Anywhere break-glass — see `operator-cheatsheet.md` in engram-infra) can `aws ecs register-task-definition` + `update-service` directly. After the incident, **immediately** open an engram-infra PR bumping `engram_image_tag` to match what's live, otherwise the next routine `terraform apply` reverts the service.
+
+The dedicated `engram-saas-prod-ecs-deploy` IAM role was removed when the workflow migrated to GitOps (engram-infra PR — TODO). No CI workflow needs ECS-write OIDC anymore.
+
+## Why GitOps (not imperative)
+
+The previous shape called `aws ecs register-task-definition` + `update-service` directly from this workflow. That stored the live image tag only in ECS state, never in git, which:
+
+1. **Broke GitOps.** Desired state must be in git.
+2. **Caused real TF drift.** `aws_ecs_service.engram` has `lifecycle.ignore_changes = [desired_count]` only — not `task_definition`. The next routine `tf apply` on engram-infra would have reverted the service to revision 1 (the TF-managed task def pointing at the old default).
+3. **Was asymmetric with staging.** Staging-fastraid already runs the var-bump-PR pattern via engram-infra's `tf-apply` daemon. Prod now mirrors it.
+
+## Why tag-gated (not merge-to-deploy)
 
 Pre-revenue, merge-to-deploy is fine. Post-launch, every PR shipping immediately creates pressure: tests pass means deploy, no human gate, no batch-windowing. Tag-gated lets the operator (a) batch multiple merges into one release, (b) hold deploys during incident windows, (c) audit exactly what shipped when via `git tag --list 'release-v*'`. The cost is one extra step per release (`git tag && git push`) — worth it for a paid product.
