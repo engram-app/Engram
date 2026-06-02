@@ -31,31 +31,25 @@ defmodule EngramWeb.Router do
   # injects a runtime-config <script> into index.html (see
   # EngramWeb.SpaController.config_script/0). TODO: upgrade to per-request
   # nonces and drop 'unsafe-inline' from script-src.
-  @csp_policy Enum.join(
-                [
-                  "default-src 'self'",
-                  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com https://*.paddle.com",
-                  "style-src 'self' 'unsafe-inline'",
-                  "img-src 'self' data: blob: https:",
-                  "font-src 'self' data:",
-                  "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com https://*.paddle.com",
-                  "frame-src https://challenges.cloudflare.com https://*.clerk.accounts.dev https://*.paddle.com",
-                  "worker-src 'self' blob:",
-                  "form-action 'self'",
-                  "base-uri 'self'",
-                  "frame-ancestors 'none'"
-                ],
-                "; "
-              )
-
+  #
+  # The CSP allowlist is built at request time by `EngramWeb.CSP.header/0`
+  # so per-tenant Clerk custom domains (CLERK_ISSUER=https://clerk.<zone>)
+  # flow into script-src / connect-src / frame-src without code edits.
+  # Adding a new external integration = one builder function in
+  # `EngramWeb.CSP`, not a router diff.
   pipeline :spa do
     plug :accepts, ["html"]
 
     plug :put_secure_browser_headers, %{
       "x-content-type-options" => "nosniff",
-      "x-frame-options" => "DENY",
-      "content-security-policy" => @csp_policy
+      "x-frame-options" => "DENY"
     }
+
+    plug :put_csp_header
+  end
+
+  defp put_csp_header(conn, _opts) do
+    Plug.Conn.put_resp_header(conn, "content-security-policy", EngramWeb.CSP.header())
   end
 
   # Paddle webhooks — no auth, raw body for signature verification
