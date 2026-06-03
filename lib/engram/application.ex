@@ -10,6 +10,10 @@ defmodule Engram.Application do
     Engram.Crypto.Config.validate!()
     verify_spa_integrity!()
     install_log_redaction_filter()
+    # Sentry logger handler must attach AFTER the redaction filter so
+    # error logs sent to Sentry have already had secrets scrubbed by
+    # EngramWeb.RedactFilter. No-op when :sentry has no DSN configured.
+    attach_sentry_logger_handler()
     EngramWeb.RequestLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
 
@@ -101,6 +105,19 @@ defmodule Engram.Application do
         :engram_redact,
         {&Engram.Logger.RedactFilter.filter/2, []}
       )
+  end
+
+  # Attach Sentry's :logger handler. When :sentry has no DSN configured
+  # (dev, test, self-host) the handler is a no-op — every report is
+  # short-circuited before any network call. Idempotent against ExUnit's
+  # per-suite restart for the same reason as the redact filter above.
+  defp attach_sentry_logger_handler do
+    _ = :logger.remove_handler(:engram_sentry)
+
+    :ok =
+      :logger.add_handler(:engram_sentry, Sentry.LoggerHandler, %{
+        config: %{metadata: [:request_id, :user_id, :module, :function, :file, :line]}
+      })
   end
 
   defp clerk_strategy_child do

@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.313",
+      version: "0.5.314",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -100,6 +100,10 @@ defmodule Engram.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
+
+      # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
+      # and self-host)
+      {:sentry, "~> 10.0"},
 
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},

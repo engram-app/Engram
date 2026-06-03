@@ -596,3 +596,21 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
+
+# Sentry error reporting. No-op when SENTRY_DSN is unset (dev/test
+# and self-host), so the only thing needed to opt in is setting the
+# env var. SaaS prod injects it via ECS SSM SecureString sourced from
+# SOPS (`sentry_dsn_backend`); follow-up engram-infra PR wires the
+# `aws_ssm_parameter` and `ecs_secrets.tf` mapping.
+if dsn = System.get_env("SENTRY_DSN") do
+  config :sentry,
+    dsn: dsn,
+    environment_name: to_string(config_env()),
+    enable_source_code_context: true,
+    root_source_code_paths: [File.cwd!()],
+    tags: %{env: to_string(config_env())},
+    # Tracing off in Tier 1 — OpenTelemetry → Tempo lands in Tier 2 with
+    # a 10% sample rate. Setting traces_sample_rate: nil makes Sentry
+    # ignore transaction telemetry entirely.
+    traces_sample_rate: nil
+end

@@ -1,6 +1,11 @@
 defmodule EngramWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :engram
 
+  # Wraps the plug pipeline in a rescue that reports any unhandled
+  # exception to Sentry before re-raising. No-op when SENTRY_DSN is
+  # unset (dev/test/self-host).
+  use Sentry.PlugCapture
+
   socket "/socket", EngramWeb.UserSocket,
     websocket: [
       check_origin: {__MODULE__, :check_origin, []}
@@ -75,6 +80,16 @@ defmodule EngramWeb.Endpoint do
     body_reader: {EngramWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library(),
     length: 11_000_000
+
+  # Sentry context: attaches conn metadata (request_id, method, route,
+  # status) to any exception reported by PlugCapture above. Placed after
+  # Plug.Parsers so the parsed body would be available — but bodies are
+  # explicitly NOT shipped (notes/attachments may contain anything
+  # sensitive). Cookies are stripped for the same reason; the default
+  # header scrubber already drops auth + cookie.
+  plug Sentry.PlugContext,
+    body_scrubber: nil,
+    cookie_scrubber: nil
 
   plug Plug.Head
   plug EngramWeb.Plugs.CORS
