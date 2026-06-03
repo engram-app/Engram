@@ -474,7 +474,7 @@ jobs:
           echo "=== Runner work dirs ==="
           ls -ld "$HOME"/actions-runner* 2>/dev/null || echo "(no actions-runner* dirs in HOME)"
 
-  # ── Weekly Hex SBOM refresh. The push-on-main path lives in ci.yml
+  # ── Weekly Hex SBOM refresh. The push-on-main path lives in verify.yml
   # (submit-dep-graph job) and fires when mix.exs / mix.lock changes;
   # this cron path catches transitive bumps from Hex retire/replace
   # events that happen outside our own commits. Saturday 03:00 UTC.

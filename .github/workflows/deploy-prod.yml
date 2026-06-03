@@ -8,7 +8,7 @@ name: Deploy prod
 # pinned image, and the engram-saas-prod service rolls onto it.
 #
 # This is the GitOps mirror of the staging-fastraid `bump-infra-tfvars`
-# pattern (engram/.github/workflows/ci.yml). Image tag = desired state
+# pattern (engram/.github/workflows/verify.yml). Image tag = desired state
 # in git; engram-infra is the reconciler.
 #
 # Release recipe:
