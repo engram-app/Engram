@@ -2447,6 +2447,11 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT_FRONTEND: ${{ vars.SENTRY_PROJECT_FRONTEND }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          # Cloudflare Web Analytics beacon — cookieless RUM. Public
+          # per-site identifier, so a plain build-arg is fine; the
+          # secret name is set to keep self-host bundles from shipping
+          # the SaaS token.
+          VITE_CF_BEACON_TOKEN: ${{ secrets.VITE_CF_BEACON_TOKEN }}
         run: |
           TAGS=(--tag "$REPO:$SHA_TAG")
           if [ -n "$VTAG" ]; then
@@ -2464,6 +2469,7 @@ jobs:
             --build-arg "VITE_GIT_SHA=${VITE_GIT_SHA}" \
             --build-arg "SENTRY_ORG=${SENTRY_ORG}" \
             --build-arg "SENTRY_PROJECT=${SENTRY_PROJECT_FRONTEND}" \
+            --build-arg "VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN}" \
             --secret "id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" \
             .
 

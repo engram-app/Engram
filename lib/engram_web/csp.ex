@@ -77,7 +77,8 @@ defmodule EngramWeb.CSP do
       clerk_directives(),
       paddle_directives(),
       turnstile_directives(),
-      cloudflare_insights_directives()
+      cloudflare_insights_directives(),
+      sentry_directives()
     ]
   end
 
@@ -200,6 +201,29 @@ defmodule EngramWeb.CSP do
 
     %{
       "script-src" => hosts,
+      "connect-src" => hosts
+    }
+  end
+
+  # Sentry error reporting (browser SDK).
+  #
+  # The SDK itself ships bundled in the SPA (no extra script-src host),
+  # but every captured event POSTs to the project's ingest host on
+  # `*.ingest.sentry.io`, and Sentry uses regional shards (us / eu) so
+  # the wildcard is necessary. Without this `connect-src` entry the
+  # browser blocks the POST and exceptions never reach Sentry — a
+  # silent-success failure mode where the SDK reports "queued" but the
+  # event evaporates at the CSP gate.
+  #
+  # Unconditionally on because the frontend bundle is the same for
+  # SaaS + self-host; the actual `Sentry.init` call is gated on
+  # `VITE_SENTRY_DSN`, and self-host builds without the DSN never
+  # produce any traffic to this host. CSP is a static allow-list and
+  # gains nothing from runtime gating.
+  defp sentry_directives do
+    hosts = ["https://*.ingest.sentry.io"]
+
+    %{
       "connect-src" => hosts
     }
   end
