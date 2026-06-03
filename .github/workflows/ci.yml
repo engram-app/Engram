@@ -2446,3 +2446,69 @@ jobs:
             "${TAGS[@]}" \
             --push \
             .
+
+  # Submit the Hex SBOM to GitHub's dependency-submission API after merge.
+  # GitHub's static mix.lock parser silently fails on this repo (verified
+  # 2026-05-22: the repo's SBOM contained 0 `pkg:hex` packages despite 200+
+  # Hex deps in mix.lock), so Dependabot security alerts never surfaced
+  # CVEs that mix_audit catches. This submission merges with GitHub's
+  # broken static parsing so Dependabot's scanner has accurate data.
+  #
+  # Pre-fold (dependency-submission.yml), this used workflow-level
+  # `paths: [mix.exs, mix.lock]`. After fold, the guard step below
+  # diffs HEAD~1 vs HEAD on those paths and exits early when the deps
+  # didn't change — same effect as the old path filter. We intentionally
+  # do NOT include ci.yml in the guard (every ci.yml edit shouldn't
+  # republish the SBOM); workflow_dispatch path lives in cron.yml.
+  #
+  # Gate matches build-and-publish-image / build-and-push-ecr.
+  submit-dep-graph:
+    if: |
+      always()
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
+    needs: [fingerprint, ci]
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: write
+    steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          # See comment in e2e-clerk's "Pre-cleanup stale resources" step.
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          # Need parent commit so the guard's HEAD~1 diff works.
+          fetch-depth: 2
+
+      - name: Path-filter early-exit
+        id: guard
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet HEAD~1 HEAD -- mix.exs mix.lock 2>/dev/null; then
+            echo "Dep files changed — submitting SBOM."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No dep changes — skipping SBOM submission."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch deps
+        # Separate from the action's own `install-deps: true` so transient
+        # hex.pm timeouts are easier to diagnose.
+        if: steps.guard.outputs.skip != 'true'
+        run: mix deps.get
+
+      - name: Submit Hex SBOM to GitHub
+        if: steps.guard.outputs.skip != 'true'
+        uses: erlef/mix-dependency-submission@v1
+        with:
+          # install-deps=true ensures a complete transitive graph. Without
+          # it, only direct deps appear — and most CVEs live in transitive
+          # deps (cowboy_telemetry, mime, etc.).
+          install-deps: true

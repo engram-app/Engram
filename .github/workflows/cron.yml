@@ -23,6 +23,7 @@ on:
     - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
     - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
     - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
+    - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
   workflow_dispatch:
     inputs:
       task:
@@ -36,6 +37,7 @@ on:
           - plan-triage
           - frontend-major-updates
           - runner-diagnostics
+          - dependency-submission
       force:
         description: '(obsidian-update only) Force re-download even if version matches'
         type: boolean
@@ -471,3 +473,29 @@ jobs:
           pgrep -af 'Runner.Listener|Runner.Worker' 2>/dev/null || echo "(none — this output should never print, runner is executing this!)"
           echo "=== Runner work dirs ==="
           ls -ld "$HOME"/actions-runner* 2>/dev/null || echo "(no actions-runner* dirs in HOME)"
+
+  # ── Weekly Hex SBOM refresh. The push-on-main path lives in ci.yml
+  # (submit-dep-graph job) and fires when mix.exs / mix.lock changes;
+  # this cron path catches transitive bumps from Hex retire/replace
+  # events that happen outside our own commits. Saturday 03:00 UTC.
+  # See pre-fold dependency-submission.yml for the historical why
+  # (GitHub's static mix.lock parser silently fails on this repo).
+  dependency-submission:
+    if: |
+      github.event.schedule == '0 3 * * 6'
+      || github.event.inputs.task == 'dependency-submission'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch deps
+        # Separate from the action's own `install-deps: true` so transient
+        # hex.pm timeouts are easier to diagnose.
+        run: mix deps.get
+
+      - name: Submit Hex SBOM to GitHub
+        uses: erlef/mix-dependency-submission@v1
+        with:
+          install-deps: true
