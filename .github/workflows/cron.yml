@@ -1,0 +1,473 @@
+name: cron
+
+# Consolidated scheduled jobs + manual diagnostics. Replaces six
+# standalone workflow files (clerk-orphans, runner-cleanup, obsidian-update,
+# plan-triage, frontend-major-updates, runner-diagnostics).
+#
+# Each schedule firing still appears as its OWN run in the Actions UI —
+# this is file-count cleanup (6 files → 1), not UI-count cleanup. The win
+# is having all cron job bodies under one path so cross-cutting changes
+# (runner labels, common deps, the isolated-runner concurrency idiom)
+# touch one file.
+#
+# Each job's `if:` matches either its schedule (`github.event.schedule`)
+# OR the dispatch input (`inputs.task`). Scheduled firings only run the
+# matching job; the rest `if:`-out. Manual dispatch via:
+#   gh workflow run cron.yml -f task=<name>            (most tasks)
+#   gh workflow run cron.yml -f task=obsidian-update -f force=true
+
+on:
+  schedule:
+    - cron: '30 6 * * *'    # clerk-orphans            (daily 06:30 UTC)
+    - cron: '0 3 * * 0'     # runner-cleanup           (Sun 03:00 UTC)
+    - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
+    - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
+    - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Which task to run'
+        type: choice
+        required: true
+        options:
+          - clerk-orphans
+          - runner-cleanup
+          - obsidian-update
+          - plan-triage
+          - frontend-major-updates
+          - runner-diagnostics
+      force:
+        description: '(obsidian-update only) Force re-download even if version matches'
+        type: boolean
+        default: false
+
+# No workflow-level permissions — each job grants what it actually needs.
+permissions: {}
+
+jobs:
+  # ── Out-of-band cleanup for stale e2e-* Clerk users left behind by crashed
+  # CI runs. The pytest fixture now scopes its sweep to the current run id
+  # (issue #160), so users from a run cancelled / OOM-killed before its
+  # session_cleanup fired would otherwise accumulate forever. This cron
+  # mops them up — with a 1h age filter to avoid racing in-flight runs.
+  # Once-daily off-peak; per-run pytest fixture handles the fresh-user path
+  # so hourly was overkill.
+  clerk-orphans:
+    if: |
+      github.event.schedule == '30 6 * * *'
+      || github.event.inputs.task == 'clerk-orphans'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    concurrency:
+      group: clerk-orphans
+      cancel-in-progress: false
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            e2e/scripts/cleanup_clerk_users.py
+
+      - name: Ensure requests is available
+        # --break-system-packages: isolated runner VM runs Python 3.12
+        # with PEP 668 (externally-managed-environment); pip --user
+        # fails closed without it. Safe — VM is single-purpose CI.
+        run: python3 -m pip install --user --quiet --break-system-packages "requests>=2.31"
+
+      - name: Reap orphan e2e Clerk users older than 1h
+        env:
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
+            echo "E2E_CLERK_SECRET_KEY not set — skipping." >&2
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h
+
+  # ── Weekly Docker + /tmp prune on the self-hosted runner. Keeps disk
+  # usage bounded so long-running runner VMs don't fill up.
+  runner-cleanup:
+    if: |
+      github.event.schedule == '0 3 * * 0'
+      || github.event.inputs.task == 'runner-cleanup'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    steps:
+      - name: Docker cleanup
+        run: |
+          echo "=== Before ==="
+          docker system df
+
+          # 1. Remove stopped containers + their volumes
+          docker container prune -f 2>/dev/null || true
+
+          # 2. Remove dangling volumes (anonymous volumes from dead containers)
+          docker volume prune -f 2>/dev/null || true
+
+          # 3. Remove dangling images (untagged layers)
+          docker image prune -f 2>/dev/null || true
+
+          # 4. Keep only latest 3 GHCR engram release tags
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            --filter "reference=ghcr.io/engram-app/engram:*" \
+            | grep -v ':latest$' \
+            | tail -n +3 \
+            | xargs -r docker rmi 2>/dev/null || true
+
+          # 5. Keep only latest CI cache image
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            --filter "reference=engram-ci:*" \
+            | tail -n +2 \
+            | xargs -r docker rmi 2>/dev/null || true
+
+          # 6. Remove stale per-run images that slipped through teardown (cancelled jobs)
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            --filter "reference=engram-ci-*-engram:latest" \
+            | xargs -r docker rmi 2>/dev/null || true
+
+          # 7. Prune build cache — keep max 2GB, nuke the rest
+          # --mount=type=cache entries stay "active" indefinitely, so age-based
+          # filters don't work. Use --all to reclaim everything, then rebuild
+          # cache naturally on next CI run.
+          docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
+
+          # 8. Clean Bun .node cache files (8.8MB each, ~400/week, never auto-cleaned)
+          find /tmp -maxdepth 1 -name '.ff*.node' -delete 2>/dev/null || true
+
+          # 9. Clean other stale /tmp files (tmpfs has user quota, fills up fast)
+          find /tmp -maxdepth 1 -user "$(whoami)" -mtime +1 \
+            ! -name 'claude-*' \
+            ! -name 'bunx-*' \
+            -exec rm -rf {} + 2>/dev/null || true
+          echo "=== After ==="
+          docker system df
+          echo "=== /tmp ==="
+          du -sh /tmp/ 2>/dev/null || true
+
+  # ── Keeps the self-hosted runner's pre-extracted Obsidian AppImage at the
+  # latest released version so E2E tests exercise up-to-date Obsidian.
+  # Weekly check (Obsidian ships every 2-4 weeks). `force` input re-downloads
+  # even when version matches (used after install corruption).
+  obsidian-update:
+    if: |
+      github.event.schedule == '0 4 * * 1'
+      || github.event.inputs.task == 'obsidian-update'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    steps:
+      # Full checkout (no sparse). Earlier versions used sparse-checkout to fetch
+      # only update-obsidian.sh, but that left `core.sparseCheckout=true` and
+      # skip-worktree bits on the shared self-hosted runner workspace, poisoning
+      # subsequent CI jobs (mix.exs absent → "Could not find a Mix.Project").
+      - uses: actions/checkout@v6
+
+      - name: Update Obsidian to latest release
+        run: |
+          chmod +x .github/update-obsidian.sh
+          if [ "${{ inputs.force }}" = "true" ]; then
+            bash .github/update-obsidian.sh --force
+          else
+            bash .github/update-obsidian.sh
+          fi
+
+      - name: Show installed version
+        run: |
+          if [ -f "$HOME/Applications/.obsidian-version" ]; then
+            echo "Installed Obsidian version: $(cat "$HOME/Applications/.obsidian-version")"
+          else
+            echo "No version file — install may have failed"
+            exit 1
+          fi
+
+  # ── Weekly plans-triage script: digests plan files in docs/superpowers/ and
+  # opens/updates a tracking issue summarizing status. Needs write perms to
+  # commit + issue/PR perms for the digest output.
+  plan-triage:
+    if: |
+      github.event.schedule == '0 14 * * 1'
+      || github.event.inputs.task == 'plan-triage'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history for first/last commit lookups
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install --quiet pyyaml
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Run plan triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/plan-triage.py
+
+  # ── Surface JS deps with a newer MAJOR than the current caret-range allows.
+  # `bun outdated` only walks within existing semver, so v5→v6 package renames
+  # (e.g. @clerk/clerk-react → @clerk/react) stay invisible until a CVE forces
+  # them. ncu --target latest + jq filter to majors, opens/updates a single
+  # tracking issue. Closing the issue is the signal that the next bump should
+  # happen.
+  frontend-major-updates:
+    if: |
+      github.event.schedule == '17 13 * * 1'
+      || github.event.inputs.task == 'frontend-major-updates'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run npm-check-updates and filter to major bumps
+        id: scan
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          # ncu has no --target major; it gives the latest of each pkg.
+          # Post-filter to drop minor/patch by comparing leading version
+          # segment of current (package.json caret) vs proposed range.
+          raw=$(bunx npm-check-updates --target latest --jsonUpgraded 2>/dev/null || echo '{}')
+          cur=$(jq -s '.[0].dependencies + .[0].devDependencies' package.json)
+          majors=$(echo "$raw" | jq --argjson cur "$cur" '
+            to_entries
+            | map(select(
+                (($cur[.key] // "") | gsub("[\\^~>=<]"; "") | split(".")[0]) !=
+                (.value             | gsub("[\\^~>=<]"; "") | split(".")[0])
+              ))
+            | from_entries
+          ')
+
+          if [ "$majors" = '{}' ] || [ -z "$majors" ]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "No major drift."
+            exit 0
+          fi
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+
+          # Markdown table: pkg | current caret | proposed
+          {
+            echo "table<<EOF"
+            echo "| Package | Current | Proposed major |"
+            echo "|---|---|---|"
+            echo "$majors" | jq -r --argjson cur "$cur" \
+              'to_entries[] | "| `\(.key)` | `\($cur[.key] // "?")` | `\(.value)` |"'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find or update tracking issue
+        if: steps.scan.outputs.drift == 'true'
+        uses: actions/github-script@v8
+        env:
+          DRIFT_TABLE: ${{ steps.scan.outputs.table }}
+        with:
+          script: |
+            const title = 'chore(deps): frontend major-version drift'
+            const body = [
+              'Weekly `npm-check-updates --target major` scan in `frontend/` found packages with a newer major than the current caret-range allows.',
+              '',
+              process.env.DRIFT_TABLE,
+              '',
+              '## Why this exists',
+              '',
+              '`bun outdated` only walks within the existing semver caret, so a v5→v6 package rename stays invisible until a CVE forces the bump (see PR #356 / Clerk).',
+              '',
+              '## Action',
+              '',
+              'Review each entry — bumps may require code changes, migration guides, or be intentionally pinned. Close this issue once handled; the next scan opens a fresh one if drift remains.',
+              '',
+              `Scan: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n')
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'deps,frontend',
+              per_page: 100,
+            })
+            const match = existing.find((i) => i.title === title)
+
+            if (match) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              })
+              core.info(`Updated existing issue #${match.number}`)
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['deps', 'frontend'],
+              })
+              core.info(`Opened issue #${created.number}`)
+            }
+
+  # ── Read-only audit of the self-hosted runner host: surfaces the things
+  # that bit the local dev box (FUSE mount_max, coredump pile-on, ABRT bloat,
+  # OOM history, concurrent chromium/obsidian footprint).
+  #
+  # Manual trigger only — run after suspected runner instability or before
+  # making host-config changes. Output goes to the workflow log; nothing
+  # is modified.
+  runner-diagnostics:
+    if: github.event.inputs.task == 'runner-diagnostics'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Host identity
+        run: |
+          echo "=== Host ==="
+          hostname
+          uname -a
+          uptime
+          echo "Runner: ${RUNNER_NAME:-unset}"
+
+      - name: Memory + swap
+        run: |
+          echo "=== Memory ==="
+          free -h
+          echo "--- /proc/meminfo (key fields) ---"
+          grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree|Committed_AS):' /proc/meminfo
+
+      - name: Load + top RSS consumers
+        run: |
+          echo "=== Load average ==="
+          cat /proc/loadavg
+          echo "=== Top 20 by RSS ==="
+          ps -eo pid,user,rss,pcpu,etime,comm --sort=-rss | head -21
+
+      - name: Concurrent browser/runtime footprint
+        run: |
+          echo "=== Live obsidian/chromium/xvfb/playwright procs ==="
+          ps -eo pid,rss,etime,cmd 2>/dev/null \
+            | grep -iE 'obsidian|chromium|chrome|xvfb|playwright|node.*plugin' \
+            | grep -v grep \
+            | awk '{
+                rss=$2; total+=rss;
+                # Truncate cmd for readability
+                cmd=""; for (i=4;i<=NF;i++) cmd=cmd" "$i;
+                if (length(cmd)>140) cmd=substr(cmd,1,137)"...";
+                printf "%8s  %8dK  %10s %s\n", $1, rss, $3, cmd
+              }
+              END { printf "TOTAL RSS across matched procs: %d MB\n", total/1024 }'
+
+      - name: FUSE config (mount_max + current mounts)
+        run: |
+          echo "=== /etc/fuse.conf ==="
+          cat /etc/fuse.conf 2>/dev/null || echo "(not present)"
+          echo "--- Current FUSE mounts ---"
+          fuse_count=$(mount -t fuse,fuse.portal,fuse.gvfsd-fuse,fuse3 2>/dev/null | wc -l)
+          all_count=$(mount | wc -l)
+          echo "fuse mounts: $fuse_count   total mounts: $all_count"
+          echo "--- max_user_namespaces / mount limits (kernel) ---"
+          sysctl -a 2>/dev/null | grep -E 'fs\.mount-max|user\.max_mnt_namespaces' || true
+
+      - name: Coredump config + storage
+        run: |
+          echo "=== /etc/systemd/coredump.conf ==="
+          cat /etc/systemd/coredump.conf 2>/dev/null || echo "(default)"
+          for d in /etc/systemd/coredump.conf.d; do
+            if [ -d "$d" ]; then
+              echo "--- $d/* ---"
+              for f in "$d"/*.conf; do [ -f "$f" ] && { echo "# $f"; cat "$f"; }; done
+            fi
+          done
+          echo "--- Coredump disk usage ---"
+          du -sh /var/lib/systemd/coredump 2>/dev/null || echo "(no spool dir)"
+          echo "--- Coredumps in last 7d ---"
+          coredumpctl list --since=-7d 2>/dev/null | tail -20 || echo "coredumpctl unavailable"
+
+      - name: ABRT presence + config
+        run: |
+          echo "=== ABRT installed? ==="
+          if command -v abrtd >/dev/null 2>&1 || systemctl list-unit-files 'abrt*' 2>/dev/null | grep -q abrt; then
+            echo "ABRT is installed."
+            systemctl list-unit-files 'abrt*' --no-pager 2>/dev/null | head -20
+            for f in /etc/abrt/abrt.conf /etc/abrt/plugins/CCpp.conf; do
+              [ -f "$f" ] && { echo "--- $f ---"; cat "$f"; }
+            done
+            echo "--- ABRT spool size ---"
+            du -sh /var/spool/abrt /var/tmp/abrt 2>/dev/null || true
+          else
+            echo "ABRT not installed — good (no pile-on risk)."
+          fi
+
+      - name: OOM history (this boot + previous)
+        run: |
+          echo "=== Boots ==="
+          journalctl --list-boots --no-pager 2>/dev/null | tail -5 || true
+          echo "=== OOM events, last 7d ==="
+          journalctl --no-pager --since=-7d 2>/dev/null \
+            | grep -E 'invoked oom-killer|Out of memory: Killed|oom_reaper' \
+            | tail -30 \
+            || echo "No OOM events in last 7d."
+
+      - name: User systemd services on runner host
+        run: |
+          echo "=== --user services (running) ==="
+          systemctl --user list-units --type=service --state=running --no-pager 2>/dev/null \
+            | head -40 \
+            || echo "(no --user manager for this UID — runner likely runs as system service)"
+          echo "=== --user units with Restart= (risk of crash-loop) ==="
+          for unit in $(systemctl --user list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}'); do
+            r=$(systemctl --user show "$unit" -p Restart --value 2>/dev/null || echo "")
+            if [ -n "$r" ] && [ "$r" != "no" ]; then
+              rs=$(systemctl --user show "$unit" -p RestartSec --value 2>/dev/null || echo "?")
+              slb=$(systemctl --user show "$unit" -p StartLimitBurst --value 2>/dev/null || echo "?")
+              sli=$(systemctl --user show "$unit" -p StartLimitIntervalUSec --value 2>/dev/null || echo "?")
+              printf "  %s  Restart=%s RestartSec=%s StartLimitBurst=%s StartLimitInterval=%s\n" \
+                "$unit" "$r" "$rs" "$slb" "$sli"
+            fi
+          done
+
+      - name: Disk + tmp usage
+        run: |
+          echo "=== Filesystems ==="
+          df -h -x tmpfs -x devtmpfs 2>/dev/null | head -15
+          echo "=== /tmp size + Bun .ff*.node count ==="
+          du -sh /tmp 2>/dev/null || true
+          find /tmp -maxdepth 1 -name '.ff*.node' 2>/dev/null | wc -l | xargs printf "  .ff*.node files: %s\n"
+          echo "=== Docker disk ==="
+          docker system df 2>/dev/null || echo "(docker not reachable)"
+
+      - name: Obsidian install state
+        run: |
+          echo "=== ~/Applications ==="
+          ls -la "$HOME/Applications" 2>/dev/null | grep -iE 'obsidian|extracted' || echo "(no Obsidian artifacts)"
+          if [ -f "$HOME/Applications/.obsidian-version" ]; then
+            echo "Installed Obsidian: $(cat "$HOME/Applications/.obsidian-version")"
+          fi
+          echo "--- Stray AppImage FUSE mount-points (should be 0 between jobs) ---"
+          mount | grep -i obsidian || echo "  none"
+
+      - name: Runner agents on this host
+        run: |
+          echo "=== Active runner processes ==="
+          pgrep -af 'Runner.Listener|Runner.Worker' 2>/dev/null || echo "(none — this output should never print, runner is executing this!)"
+          echo "=== Runner work dirs ==="
+          ls -ld "$HOME"/actions-runner* 2>/dev/null || echo "(no actions-runner* dirs in HOME)"
