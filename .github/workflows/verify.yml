@@ -2467,16 +2467,31 @@ jobs:
             --secret "id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" \
             .
 
+      # Lift SENTRY_AUTH_TOKEN into a step env so the next two steps
+      # can gate on `env.HAS_TOKEN`. GH Actions doesn't allow the
+      # `secrets` context in step-level `if:` conditions, so the
+      # env-indirection is the documented workaround.
+      - name: Detect Sentry auth token
+        id: sentry-token
+        env:
+          TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SENTRY_AUTH_TOKEN unset — skipping Sentry release steps. Stack traces will ship un-symbolicated until the secret lands."
+          fi
+
       # Create + finalize a Sentry release tagged with the commit SHA.
       # action-release uploads no source maps itself (the Vite plugin
       # in the frontend stage of Dockerfile already pushed them under
       # the same release name) — it just registers the release in
       # Sentry's UI and associates commits, so the "Releases" view
       # shows what's running and the "Suspect Commits" feature can
-      # finger a likely-culprit commit on a new error. Self-disables
-      # when SENTRY_AUTH_TOKEN is empty.
+      # finger a likely-culprit commit on a new error.
       - name: Sentry frontend release
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        if: steps.sentry-token.outputs.has_token == 'true'
         uses: getsentry/action-release@v3
         env:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
@@ -2489,7 +2504,7 @@ jobs:
           sourcemaps: ''
 
       - name: Sentry backend release
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        if: steps.sentry-token.outputs.has_token == 'true'
         uses: getsentry/action-release@v3
         env:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
