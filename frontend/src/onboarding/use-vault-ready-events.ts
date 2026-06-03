@@ -1,0 +1,81 @@
+import { useEffect, useState } from 'react'
+import { Socket } from 'phoenix'
+import { useAuthAdapter } from '../auth/use-auth-adapter'
+
+interface State {
+  vaultCreated: boolean
+  vaultPopulated: boolean
+  vaultId: number | null
+}
+
+const INITIAL: State = { vaultCreated: false, vaultPopulated: false, vaultId: null }
+
+interface Options {
+  userId: number | null | undefined
+  enabled: boolean
+}
+
+/**
+ * Subscribes to `user:{id}` for `vault_created` and `vault_populated`
+ * broadcasts. Used by the FTUX vault page to wait on the Obsidian
+ * plugin's first sign-in + first sync, then auto-transition off the
+ * install-instructions screen.
+ *
+ * Returns a flat state shape so the page can render distinct copy for
+ * each milestone ("Install the plugin" → "Vault detected, syncing…" →
+ * navigate). Opens its own socket — it doesn't piggyback on the per-vault
+ * sync socket because that one is only live AFTER a vault exists.
+ */
+export function useVaultReadyEvents({ userId, enabled }: Options): State {
+  const { getToken } = useAuthAdapter()
+  const [state, setState] = useState<State>(INITIAL)
+
+  useEffect(() => {
+    if (!enabled || userId == null) return
+
+    let socket: Socket | null = null
+    let cancelled = false
+
+    async function connect() {
+      const token = await getToken()
+      if (cancelled || !token) return
+
+      socket = new Socket('/socket', { params: { token } })
+      socket.connect()
+
+      const channel = socket.channel(`user:${userId}`)
+
+      channel.on('vault_created', (payload: { vault_id: number }) => {
+        setState((prev) => ({
+          ...prev,
+          vaultCreated: true,
+          vaultId: prev.vaultId ?? payload.vault_id,
+        }))
+      })
+
+      channel.on('vault_populated', (payload: { vault_id: number }) => {
+        setState((prev) => ({
+          ...prev,
+          vaultCreated: true,
+          vaultPopulated: true,
+          vaultId: prev.vaultId ?? payload.vault_id,
+        }))
+      })
+
+      channel.join().receive('error', (resp) => {
+        console.error('user channel join failed', resp)
+      })
+    }
+
+    connect()
+
+    return () => {
+      cancelled = true
+      if (socket) {
+        socket.disconnect()
+      }
+    }
+  }, [userId, enabled, getToken])
+
+  return state
+}

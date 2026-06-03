@@ -30,6 +30,7 @@ defmodule EngramWeb.OnboardingController do
   # Drop profile from the wire until the user has actually saved one — keeps
   # the questionnaire-incomplete payload identical to its pre-profile shape.
   defp reject_empty_profile(%{profile: nil} = s), do: Map.delete(s, :profile)
+
   defp reject_empty_profile(%{profile: profile} = s) when map_size(profile) == 0,
     do: Map.delete(s, :profile)
 

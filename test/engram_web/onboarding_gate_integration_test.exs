@@ -51,6 +51,8 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   test "GET /api/folders returns 200 after onboarding completes", %{conn: conn, user: user} do
     {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
+    # Setup already inserts a vault — pair with uses_obsidian=false so the
+    # new vault gate sees has_vault=true and lets the request through.
     {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
     conn = get(conn, "/api/folders")

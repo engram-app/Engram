@@ -13,6 +13,7 @@ defmodule Engram.Onboarding do
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
+  alias Engram.Vaults
 
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
@@ -153,7 +154,8 @@ defmodule Engram.Onboarding do
       subscription_ok = Billing.active?(user)
       profile = current_profile(user)
       profile_complete = profile_complete?(profile)
-      next = next_step(terms_ok, subscription_ok, profile_complete)
+      has_vault = Vaults.has_vault?(user)
+      next = next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
 
       %{
         enabled: true,
@@ -161,6 +163,7 @@ defmodule Engram.Onboarding do
         subscription_ok: subscription_ok,
         profile_complete: profile_complete,
         profile: profile,
+        has_vault: has_vault,
         current_tos_version: current_tos,
         current_privacy_version: current_privacy,
         terms_notice: notice(@terms_document, current_tos, accepted_tos),
@@ -272,8 +275,23 @@ defmodule Engram.Onboarding do
     |> Repo.one(skip_tenant_check: true)
   end
 
-  defp next_step(false, _, _), do: :agreement
-  defp next_step(true, false, _), do: :billing
-  defp next_step(true, true, false), do: :profile
-  defp next_step(true, true, true), do: :done
+  defp next_step(false, _, _, _, _), do: :agreement
+  defp next_step(true, false, _, _, _), do: :billing
+  defp next_step(true, true, false, _, _), do: :profile
+
+  defp next_step(true, true, true, profile, has_vault) do
+    # uses_obsidian=true short-circuits past the vault gate: the plugin's
+    # OAuth flow creates the vault on first sign-in, so we don't block the
+    # dashboard waiting for it. Fresh-path users MUST land on /onboard/vault
+    # to name + create a vault (otherwise they hit an empty dashboard with
+    # no notes).
+    cond do
+      profile_uses_obsidian?(profile) -> :done
+      has_vault -> :done
+      true -> :vault
+    end
+  end
+
+  defp profile_uses_obsidian?(%{"uses_obsidian" => true}), do: true
+  defp profile_uses_obsidian?(_), do: false
 end

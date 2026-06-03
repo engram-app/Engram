@@ -4,21 +4,17 @@ import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import OnboardProfilePage from './onboard-profile-page'
 
-const { mutate, navigate, createVaultMutate, vaultsRef } = vi.hoisted(() => ({
+const { mutate, navigate } = vi.hoisted(() => ({
   mutate: vi.fn().mockResolvedValue({
     uses_obsidian: false,
     tools: ['claude'],
     completed_at: 'now',
   }),
   navigate: vi.fn(),
-  createVaultMutate: vi.fn().mockResolvedValue({ vault: { id: 1, name: 'My Vault' } }),
-  vaultsRef: { current: [] as Array<{ id: number; name: string }> },
 }))
 
 vi.mock('../api/queries', () => ({
   useSetOnboardingProfile: () => ({ mutateAsync: mutate, isPending: false, error: null }),
-  useCreateVault: () => ({ mutateAsync: createVaultMutate, isPending: false }),
-  useVaults: () => ({ data: vaultsRef.current }),
 }))
 
 vi.mock('react-router', async () => {
@@ -40,9 +36,7 @@ function renderPage() {
 describe('OnboardProfilePage', () => {
   beforeEach(() => {
     mutate.mockClear()
-    createVaultMutate.mockClear()
     navigate.mockClear()
-    vaultsRef.current = []
   })
 
   it('starts on the Obsidian question', () => {
@@ -59,56 +53,25 @@ describe('OnboardProfilePage', () => {
   it('disables Take me to my vault until at least one tool is selected', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /starting fresh/i }))
-    const submit = screen.getByRole('button', { name: /take me to my vault/i })
+    const submit = screen.getByRole('button', { name: /continue/i })
     expect(submit).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /claude code/i }))
     expect(submit).not.toBeDisabled()
   })
 
-  it('submits the selected uses_obsidian + tools and navigates home', async () => {
+  it('submits selected uses_obsidian + tools, then routes to /onboard/vault', async () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /already use obsidian/i }))
     fireEvent.click(screen.getByRole('checkbox', { name: /^claude \(/i }))
     fireEvent.click(screen.getByRole('checkbox', { name: /cursor/i }))
-    fireEvent.click(screen.getByRole('button', { name: /take me to my vault/i }))
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
 
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
     expect(mutate).toHaveBeenCalledWith({
       uses_obsidian: true,
       tools: ['claude', 'cursor'],
     })
-    expect(navigate).toHaveBeenCalledWith('/', { replace: true })
-  })
-
-  it('auto-creates "My Vault" on submit when uses_obsidian=false and no vaults exist', async () => {
-    renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /starting fresh/i }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /web app/i }))
-    fireEvent.click(screen.getByRole('button', { name: /take me to my vault/i }))
-
-    await waitFor(() => expect(createVaultMutate).toHaveBeenCalledTimes(1))
-    expect(createVaultMutate).toHaveBeenCalledWith({ name: 'My Vault' })
-  })
-
-  it('does NOT create a vault when uses_obsidian=true (plugin will create it)', async () => {
-    renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /already use obsidian/i }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /^claude \(/i }))
-    fireEvent.click(screen.getByRole('button', { name: /take me to my vault/i }))
-
-    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
-    expect(createVaultMutate).not.toHaveBeenCalled()
-  })
-
-  it('does NOT create a vault when one already exists, even if uses_obsidian=false', async () => {
-    vaultsRef.current = [{ id: 7, name: 'Existing' }]
-    renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /starting fresh/i }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /web app/i }))
-    fireEvent.click(screen.getByRole('button', { name: /take me to my vault/i }))
-
-    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
-    expect(createVaultMutate).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith('/onboard/vault', { replace: true })
   })
 
   it('Back button on screen 2 returns to screen 1', () => {

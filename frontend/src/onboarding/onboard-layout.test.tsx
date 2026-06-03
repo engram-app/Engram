@@ -20,6 +20,8 @@ function renderAt(path: string) {
         <Route element={<OnboardLayout />}>
           <Route path="/onboard/agreement" element={<p>agreement step</p>} />
           <Route path="/onboard/billing" element={<p>billing step</p>} />
+          <Route path="/onboard/profile" element={<p>profile step</p>} />
+          <Route path="/onboard/vault" element={<p>vault step</p>} />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -27,11 +29,25 @@ function renderAt(path: string) {
 }
 
 describe('OnboardLayout', () => {
-  it('shows the Engram wordmark and the current step', () => {
+  it('numbers each step 1-of-4 through 4-of-4 based on pathname', () => {
+    renderAt('/onboard/agreement')
+    expect(screen.getByText(/step 1 of 4/i)).toBeInTheDocument()
+  })
+
+  it('shows step 2 of 4 on billing', () => {
     renderAt('/onboard/billing')
-    expect(screen.getByText('Engram')).toBeInTheDocument()
-    expect(screen.getByText(/step 2 of 2/i)).toBeInTheDocument()
+    expect(screen.getByText(/step 2 of 4/i)).toBeInTheDocument()
     expect(screen.getByText('billing step')).toBeInTheDocument()
+  })
+
+  it('shows step 3 of 4 on profile', () => {
+    renderAt('/onboard/profile')
+    expect(screen.getByText(/step 3 of 4/i)).toBeInTheDocument()
+  })
+
+  it('shows step 4 of 4 on vault', () => {
+    renderAt('/onboard/vault')
+    expect(screen.getByText(/step 4 of 4/i)).toBeInTheDocument()
   })
 
   it('signs the user out mid-flow', () => {

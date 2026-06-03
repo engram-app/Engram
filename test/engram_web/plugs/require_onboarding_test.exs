@@ -76,6 +76,30 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert body["missing"] == ["profile", "terms"]
   end
 
+  test "halts 403 with missing=[vault] when fresh-path profile is set but no vault",
+       %{conn: conn} do
+    user = insert(:user)
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    insert(:subscription, user: user, status: "trialing")
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    assert conn.halted
+    assert conn.status == 403
+    body = Phoenix.ConnTest.json_response(conn, 403)
+    assert body["missing"] == ["vault"]
+    assert body["next_step"] == "vault"
+  end
+
+  test "passes through for obsidian users without a vault (plugin creates it)",
+       %{conn: conn} do
+    user = insert(:user)
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    insert(:subscription, user: user, status: "trialing")
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    refute conn.halted
+  end
+
   test "halts 403 with missing=[profile] when terms+subscription ok but profile incomplete",
        %{conn: conn} do
     user = insert(:user)
@@ -89,12 +113,13 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert body["next_step"] == "profile"
   end
 
-  test "passes through when all three gates (terms+subscription+profile) are satisfied",
+  test "passes through when fresh-path profile is set AND a vault exists",
        %{conn: conn} do
     user = insert(:user)
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+    {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
   end

@@ -82,6 +82,10 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          # FTUX vault page listens for this — fires when an empty vault
+          # gets its first note (typical case: Obsidian plugin completes
+          # its first sync push). `prev_hash == nil` ⇒ insert path.
+          if prev_hash == nil, do: maybe_broadcast_vault_populated(user, vault)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -816,6 +820,31 @@ defmodule Engram.Notes do
   end
 
   @spec broadcast_change(integer(), integer(), String.t(), String.t(), Note.t()) :: :ok
+  # Emits `vault_populated` only when this insert took the vault from 0
+  # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
+  # is one-shot anyway, but avoiding extra channel traffic keeps the
+  # invariant readable from the server side too.
+  defp maybe_broadcast_vault_populated(user, vault) do
+    {:ok, count} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(
+          from n in Note,
+            where: n.user_id == ^user.id and n.vault_id == ^vault.id,
+            select: count(n.id)
+        )
+      end)
+
+    if count == 1 do
+      EngramWeb.Endpoint.broadcast(
+        "user:#{user.id}",
+        "vault_populated",
+        %{vault_id: vault.id}
+      )
+    end
+
+    :ok
+  end
+
   defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do
     _ =
       EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{

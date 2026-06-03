@@ -1,10 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import {
-  useCreateVault,
-  useSetOnboardingProfile,
-  useVaults,
-} from '../api/queries'
+import { useSetOnboardingProfile } from '../api/queries'
 import { Checkbox } from '@/components/ui/checkbox'
 import AuthPanel from '@/layout/auth-panel'
 import { heading, selectableRow } from '@/lib/ui-classes'
@@ -15,8 +11,6 @@ type Screen = 'obsidian' | 'tools'
 export default function OnboardProfilePage() {
   const navigate = useNavigate()
   const { mutateAsync, isPending, error } = useSetOnboardingProfile()
-  const createVault = useCreateVault()
-  const { data: vaults } = useVaults()
   const [screen, setScreen] = useState<Screen>('obsidian')
   const [usesObsidian, setUsesObsidian] = useState<boolean | null>(null)
   const [tools, setTools] = useState<Set<string>>(new Set())
@@ -37,20 +31,9 @@ export default function OnboardProfilePage() {
   async function submit() {
     if (usesObsidian == null || tools.size === 0) return
     await mutateAsync({ uses_obsidian: usesObsidian, tools: Array.from(tools) })
-
-    // "Starting fresh" branch → ensure the user lands on a real vault, not
-    // an empty CreateFirstVaultModal that would re-pop on the dashboard.
-    // Obsidian users get their vault on first plugin sync, so skip here.
-    const noVaults = (vaults ?? []).length === 0
-    if (!usesObsidian && noVaults) {
-      try {
-        await createVault.mutateAsync({ name: 'My Vault' })
-      } catch {
-        // Non-fatal: the existing first-vault flow on the dashboard will
-        // recover. Don't block the user on a transient vault-create error.
-      }
-    }
-    navigate('/', { replace: true })
+    // Always route to the vault step (Step 4). Obsidian users see install
+    // instructions + socket-driven wait; fresh users name their vault.
+    navigate('/onboard/vault', { replace: true })
   }
 
   if (screen === 'obsidian') {
@@ -115,7 +98,7 @@ export default function OnboardProfilePage() {
           disabled={!canContinue}
           className="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isPending ? 'Saving…' : 'Take me to my vault'}
+          {isPending ? 'Saving…' : 'Continue'}
         </button>
       </div>
     </AuthPanel>

@@ -251,9 +251,14 @@ export interface OnboardingStatus {
   // Echoed back once `set_profile/2` has run — drives the personalized
   // setup cards on the dashboard. Absent until the questionnaire is done.
   profile?: OnboardingProfile
+  // True when at least one non-deleted vault exists. The fresh-start
+  // onboarding path (uses_obsidian=false) gates `next_step: "vault"` on
+  // this; Obsidian users short-circuit past the gate (plugin creates the
+  // vault on first OAuth sign-in).
+  has_vault?: boolean
   current_tos_version?: string
   current_privacy_version?: string
-  next_step: 'agreement' | 'billing' | 'profile' | 'done'
+  next_step: 'agreement' | 'billing' | 'profile' | 'vault' | 'done'
 }
 
 export interface OnboardingProfile {

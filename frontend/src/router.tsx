@@ -25,6 +25,7 @@ import OnboardRedirect from './onboarding/onboard-redirect'
 import AgreementPage from './onboarding/agreement-page'
 import OnboardBillingPage from './onboarding/onboard-billing-page'
 import OnboardProfilePage from './onboarding/onboard-profile-page'
+import OnboardVaultPage from './onboarding/onboard-vault-page'
 
 // Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
 // stays out of the main chunk for local self-host builds.
@@ -57,6 +58,7 @@ export const router = createBrowserRouter(
             { path: 'agreement', element: <AgreementPage /> },
             { path: 'billing', element: <OnboardBillingPage /> },
             { path: 'profile', element: <OnboardProfilePage /> },
+            { path: 'vault', element: <OnboardVaultPage /> },
           ],
         },
 
