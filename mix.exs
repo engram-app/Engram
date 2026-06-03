@@ -101,6 +101,10 @@ defmodule Engram.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
 
+      # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
+      # and self-host)
+      {:sentry, "~> 10.0"},
+
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},
       {:ex_aws_s3, "~> 2.5"},

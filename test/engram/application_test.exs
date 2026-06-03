@@ -67,4 +67,25 @@ defmodule Engram.ApplicationTest do
              "BootCanaryGuard must be wired as a supervisor child via {Module, :start_link, _}."
     end
   end
+
+  describe "sentry logger handler" do
+    test ":engram_sentry handler is attached after application boot" do
+      # Regression guard against silently dropping the Sentry attachment —
+      # without the :engram_sentry handler, errors never reach Sentry even
+      # when SENTRY_DSN is set. The handler is a no-op when :sentry has no
+      # DSN (test env), so attaching is safe everywhere.
+      ids =
+        :logger.get_handler_config()
+        |> Enum.map(fn %{id: id} -> id end)
+
+      assert :engram_sentry in ids,
+             "Engram.Application.start/2 must add the :engram_sentry logger handler " <>
+               "(see attach_sentry_logger_handler/0). Got handlers: #{inspect(ids)}"
+    end
+
+    test "handler module is Sentry.LoggerHandler" do
+      assert {:ok, %{module: Sentry.LoggerHandler}} =
+               :logger.get_handler_config(:engram_sentry)
+    end
+  end
 end
