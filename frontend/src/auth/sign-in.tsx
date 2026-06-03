@@ -7,15 +7,7 @@ import { safeReturnTo } from './safe-return-to'
 
 const isClerk = config.authProvider === 'clerk'
 
-const ClerkSignIn = isClerk
-  ? lazy(() =>
-      import('@clerk/react').then((mod) => ({
-        default: ({ returnTo }: { returnTo: string }) => (
-          <mod.SignIn routing="hash" forceRedirectUrl={returnTo} />
-        ),
-      })),
-    )
-  : null
+const ClerkSignIn = isClerk ? lazy(() => import('./clerk-sign-in')) : null
 
 const LocalSignIn = lazy(() => import('./local-sign-in'))
 
