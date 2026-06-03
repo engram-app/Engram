@@ -2332,3 +2332,117 @@ jobs:
           PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
         run: |
           gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
+
+  # Build + push the prod image to ECR (folded from build-ecr.yml).
+  # Tagged `sha-<7chars>` (deterministic deploy handle) plus a `v<X.Y.Z>`
+  # tag when HEAD has a `v*` annotated git tag (marketing/audit milestone —
+  # NOT `release-v*`, that's the deploy trigger). Image lives in ECR until
+  # an operator pushes a `release-v*` tag, at which point deploy-prod.yml
+  # opens an infra PR rewriting the prod image tag.
+  #
+  # Gate matches build-and-publish-image: ci-green OR cache-hit-both, so a
+  # TF-driven push to .github/CODEOWNERS (outside BACKEND_HASH inputs)
+  # doesn't block ECR builds.
+  build-and-push-ecr:
+    if: |
+      always()
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
+    needs: [fingerprint, ci]
+    runs-on: [self-hosted, linux, x64, isolated]
+    # Pre-fold (build-ecr.yml), this was workflow-level concurrency. Job-level
+    # preserves the "don't cancel an in-flight push — every main commit gets
+    # its own sha-tagged image" semantic; lifecycle policy in TF (ecr.tf) caps
+    # tagged images at 20 + expires untagged after 7 days.
+    concurrency:
+      group: build-ecr-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write  # required for aws-actions/configure-aws-credentials OIDC
+      contents: read
+    steps:
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          # See comment in e2e-clerk's "Pre-cleanup stale resources" step.
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need tags for git describe
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          echo "sha=sha-$SHA" >> "$GITHUB_OUTPUT"
+          # `v*` exact-match tag → add as a second image tag.
+          # Ignore `release-v*` (that's the deploy trigger, not an image marker).
+          if VTAG=$(git describe --tags --exact-match 2>/dev/null) && [[ "$VTAG" =~ ^v[0-9] ]]; then
+            echo "vtag=$VTAG" >> "$GITHUB_OUTPUT"
+            echo "Tagging with: sha-$SHA, $VTAG"
+          else
+            echo "Tagging with: sha-$SHA"
+          fi
+
+      - name: Install AWS CLI v2 (idempotent)
+        # Self-hosted runner pool doesn't ship awscli + the runner user has no
+        # passwordless sudo. Install into $HOME/.aws-cli (userspace) and add
+        # the bin dir to GITHUB_PATH every run.
+        #
+        # The `[ ! -x "$BIN" ]` path-based check is more reliable than
+        # `command -v aws` — GITHUB_PATH additions don't persist across runs,
+        # so a PATH-shaped check fails even on a runner where awscli is
+        # already present at the expected $HOME/.aws-cli path.
+        #
+        # `--update` makes `aws/install` idempotent even when an existing
+        # install is present (otherwise it errors with "Found preexisting AWS
+        # CLI installation"). The path check above keeps the fast path;
+        # --update is the safety net for race conditions.
+        run: |
+          BIN="$HOME/.aws-cli/bin/aws"
+          if [ ! -x "$BIN" ]; then
+            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            rm -rf /tmp/awscli
+            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
+            /tmp/awscli/aws/install \
+              --install-dir "$HOME/.aws-cli" \
+              --bin-dir "$HOME/.aws-cli/bin" \
+              --update
+            rm -rf /tmp/awscliv2.zip /tmp/awscli
+          fi
+          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
+          "$BIN" --version
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin \
+              "${{ vars.AWS_ECR_REPOSITORY }}"
+
+      - name: Build & push
+        env:
+          REPO: ${{ vars.AWS_ECR_REPOSITORY }}
+          SHA_TAG: ${{ steps.tags.outputs.sha }}
+          VTAG: ${{ steps.tags.outputs.vtag }}
+          # Plain progress writer — see ci.yml prebuild-ci-image for the
+          # docker/buildx race rationale (#334).
+          BUILDKIT_PROGRESS: plain
+        run: |
+          TAGS=(--tag "$REPO:$SHA_TAG")
+          if [ -n "$VTAG" ]; then
+            TAGS+=(--tag "$REPO:$VTAG")
+          fi
+          docker buildx build \
+            "${TAGS[@]}" \
+            --push \
+            .
