@@ -102,6 +102,14 @@ defmodule EngramWeb.Router do
     get "/health/deep", HealthController, :deep
   end
 
+  # Full dependency matrix for humans + Grafana. Admin-gated so the
+  # response (which names every dep + its status) is not a public
+  # information leak. NOT used by ALB or container HCs.
+  scope "/api", EngramWeb do
+    pipe_through [:api, EngramWeb.Plugs.Auth, :require_admin]
+    get "/health/diagnostics", HealthController, :diagnostics
+  end
+
   scope "/api", EngramWeb do
     # Device flow — unauthenticated, rate limited
     pipe_through [:api, :rate_limit_auth]
