@@ -171,13 +171,23 @@ jobs:
           # `git ls-tree -r HEAD -- <paths>` emits `<mode> <type> <sha>\t<path>`
           # per file. Hashing this is content-stable across rebases/squashes.
           # Includes the workflow itself so any CI change forces a full run.
-          BACKEND_HASH=$(git ls-tree -r HEAD -- \
-            lib priv config test frontend \
-            Dockerfile entrypoint.sh \
-            mix.exs mix.lock \
-            docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
-            .github/workflows/ci.yml \
-            | sha256sum | cut -d' ' -f1)
+          #
+          # mix.exs is hashed SEPARATELY with the version line stripped, so a
+          # pure version bump doesn't invalidate the cache. `version-check`
+          # still validates the bump on every branch push (not gated on
+          # cache-hit), and `build-and-publish-image` keys its skip-or-build
+          # decision on whether the new image tag already exists in GHCR —
+          # version bump → new tag → fresh image, regardless of cache state.
+          MIX_EXS_NO_VERSION=$(grep -vE '^[[:space:]]*version: "[0-9]+\.[0-9]+\.[0-9]+"' mix.exs | sha256sum | cut -d' ' -f1)
+          BACKEND_HASH=$({
+            git ls-tree -r HEAD -- \
+              lib priv config test frontend \
+              Dockerfile entrypoint.sh \
+              mix.lock \
+              docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
+              .github/workflows/ci.yml
+            echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
+          } | sha256sum | cut -d' ' -f1)
           # The e2e harness tree (helpers, fixtures, tests). Including it in
           # the e2e hash means an e2e-only change (test fix, helper tweak)
           # invalidates the e2e cache and forces e2e-clerk to actually run
