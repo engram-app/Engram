@@ -1299,6 +1299,262 @@ jobs:
           mkdir -p priv/plts
           mix dialyzer --quiet
 
+  # ── Hygiene checks (folded from lint.yml + frontend-audit.yml) ──
+  # Run on every trigger except cross-repo plugin dispatch (plugin
+  # can't regress backend hygiene). NOT gated on backend-cache-hit
+  # because root CLAUDE.md / TODO.md / repo-root markdown live
+  # outside the BACKEND_HASH input set — gating on cache-hit would
+  # let drift slip through on pure-doc pushes.
+  #
+  # These jobs are intentionally NOT added to the `ci` aggregator's
+  # `needs:` — preserves their pre-fold "informational, not required"
+  # protection-rule semantic. Promote to required by adding to the
+  # aggregator + updating ruleset 16309248.
+
+  todo-drift:
+    name: TODO drift
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Forbid TODO*.md files
+        run: |
+          set -euo pipefail
+          # TODOs belong in GitHub Issues, not markdown checklists.
+          # Audit context: 2026-05-22 doc-audit migrated 34 TODOs out of MD scrum-style.
+          # See [[project_doc_audit_migration]] memory + project_workspace_maturity_wave.
+          matches=$(find . -type f \( -name 'TODO.md' -o -name 'TODO-*.md' \) -not -path './.git/*' || true)
+          if [ -n "$matches" ]; then
+            echo "::error::Found TODO*.md files. File TODOs as GitHub Issues instead:"
+            echo "$matches"
+            exit 1
+          fi
+          echo "OK — no TODO*.md files."
+
+      - name: Forbid checkbox-as-TODO in repo-root markdown
+        run: |
+          set -euo pipefail
+          # Block `^- [ ]` and `^- [x]` checkbox patterns in repo-root markdown
+          # (CLAUDE.md, README.md, etc.). Legitimate checklist locations
+          # (runbooks under docs/context/, plans+specs under docs/superpowers/)
+          # are intentionally not linted — they use checkboxes as a format.
+          mapfile -t files < <(find . -maxdepth 1 -name '*.md' -type f)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "OK — no root markdown files to check."
+            exit 0
+          fi
+          violations=$(grep -lE '^- \[[ x]\]' "${files[@]}" 2>/dev/null || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Found checkbox-as-TODO patterns in root markdown. File issues or move to a runbook/plan instead:"
+            echo "$violations"
+            grep -nE '^- \[[ x]\]' $violations || true
+            exit 1
+          fi
+          echo "OK — no checkbox-as-TODO in root markdown."
+
+  claude-md-staleness:
+    name: CLAUDE.md staleness
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Scan CLAUDE.md files for known-stale facts
+        run: |
+          set -euo pipefail
+          # CLAUDE.md should reflect CURRENT product state. Patterns below are
+          # known-dead facts per workspace memory entries:
+          #   - dead domains  → [[project_domain]]
+          #   - dead pricing  → [[project_pricing_model]] (v2 reanchored $10/$20)
+          #   - dead org refs → [[project_engram_app_org_complete]]
+          # Stripe references are intentionally NOT linted — too noisy
+          # against legitimate "Stripe removed" historical context.
+          mapfile -t files < <(find . -name 'CLAUDE.md' -type f -not -path './.git/*')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "OK — no CLAUDE.md files in repo."
+            exit 0
+          fi
+          echo "Scanning: ${files[*]}"
+
+          patterns=(
+            'engram-sync\.app'
+            'engram\.ras\.band'
+            '\bengram\.com\b'
+            'Starter[^\n]{0,30}\$5\b'
+            'Pro[^\n]{0,30}\$10\b'
+            'Starter[^\n]{0,30}\$6\b'
+            'Pro[^\n]{0,30}\$12\b'
+            'Rasbandit/[Ee]ngram'
+          )
+
+          fail=0
+          for p in "${patterns[@]}"; do
+            hits=$(grep -nPH "$p" "${files[@]}" 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "::error::Stale pattern '${p}' found in CLAUDE.md:"
+              echo "$hits"
+              fail=1
+            fi
+          done
+          if [ $fail -eq 1 ]; then
+            echo
+            echo "Replace with current state per workspace memory:"
+            echo "  - Domains: app.engram.page (saas), engram.ax (selfhost)"
+            echo "  - Pricing: Free / Starter \$10 / Pro \$20 (v2 reanchored)"
+            echo "  - Org:     engram-app/<repo>"
+            exit 1
+          fi
+          echo "OK — no known-stale facts in CLAUDE.md files."
+
+  migrations-immutable:
+    name: migrations immutable
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    # Block in-place edits to already-applied migrations. Triggering incident:
+    # 2026-05-30 PR #368 edited migration 20260530000002 in place from :inet
+    # to :text after FastRaid prod had already run the :inet version, leaving
+    # prod's oauth_clients.first_ip column as inet while CI's fresh DB
+    # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
+    # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need history to diff against origin/main. depth=50 is plenty for
+          # PR-sized diffs and avoids the full clone cost.
+          fetch-depth: 50
+
+      - name: Check migrations are not modified in place
+        env:
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          # Genuine emergency bypass: PR carries the 'allow-migration-edit' label.
+          # Use only when fixing a migration that has NOT reached any deployed
+          # environment (rare; deliberately friction-y).
+          if echo "$PR_LABELS" | grep -q '"allow-migration-edit"'; then
+            echo "::notice::Bypass label 'allow-migration-edit' present — skipping immutable-migrations check."
+            exit 0
+          fi
+
+          # ci.yml fires on `push`, not `pull_request`, so the label check
+          # above is dead on most runs (github.event.pull_request is null).
+          # Fallback bypass via [allow-migration-edit] tag in the head
+          # commit message — same friction-y semantic, push-compatible.
+          if git log -1 --format=%B | grep -qF '[allow-migration-edit]'; then
+            echo "::notice::Bypass tag '[allow-migration-edit]' in HEAD commit message — skipping immutable-migrations check."
+            exit 0
+          fi
+
+          # ci.yml fires on `push` to feature branches and main, not on
+          # `pull_request`. The base ref to diff against is origin/main for
+          # any non-main branch; on main itself there's nothing to compare.
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main — nothing to check."
+            exit 0
+          fi
+
+          BASE_REF="main"
+          # Fail loud on fetch errors — silencing stderr would let a transient
+          # network failure produce a false-negative green run.
+          if ! git fetch origin "${BASE_REF}" --depth=50 >/dev/null; then
+            echo "::error::Failed to fetch base ref origin/${BASE_REF}"
+            exit 1
+          fi
+
+          failed=0
+          # --diff-filter=MTD catches modifications, type changes, and deletions.
+          # --no-renames disables git's default rename detection so a `git mv` of
+          # an already-applied migration decomposes into add+delete; the delete
+          # half then matches the filter and gets flagged. Without --no-renames,
+          # renames surface as status R and slip the check silently.
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if git cat-file -e "origin/${BASE_REF}:$file" 2>/dev/null; then
+              echo "::error file=$file::Migration was modified in place. Applied migrations are immutable — write a NEW migration to amend the schema. (Bypass with PR label 'allow-migration-edit'.)"
+              failed=1
+            fi
+          done < <(git diff --name-only --no-renames --diff-filter=MTD "origin/${BASE_REF}...HEAD" -- 'priv/repo/migrations/*.exs')
+
+          if [ "$failed" -eq 0 ]; then
+            echo "OK — no applied migrations modified in place."
+          fi
+          exit $failed
+
+  frontend-audit:
+    name: frontend audit
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    # Run `bun audit` against frontend/ on every CI trigger. Fail when any
+    # critical or high advisory affects a PRODUCTION dependency path. The
+    # --prod flag scopes to non-dev paths so a vuln deep under, say,
+    # pngquant-bin (build-time image tool) doesn't block PRs.
+    #
+    # Note: `bun audit --prod` (as of bun 1.3.11) still prints the full
+    # advisory header — including some parent paths that aren't production —
+    # because it groups by advisory rather than by resolved path. The jq
+    # filter below relies on the `severity` field, not the path list, so
+    # false-positive parents in the printout don't affect the gate.
+    #
+    # Path filter (from pre-fold frontend-audit.yml) is preserved via the
+    # guard step below: skip when neither frontend/package.json nor
+    # frontend/bun.lock changed vs origin/main. On main itself, run
+    # unconditionally (audits the just-merged state).
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need history to diff against origin/main in the guard step.
+          fetch-depth: 50
+
+      - name: Path-filter early-exit
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main — running audit unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Ensure base ref is available for the diff. Tolerate failure —
+          # if fetch fails, the diff will surface the error explicitly.
+          git fetch origin main --depth=50 >/dev/null 2>&1 || true
+          if git diff --quiet origin/main HEAD -- \
+                frontend/package.json frontend/bun.lock 2>/dev/null; then
+            echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Lockfile changed — running audit."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          bun-version: latest
+
+      - name: bun audit --prod
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          json=$(bun audit --prod --json 2>/dev/null || echo '{}')
+          echo "$json" | jq .
+
+          # Gate: any advisory with severity critical or high in --prod scope.
+          blocking=$(echo "$json" | jq '[
+            (.advisories // .vulnerabilities // [] | .. | objects | select(.severity?))
+            | select(.severity == "critical" or .severity == "high")
+          ] | length')
+
+          if [ "$blocking" -gt 0 ]; then
+            echo "::error::Found $blocking critical/high advisory in production deps."
+            echo "Run \`bun audit --prod\` locally for the full report."
+            exit 1
+          fi
+
+          echo "Prod audit clean (critical/high)."
+
   e2e-local:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
