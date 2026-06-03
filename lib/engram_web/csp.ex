@@ -76,7 +76,8 @@ defmodule EngramWeb.CSP do
     [
       clerk_directives(),
       paddle_directives(),
-      turnstile_directives()
+      turnstile_directives(),
+      cloudflare_insights_directives()
     ]
   end
 
@@ -175,6 +176,31 @@ defmodule EngramWeb.CSP do
     %{
       "script-src" => hosts,
       "frame-src" => hosts
+    }
+  end
+
+  # Cloudflare Web Analytics (cookieless, edge-injected).
+  #
+  # When the Cloudflare dashboard's Web Analytics toggle is on, the
+  # orange-cloud edge proxy injects a `<script src="https://static.
+  # cloudflareinsights.com/beacon.min.js/...">` tag into HTML responses
+  # — without ever touching the backend. The beacon then POSTs page-view
+  # events back to the same host, so CSP needs both `script-src` (load)
+  # and `connect-src` (telemetry POST).
+  #
+  # This is unconditionally on because (a) the source-of-truth is a CF
+  # dashboard toggle, not a backend env var, and (b) workspace memory
+  # [[project_observability_stack_plan]] and the cookie-audit decision
+  # [[cookie-audit-2026-05-24]] both rely on cookieless CF Insights
+  # working in prod as the foundation of the no-banner launch posture.
+  # Self-host operators who don't front their app with Cloudflare see
+  # no traffic to this host; the extra CSP entry is harmless dead air.
+  defp cloudflare_insights_directives do
+    hosts = ["https://static.cloudflareinsights.com"]
+
+    %{
+      "script-src" => hosts,
+      "connect-src" => hosts
     }
   end
 end

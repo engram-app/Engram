@@ -53,6 +53,22 @@ defmodule EngramWeb.CSPTest do
       assert connect_src(header) =~ "https://*.paddle.com"
       assert frame_src(header) =~ "https://*.paddle.com"
     end
+
+    test "always whitelists Cloudflare Web Analytics (edge-injected beacon)" do
+      # CF Web Analytics injects `<script src="https://static.cloudflareinsights.com/
+      # beacon.min.js/...">` at edge time when the dashboard toggle is on. The
+      # beacon also POSTs telemetry back to the same host, so it needs both
+      # script-src + connect-src. Without this allowlist, prod analytics breaks
+      # silently (no console error from the beacon itself — CSP blocks the script
+      # load before it can run). See workspace memory cookie-audit-2026-05-24
+      # for why this matters for the no-banner launch posture.
+      Application.put_env(:engram, :clerk_issuer, nil)
+
+      header = CSP.header()
+
+      assert script_src(header) =~ "https://static.cloudflareinsights.com"
+      assert connect_src(header) =~ "https://static.cloudflareinsights.com"
+    end
   end
 
   describe "Clerk integration — dev/test instance (CLERK_ISSUER under *.clerk.accounts.dev)" do
