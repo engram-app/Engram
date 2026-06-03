@@ -2437,15 +2437,84 @@ jobs:
           # Plain progress writer — see ci.yml prebuild-ci-image for the
           # docker/buildx race rationale (#334).
           BUILDKIT_PROGRESS: plain
+          # Sentry frontend wiring (no-op when SENTRY_* secrets unset).
+          # VITE_GIT_SHA is the 7-char tag from the step above without
+          # the `sha-` prefix so Sentry release names match the values
+          # passed to action-release below + to the runtime SDK's
+          # release option.
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_GIT_SHA: ${{ github.sha }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT_FRONTEND: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           TAGS=(--tag "$REPO:$SHA_TAG")
           if [ -n "$VTAG" ]; then
             TAGS+=(--tag "$REPO:$VTAG")
           fi
+          # --secret pipes SENTRY_AUTH_TOKEN to the build via a tmpfs
+          # mount, never written to image layers. The Vite plugin
+          # self-disables if the token isn't present, so an empty
+          # secret is a graceful no-op (degraded UX: stack traces
+          # ship un-symbolicated until the token lands).
           docker buildx build \
             "${TAGS[@]}" \
             --push \
+            --build-arg "VITE_SENTRY_DSN=${VITE_SENTRY_DSN}" \
+            --build-arg "VITE_GIT_SHA=${VITE_GIT_SHA}" \
+            --build-arg "SENTRY_ORG=${SENTRY_ORG}" \
+            --build-arg "SENTRY_PROJECT=${SENTRY_PROJECT_FRONTEND}" \
+            --secret "id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" \
             .
+
+      # Lift SENTRY_AUTH_TOKEN into a step env so the next two steps
+      # can gate on `env.HAS_TOKEN`. GH Actions doesn't allow the
+      # `secrets` context in step-level `if:` conditions, so the
+      # env-indirection is the documented workaround.
+      - name: Detect Sentry auth token
+        id: sentry-token
+        env:
+          TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SENTRY_AUTH_TOKEN unset — skipping Sentry release steps. Stack traces will ship un-symbolicated until the secret lands."
+          fi
+
+      # Create + finalize a Sentry release tagged with the commit SHA.
+      # action-release uploads no source maps itself (the Vite plugin
+      # in the frontend stage of Dockerfile already pushed them under
+      # the same release name) — it just registers the release in
+      # Sentry's UI and associates commits, so the "Releases" view
+      # shows what's running and the "Suspect Commits" feature can
+      # finger a likely-culprit commit on a new error.
+      - name: Sentry frontend release
+        if: steps.sentry-token.outputs.has_token == 'true'
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          environment: prod
+          version: ${{ github.sha }}
+          finalize: true
+          sourcemaps: ''
+
+      - name: Sentry backend release
+        if: steps.sentry-token.outputs.has_token == 'true'
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          environment: prod
+          version: ${{ github.sha }}
+          finalize: true
+          sourcemaps: ''
 
   # Submit the Hex SBOM to GitHub's dependency-submission API after merge.
   # GitHub's static mix.lock parser silently fails on this repo (verified
