@@ -9,19 +9,36 @@ Clerk Backend API docs: https://clerk.com/docs/reference/backend-api
 from __future__ import annotations
 
 import logging
+import random
 import time
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-# Clerk's POST /sessions endpoint exhibits eventual-consistency 404s vs the
-# user store: a user_id that GET /users/{id} returns happily can still
-# 404 from POST /sessions for a few hundred ms after creation. Retry
-# resource_not_found errors with exponential backoff. 5 attempts span
-# ~6s total, well above Clerk's observed lag window (<1s in practice).
+# Clerk's POST /sessions endpoint is eventually consistent vs POST /users:
+# a user_id Clerk just returned can 404 from POST /sessions for a while.
+# Observed window today (issue #193) is up to ~6s in degraded periods;
+# in normal operation it's sub-second.
+#
+# Strategy (revised after #193 reopened):
+#   - create_user() blocks until POST /sessions stops 404'ing (readiness
+#     probe). Concentrates the wait at one site instead of every caller
+#     racing the propagation.
+#   - _create_session_with_retry stays as a defensive backstop for the
+#     unlikely case where someone reuses an old user_id mid-flight, but
+#     its budget is tight — readiness was already proven upstream.
+_SESSION_READY_MAX_WAIT_SECONDS = 60.0
+_SESSION_READY_INITIAL_BACKOFF = 0.5
+_SESSION_READY_MAX_BACKOFF = 8.0
+
 _SESSION_CREATE_MAX_ATTEMPTS = 5
 _SESSION_CREATE_INITIAL_BACKOFF = 0.2
+
+
+class ClerkPropagationTimeout(RuntimeError):
+    """Raised when Clerk's POST /sessions still 404s the user after the
+    readiness probe's wall-clock budget."""
 
 
 class ClerkClient:
@@ -87,7 +104,67 @@ class ClerkClient:
         resp.raise_for_status()
         user_id = resp.json()["id"]
         logger.info("Created Clerk user %s (%s)", user_id, email)
+        # Block until Clerk's session endpoint can see this user. Without
+        # this, every downstream caller (create_session_token, JWT mint,
+        # etc.) races Clerk's propagation lag — see #193.
+        self._wait_until_session_ready(user_id)
         return user_id
+
+    def _wait_until_session_ready(self, user_id: str) -> None:
+        """Block until Clerk's POST /sessions stops 404'ing the given user.
+
+        Eventual consistency: a user just created via POST /users can be
+        invisible to POST /sessions for seconds (up to ~6s observed; #193).
+        This probe creates one Clerk session and discards it — once it
+        succeeds, the user is queryable from the session endpoint and
+        subsequent legitimate session creation will not race.
+
+        Raises ClerkPropagationTimeout when Clerk doesn't propagate
+        within _SESSION_READY_MAX_WAIT_SECONDS. Other errors (auth,
+        rate-limit, etc.) raise immediately — we only loop on the
+        specific 404 resource_not_found signal.
+        """
+        deadline = time.monotonic() + _SESSION_READY_MAX_WAIT_SECONDS
+        backoff = _SESSION_READY_INITIAL_BACKOFF
+        attempt = 0
+        while True:
+            attempt += 1
+            resp = self.session.post(
+                f"{self.base_url}/sessions",
+                json={"user_id": user_id},
+                timeout=10,
+            )
+            if resp.ok:
+                session_id = resp.json()["id"]
+                logger.info(
+                    "Clerk session-ready probe succeeded for %s on attempt %d (session %s discarded)",
+                    user_id, attempt, session_id,
+                )
+                return
+            if not (resp.status_code == 404 and self._is_resource_not_found(resp)):
+                logger.error(
+                    "Clerk session-ready probe failed (non-404): %s %s",
+                    resp.status_code, resp.text,
+                )
+                resp.raise_for_status()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ClerkPropagationTimeout(
+                    f"Clerk POST /sessions still 404 for user {user_id} after "
+                    f"{_SESSION_READY_MAX_WAIT_SECONDS}s ({attempt} attempts)"
+                )
+            # ±20% jitter avoids thundering-herd on Clerk when many tests
+            # provision users in parallel during a degraded window.
+            sleep_for = min(
+                backoff + random.uniform(-0.2 * backoff, 0.2 * backoff),
+                remaining,
+            )
+            logger.warning(
+                "Clerk session-ready probe 404 for %s (attempt %d, sleeping %.2fs, %.1fs remaining)",
+                user_id, attempt, sleep_for, remaining,
+            )
+            time.sleep(sleep_for)
+            backoff = min(backoff * 2, _SESSION_READY_MAX_BACKOFF)
 
     @staticmethod
     def _is_identifier_taken(resp: requests.Response) -> bool:

@@ -21,27 +21,16 @@ const USER_MENU = { role: 'button' as const, name: 'User menu' }
  * Sign in via Clerk Backend API ticket — bypasses form + bot detection entirely.
  * Creates a sign-in token server-side, then uses it client-side via strategy: 'ticket'.
  * Requires CLERK_SECRET_KEY env var (set in global-setup).
+ *
+ * No retry on "No user found" here — global-setup probes POST /sign_in_tokens
+ * until it stops 404'ing before writing .auth-state.json, so any 404 at this
+ * point indicates a real problem (user deleted mid-run, instance swap, etc.)
+ * and should surface immediately. See #193 + global-setup.ts waitUntilSignInReady.
  */
 async function clerkSignIn(page: Page, email: string) {
   // Navigate first so Clerk JS SDK loads on the page
   await page.goto('/sign-in/')
-  // Clerk user creation in global-setup is eventually consistent: the
-  // backend sign-in-token call here can briefly 404 the freshly-created user
-  // ("No user found with email") before replication settles. Retry a few
-  // times before giving up (issue #193); rethrow any other error immediately.
-  let lastErr: unknown
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await clerk.signIn({ page, emailAddress: email })
-      lastErr = undefined
-      break
-    } catch (err) {
-      if (!/No user found/i.test(String(err))) throw err
-      lastErr = err
-      await page.waitForTimeout(1_000)
-    }
-  }
-  if (lastErr) throw lastErr
+  await clerk.signIn({ page, emailAddress: email })
   await page.goto('/')
   await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
 }
