@@ -78,7 +78,8 @@ defmodule EngramWeb.CSP do
       paddle_directives(),
       turnstile_directives(),
       cloudflare_insights_directives(),
-      sentry_directives()
+      sentry_directives(),
+      posthog_directives()
     ]
   end
 
@@ -222,6 +223,27 @@ defmodule EngramWeb.CSP do
   # gains nothing from runtime gating.
   defp sentry_directives do
     hosts = ["https://*.ingest.sentry.io"]
+
+    %{
+      "connect-src" => hosts
+    }
+  end
+
+  # PostHog product analytics (browser SDK).
+  #
+  # SDK is bundled (no script-src host). Events POST to the project's
+  # regional host — `us.i.posthog.com` for US-hosted projects,
+  # `eu.i.posthog.com` for EU. The `.i.` subdomain is PostHog's
+  # documented ingest path; wildcard covers both regions without
+  # hard-coding which one this account uses (configured at build via
+  # VITE_POSTHOG_HOST).
+  #
+  # Same silent-failure trap as Sentry: without this `connect-src`
+  # entry, `posthog.capture(...)` looks like it succeeded — the SDK
+  # queues the event and the network POST returns blocked, swallowed
+  # by the fetch promise. No backend funnel data, no clue why.
+  defp posthog_directives do
+    hosts = ["https://*.i.posthog.com", "https://*.posthog.com"]
 
     %{
       "connect-src" => hosts

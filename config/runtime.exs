@@ -614,3 +614,15 @@ if dsn = System.get_env("SENTRY_DSN") do
     # ignore transaction telemetry entirely.
     traces_sample_rate: nil
 end
+
+# PostHog server-side capture (Engram.Observability.PostHog).
+# Same opt-in shape as Sentry: no-op when POSTHOG_API_KEY is unset,
+# so dev/test/self-host emit no telemetry and the wrapper module
+# short-circuits before any network call. distinct_id matches the
+# frontend's posthog.identify(clerk_user_id) so funnels join across
+# the user timeline.
+if key = System.get_env("POSTHOG_API_KEY") do
+  config :engram,
+    posthog_key: key,
+    posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
+end

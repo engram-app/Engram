@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import * as Sentry from '@sentry/react'
+import posthog from 'posthog-js'
 import { Toaster } from '@/components/ui/sonner'
 import { router } from './router'
 import { queryClient } from './api/query-client'
@@ -42,6 +43,28 @@ if (cfBeaconToken) {
   s.src = 'https://static.cloudflareinsights.com/beacon.min.js'
   s.setAttribute('data-cf-beacon', JSON.stringify({ token: cfBeaconToken }))
   document.head.appendChild(s)
+}
+
+// PostHog — product analytics. Cookieless by `persistence: 'memory'`
+// per [[reference_cookie_audit_2026_05_24]] so the no-banner launch
+// posture holds. Autocapture is OFF — explicit events only (see PR8)
+// is the single biggest cost lever on the free tier, per
+// [[project_observability_stack_plan]]. The identify call happens in
+// the Clerk auth provider as soon as the user resolves, NOT here —
+// firing it pre-auth would burn a permanent anonymous distinct_id.
+const posthogKey = import.meta.env.VITE_POSTHOG_KEY
+const posthogHost = import.meta.env.VITE_POSTHOG_HOST ?? 'https://us.i.posthog.com'
+if (posthogKey) {
+  posthog.init(posthogKey, {
+    api_host: posthogHost,
+    persistence: 'memory',
+    autocapture: false,
+    capture_pageview: false,
+    capture_pageleave: false,
+    disable_session_recording: true,
+    // Honor the browser's DNT signal as belt-and-suspenders.
+    respect_dnt: true,
+  })
 }
 
 const isClerk = config.authProvider === 'clerk'

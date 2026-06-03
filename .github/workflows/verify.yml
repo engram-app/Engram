@@ -2452,6 +2452,11 @@ jobs:
           # secret name is set to keep self-host bundles from shipping
           # the SaaS token.
           VITE_CF_BEACON_TOKEN: ${{ secrets.VITE_CF_BEACON_TOKEN }}
+          # PostHog product analytics — public project token (write-only
+          # event ingest, per-project). Host defaults to us.i.posthog.com
+          # in main.tsx if VITE_POSTHOG_HOST is unset.
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
         run: |
           TAGS=(--tag "$REPO:$SHA_TAG")
           if [ -n "$VTAG" ]; then
@@ -2470,6 +2475,8 @@ jobs:
             --build-arg "SENTRY_ORG=${SENTRY_ORG}" \
             --build-arg "SENTRY_PROJECT=${SENTRY_PROJECT_FRONTEND}" \
             --build-arg "VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN}" \
+            --build-arg "VITE_POSTHOG_KEY=${VITE_POSTHOG_KEY}" \
+            --build-arg "VITE_POSTHOG_HOST=${VITE_POSTHOG_HOST}" \
             --secret "id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" \
             .
 
