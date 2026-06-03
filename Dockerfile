@@ -11,13 +11,38 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 # ─── Frontend build ──────────────────────────────────────────────────────
 FROM oven/bun:1.3 AS frontend
 
+# Build-args propagated from CI for Sentry wiring. All optional; the
+# Sentry React SDK + Vite plugin no-op when their env vars are unset,
+# so a build without these (local `docker build`, self-host) still
+# works.
+#   VITE_SENTRY_DSN — baked into the bundle; turns on Sentry.init in
+#       the browser.
+#   VITE_GIT_SHA    — release tag used by Sentry to symbolicate stack
+#       traces against the right source-map upload.
+#   SENTRY_ORG / SENTRY_PROJECT — used by @sentry/vite-plugin to
+#       address the right project when uploading source maps.
+ARG VITE_SENTRY_DSN
+ARG VITE_GIT_SHA
+ARG SENTRY_ORG
+ARG SENTRY_PROJECT
+ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
+    VITE_GIT_SHA=${VITE_GIT_SHA} \
+    SENTRY_ORG=${SENTRY_ORG} \
+    SENTRY_PROJECT=${SENTRY_PROJECT}
+
 WORKDIR /frontend
 COPY frontend/package.json frontend/bun.lock ./
 # Bun global package cache survives across builds on self-hosted runners.
 RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-cache \
     bun install --frozen-lockfile
 COPY frontend/ ./
-RUN bun run build
+# `--mount=type=secret` is the leak-safe path for SENTRY_AUTH_TOKEN —
+# exposed as a tmpfs file readable only inside this RUN, never
+# persisted in image layers or `docker history`. The Vite plugin
+# self-disables if the token is missing, so this same `bun run build`
+# line is the no-op branch for builds without the secret.
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN \
+    bun run build
 
 # ─── Elixir build ────────────────────────────────────────────────────────
 FROM ${BUILDER_IMAGE} AS builder

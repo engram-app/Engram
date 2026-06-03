@@ -180,3 +180,51 @@ jobs:
               echo "- No PR opened (no diff — image already at this tag)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Notify Discord on success. "Deploy initiated" — not "deploy
+      # complete" — since the actual ECS rollout happens later in
+      # engram-infra's `terraform (prod)` apply (~3-5 min after the
+      # bot PR auto-merges). Complete-rollout notify is a future
+      # observability item (Tier 3); this catches the operator's
+      # "did the tag push do anything?" question. Silently no-ops
+      # when DISCORD_DEPLOY_WEBHOOK_URL is unset.
+      - name: Notify Discord (deploy initiated)
+        if: success() && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
+          RELEASE: ${{ steps.tags.outputs.release }}
+          IMAGE: ${{ steps.tags.outputs.image_tag }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.open-pr.outputs.pull-request-url }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            CONTENT="[DEPLOY-INITIATED] \`${RELEASE}\` → \`${IMAGE}\`
+          engram-infra PR: ${PR_URL}
+          Tagged by: ${ACTOR}"
+          else
+            CONTENT="[DEPLOY-NOOP] \`${RELEASE}\` → \`${IMAGE}\` (image already at this tag; no PR opened)
+          Tagged by: ${ACTOR}"
+          fi
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
+            "$WEBHOOK"
+
+      # Failure path — same webhook, different framing. `failure()`
+      # fires when an earlier step exited non-zero.
+      - name: Notify Discord (deploy failed)
+        if: failure() && env.WEBHOOK != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
+          RELEASE: ${{ steps.tags.outputs.release || github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          CONTENT="[DEPLOY-FAILED] \`${RELEASE}\`
+          Run: ${RUN_URL}
+          Tagged by: ${ACTOR}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --max-time 5 \
+            --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
+            "$WEBHOOK"
