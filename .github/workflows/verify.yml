@@ -185,7 +185,7 @@ jobs:
               Dockerfile entrypoint.sh \
               mix.lock \
               docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
-              .github/workflows/ci.yml
+              .github/workflows/verify.yml
             echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
           } | sha256sum | cut -d' ' -f1)
           # The e2e harness tree (helpers, fixtures, tests). Including it in
@@ -1448,7 +1448,7 @@ jobs:
             exit 0
           fi
 
-          # ci.yml fires on `push`, not `pull_request`, so the label check
+          # verify.yml fires on `push`, not `pull_request`, so the label check
           # above is dead on most runs (github.event.pull_request is null).
           # Fallback bypass via [allow-migration-edit] tag in the head
           # commit message — same friction-y semantic, push-compatible.
