@@ -13,6 +13,22 @@ import { useTheme } from '../theme/theme-provider'
 
 const clerkPubKey = config.clerkPublishableKey
 
+// Clerk passes the post-auth redirect target as an ABSOLUTE URL when it crosses
+// (or might cross) origins — including the in-origin case after an OAuth
+// callback completes. React Router's `navigate("https://app.engram.page/")`
+// silently no-ops on absolute URLs (treats it as a path), leaving the user
+// stuck on `/sign-in#/?sign_in_force_redirect_url=...` after Google return.
+// Strip same-origin targets back to a path so the SPA router actually moves.
+// Off-origin URLs pass through untouched for full-page navigation.
+export function toRelativeUrl(to: string): string {
+  try {
+    const u = new URL(to, window.location.origin)
+    return u.origin === window.location.origin ? u.pathname + u.search + u.hash : to
+  } catch {
+    return to
+  }
+}
+
 // Map Clerk onto Engram's CSS design tokens. The Clerk React components render
 // in-DOM (not an iframe), so these var() references resolve against the document.
 // The dark baseTheme (applied reactively below) is what flips Clerk's own
@@ -102,8 +118,8 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
       signUpUrl={signUpUrl}
       waitlistUrl={waitlistUrl}
       afterSignOutUrl={ROUTES.SIGN_IN}
-      routerPush={(to) => router.navigate(to)}
-      routerReplace={(to) => router.navigate(to, { replace: true })}
+      routerPush={(to) => router.navigate(toRelativeUrl(to))}
+      routerReplace={(to) => router.navigate(toRelativeUrl(to), { replace: true })}
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>
