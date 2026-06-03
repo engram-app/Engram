@@ -29,6 +29,21 @@ if (sentryDsn) {
   })
 }
 
+// Cloudflare Web Analytics — cookieless RUM beacon. Opt-in via
+// VITE_CF_BEACON_TOKEN at build time; no-op when unset so dev /
+// self-host builds don't ping the SaaS-side CF analytics account.
+// Injected dynamically rather than as a static <script> in
+// index.html because the token only exists on the SaaS build path
+// (self-host's same bundle would otherwise embed it as a literal).
+const cfBeaconToken = import.meta.env.VITE_CF_BEACON_TOKEN
+if (cfBeaconToken) {
+  const s = document.createElement('script')
+  s.defer = true
+  s.src = 'https://static.cloudflareinsights.com/beacon.min.js'
+  s.setAttribute('data-cf-beacon', JSON.stringify({ token: cfBeaconToken }))
+  document.head.appendChild(s)
+}
+
 const isClerk = config.authProvider === 'clerk'
 
 const AuthProvider = isClerk

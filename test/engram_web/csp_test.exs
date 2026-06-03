@@ -69,6 +69,19 @@ defmodule EngramWeb.CSPTest do
       assert script_src(header) =~ "https://static.cloudflareinsights.com"
       assert connect_src(header) =~ "https://static.cloudflareinsights.com"
     end
+
+    test "always whitelists Sentry ingest hosts on connect-src" do
+      # Sentry browser SDK is bundled (no script-src host needed) but
+      # captured events POST to `*.ingest.sentry.io`. Without this
+      # entry the SDK silently fails — the network POST returns blocked
+      # by CSP, no error reaches `Sentry.captureException`'s caller,
+      # and prod errors evaporate at the CSP gate.
+      Application.put_env(:engram, :clerk_issuer, nil)
+
+      header = CSP.header()
+
+      assert connect_src(header) =~ "https://*.ingest.sentry.io"
+    end
   end
 
   describe "Clerk integration — dev/test instance (CLERK_ISSUER under *.clerk.accounts.dev)" do
