@@ -177,7 +177,7 @@ function SourceScreen({
             />
           }
           title="I already use Obsidian"
-          body="Install our plugin and your existing notes sync over on the first connect. Nothing empty to fill in."
+          body="Install our plugin and your existing notes sync over on the first connect."
           selected={source === 'obsidian'}
           onClick={() => onPickSource('obsidian')}
         />
