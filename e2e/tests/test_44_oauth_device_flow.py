@@ -66,6 +66,18 @@ async def test_full_device_flow(
         session_token = clerk_client.create_session_token(clerk_user_id)
         logger.info("Got Clerk session token for %s", test_email)
 
+        # Pre-complete onboarding so the OAuth access token returned by the
+        # exchange below isn't 403'd by RequireOnboarding on /api/notes.
+        prof_resp = requests.patch(
+            f"{API_URL}/onboarding/profile",
+            json={"uses_obsidian": True, "tools": ["claude"]},
+            headers={"Authorization": f"Bearer {session_token}"},
+            timeout=10,
+        )
+        assert prof_resp.status_code in (200, 201), (
+            f"Onboarding profile PATCH failed: {prof_resp.status_code} {prof_resp.text[:300]}"
+        )
+
         # ── 3. Start device flow ──────────────────────────────────
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         client_id = f"e2e-device-{ts}"

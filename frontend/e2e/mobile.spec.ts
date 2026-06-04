@@ -10,6 +10,26 @@ async function registerUser(baseURL: string, email: string) {
   })
   if (res.status === 422) return
   if (!res.ok) throw new Error(`Register failed: ${res.status} ${await res.text()}`)
+  const { access_token: token } = await res.json()
+  const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
+    method: 'PATCH',
+    headers: auth,
+    body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
+  })
+  if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`)
+  const act = await fetch(`${baseURL}/api/onboarding/actions`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+  })
+  if (!act.ok) throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`)
+  const vault = await fetch(`${baseURL}/api/vaults`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ name: 'E2E Vault' }),
+  })
+  if (!vault.ok) throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`)
 }
 
 function testEmail(label: string) {

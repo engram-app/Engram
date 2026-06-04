@@ -23,6 +23,7 @@ defmodule Engram.Accounts.User do
     field :suspended_at, :utc_datetime_usec
     field :inactivity_warning_60_at, :utc_datetime_usec
     field :inactivity_warning_80_at, :utc_datetime_usec
+    field :onboarding_profile, :map, default: %{}
 
     belongs_to :plan, Engram.Billing.Plan
     has_one :subscription, Engram.Billing.Subscription

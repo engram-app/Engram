@@ -49,7 +49,10 @@ defmodule Engram.Vaults do
             |> case do
               {:ok, v} ->
                 emit_vault_count(user.id, :created)
-                {:ok, decrypt_vault_if_needed(v, user)}
+                _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
+                decrypted = decrypt_vault_if_needed(v, user)
+                broadcast_vault_created(user.id, decrypted)
+                {:ok, decrypted}
 
               other ->
                 other
@@ -58,6 +61,21 @@ defmodule Engram.Vaults do
       end)
       |> unwrap_transaction()
     end
+  end
+
+  # FTUX vault page subscribes to user channel and waits for this event so
+  # it can auto-transition to the dashboard once a vault appears (e.g. the
+  # Obsidian plugin creates one via its OAuth flow). Fire-and-forget; if
+  # nobody's listening, Phoenix.PubSub drops it.
+  defp broadcast_vault_created(user_id, vault) do
+    _ =
+      EngramWeb.Endpoint.broadcast(
+        "user:#{user_id}",
+        "vault_created",
+        %{vault_id: vault.id, name: vault.name}
+      )
+
+    :ok
   end
 
   # Pricing v2 §J — telemetry-only per-account vault count. Emitted on every
@@ -205,6 +223,21 @@ defmodule Engram.Vaults do
       |> Repo.all(skip_tenant_check: true)
       |> Map.new(fn v -> {to_string(v.id), v} end)
     end
+  end
+
+  @doc """
+  Count of non-deleted vaults owned by `user`. Tenant scoping is the explicit
+  `user_id == ^user_id` clause; RLS is bypassed (`skip_tenant_check: true`)
+  for parity with `list_for_ids/2`. The clause MUST stay.
+  """
+  @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
+  def count_for(%Engram.Accounts.User{id: user_id}) do
+    Repo.aggregate(
+      from(v in Vault, where: v.user_id == ^user_id and is_nil(v.deleted_at)),
+      :count,
+      :id,
+      skip_tenant_check: true
+    )
   end
 
   # ── Content counts ───────────────────────────────────────────────────────
@@ -524,6 +557,23 @@ defmodule Engram.Vaults do
         where: v.user_id == ^user_id and is_nil(v.deleted_at),
         select: count(v.id)
     )
+  end
+
+  @doc """
+  True when `user` owns at least one non-deleted vault. Used by the
+  onboarding gate to decide whether to surface the `/onboard/vault` step.
+  Tenant-scoped per the Vaults RLS policy.
+  """
+  def has_vault?(user) do
+    {:ok, exists} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.exists?(
+          from v in Vault,
+            where: v.user_id == ^user.id and is_nil(v.deleted_at)
+        )
+      end)
+
+    exists
   end
 
   defp fetch_active(user_id, vault_id) do

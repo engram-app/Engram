@@ -57,6 +57,11 @@ export default async function globalSetup() {
   // so test code doesn't need retries.
   await waitUntilSignInReady(user.id, secretKey)
 
+  // Pre-complete onboarding for the Clerk test user against the clerk backend.
+  // RequireOnboarding gates /api/* with 403 `onboarding_required` until the
+  // user has a profile. uses_obsidian=true short-circuits the vault step too.
+  await preCompleteOnboarding(user.id, secretKey)
+
   fs.writeFileSync(
     AUTH_STATE_PATH,
     JSON.stringify({
@@ -66,6 +71,78 @@ export default async function globalSetup() {
       skipped: false,
     }),
   )
+}
+
+const CLERK_BACKEND_PORT = process.env.PW_CLERK_BACKEND_PORT ?? '4001'
+const CLERK_API_BASE = `http://localhost:${CLERK_BACKEND_PORT}/api`
+
+async function preCompleteOnboarding(userId: string, secretKey: string): Promise<void> {
+  // Mint a short-lived Clerk session token, use it to provision the Engram
+  // user record (POST /api-keys triggers find_or_create_by_clerk_id), then
+  // mark onboarding complete so OnboardingGate stops redirecting tests away
+  // from the dashboard.
+  const sessionResp = await fetch(`${CLERK_API}/sessions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+  if (!sessionResp.ok) {
+    throw new Error(`Clerk create session failed: ${sessionResp.status} ${await sessionResp.text()}`)
+  }
+  const sessionId = (await sessionResp.json()).id as string
+
+  const tokenResp = await fetch(`${CLERK_API}/sessions/${sessionId}/tokens`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+  })
+  if (!tokenResp.ok) {
+    throw new Error(`Clerk mint token failed: ${tokenResp.status} ${await tokenResp.text()}`)
+  }
+  const jwt = (await tokenResp.json()).jwt as string
+
+  // Provision the user in Engram's DB via /api-keys (any authenticated
+  // call would do; this one keeps a parity with the Python provider).
+  const keyResp = await fetch(`${CLERK_API_BASE}/api-keys`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'e2e-browser-key' }),
+  })
+  if (!keyResp.ok) {
+    throw new Error(`Engram api-keys POST failed: ${keyResp.status} ${await keyResp.text()}`)
+  }
+
+  const profResp = await fetch(`${CLERK_API_BASE}/onboarding/profile`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
+  })
+  if (!profResp.ok) {
+    throw new Error(`Engram onboarding profile PATCH failed: ${profResp.status} ${await profResp.text()}`)
+  }
+
+  // Suppress TourOfferModal + CreateFirstVaultModal — they'd intercept every
+  // click on the dashboard, breaking sign-out / theme / mobile / note tests.
+  // The FTUX modal-specific tests already use idempotent "skip if absent"
+  // checks for these modals, so seeding here doesn't regress that coverage.
+  const actionResp = await fetch(`${CLERK_API_BASE}/onboarding/actions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+  })
+  if (!actionResp.ok) {
+    throw new Error(`Onboarding action POST failed: ${actionResp.status} ${await actionResp.text()}`)
+  }
+
+  const vaultResp = await fetch(`${CLERK_API_BASE}/vaults`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'E2E Default Vault' }),
+  })
+  if (!vaultResp.ok) {
+    throw new Error(`Vault POST failed: ${vaultResp.status} ${await vaultResp.text()}`)
+  }
+
+  console.log(`Pre-completed onboarding for Clerk user ${userId}`)
 }
 
 const SIGN_IN_READY_MAX_WAIT_MS = 60_000

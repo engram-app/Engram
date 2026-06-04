@@ -1,4 +1,4 @@
-.PHONY: help deps dev dev-selfhost dev-stop test backend-build backend-up backend-down frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list parity-mix parity-bash parity-ci-up parity-ci-down gen-master-key
+.PHONY: help deps dev dev-selfhost dev-stop dev-db-up dev-db-down dev-db-reset test backend-build backend-up backend-down frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list parity-mix parity-bash parity-ci-up parity-ci-down gen-master-key
 
 help:              ## List available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -12,8 +12,30 @@ deps:              ## Fetch Elixir + frontend deps
 dev:               ## Start local Phoenix dev server (SaaS shape: Voyage + Clerk, port 4000)
 	env $$(grep -v '^\#' .env.local | grep -v '^$$' | xargs) mix phx.server
 
-dev-selfhost:      ## Start local Phoenix dev server (selfhost shape: Ollama + local auth, port 4001)
-	env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix phx.server
+dev-db-up:         ## Start the isolated local Postgres + Qdrant for dev (idempotent)
+	docker compose -f docker-compose.dev.yml up -d --wait
+
+dev-db-down:       ## Stop the local dev Postgres + Qdrant (keeps volumes)
+	docker compose -f docker-compose.dev.yml down
+
+dev-db-reset:      ## DESTROY the local dev DB + Qdrant volumes — fresh slate
+	docker compose -f docker-compose.dev.yml down -v
+
+dev-selfhost: dev-db-up  ## Start local Phoenix + Vite + isolated dev DB (selfhost shape)
+	@# Brings up dev Postgres+Qdrant (containers), creates+migrates the schema,
+	@# then runs Vite :5173 and Phoenix :4000. Trap reaps Vite when Phoenix
+	@# exits so Ctrl-C cleans up both processes.
+	@set -e ; \
+	  echo "[dev-selfhost] ensuring schema is migrated…" ; \
+	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix ecto.create --quiet ; \
+	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix engram.prepare_database ; \
+	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix ecto.migrate ; \
+	  ( cd frontend && \
+	      VITE_AUTH_PROVIDER=local VITE_BILLING_ENABLED=false VITE_CLERK_PUBLISHABLE_KEY= \
+	      exec bun run dev --host 127.0.0.1 ) & \
+	  VITE_PID=$$! ; \
+	  trap "kill $$VITE_PID 2>/dev/null || true" EXIT INT TERM ; \
+	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix phx.server
 
 dev-stop:          ## Stop local Phoenix dev server (and any orphan Vite processes)
 	@pkill -f "mix phx.server" 2>/dev/null && echo "Phoenix stopped" || echo "Phoenix not running"

@@ -17,6 +17,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useBillingStatus } from '../api/queries'
 import { useChannel } from '../api/use-channel'
+import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 import AppHeader from './app-header'
 import FolderTree from '../viewer/folder-tree'
 import FolderActions from './folder-actions'
@@ -33,6 +34,10 @@ function DesktopLayout() {
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const { content: rightContent, collapsed: rightCollapsed, setCollapsed: setRightCollapsed } =
     useRightSidebar()
+  // During the FTUX tour the vault-switcher dropdown opens upward into
+  // empty space. Stretch the data-tour anchor so the Joyride spotlight
+  // cutout extends over the menu items, not just the trigger row.
+  const demoActive = useDemoVaultOptional()?.active === true
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'engram:app-layout',
     panelIds: LAYOUT_PANEL_IDS,
@@ -99,17 +104,36 @@ function DesktopLayout() {
                   <PanelLeftClose />
                 </Button>
               </div>
-              <ScrollArea className="flex-1">
+              <ScrollArea className="flex-1" data-tour="folder-tree">
                 <FolderTree />
               </ScrollArea>
               <FolderActions />
-              <VaultSwitcher />
+              <section className="relative">
+                <VaultSwitcher />
+                {/*
+                  The Joyride spotlight is computed from the target's bounding
+                  rect. Use an absolutely-positioned ghost that extends above
+                  the VaultSwitcher trigger so the cutout covers the dropdown
+                  menu when it opens upward — without taking real layout space
+                  (which would shove the FolderActions row up during the tour).
+                */}
+                {demoActive && (
+                  <div
+                    data-tour="sidebar-vaults"
+                    aria-hidden
+                    className="pointer-events-none absolute inset-x-0 bottom-0 -top-24"
+                  />
+                )}
+              </section>
             </div>
           </FolderTreeProvider>
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel id="main" defaultSize="60%" minSize="30%">
-          <main className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground">
+          <main
+            className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground"
+            data-tour="note-viewer"
+          >
             {leftCollapsed && (
               <Button
                 variant="ghost"

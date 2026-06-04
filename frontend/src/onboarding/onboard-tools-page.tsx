@@ -1,0 +1,172 @@
+import { useState } from 'react'
+import { Navigate, useNavigate } from 'react-router'
+import { useOnboardingStatus, useSetOnboardingProfile } from '../api/queries'
+import { Checkbox } from '@/components/ui/checkbox'
+import AuthPanel from '@/layout/auth-panel'
+import LoadingScreen from '../layout/loading-screen'
+import { heading, selectableRow } from '@/lib/ui-classes'
+import {
+  TOOL_ASSISTANTS,
+  TOOL_CODING,
+  TOOL_OTHER,
+  type ToolOption,
+} from './onboarding-tools'
+import { ToolBadge } from './tool-icon'
+
+export default function OnboardToolsPage() {
+  const navigate = useNavigate()
+  const { data: status, isLoading } = useOnboardingStatus()
+  const setProfile = useSetOnboardingProfile()
+
+  if (isLoading || !status) {
+    return <LoadingScreen />
+  }
+
+  // Honor backend ordering. Agreement/billing must come first; :done means
+  // we shouldn't be in the wizard. :tools (own step) and :vault (re-edit
+  // allowed for users who already picked tools and want to revise) both
+  // render this page.
+  if (
+    status.next_step !== 'tools' &&
+    status.next_step !== 'vault' &&
+    status.next_step !== 'done'
+  ) {
+    return <Navigate to={`/onboard/${status.next_step}`} replace />
+  }
+  if (status.next_step === 'done') {
+    return <Navigate to="/" replace />
+  }
+
+  return (
+    <ToolsForm
+      initialTools={status.profile?.tools ?? []}
+      isPending={setProfile.isPending}
+      hasError={setProfile.isError}
+      onSubmit={async (tools) => {
+        await setProfile.mutateAsync({ tools })
+        navigate('/onboard/vault', { replace: true })
+      }}
+    />
+  )
+}
+
+interface ToolsFormProps {
+  initialTools: string[]
+  isPending: boolean
+  hasError: boolean
+  onSubmit: (tools: string[]) => Promise<void>
+}
+
+function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormProps) {
+  const [tools, setTools] = useState<Set<string>>(new Set(initialTools))
+
+  function toggleTool(slug: string) {
+    setTools((prev) => {
+      const next = new Set(prev)
+      next.has(slug) ? next.delete(slug) : next.add(slug)
+      return next
+    })
+  }
+
+  async function submit() {
+    if (tools.size === 0 || isPending) return
+    await onSubmit(Array.from(tools))
+  }
+
+  const canContinue = tools.size > 0 && !isPending
+
+  return (
+    <AuthPanel className="flex flex-col gap-6">
+      <header className="flex flex-col gap-3">
+        <h1 className={heading}>Which AI tools do you use?</h1>
+        <p className="text-base text-foreground">
+          We'll tailor your setup around the tools you already work with.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Not a comprehensive list — pick <strong>Other connection</strong> if
+          yours isn't here.
+        </p>
+      </header>
+
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <ToolColumn
+          title="AI assistants"
+          options={TOOL_ASSISTANTS}
+          selected={tools}
+          onToggle={toggleTool}
+        />
+        <ToolColumn
+          title="Coding tools"
+          options={TOOL_CODING}
+          selected={tools}
+          onToggle={toggleTool}
+        />
+      </div>
+
+      <ToolColumn
+        title="Other connections"
+        options={TOOL_OTHER}
+        selected={tools}
+        onToggle={toggleTool}
+        layout="row"
+      />
+
+      {hasError ? (
+        <p role="alert" className="text-sm text-destructive">
+          Couldn't save your answers — please try again.
+        </p>
+      ) : null}
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canContinue}
+          className="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isPending ? 'Saving…' : 'Continue'}
+        </button>
+      </div>
+    </AuthPanel>
+  )
+}
+
+interface ToolColumnProps {
+  title: string
+  options: ToolOption[]
+  selected: Set<string>
+  onToggle: (slug: string) => void
+  layout?: 'stack' | 'row'
+}
+
+function ToolColumn({
+  title,
+  options,
+  selected,
+  onToggle,
+  layout = 'stack',
+}: ToolColumnProps) {
+  const innerClass =
+    layout === 'row'
+      ? 'grid grid-cols-1 gap-2 sm:grid-cols-2'
+      : 'flex flex-col gap-2'
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </legend>
+      <div className={innerClass}>
+        {options.map((opt) => (
+          <label key={opt.slug} className={selectableRow(selected.has(opt.slug))}>
+            <Checkbox
+              checked={selected.has(opt.slug)}
+              onCheckedChange={() => onToggle(opt.slug)}
+              aria-label={opt.label}
+            />
+            <ToolBadge slug={opt.slug} fallbackLabel={opt.label} />
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  )
+}
