@@ -34,8 +34,11 @@ defmodule Engram.Observability.PostHog do
         # Task.start/1 — detached, no supervisor wiring needed.
         # Failure here must not propagate to the caller (a webhook
         # handler, a request pipeline, an Oban worker), so we don't
-        # link the spawn.
-        Task.start(fn -> do_capture(key, host, distinct_id, event, properties) end)
+        # link the spawn. The `{:ok, pid}` is intentionally ignored;
+        # explicit underscore so Dialyzer's `unmatched_returns` is
+        # satisfied (the value is never useful to a fire-and-forget
+        # caller).
+        _ = Task.start(fn -> do_capture(key, host, distinct_id, event, properties) end)
         :ok
 
       :disabled ->
