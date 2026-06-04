@@ -171,6 +171,24 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/spa-state-injection.md` | How Phoenix ships server-known state into `window.__ENGRAM_CONFIG__` so the React SPA can render first-paint-correct UI without a fetch round-trip — the recipe for adding new injected fields, dev vs prod behavior, gotchas (NOT real SSR; see #353) |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
+## Self-host preflight
+
+Operators can preview what the next upgrade will do via:
+
+```bash
+mix engram.preflight
+```
+
+Inside a running container:
+
+```bash
+docker compose exec engram bin/engram eval 'Mix.Tasks.Engram.Preflight.run([])'
+```
+
+The output lists pending migrations, their phase tag, whether each is reversible, an estimated lock impact (`:low` / `:medium` / `:high`), and a copy-paste rollback command (only emitted when every pending migration is reversible). When any pending migration is irreversible, the report instructs the operator to take a database backup before pulling the new image.
+
+Implementation: `lib/mix/tasks/engram.preflight.ex`. The `:high` lock-risk flag fires on plain (non-CONCURRENTLY) index creation, drop/rename of a table, column rename, and column type changes — all operations that take ACCESS EXCLUSIVE and block reads/writes for the duration. Raw `execute("...")` SQL is not analyzed; treat as `:high` when uncertain.
+
 ## Life OS
 project: engram
 goal: income
