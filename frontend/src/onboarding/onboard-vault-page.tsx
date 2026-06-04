@@ -77,9 +77,31 @@ function VaultStep({
   const [source, setSource] = useState<Source>(
     profileSaved ? (savedUsesObsidian ? 'obsidian' : 'fresh') : null,
   )
+  // Track whether we've eager-committed `uses_obsidian: true` so the plugin's
+  // first sync isn't blocked by RequireOnboarding. The gate skips the vault
+  // check when uses_obsidian is true — without this, /api/notes 403s mid-sync
+  // and `vault_populated` never fires.
+  const [obsidianCommitted, setObsidianCommitted] = useState<boolean>(
+    profileSaved && savedUsesObsidian,
+  )
+
+  async function pickSource(s: Source) {
+    setSource(s)
+    if (s === 'obsidian' && !obsidianCommitted) {
+      try {
+        await setProfile.mutateAsync({ uses_obsidian: true })
+        setObsidianCommitted(true)
+      } catch {
+        // Surface as the panel's normal error path on next interaction
+      }
+    }
+  }
 
   async function commitObsidian() {
-    await setProfile.mutateAsync({ uses_obsidian: true })
+    if (!obsidianCommitted) {
+      await setProfile.mutateAsync({ uses_obsidian: true })
+      setObsidianCommitted(true)
+    }
     navigate('/', { replace: true })
   }
 
@@ -103,7 +125,7 @@ function VaultStep({
   return (
     <SourceScreen
       source={source}
-      onPickSource={setSource}
+      onPickSource={pickSource}
       userId={userId}
       isCommitting={
         setProfile.isPending || createVault.isPending || updateNote.isPending
