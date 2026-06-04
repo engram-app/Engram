@@ -33,6 +33,22 @@ export default function NotePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note?.path])
 
+  // Signal the onboarding tour that the user opened a note. The controller
+  // listens for this on window and advances any gated step bound to it.
+  useEffect(() => {
+    if (!note?.path) return
+    window.dispatchEvent(
+      new CustomEvent('engram:note-opened', { detail: { path: note.path } }),
+    )
+  }, [note?.path])
+
+  // Signal the tour that the user switched into Edit mode for the first
+  // time. Gated step "Rendered live" listens for this and advances.
+  useEffect(() => {
+    if (mode !== 'edit') return
+    window.dispatchEvent(new CustomEvent('engram:edit-mode-entered'))
+  }, [mode])
+
   // Push the ToC into the app-shell right sidebar while we're in preview;
   // clear it when leaving the page or switching to edit mode.
   useEffect(() => {
@@ -83,7 +99,7 @@ export default function NotePage() {
       className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl"
     >
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
-        <TabsList variant="line">
+        <TabsList variant="line" data-tour="note-tabs">
           <TabsTrigger value="preview">Preview</TabsTrigger>
           <TabsTrigger value="edit">Edit</TabsTrigger>
         </TabsList>
@@ -144,7 +160,7 @@ export default function NotePage() {
           </div>
         )}
         <ScrollArea className="h-full">
-          <div className="px-6 py-6 lg:px-8 lg:py-8">
+          <div className="px-6 py-6 lg:px-8 lg:py-8" data-tour="note-editor">
             <NoteEditor value={draft} onChange={setDraft} />
           </div>
         </ScrollArea>

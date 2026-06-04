@@ -647,6 +647,37 @@ defmodule Engram.OnboardingTest do
     end
   end
 
+  describe "record_action/2 + list_actions/1" do
+    setup do
+      user = insert(:user)
+      {:ok, user: user}
+    end
+
+    test "writes a row and is idempotent", %{user: user} do
+      assert :ok = Onboarding.record_action(user.id, :first_vault_created)
+      assert :ok = Onboarding.record_action(user.id, :first_vault_created)
+
+      assert ["first_vault_created"] = Onboarding.list_actions(user.id)
+    end
+
+    test "list_actions/1 returns [] for unknown user" do
+      # Bigint that no user_fixture mints.
+      assert [] = Onboarding.list_actions(0)
+    end
+
+    test "lists multiple distinct actions", %{user: user} do
+      :ok = Onboarding.record_action(user.id, :tour_offered_skipped)
+      :ok = Onboarding.record_action(user.id, :first_vault_created)
+
+      assert MapSet.new(["tour_offered_skipped", "first_vault_created"]) ==
+               MapSet.new(Onboarding.list_actions(user.id))
+    end
+
+    test "rejects unknown action atom", %{user: user} do
+      assert {:error, %Ecto.Changeset{}} = Onboarding.record_action(user.id, :bogus)
+    end
+  end
+
   defp with_agreement_query_count(fun) do
     # Scope to this test's pid: telemetry handlers run in the emitting process,
     # so without this a concurrent async test could leak into the count.

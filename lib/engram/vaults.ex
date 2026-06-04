@@ -49,6 +49,7 @@ defmodule Engram.Vaults do
             |> case do
               {:ok, v} ->
                 emit_vault_count(user.id, :created)
+                _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
                 decrypted = decrypt_vault_if_needed(v, user)
                 broadcast_vault_created(user.id, decrypted)
                 {:ok, decrypted}
@@ -221,6 +222,21 @@ defmodule Engram.Vaults do
       |> Repo.all(skip_tenant_check: true)
       |> Map.new(fn v -> {to_string(v.id), v} end)
     end
+  end
+
+  @doc """
+  Count of non-deleted vaults owned by `user`. Tenant scoping is the explicit
+  `user_id == ^user_id` clause; RLS is bypassed (`skip_tenant_check: true`)
+  for parity with `list_for_ids/2`. The clause MUST stay.
+  """
+  @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
+  def count_for(%Engram.Accounts.User{id: user_id}) do
+    Repo.aggregate(
+      from(v in Vault, where: v.user_id == ^user_id and is_nil(v.deleted_at)),
+      :count,
+      :id,
+      skip_tenant_check: true
+    )
   end
 
   # ── Content counts ───────────────────────────────────────────────────────

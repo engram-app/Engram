@@ -38,7 +38,7 @@ export default defineConfig({
     },
     {
       name: 'clerk',
-      testMatch: 'clerk-auth.spec.ts',
+      testMatch: /\/(clerk-auth|onboarding-ftux)\.spec\.ts$/,
       use: {
         baseURL: `http://localhost:${CLERK_VITE_PORT}`,
       },

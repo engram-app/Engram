@@ -205,6 +205,7 @@ defmodule EngramWeb.Router do
     post "/onboarding/accept-terms", OnboardingController, :accept_terms
     # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
     patch "/onboarding/profile", OnboardingController, :set_profile
+    post "/onboarding/actions", OnboardingController, :record
 
     # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
     # JWT after the React consent UI is approved. Returns JSON

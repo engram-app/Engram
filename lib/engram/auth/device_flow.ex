@@ -96,8 +96,15 @@ defmodule Engram.Auth.DeviceFlow do
       %{status: "pending"} ->
         {:error, :authorization_pending}
 
-      %{status: "authorized"} = auth ->
-        consume_and_issue_tokens(auth)
+      %{status: "authorized", user: %{id: user_id}} = auth ->
+        result = consume_and_issue_tokens(auth)
+
+        case result do
+          {:ok, _} -> _ = Engram.Onboarding.record_action(user_id, :plugin_connected)
+          _ -> :ok
+        end
+
+        result
 
       _other ->
         {:error, :expired_or_invalid}

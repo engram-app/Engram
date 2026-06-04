@@ -789,4 +789,23 @@ defmodule Engram.VaultsTest do
       0 -> :ok
     end
   end
+
+  describe "create_vault/2 onboarding hook" do
+    test "records first_vault_created on first vault" do
+      user = insert(:user)
+      assert [] = Engram.Onboarding.list_actions(user.id)
+
+      {:ok, _v} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)
+    end
+
+    test "second vault does not double-record" do
+      user = insert(:user)
+      {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Second"})
+
+      assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)
+    end
+  end
 end
