@@ -12,6 +12,59 @@ defmodule Engram.BillingTest do
 
   setup :verify_on_exit!
 
+  describe "tier_from_subscription/1" do
+    setup do
+      # Wipe any per-process dedupe state from previous tests.
+      Process.delete(:engram_unknown_price_ids_seen)
+      :ok
+    end
+
+    test "logs paddle_unknown_price_id once per unknown price per process" do
+      paddle_sub_unknown = fn id ->
+        %{"items" => [%{"price" => %{"id" => id}}]}
+      end
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # Three calls with the same unknown price ID — must log only once.
+          # Unknown defaults to "free" (pricing v3) so a bogus payload can't
+          # silently grant paid features.
+          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+
+          # A different unknown price → should also log once.
+          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_b"))
+        end)
+
+      occurrences = log |> String.split("paddle_unknown_price_id") |> length() |> Kernel.-(1)
+
+      assert occurrences == 2,
+             "expected 2 error logs (one per unique unknown id), got #{occurrences}"
+
+      assert log =~ "pri_unknown_a"
+      assert log =~ "pri_unknown_b"
+    end
+
+    test "does NOT log for known price IDs" do
+      starter_id = Application.get_env(:engram, :paddle_starter_monthly_price_id)
+      pro_id = Application.get_env(:engram, :paddle_pro_monthly_price_id)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert "starter" ==
+                   Billing.tier_from_subscription(%{
+                     "items" => [%{"price" => %{"id" => starter_id}}]
+                   })
+
+          assert "pro" ==
+                   Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro_id}}]})
+        end)
+
+      refute log =~ "paddle_unknown_price_id"
+    end
+  end
+
   describe "tier/1" do
     test "returns :free for user with no subscription" do
       user = insert(:user)

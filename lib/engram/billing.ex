@@ -455,10 +455,18 @@ defmodule Engram.Billing do
 
   defp extract_user_id(_), do: :error
 
-  defp tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
+  @doc """
+  Resolve a tier name (`"free"` | `"starter"` | `"pro"`) from a Paddle
+  subscription data map. Defaults to `"free"` for unknown or missing
+  prices (logged loudly via `Logger.error`) so a bogus payload can't
+  silently grant paid features — reconciliation surfaces the mismatch
+  separately.
+  """
+  @spec tier_from_subscription(map()) :: String.t()
+  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
     do: tier_from_price_id(price_id)
 
-  defp tier_from_subscription(other) do
+  def tier_from_subscription(other) do
     Logger.error("paddle subscription missing items[0].price.id; defaulting to free",
       payload_keys: Map.keys(other || %{})
     )
@@ -481,11 +489,28 @@ defmodule Engram.Billing do
         "pro"
 
       true ->
-        Logger.error("unknown paddle price_id; defaulting to free",
-          price_id: price_id
-        )
-
+        log_unknown_price_id_once(price_id)
         "free"
+    end
+  end
+
+  # Dedupe per-process. Reconciliation iterates every Paddle sub and
+  # webhook handlers run in their own request process — without this
+  # guard, a misconfigured PADDLE_*_PRICE_ID env var would fire N logs
+  # per reconciliation cycle (one per Paddle sub) and burn Sentry quota.
+  # With the guard: one log per unique unknown price ID per process,
+  # which is the actionable signal.
+  defp log_unknown_price_id_once(price_id) do
+    seen = Process.get(:engram_unknown_price_ids_seen, MapSet.new())
+
+    unless MapSet.member?(seen, price_id) do
+      Logger.error("paddle_unknown_price_id",
+        category: :paddle,
+        reason_label: :unknown_price_id,
+        paddle_price_id: price_id
+      )
+
+      Process.put(:engram_unknown_price_ids_seen, MapSet.put(seen, price_id))
     end
   end
 

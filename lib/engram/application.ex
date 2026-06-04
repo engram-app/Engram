@@ -5,6 +5,8 @@ defmodule Engram.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     Engram.Crypto.Config.validate!()
@@ -109,14 +111,40 @@ defmodule Engram.Application do
 
   # Attach Sentry's :logger handler. When :sentry has no DSN configured
   # (dev, test, self-host) the handler is a no-op — every report is
-  # short-circuited before any network call. Idempotent against ExUnit's
-  # per-suite restart for the same reason as the redact filter above.
+  # short-circuited before any network call, so attaching is safe everywhere.
+  # Idempotent against ExUnit's per-suite restart for the same reason as the
+  # redact filter above.
+  #
+  # Metadata allowlist controls cardinality on the Sentry side — every key
+  # here is one that may appear on `Logger.error/2` calls we want surfaced
+  # (paddle webhook, paddle reconcile, crypto rotation, request context).
   defp attach_sentry_logger_handler do
     _ = :logger.remove_handler(:engram_sentry)
 
     :ok =
       :logger.add_handler(:engram_sentry, Sentry.LoggerHandler, %{
-        config: %{metadata: [:request_id, :user_id, :module, :function, :file, :line]}
+        config: %{
+          metadata: [
+            :category,
+            :drift_kind,
+            :event_id,
+            :event_type,
+            :file,
+            :function,
+            :kind,
+            :line,
+            :module,
+            :paddle_price_id,
+            :paddle_subscription_id,
+            :queue,
+            :reason,
+            :reason_label,
+            :request_id,
+            :status,
+            :user_id,
+            :worker
+          ]
+        }
       })
   end
 

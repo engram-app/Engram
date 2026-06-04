@@ -70,6 +70,29 @@ defmodule Engram.Paddle.Client do
   @callback get_update_payment_transaction(subscription_id :: String.t()) ::
               {:ok, map()} | {:error, term()}
 
+  @doc """
+  List subscriptions updated since the given DateTime, paginated.
+
+  Paddle endpoint: `GET /subscriptions?updated_at[GTE]={iso}&per_page=200`.
+  Follows `meta.pagination.next` until exhausted.
+
+  Returns:
+    * `{:ok, list}` — full pagination consumed
+    * `{:partial, list, :max_pages_exceeded}` — hard page-count cap hit;
+      list is whatever was collected. Callers MUST treat this as drift
+      signal, not a clean read.
+    * `{:partial, list, :pagination_loop}` — Paddle returned a `next` URL
+      we'd already fetched; broke the loop. Same caller contract.
+    * `{:error, reason}` — transport / non-2xx.
+
+  Feeds the daily reconciliation Oban worker
+  (`Engram.Billing.Workers.PaddleReconcile`).
+  """
+  @callback list_subscriptions(since :: DateTime.t()) ::
+              {:ok, [map()]}
+              | {:partial, [map()], :max_pages_exceeded | :pagination_loop}
+              | {:error, term()}
+
   @default_impl Engram.Paddle.Client.HTTP
 
   @doc "Returns the configured client implementation module."

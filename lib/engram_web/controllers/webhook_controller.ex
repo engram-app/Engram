@@ -32,19 +32,70 @@ defmodule EngramWeb.WebhookController do
          {:ok, payload} <- read_body_once(conn),
          :ok <- verify_signature(payload, sig_header) do
       event = Jason.decode!(payload)
+      event_type = event["event_type"]
+      event_id = event["event_id"]
 
-      case Billing.upsert_from_paddle_event(event) do
-        {:ok, result} ->
-          _ = PostHogForwarder.forward_paddle_event(event, result)
+      Logger.metadata(
+        category: :paddle_webhook,
+        event_type: event_type,
+        event_id: event_id
+      )
+
+      Logger.info("paddle_webhook_received")
+
+      response =
+        :telemetry.span(
+          [:engram, :paddle, :webhook],
+          %{event_type: event_type, event_id: event_id},
+          fn ->
+            try do
+              case Billing.upsert_from_paddle_event(event) do
+                {:ok, result} = ok ->
+                  _ = PostHogForwarder.forward_paddle_event(event, result)
+                  {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
+
+                {:error, reason} = err ->
+                  Logger.error("paddle_webhook_handler_error",
+                    reason: format_reason(reason)
+                  )
+
+                  {err, %{event_type: event_type, event_id: event_id, result: :error}}
+              end
+            rescue
+              error ->
+                # If upsert_from_paddle_event/1 raises (Repo down, behaviour
+                # mis-wired, malformed payload that escapes pattern match):
+                # log structurally with stacktrace, capture in Sentry, then
+                # surface as {:error, :exception} so the :telemetry stop
+                # event fires with result: :error (instead of :exception,
+                # which dashboards built on stop.duration miss). Silent-200
+                # ack still goes to Paddle; reconciliation catches any
+                # resulting drift within 24h.
+                stacktrace = __STACKTRACE__
+
+                Logger.error("paddle_webhook_handler_exception",
+                  reason: Exception.message(error),
+                  kind: error.__struct__
+                )
+
+                _ =
+                  Sentry.capture_exception(error,
+                    stacktrace: stacktrace,
+                    extra: %{event_type: event_type, event_id: event_id}
+                  )
+
+                {{:error, :exception},
+                 %{event_type: event_type, event_id: event_id, result: :error}}
+            end
+          end
+        )
+
+      case response do
+        {:ok, _} ->
+          Logger.info("paddle_webhook_ok")
           json(conn, %{status: "ok"})
 
-        {:error, reason} ->
-          Logger.warning("Paddle webhook processing failed",
-            event_type: event["event_type"],
-            event_id: event["event_id"],
-            reason: format_reason(reason)
-          )
-
+        {:error, _} ->
           json(conn, %{status: "ok"})
       end
     else
