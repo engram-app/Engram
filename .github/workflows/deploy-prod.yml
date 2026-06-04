@@ -249,3 +249,68 @@ jobs:
             --max-time 5 \
             --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
             "$WEBHOOK"
+
+  create-release-notes:
+    # Auto-create a GitHub Release for the release-v* tag with a
+    # SCHEMA-IMPACT prepend when any merged PR in the release range
+    # carries a phase/* label. Self-hosters read this on the release
+    # page before pulling the new image. When no phase/* labels exist
+    # in the range, no Release is created (empty notes are not useful).
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release range
+        id: range
+        run: |
+          tag="${{ github.ref_name }}"
+          # Previous release-v* tag, sorted by version. Exclude the current
+          # tag in case sort returns it first (defensive).
+          prev=$(git tag -l 'release-v*' --sort=-v:refname | grep -v "^${tag}\$" | head -1)
+          if [ -z "$prev" ]; then
+            # First release ever — compare against repo root commit.
+            prev=$(git rev-list --max-parents=0 HEAD | head -1)
+            echo "::notice::No prior release-v* tag — comparing against repo root commit $prev"
+          fi
+          echo "base_sha=$(git rev-parse "$prev")" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse "$tag")" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SCHEMA-IMPACT block
+        id: impact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes=$(bash scripts/generate_schema_impact_notes.sh \
+            "${{ steps.range.outputs.base_sha }}" \
+            "${{ steps.range.outputs.head_sha }}")
+          if [ -z "$notes" ]; then
+            echo "has_impact=false" >> "$GITHUB_OUTPUT"
+            echo "No phase/* labels in release range — skipping release-notes creation."
+            exit 0
+          fi
+          echo "has_impact=true" >> "$GITHUB_OUTPUT"
+          # Stash notes for the next step (multiline outputs need EOF delimiter).
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$notes"
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.range.outputs.prev_tag }}...${{ github.ref_name }}"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.impact.outputs.has_impact == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "${{ steps.impact.outputs.notes }}" \
+            --target "${{ github.sha }}"
