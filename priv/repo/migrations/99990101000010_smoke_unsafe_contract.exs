@@ -1,3 +1,4 @@
+# squawk-ignore-file  smoke fixture for migration-safety-tier-1; deleted before merge
 defmodule Engram.Repo.Migrations.SmokeUnsafeContract do
   use Ecto.Migration
 

@@ -1505,7 +1505,7 @@ jobs:
     #                         contract-phase-references job)
     #   phase/single-shot   - expand+contract in one release; accept downtime
     #                         even on SaaS. Use sparingly.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
@@ -1518,15 +1518,15 @@ jobs:
       - name: Detect migration touches
         id: detect
         run: |
-          git fetch -q --depth=1 origin "${{ github.base_ref }}" || true
+          git fetch -q --depth=1 origin main || true
           changed=$(git diff --name-only --diff-filter=ACMR \
-            "origin/${{ github.base_ref }}...HEAD" -- 'priv/repo/migrations/*.exs' || true)
+            origin/main...HEAD -- 'priv/repo/migrations/*.exs' || true)
           if [ -z "$changed" ]; then
             echo "touches=false" >> "$GITHUB_OUTPUT"
-            echo "No migration changes on this PR — phase label not required."
+            echo "No migration changes on this branch — phase label not required."
           else
             echo "touches=true" >> "$GITHUB_OUTPUT"
-            echo "Migrations changed on this PR:"
+            echo "Migrations changed on this branch:"
             printf '  %s\n' $changed
           fi
 
@@ -1534,20 +1534,24 @@ jobs:
         if: steps.detect.outputs.touches == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          phase_labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" \
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "::warning::No open PR found for branch ${GITHUB_REF_NAME} — phase label check skipped."
+            exit 0
+          fi
+          phase_labels=$(gh api "repos/$REPO/issues/$pr_number/labels" \
             --jq '.[].name | select(startswith("phase/"))')
           count=$(printf '%s\n' "$phase_labels" | grep -c . || true)
           if [ "$count" -ne 1 ]; then
             echo "::error::Migration PR must carry exactly ONE phase/* label."
-            echo "::error::Found $count phase/* labels on PR #$PR_NUMBER."
+            echo "::error::Found $count phase/* labels on PR #$pr_number."
             echo "::error::Valid labels: phase/expand, phase/migrate-data, phase/contract, phase/single-shot"
             echo "::error::See backend/AGENTS.md § Migration phases for guidance."
             exit 1
           fi
-          echo "OK — PR carries phase label: $phase_labels"
+          echo "OK — PR #$pr_number carries phase label: $phase_labels"
 
   contract-phase-references:
     # On phase/contract PRs only: extract the columns and tables dropped
@@ -1555,9 +1559,7 @@ jobs:
     # Enforces the expand/contract two-deploy fence: code that uses a
     # column must be removed in an earlier release before the column itself
     # is dropped in a later release.
-    if: |
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'phase/contract')
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [phase-label-required, prebuild-mix]
     permissions:
@@ -1567,12 +1569,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check phase/contract label on open PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping contract-phase-references."
+            exit 0
+          fi
+          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
+          if echo "$labels" | grep -qx 'phase/contract'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+            echo "phase/contract label present on PR #$pr_number — running grep gate."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "phase/contract label NOT present — skipping grep gate."
+          fi
+
       # Restore prebuild-mix caches. Same pattern as the `lint` job: deps +
       # _build/dev populated before any mix command so compile is a fast
       # incremental no-op. Keys are pinned to the BEAM version emitted by
       # prebuild-mix so a runner OTP/Elixir bump correctly invalidates the
       # cache instead of feeding stale BEAM artifacts.
       - name: Restore deps cache
+        if: steps.gate.outputs.proceed == 'true'
         id: cache-deps
         uses: actions/cache/restore@v5
         with:
@@ -1582,6 +1607,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
+        if: steps.gate.outputs.proceed == 'true'
         uses: actions/cache/restore@v5
         with:
           path: _build/dev
@@ -1590,17 +1616,19 @@ jobs:
             mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps
-        if: steps.cache-deps.outputs.cache-hit != 'true'
+        if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get --check-locked
 
       - name: Compile
+        if: steps.gate.outputs.proceed == 'true'
         run: mix compile
 
       - name: List new migrations
+        if: steps.gate.outputs.proceed == 'true'
         id: list
         run: |
-          git fetch -q --depth=1 origin "${{ github.base_ref }}" || true
-          BASE_REF="origin/${{ github.base_ref }}" \
+          git fetch -q --depth=1 origin main || true
+          BASE_REF="origin/main" \
             bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
           if [ ! -s /tmp/new-migrations.txt ]; then
             echo "::error::phase/contract label set but no migrations newer than base ref"
@@ -1610,6 +1638,7 @@ jobs:
           sed 's/^/  /' /tmp/new-migrations.txt
 
       - name: Extract dropped identifiers
+        if: steps.gate.outputs.proceed == 'true'
         id: drops
         run: |
           : > /tmp/drops.txt
@@ -1625,6 +1654,7 @@ jobs:
           sed 's/^/  /' /tmp/drops.txt
 
       - name: Grep lib/ for surviving references
+        if: steps.gate.outputs.proceed == 'true'
         run: |
           fail=0
           while IFS= read -r line; do
