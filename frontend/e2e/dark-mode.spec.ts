@@ -10,6 +10,13 @@ async function registerUser(baseURL: string, email: string) {
   })
   if (res.status === 422) return
   if (!res.ok) throw new Error(`Register failed: ${res.status} ${await res.text()}`)
+  const { access_token: token } = await res.json()
+  const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
+  })
+  if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`)
 }
 
 function testEmail(label: string) {

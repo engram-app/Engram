@@ -32,6 +32,14 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
   })
   if (!login.ok) throw new Error(`login failed: ${login.status} ${await login.text()}`)
   const { access_token } = (await login.json()) as { access_token: string }
+
+  const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+    body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
+  })
+  if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`)
+
   return access_token
 }
 

@@ -835,11 +835,12 @@ defmodule Engram.Notes do
       end)
 
     if count == 1 do
-      EngramWeb.Endpoint.broadcast(
-        "user:#{user.id}",
-        "vault_populated",
-        %{vault_id: vault.id}
-      )
+      _ =
+        EngramWeb.Endpoint.broadcast(
+          "user:#{user.id}",
+          "vault_populated",
+          %{vault_id: vault.id}
+        )
     end
 
     :ok

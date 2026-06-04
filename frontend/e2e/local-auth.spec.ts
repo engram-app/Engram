@@ -11,6 +11,16 @@ async function registerUser(baseURL: string, email: string) {
   })
   if (res.status === 422) return // already exists (idempotent)
   if (!res.ok) throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`)
+
+  // Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
+  // instead of being bounced to /onboard/profile by OnboardingGate.
+  const { access_token: token } = await res.json()
+  const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
+  })
+  if (!prof.ok) throw new Error(`Onboarding profile PATCH failed: ${prof.status} ${await prof.text()}`)
 }
 
 /** Unique email per test — no cross-test dependency. */
@@ -28,7 +38,7 @@ test.describe('Local auth provider', () => {
     await expect(page.locator('.cl-signIn')).toHaveCount(0)
   })
 
-  test('register first user → redirects to dashboard', async ({ page }) => {
+  test('register first user → redirects to onboarding', async ({ page }) => {
     const email = testEmail('register')
     await page.goto('/sign-up/')
     await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible()
@@ -38,8 +48,9 @@ test.describe('Local auth provider', () => {
     await page.getByLabel('Confirm password').fill(TEST_PASSWORD)
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    await expect(page).toHaveURL(/\/$/, { timeout: 10_000 })
-    await expect(page.getByLabel('User menu')).toBeVisible()
+    // OnboardingGate sends fresh accounts through the wizard; profile is the
+    // first universal step in self-host mode (billing/agreement auto-pass).
+    await expect(page).toHaveURL(/\/onboard\/profile/, { timeout: 10_000 })
   })
 
   test('sign out → redirects to sign-in', async ({ page, baseURL }) => {
@@ -91,6 +102,6 @@ test.describe('Local auth provider', () => {
     await page.getByLabel('Confirm password').fill(TEST_PASSWORD)
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    await expect(page).toHaveURL(/\/$/, { timeout: 10_000 })
+    await expect(page).toHaveURL(/\/onboard\/profile/, { timeout: 10_000 })
   })
 })

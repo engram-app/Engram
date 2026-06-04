@@ -68,11 +68,12 @@ defmodule Engram.Vaults do
   # Obsidian plugin creates one via its OAuth flow). Fire-and-forget; if
   # nobody's listening, Phoenix.PubSub drops it.
   defp broadcast_vault_created(user_id, vault) do
-    EngramWeb.Endpoint.broadcast(
-      "user:#{user_id}",
-      "vault_created",
-      %{vault_id: vault.id, name: vault.name}
-    )
+    _ =
+      EngramWeb.Endpoint.broadcast(
+        "user:#{user_id}",
+        "vault_created",
+        %{vault_id: vault.id, name: vault.name}
+      )
 
     :ok
   end

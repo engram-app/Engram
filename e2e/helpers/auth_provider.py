@@ -88,6 +88,18 @@ class ClerkAuthProvider(AuthProvider):
             raise RuntimeError(f"No key in API key response: {resp.json()}")
 
         logger.info("Created API key for %s: %s...", email, api_key[:20])
+
+        # 3. Auto-complete onboarding so vault-scoped tests don't hit 403.
+        prof_resp = session.patch(
+            f"{self.api_url}/onboarding/profile",
+            json={"uses_obsidian": True, "tools": ["claude"]},
+            timeout=10,
+        )
+        if prof_resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Onboarding profile PATCH failed: {prof_resp.status_code}\n{prof_resp.text[:500]}"
+            )
+
         return clerk_user_id, api_key
 
     def cleanup_user(self, provider_user_id: str) -> None:
@@ -137,6 +149,18 @@ class LocalAuthProvider(AuthProvider):
         api_key = resp.json().get("key")
         if not api_key:
             raise RuntimeError(f"No key in API key response: {resp.json()}")
+
+        # Auto-complete onboarding so vault-scoped tests don't hit 403.
+        prof_resp = requests.patch(
+            f"{self.api_url}/onboarding/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"uses_obsidian": True, "tools": ["claude"]},
+            timeout=10,
+        )
+        if prof_resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Onboarding profile PATCH failed for {email}: {prof_resp.status_code}\n{prof_resp.text[:500]}"
+            )
 
         # Use email as provider_user_id for local (no external ID to track)
         logger.info("Created API key for %s: %s...", email, api_key[:20])

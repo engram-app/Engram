@@ -31,8 +31,8 @@ defmodule Engram.Repo.Migrations.CreateOnboardingActions do
     execute(
       """
       CREATE POLICY tenant_isolation_onboarding_actions ON onboarding_actions
-        USING (user_id::text = current_setting('app.current_tenant', true))
-        WITH CHECK (user_id::text = current_setting('app.current_tenant', true))
+        USING (user_id::text = (SELECT current_setting('app.current_tenant', true)))
+        WITH CHECK (user_id::text = (SELECT current_setting('app.current_tenant', true)))
       """,
       "DROP POLICY IF EXISTS tenant_isolation_onboarding_actions ON onboarding_actions"
     )
