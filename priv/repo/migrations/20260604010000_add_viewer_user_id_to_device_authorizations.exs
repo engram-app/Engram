@@ -12,9 +12,15 @@ defmodule Engram.Repo.Migrations.AddViewerUserIdToDeviceAuthorizations do
     alter table(:device_authorizations) do
       add :viewer_user_id, references(:users, on_delete: :nilify_all)
     end
+
+    # Covering index for the FK — splinter flags unindexed FKs and the
+    # `on_delete: :nilify_all` cascade benefits from one too.
+    create index(:device_authorizations, [:viewer_user_id])
   end
 
   def down do
+    drop index(:device_authorizations, [:viewer_user_id])
+
     alter table(:device_authorizations) do
       remove :viewer_user_id
     end
