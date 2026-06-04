@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthAdapter } from '../auth/use-auth-adapter'
 import { useNavigate } from 'react-router'
@@ -9,6 +9,8 @@ import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-classes'
+import { useMe } from '../api/queries'
+import { useVaultReadyEvents } from '../onboarding/use-vault-ready-events'
 
 type Vault = { id: number; name: string; note_count: number }
 
@@ -27,6 +29,7 @@ export default function DeviceLinkPage() {
   const [selection, setSelection] = useState<string>('matched')
   const [suggestedName, setSuggestedName] = useState('')
   const [customName, setCustomName] = useState('')
+  const [linkedVaultId, setLinkedVaultId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -100,12 +103,12 @@ export default function DeviceLinkPage() {
         '/auth/device/authorize',
         body,
       )
-      // Stash the linked vault as active so if the user does come back to
-      // the web later, they land in the right one. We don't auto-navigate —
-      // the plugin still owes us the first sync from inside Obsidian, and
-      // the onboarding wizard auto-advances on the `vault_populated`
-      // broadcast in its own tab.
+      // Stash the linked vault as active so subsequent navigations land in
+      // the right one. We DON'T auto-navigate immediately — the plugin still
+      // owes the first sync from inside Obsidian. The success step listens
+      // for the `vault_populated` broadcast and forwards then.
       setActiveVaultId(vault_id)
+      setLinkedVaultId(vault_id)
       qc.invalidateQueries({ queryKey: ['vaults'] })
       setStep('success')
     } catch (e: unknown) {
@@ -283,26 +286,10 @@ export default function DeviceLinkPage() {
         )}
 
         {step === 'success' && (
-          <div className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-foreground">Vault linked!</h2>
-            <p className="text-sm text-foreground">
-              Head back to Obsidian and kick off your first sync from the
-              plugin. We'll take it from there.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              You can close this tab safely. If you have the Engram dashboard
-              open in another tab, it'll move forward on its own as soon as
-              the sync starts.
-            </p>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => navigate('/')}
-              className="self-start text-sm"
-            >
-              Or skip to the dashboard
-            </Button>
-          </div>
+          <SuccessStep
+            linkedVaultId={linkedVaultId}
+            onForward={() => navigate('/')}
+          />
         )}
 
         {error && (
@@ -315,5 +302,60 @@ export default function DeviceLinkPage() {
         )}
       </AuthPanel>
     </AuthShell>
+  )
+}
+
+interface SuccessStepProps {
+  linkedVaultId: number | null
+  onForward: () => void
+}
+
+function SuccessStep({ linkedVaultId, onForward }: SuccessStepProps) {
+  const { data: me } = useMe()
+  const { vaultPopulated, vaultId } = useVaultReadyEvents({
+    userId: me?.id ?? null,
+    enabled: true,
+  })
+
+  // Auto-forward to the dashboard once the plugin's first sync lands. Match
+  // on `linkedVaultId` so we only forward for THIS link session — broadcasts
+  // from an unrelated vault won't shove us anywhere.
+  useEffect(() => {
+    if (vaultPopulated && vaultId != null && vaultId === linkedVaultId) {
+      onForward()
+    }
+  }, [vaultPopulated, vaultId, linkedVaultId, onForward])
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-foreground">Vault linked!</h2>
+        <p className="text-sm text-foreground">
+          Now jump back to Obsidian and run your first sync.
+        </p>
+      </div>
+
+      <p
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+      >
+        <span className="inline-block size-2 animate-pulse rounded-full bg-primary align-middle" />
+        Waiting for your first sync…
+      </p>
+
+      <p className="text-sm text-muted-foreground">
+        Once it lands we'll take you to your vault automatically.
+      </p>
+
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={onForward}
+        className="self-start text-sm"
+      >
+        Skip ahead
+      </Button>
+    </div>
   )
 }
