@@ -1663,15 +1663,12 @@ jobs:
             case "$kind" in
               column)
                 name=$(echo "$line" | awk '{print $3}')
-                # Match :name as an atom or "name" as a string; skip files
-                # explicitly marked as fixtures for this branch.
-                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ \
-                  --exclude='*smoke_contract_reference*' || true)
+                # Match :name as an atom or "name" as a string.
+                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ || true)
                 ;;
               table)
                 name=$(echo "$line" | awk '{print $2}')
-                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ \
-                  --exclude='*smoke_contract_reference*' || true)
+                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ || true)
                 ;;
               *)
                 continue
