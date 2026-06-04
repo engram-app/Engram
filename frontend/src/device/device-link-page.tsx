@@ -100,12 +100,14 @@ export default function DeviceLinkPage() {
         '/auth/device/authorize',
         body,
       )
-      // Forward to the vault that was just linked — not whatever the vault
-      // switcher would otherwise fall back to (the default / first vault).
+      // Stash the linked vault as active so if the user does come back to
+      // the web later, they land in the right one. We don't auto-navigate —
+      // the plugin still owes us the first sync from inside Obsidian, and
+      // the onboarding wizard auto-advances on the `vault_populated`
+      // broadcast in its own tab.
       setActiveVaultId(vault_id)
       qc.invalidateQueries({ queryKey: ['vaults'] })
       setStep('success')
-      setTimeout(() => navigate('/'), 1500)
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Authorization failed'
       if (message.includes('404') || message.includes('not found')) {
@@ -281,11 +283,25 @@ export default function DeviceLinkPage() {
         )}
 
         {step === 'success' && (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             <h2 className="text-lg font-semibold text-foreground">Vault linked!</h2>
-            <p className="text-sm text-muted-foreground">
-              Your Obsidian plugin is now connected. Redirecting to your vault…
+            <p className="text-sm text-foreground">
+              Head back to Obsidian and kick off your first sync from the
+              plugin. We'll take it from there.
             </p>
+            <p className="text-sm text-muted-foreground">
+              You can close this tab safely. If you have the Engram dashboard
+              open in another tab, it'll move forward on its own as soon as
+              the sync starts.
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => navigate('/')}
+              className="self-start text-sm"
+            >
+              Or skip to the dashboard
+            </Button>
           </div>
         )}
 
