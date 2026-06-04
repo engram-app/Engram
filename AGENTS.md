@@ -74,6 +74,29 @@ The phase labels exist for SaaS; self-hosters get downtime for free and
 don't need to think about phases. The same source-side gates protect them
 because the unsafe SQL never enters the migration files they pull.
 
+## Self-host preflight
+
+Operators can preview what the next upgrade will do via:
+
+    mix engram.preflight
+
+Inside a running container:
+
+    docker compose exec engram bin/engram eval 'Mix.Tasks.Engram.Preflight.run([])'
+
+The output lists pending migrations, their phase tag, whether each is
+reversible, an estimated lock impact (`:low` / `:medium` / `:high`), and
+a copy-paste rollback command (only emitted when every pending migration
+is reversible). When any pending migration is irreversible, the report
+instructs the operator to take a database backup before pulling the new
+image.
+
+Implementation: `lib/mix/tasks/engram.preflight.ex`. The `:high` lock-risk
+flag fires on plain (non-CONCURRENTLY) index creation, drop/rename of a
+table, column rename, and column type changes — all operations that take
+ACCESS EXCLUSIVE and block reads/writes for the duration. Raw `execute("...")`
+SQL is not analyzed; treat as `:high` when uncertain.
+
 ## Why no Atlas / strong_migrations / custom Credo rules
 
 We evaluated those. Squawk + the two gates added in this file already cover
