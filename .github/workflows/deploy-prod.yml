@@ -309,8 +309,14 @@ jobs:
         if: steps.impact.outputs.has_impact == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ steps.impact.outputs.notes }}
         run: |
+          # Pass notes via env var to avoid bash arg-parsing issues with
+          # double quotes in PR titles. --notes-file is the canonical form.
+          notes_file=$(mktemp)
+          trap 'rm -f "$notes_file"' EXIT
+          printf '%s' "$NOTES" > "$notes_file"
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --notes "${{ steps.impact.outputs.notes }}" \
+            --notes-file "$notes_file" \
             --target "${{ github.sha }}"
