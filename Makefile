@@ -28,6 +28,7 @@ dev-selfhost: dev-db-up  ## Start local Phoenix + Vite + isolated dev DB (selfho
 	@set -e ; \
 	  echo "[dev-selfhost] ensuring schema is migrated…" ; \
 	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix ecto.create --quiet ; \
+	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix engram.prepare_database ; \
 	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix ecto.migrate ; \
 	  ( cd frontend && \
 	      VITE_AUTH_PROVIDER=local VITE_BILLING_ENABLED=false VITE_CLERK_PUBLISHABLE_KEY= \

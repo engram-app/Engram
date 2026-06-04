@@ -6,8 +6,8 @@ defmodule Engram.Onboarding do
   which gates the hosted-only steps: agreement (ToS) and billing (Paddle).
   When false (self-host: AUTH_PROVIDER=local + no PADDLE_API_KEY), the wizard
   still runs but treats `terms_ok` and `subscription_ok` as auto-pass — the
-  operator owns their own legal posture and there is no paywall. Profile and
-  vault gate in every mode.
+  operator owns their own legal posture and there is no paywall. The `:vault`
+  step (questionnaire + first vault) gates in every mode.
   """
 
   alias Engram.Billing
@@ -23,9 +23,13 @@ defmodule Engram.Onboarding do
   @privacy_document "privacy_policy"
 
   # FTUX questionnaire tool catalog. Add new clients here in lockstep with
-  # the frontend constants (see frontend/src/onboarding/questionnaire/tools.ts).
+  # the frontend constants (see frontend/src/onboarding/onboarding-tools.ts).
   # Renames are MIGRATIONS — old slugs in user rows won't be auto-rewritten.
-  @valid_tools ~w(claude chatgpt web_only claude_code cursor continue_cline other_mcp)
+  @valid_tools ~w(
+    claude chatgpt grok mistral open_webui lobechat
+    claude_code cursor windsurf cline continue opencode github_copilot
+    web_only other_mcp
+  )
 
   @doc """
   Returns the canonical list of valid tool slugs accepted by `set_profile/2`.
@@ -132,7 +136,7 @@ defmodule Engram.Onboarding do
     * `:terms_notice` — metadata for the newest published ToS version the user
       has not yet accepted (version/effective_date/material/changelog/accept_url),
       or `nil` when the user is already on the current version
-    * `:next_step` — one of `:agreement | :billing | :done`
+    * `:next_step` — one of `:agreement | :billing | :tools | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
@@ -145,7 +149,9 @@ defmodule Engram.Onboarding do
   once the version is effective and `terms_ok` has flipped false.
 
   When `billing_enabled` is false (self-host), agreement + billing steps
-  short-circuit to ok and the chain falls through to profile → vault.
+  short-circuit to ok and the chain falls through to tools → vault. The
+  `:tools` step collects the questionnaire's tool checkboxes; `:vault`
+  owns the obsidian/fresh source pick + first-vault creation.
   `:enabled` is always true — every account onboards.
   """
   def status(user) do
@@ -177,11 +183,11 @@ defmodule Engram.Onboarding do
   end
 
   # Enumerates the full step chain so the frontend can render "Step X of N"
-  # without re-deriving the gate rules. `:vault` drops once profile.uses_obsidian
-  # is true (plugin creates it on first OAuth sign-in).
-  defp build_steps(billing_active, profile) do
-    base = if billing_active, do: [:agreement, :billing, :profile], else: [:profile]
-    if profile_uses_obsidian?(profile), do: base, else: base ++ [:vault]
+  # without re-deriving the gate rules. `:tools` collects the questionnaire's
+  # tool picks; `:vault` collects the obsidian/fresh source pick and creates
+  # (or waits on) the first vault.
+  defp build_steps(billing_active, _profile) do
+    if billing_active, do: [:agreement, :billing, :tools, :vault], else: [:tools, :vault]
   end
 
   # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own
@@ -198,41 +204,81 @@ defmodule Engram.Onboarding do
   end
 
   @doc """
-  Store the FTUX questionnaire answers on `user.onboarding_profile`. Validates
-  `uses_obsidian` is a boolean, `tools` is non-empty, and every tool slug
-  belongs to `valid_tools/0`. Stamps `completed_at` so `status/1` flips
-  `profile_complete: true` and (when terms+subscription are ok) `next_step: :done`.
+  Merge partial FTUX answers into `user.onboarding_profile`. The wizard
+  POSTs once per screen (tools from `/onboard/tools`, uses_obsidian from
+  `/onboard/vault`), so this accepts either field independently or both
+  together. `completed_at` stamps the moment BOTH `tools` and
+  `uses_obsidian` are present after the merge — that's the signal
+  `profile_complete?/1` keys on.
+
+  Validates only the fields actually being set: `tools` must be a non-empty
+  list of slugs from `valid_tools/0`; `uses_obsidian` must be a boolean.
+  Empty payloads (neither field) are rejected so a stray POST can't
+  no-op-succeed.
 
   Returns `{:ok, %User{}}` or `{:error, atom}` where atom is one of
-  `:invalid_uses_obsidian | :empty_tools | :invalid_tool`.
+  `:invalid_uses_obsidian | :empty_tools | :invalid_tool | :nothing_to_set`.
   """
-  def set_profile(user, %{uses_obsidian: uses_obsidian, tools: tools}) when is_list(tools) do
-    cond do
-      not is_boolean(uses_obsidian) ->
-        {:error, :invalid_uses_obsidian}
+  def set_profile(user, attrs) when is_map(attrs) do
+    has_tools = Map.has_key?(attrs, :tools)
+    has_source = Map.has_key?(attrs, :uses_obsidian)
 
-      tools == [] ->
+    cond do
+      not has_tools and not has_source ->
+        {:error, :nothing_to_set}
+
+      has_tools and not is_list(Map.get(attrs, :tools)) ->
         {:error, :empty_tools}
 
-      Enum.any?(tools, &(&1 not in @valid_tools)) ->
+      has_tools and Map.get(attrs, :tools) == [] ->
+        {:error, :empty_tools}
+
+      has_tools and Enum.any?(Map.get(attrs, :tools), &(&1 not in @valid_tools)) ->
         {:error, :invalid_tool}
 
+      has_source and not is_boolean(Map.get(attrs, :uses_obsidian)) ->
+        {:error, :invalid_uses_obsidian}
+
       true ->
-        profile = %{
-          "uses_obsidian" => uses_obsidian,
-          "tools" => tools,
-          "completed_at" => DateTime.utc_now(:second) |> DateTime.to_iso8601()
-        }
+        existing = current_profile(user) || %{}
+
+        merged =
+          existing
+          |> maybe_put_field(attrs, :tools, "tools")
+          |> maybe_put_field(attrs, :uses_obsidian, "uses_obsidian")
+          |> maybe_stamp_completed_at()
 
         user
-        |> Ecto.Changeset.change(onboarding_profile: profile)
+        |> Ecto.Changeset.change(onboarding_profile: merged)
         |> Repo.update(skip_tenant_check: true)
+    end
+  end
+
+  defp maybe_put_field(profile, attrs, key, json_key) do
+    case Map.fetch(attrs, key) do
+      {:ok, value} -> Map.put(profile, json_key, value)
+      :error -> profile
+    end
+  end
+
+  # Stamp once, when BOTH halves of the questionnaire have landed. Stamping
+  # is one-shot: a re-POST that overwrites one field doesn't refresh the
+  # timestamp, so `profile_complete?` reads as a monotonic latch.
+  defp maybe_stamp_completed_at(profile) do
+    has_tools = match?([_ | _], Map.get(profile, "tools"))
+    has_source = is_boolean(Map.get(profile, "uses_obsidian"))
+    has_stamp = is_binary(Map.get(profile, "completed_at"))
+
+    if has_tools and has_source and not has_stamp do
+      Map.put(profile, "completed_at", DateTime.utc_now(:second) |> DateTime.to_iso8601())
+    else
+      profile
     end
   end
 
   # Re-read the column rather than trusting the caller's struct — callers that
   # just ran `set_profile/2` and then `status/1` would otherwise see a stale
-  # `nil` and the gate would stick on `:profile` even after a successful save.
+  # `nil` and the gate would stick on `:vault` even after a successful save.
   defp current_profile(user) do
     import Ecto.Query
 
@@ -300,14 +346,21 @@ defmodule Engram.Onboarding do
 
   defp next_step(false, _, _, _, _), do: :agreement
   defp next_step(true, false, _, _, _), do: :billing
-  defp next_step(true, true, false, _, _), do: :profile
+
+  # Profile incomplete: chain through :tools then :vault. `:tools` step is
+  # complete when the user has POSTed `tools`; `:vault` step is complete when
+  # they've POSTed `uses_obsidian` (and, for fresh-path users, a vault row
+  # exists). Both POSTs land via `set_profile/2`; once the second arrives,
+  # `maybe_stamp_completed_at/1` latches `profile_complete?: true`.
+  defp next_step(true, true, false, profile, _) do
+    if profile_has_tools?(profile), do: :vault, else: :tools
+  end
 
   defp next_step(true, true, true, profile, has_vault) do
-    # uses_obsidian=true short-circuits past the vault gate: the plugin's
+    # uses_obsidian=true short-circuits past the vault-create gate: the plugin's
     # OAuth flow creates the vault on first sign-in, so we don't block the
-    # dashboard waiting for it. Fresh-path users MUST land on /onboard/vault
-    # to name + create a vault (otherwise they hit an empty dashboard with
-    # no notes).
+    # dashboard waiting for it. Fresh-path users stay on `:vault` until a
+    # vault row exists (otherwise they'd hit an empty dashboard with no notes).
     cond do
       profile_uses_obsidian?(profile) -> :done
       has_vault -> :done
@@ -317,6 +370,9 @@ defmodule Engram.Onboarding do
 
   defp profile_uses_obsidian?(%{"uses_obsidian" => true}), do: true
   defp profile_uses_obsidian?(_), do: false
+
+  defp profile_has_tools?(%{"tools" => [_ | _]}), do: true
+  defp profile_has_tools?(_), do: false
 
   @doc """
   Record an onboarding milestone for `user_id`. Idempotent — re-recording the

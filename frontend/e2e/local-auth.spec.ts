@@ -13,7 +13,7 @@ async function registerUser(baseURL: string, email: string) {
   if (!res.ok) throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`)
 
   // Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
-  // instead of being bounced to /onboard/profile by OnboardingGate; record a
+  // instead of being bounced to /onboard/vault by OnboardingGate; record a
   // tour_offered_skipped action and seed a default vault so the dashboard's
   // TourOfferModal + CreateFirstVaultModal don't intercept every click.
   const { access_token: token } = await res.json()
@@ -63,9 +63,9 @@ test.describe('Local auth provider', () => {
     await page.getByLabel('Confirm password').fill(TEST_PASSWORD)
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    // OnboardingGate sends fresh accounts through the wizard; profile is the
+    // OnboardingGate sends fresh accounts through the wizard; tools is the
     // first universal step in self-host mode (billing/agreement auto-pass).
-    await expect(page).toHaveURL(/\/onboard\/profile/, { timeout: 10_000 })
+    await expect(page).toHaveURL(/\/onboard\/tools/, { timeout: 10_000 })
   })
 
   test('sign out → redirects to sign-in', async ({ page, baseURL }) => {
@@ -117,6 +117,6 @@ test.describe('Local auth provider', () => {
     await page.getByLabel('Confirm password').fill(TEST_PASSWORD)
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    await expect(page).toHaveURL(/\/onboard\/profile/, { timeout: 10_000 })
+    await expect(page).toHaveURL(/\/onboard\/tools/, { timeout: 10_000 })
   })
 })

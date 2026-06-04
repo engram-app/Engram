@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router'
+import { Navigate, useNavigate } from 'react-router'
 import { setActiveVaultId } from '../api/active-vault'
 import {
   useCreateVault,
   useMe,
   useOnboardingStatus,
+  useSetOnboardingProfile,
   useUpdateNote,
 } from '../api/queries'
 import AuthPanel from '@/layout/auth-panel'
@@ -13,112 +14,214 @@ import { heading } from '@/lib/ui-classes'
 import { useVaultReadyEvents } from './use-vault-ready-events'
 import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from './welcome-note'
 
-type View = 'obsidian' | 'fresh'
+type Source = 'obsidian' | 'fresh' | null
 
 export default function OnboardVaultPage() {
   const navigate = useNavigate()
-  const location = useLocation()
   const { data: status, isLoading } = useOnboardingStatus()
   const { data: me } = useMe()
+  const setProfile = useSetOnboardingProfile()
   const createVault = useCreateVault()
   const updateNote = useUpdateNote()
 
-  // Allow the user to override their original answer ("or skip — name a
-  // vault here instead"). `null` = follow whatever the profile said.
-  const [override, setOverride] = useState<View | null>(null)
-
-  // Block render until status arrives so the obsidian user never briefly
-  // sees the fresh-path form before the page flips to install instructions.
+  // Block render until status arrives so the source toggle never flashes
+  // the wrong branch on first paint for a returning mid-flow user.
   if (isLoading || !status) {
     return <LoadingScreen />
   }
 
-  // Page can be reached by direct URL or a stale tab — make sure the user
-  // is actually at the vault step. Redirect back to whatever step the
-  // server thinks they're on. Without this, a user with an empty profile
-  // landing here from a refresh would see the fresh-path form even though
-  // they haven't answered the questionnaire yet.
+  // Backend owns step ordering — if it says tools/agreement/billing should
+  // come first, honor that. `:done` means wizard complete; kick home.
   if (status.next_step !== 'vault' && status.next_step !== 'done') {
-    return <RedirectToNextStep step={status.next_step} />
+    return <Navigate to={`/onboard/${status.next_step}`} replace />
   }
   if (status.next_step === 'done') {
-    return <RedirectToDashboard />
-  }
-
-  // Source of truth, in priority order:
-  // 1. User override (clicked "or skip" to switch to fresh)
-  // 2. Router state from the questionnaire submit — deterministic, no
-  //    race on the status query refetch
-  // 3. Status query (covers deep-link / page-refresh cases)
-  const stateUsesObsidian = (location.state as { usesObsidian?: boolean } | null)
-    ?.usesObsidian
-  const profileUsesObsidian =
-    stateUsesObsidian ?? status.profile?.uses_obsidian === true
-  const view: View = override ?? (profileUsesObsidian ? 'obsidian' : 'fresh')
-
-  if (view === 'obsidian') {
-    return (
-      <ObsidianView
-        userId={me?.id ?? null}
-        onSwitchToFresh={() => setOverride('fresh')}
-        onSkipToDashboard={() => navigate('/', { replace: true })}
-      />
-    )
+    return <Navigate to="/" replace />
   }
 
   return (
-    <FreshView
-      isPending={createVault.isPending || updateNote.isPending}
-      onCreate={async (name) => {
-        const trimmed = name.trim() || 'My Vault'
-        const { vault } = await createVault.mutateAsync({ name: trimmed })
-        setActiveVaultId(vault.id)
-        try {
-          await updateNote.mutateAsync({
-            path: WELCOME_NOTE_PATH,
-            content: WELCOME_NOTE_CONTENT,
-          })
-        } catch {
-          // Vault still exists if note-seed fails — let the user proceed.
-        }
-        navigate('/', { replace: true })
-      }}
+    <VaultStep
+      profileSaved={status.profile_complete === true}
+      savedUsesObsidian={status.profile?.uses_obsidian === true}
+      userId={me?.id ?? null}
+      setProfile={setProfile}
+      createVault={createVault}
+      updateNote={updateNote}
+      navigate={navigate}
     />
   )
 }
 
-function RedirectToNextStep({ step }: { step: string }) {
-  return <Navigate to={`/onboard/${step}`} replace />
-}
-
-function RedirectToDashboard() {
-  return <Navigate to="/" replace />
-}
-
-// ── Obsidian path ─────────────────────────────────────────────────────────────
-
-interface ObsidianViewProps {
+interface VaultStepProps {
+  profileSaved: boolean
+  savedUsesObsidian: boolean
   userId: number | null
-  onSwitchToFresh: () => void
-  onSkipToDashboard: () => void
+  setProfile: ReturnType<typeof useSetOnboardingProfile>
+  createVault: ReturnType<typeof useCreateVault>
+  updateNote: ReturnType<typeof useUpdateNote>
+  navigate: ReturnType<typeof useNavigate>
 }
 
-function ObsidianView({ userId, onSwitchToFresh, onSkipToDashboard }: ObsidianViewProps) {
-  const navigate = useNavigate()
+function VaultStep({
+  profileSaved,
+  savedUsesObsidian,
+  userId,
+  setProfile,
+  createVault,
+  updateNote,
+  navigate,
+}: VaultStepProps) {
+  // Mid-flow refresh: if uses_obsidian was already POSTed in a prior visit,
+  // pre-select that side so the user sees the inline panel for the branch
+  // they picked instead of an empty source toggle.
+  const [source, setSource] = useState<Source>(
+    profileSaved ? (savedUsesObsidian ? 'obsidian' : 'fresh') : null,
+  )
+
+  async function commitObsidian() {
+    await setProfile.mutateAsync({ uses_obsidian: true })
+    navigate('/', { replace: true })
+  }
+
+  async function commitFresh(name: string) {
+    await setProfile.mutateAsync({ uses_obsidian: false })
+    const trimmed = name.trim() || 'My Vault'
+    const { vault } = await createVault.mutateAsync({ name: trimmed })
+    setActiveVaultId(vault.id)
+    try {
+      await updateNote.mutateAsync({
+        path: WELCOME_NOTE_PATH,
+        content: WELCOME_NOTE_CONTENT,
+      })
+    } catch {
+      // Vault still exists if the welcome-note seed fails — let the user
+      // proceed; an empty vault is recoverable, a missing vault is not.
+    }
+    navigate('/', { replace: true })
+  }
+
+  return (
+    <SourceScreen
+      source={source}
+      onPickSource={setSource}
+      userId={userId}
+      isCommitting={
+        setProfile.isPending || createVault.isPending || updateNote.isPending
+      }
+      onCommitObsidian={commitObsidian}
+      onCommitFresh={commitFresh}
+    />
+  )
+}
+
+// ── Source screen (with inline action panel) ──────────────────────────────────
+
+interface SourceScreenProps {
+  source: Source
+  onPickSource: (s: Source) => void
+  userId: number | null
+  isCommitting: boolean
+  onCommitObsidian: () => Promise<void>
+  onCommitFresh: (name: string) => Promise<void>
+}
+
+function SourceScreen({
+  source,
+  onPickSource,
+  userId,
+  isCommitting,
+  onCommitObsidian,
+  onCommitFresh,
+}: SourceScreenProps) {
+  return (
+    <AuthPanel className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <h1 className={heading}>Where do your notes live?</h1>
+        <p className="text-sm text-muted-foreground">
+          Engram stores your notes as plain markdown files. Obsidian is one
+          way to read them — not required. Pick a side and we'll get you set
+          up right here.
+        </p>
+      </header>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <SourceCard
+          title="I already use Obsidian"
+          body="Install our plugin and your first sync creates the vault — no empty placeholder."
+          selected={source === 'obsidian'}
+          onClick={() => onPickSource('obsidian')}
+        />
+        <SourceCard
+          title="I'm starting fresh"
+          body="We'll create your first vault now. You can rename or add more later from settings."
+          selected={source === 'fresh'}
+          onClick={() => onPickSource('fresh')}
+        />
+      </div>
+
+      {source === 'obsidian' ? (
+        <ObsidianInlinePanel
+          userId={userId}
+          isCommitting={isCommitting}
+          onCommit={onCommitObsidian}
+        />
+      ) : source === 'fresh' ? (
+        <FreshInlinePanel isCommitting={isCommitting} onCommit={onCommitFresh} />
+      ) : null}
+    </AuthPanel>
+  )
+}
+
+interface SourceCardProps {
+  title: string
+  body: string
+  selected: boolean
+  onClick: () => void
+}
+
+function SourceCard({ title, body, selected, onClick }: SourceCardProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={
+        'group flex flex-col gap-2 rounded-xl border p-5 text-left transition ' +
+        (selected
+          ? 'border-primary bg-accent/40'
+          : 'border-border bg-background hover:border-primary hover:bg-accent/30')
+      }
+    >
+      <span className="text-base font-semibold text-foreground group-hover:text-primary">
+        {title}
+      </span>
+      <span className="text-sm text-muted-foreground">{body}</span>
+    </button>
+  )
+}
+
+// ── Obsidian inline panel ─────────────────────────────────────────────────────
+
+interface ObsidianInlinePanelProps {
+  userId: number | null
+  isCommitting: boolean
+  onCommit: () => Promise<void>
+}
+
+function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlinePanelProps) {
   const { vaultCreated, vaultPopulated, vaultId } = useVaultReadyEvents({
     userId,
     enabled: true,
   })
 
-  // Auto-transition once the plugin has actually written notes. Setting the
-  // active vault makes the dashboard open into the new vault directly
-  // instead of falling through CreateFirstVaultModal.
+  // Auto-commit + activate once the plugin has actually written notes, so
+  // the user is hands-off the moment their first sync lands.
   useEffect(() => {
-    if (vaultPopulated && vaultId != null) {
+    if (vaultPopulated && vaultId != null && !isCommitting) {
       setActiveVaultId(vaultId)
-      navigate('/', { replace: true })
+      void onCommit()
     }
-  }, [vaultPopulated, vaultId, navigate])
+  }, [vaultPopulated, vaultId, isCommitting, onCommit])
 
   const stage: 'waiting' | 'detected' | 'syncing' = vaultPopulated
     ? 'syncing'
@@ -127,16 +230,11 @@ function ObsidianView({ userId, onSwitchToFresh, onSkipToDashboard }: ObsidianVi
       : 'waiting'
 
   return (
-    <AuthPanel className="flex flex-col gap-5">
-      <header className="flex flex-col gap-2">
-        <h1 className={heading}>Install the Engram plugin</h1>
-        <p className="text-sm text-muted-foreground">
-          Three steps. We'll wait on this page until your vault appears here —
-          no need to come back.
-        </p>
-      </header>
-
-      <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-foreground">
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
+      <h2 className="text-base font-semibold text-foreground">
+        Install the Engram plugin
+      </h2>
+      <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm text-foreground">
         <li>
           Open Obsidian → <strong>Settings → Community plugins → Browse</strong>,
           search for <em>Engram</em>, install and enable it.
@@ -146,30 +244,20 @@ function ObsidianView({ userId, onSwitchToFresh, onSkipToDashboard }: ObsidianVi
           with your Engram account.
         </li>
         <li>
-          Pick a vault to sync. The plugin will create a matching Engram
-          vault and push your existing files.
+          Pick a vault to sync. The plugin creates a matching Engram vault
+          and pushes your existing files.
         </li>
       </ol>
-
       <StatusRow stage={stage} />
-
-      <footer className="flex flex-col gap-2 border-t border-border pt-4 text-sm">
-        <button
-          type="button"
-          onClick={onSkipToDashboard}
-          className="rounded-lg border border-border bg-background px-4 py-2 font-medium text-foreground transition hover:bg-accent/40"
-        >
-          I've installed it — take me to my dashboard
-        </button>
-        <button
-          type="button"
-          onClick={onSwitchToFresh}
-          className="text-xs font-medium text-muted-foreground transition hover:text-foreground"
-        >
-          Or skip — name a vault here instead
-        </button>
-      </footer>
-    </AuthPanel>
+      <button
+        type="button"
+        onClick={() => void onCommit()}
+        disabled={isCommitting}
+        className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isCommitting ? 'Saving…' : "I've installed it — take me to my dashboard"}
+      </button>
+    </div>
   )
 }
 
@@ -191,39 +279,35 @@ function StatusRow({ stage }: { stage: 'waiting' | 'detected' | 'syncing' }) {
   )
 }
 
-// ── Fresh-start path ──────────────────────────────────────────────────────────
+// ── Fresh-start inline panel ──────────────────────────────────────────────────
 
-interface FreshViewProps {
-  isPending: boolean
-  onCreate: (name: string) => Promise<void>
+interface FreshInlinePanelProps {
+  isCommitting: boolean
+  onCommit: (name: string) => Promise<void>
 }
 
-function FreshView({ isPending, onCreate }: FreshViewProps) {
+function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
   const [name, setName] = useState('My Vault')
   const [error, setError] = useState<string | null>(null)
 
   async function submit() {
     setError(null)
     try {
-      await onCreate(name)
+      await onCommit(name)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create vault')
     }
   }
 
-  const disabled = isPending || name.trim().length === 0
+  const disabled = isCommitting || name.trim().length === 0
 
   return (
-    <AuthPanel className="flex flex-col gap-5">
-      <header className="flex flex-col gap-2">
-        <h1 className={heading}>Name your first vault</h1>
-        <p className="text-sm text-muted-foreground">
-          A vault is a folder for related notes. We'll create one with a
-          welcome note so the editor isn't empty when you arrive. You can
-          rename or add more later from settings.
-        </p>
-      </header>
-
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
+      <h2 className="text-base font-semibold text-foreground">Name your first vault</h2>
+      <p className="text-sm text-muted-foreground">
+        A vault is a folder for related notes. We'll seed it with a welcome
+        note so the editor isn't empty when you arrive.
+      </p>
       <label className="flex flex-col gap-2 text-sm">
         <span className="font-medium text-foreground">Vault name</span>
         <input
@@ -235,21 +319,19 @@ function FreshView({ isPending, onCreate }: FreshViewProps) {
           className="rounded-lg border border-border bg-background px-3 py-2 text-base text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
         />
       </label>
-
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       ) : null}
-
       <button
         type="button"
         onClick={submit}
         disabled={disabled}
-        className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {isPending ? 'Creating…' : 'Create vault & continue'}
+        {isCommitting ? 'Creating…' : 'Create vault & continue'}
       </button>
-    </AuthPanel>
+    </div>
   )
 }

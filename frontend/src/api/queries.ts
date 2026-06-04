@@ -319,10 +319,11 @@ export interface OnboardingStatus {
   current_privacy_version?: string
   next_step: OnboardingStep | 'done'
   // Full intended step chain for THIS account at this moment. Self-host
-  // returns ["profile","vault"]; hosted returns ["agreement","billing",
-  // "profile","vault"]. `vault` drops once profile.uses_obsidian=true.
-  // The frontend uses this for "Step X of N" and to reject manual nav
-  // to a step not in the chain (e.g. /onboard/agreement on self-host).
+  // returns ["tools","vault"]; hosted returns ["agreement","billing",
+  // "tools","vault"]. `:tools` collects the FTUX tool checkboxes; `:vault`
+  // owns the obsidian/fresh source pick + first-vault creation. The
+  // frontend uses this for "Step X of N" and to reject manual nav to a
+  // step not in the chain (e.g. /onboard/agreement on self-host).
   steps: OnboardingStep[]
   // Post-wizard milestone log driving the persistent dashboard checklist.
   actions: OnboardingAction[]
@@ -330,12 +331,16 @@ export interface OnboardingStatus {
   vault_count: number
 }
 
-export type OnboardingStep = 'agreement' | 'billing' | 'profile' | 'vault'
+export type OnboardingStep = 'agreement' | 'billing' | 'tools' | 'vault'
 
+// Partial mid-flow: the `:tools` step POSTs `tools` first, the `:vault`
+// step POSTs `uses_obsidian` after. `completed_at` only stamps once both
+// have landed — until then, treat absent fields as "user hasn't answered
+// that screen yet."
 export interface OnboardingProfile {
-  uses_obsidian: boolean
-  tools: string[]
-  completed_at: string
+  uses_obsidian?: boolean
+  tools?: string[]
+  completed_at?: string
 }
 
 // Onboarding hooks
@@ -380,15 +385,19 @@ export function useAcceptTerms() {
   })
 }
 
+// Partial body — the `:tools` screen POSTs `{ tools }`, the `:vault` screen
+// POSTs `{ uses_obsidian }`. Either field may be present (or both, on a
+// one-shot completion). Backend `set_profile/2` merges into the JSONB
+// column and stamps `completed_at` once both halves have landed.
 export function useSetOnboardingProfile() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: { uses_obsidian: boolean; tools: string[] }) =>
+    mutationFn: (body: { uses_obsidian?: boolean; tools?: string[] }) =>
       api.patch<OnboardingProfile>('/onboarding/profile', body),
     // AWAIT the invalidation so mutateAsync resolves only after
     // ['onboarding','status'] has refetched. Without the await,
-    // OnboardingGate reads the still-cached next_step: "profile"
-    // immediately after navigate('/') and bounces back here.
+    // OnboardingGate reads the still-cached next_step (e.g. "tools")
+    // immediately after navigate and bounces back here.
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },

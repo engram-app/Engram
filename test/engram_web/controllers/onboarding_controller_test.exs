@@ -82,11 +82,11 @@ defmodule EngramWeb.OnboardingControllerTest do
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
       # Wizard runs (every account onboards), but agreement + billing auto-pass.
-      # Fresh user falls through to the profile (questionnaire) step.
+      # Fresh user falls through to the :tools step first.
       assert body["enabled"] == true
       assert body["terms_ok"] == true
       assert body["subscription_ok"] == true
-      assert body["next_step"] == "profile"
+      assert body["next_step"] == "tools"
     end
   end
 

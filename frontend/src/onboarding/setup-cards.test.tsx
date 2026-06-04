@@ -31,10 +31,23 @@ describe('SetupCards', () => {
   })
 
   it('renders a coming-soon stub for tools without real instructions yet', () => {
-    render(<SetupCards profile={{ ...PROFILE_BASE, tools: ['continue_cline'] }} />)
+    render(<SetupCards profile={{ ...PROFILE_BASE, tools: ['cline'] }} />)
     expect(
-      screen.getByRole('heading', { name: /configure continue.*cline/i }),
+      screen.getByRole('heading', { name: /configure cline/i }),
     ).toBeInTheDocument()
+  })
+
+  it('renders coming-soon stubs for the newly-added AI assistant slugs', () => {
+    render(
+      <SetupCards
+        profile={{ ...PROFILE_BASE, tools: ['mistral', 'open_webui', 'opencode'] }}
+      />,
+    )
+    expect(
+      screen.getByRole('heading', { name: /connect mistral/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /connect open webui/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /add engram to opencode/i })).toBeInTheDocument()
   })
 
   it('dismisses a card on Done click and persists across renders', () => {

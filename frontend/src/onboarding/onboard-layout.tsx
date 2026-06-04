@@ -4,7 +4,7 @@ import { useOnboardingStatus, type OnboardingStep } from '../api/queries'
 import AuthShell from '../layout/auth-shell'
 import LoadingScreen from '../layout/loading-screen'
 
-const STEP_PATHS: OnboardingStep[] = ['agreement', 'billing', 'profile', 'vault']
+const STEP_PATHS: OnboardingStep[] = ['agreement', 'billing', 'tools', 'vault']
 
 function stepFromPath(pathname: string): OnboardingStep | null {
   const last = pathname.split('/').pop() ?? ''

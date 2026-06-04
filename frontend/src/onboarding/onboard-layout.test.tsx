@@ -19,11 +19,11 @@ vi.mock('../api/queries', () => ({
 
 import { useOnboardingStatus } from '../api/queries'
 
-type Steps = ('agreement' | 'billing' | 'profile' | 'vault')[]
+type Steps = ('agreement' | 'billing' | 'tools' | 'vault')[]
 
 function renderAt(path: string, steps: Steps) {
   vi.mocked(useOnboardingStatus).mockReturnValue({
-    data: { enabled: true, next_step: 'profile', steps },
+    data: { enabled: true, next_step: 'tools', steps },
     isLoading: false,
     isError: false,
   } as never)
@@ -34,7 +34,7 @@ function renderAt(path: string, steps: Steps) {
         <Route element={<OnboardLayout />}>
           <Route path="/onboard/agreement" element={<p>agreement step</p>} />
           <Route path="/onboard/billing" element={<p>billing step</p>} />
-          <Route path="/onboard/profile" element={<p>profile step</p>} />
+          <Route path="/onboard/tools" element={<p>tools step</p>} />
           <Route path="/onboard/vault" element={<p>vault step</p>} />
         </Route>
         <Route path="/onboard" element={<p>resolver landing</p>} />
@@ -43,8 +43,8 @@ function renderAt(path: string, steps: Steps) {
   )
 }
 
-const SAAS: Steps = ['agreement', 'billing', 'profile', 'vault']
-const SELF: Steps = ['profile', 'vault']
+const SAAS: Steps = ['agreement', 'billing', 'tools', 'vault']
+const SELF: Steps = ['tools', 'vault']
 
 describe('OnboardLayout', () => {
   it('renders loading screen while status is pending', () => {
@@ -54,10 +54,10 @@ describe('OnboardLayout', () => {
       isError: false,
     } as never)
     render(
-      <MemoryRouter initialEntries={['/onboard/profile']}>
+      <MemoryRouter initialEntries={['/onboard/tools']}>
         <Routes>
           <Route element={<OnboardLayout />}>
-            <Route path="/onboard/profile" element={<p>profile step</p>} />
+            <Route path="/onboard/tools" element={<p>tools step</p>} />
           </Route>
         </Routes>
       </MemoryRouter>,
@@ -65,7 +65,7 @@ describe('OnboardLayout', () => {
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
   })
 
-  it('numbers each hosted step 1-of-4 through 4-of-4', () => {
+  it('numbers hosted agreement step 1 of 4', () => {
     renderAt('/onboard/agreement', SAAS)
     expect(screen.getByText(/step 1 of 4/i)).toBeInTheDocument()
   })
@@ -76,8 +76,8 @@ describe('OnboardLayout', () => {
     expect(screen.getByText('billing step')).toBeInTheDocument()
   })
 
-  it('shows step 3 of 4 on profile (hosted)', () => {
-    renderAt('/onboard/profile', SAAS)
+  it('shows step 3 of 4 on tools (hosted)', () => {
+    renderAt('/onboard/tools', SAAS)
     expect(screen.getByText(/step 3 of 4/i)).toBeInTheDocument()
   })
 
@@ -86,19 +86,14 @@ describe('OnboardLayout', () => {
     expect(screen.getByText(/step 4 of 4/i)).toBeInTheDocument()
   })
 
-  it('shows step 1 of 2 on profile (self-host)', () => {
-    renderAt('/onboard/profile', SELF)
+  it('shows step 1 of 2 on tools (self-host)', () => {
+    renderAt('/onboard/tools', SELF)
     expect(screen.getByText(/step 1 of 2/i)).toBeInTheDocument()
   })
 
   it('shows step 2 of 2 on vault (self-host)', () => {
     renderAt('/onboard/vault', SELF)
     expect(screen.getByText(/step 2 of 2/i)).toBeInTheDocument()
-  })
-
-  it('shows step 1 of 1 when obsidian short-circuit drops vault', () => {
-    renderAt('/onboard/profile', ['profile'])
-    expect(screen.getByText(/step 1 of 1/i)).toBeInTheDocument()
   })
 
   it('redirects /onboard/agreement to /onboard when self-host chain skips it', () => {
@@ -111,13 +106,8 @@ describe('OnboardLayout', () => {
     expect(screen.getByText('resolver landing')).toBeInTheDocument()
   })
 
-  it('redirects /onboard/vault to /onboard when uses_obsidian drops the vault step', () => {
-    renderAt('/onboard/vault', ['profile'])
-    expect(screen.getByText('resolver landing')).toBeInTheDocument()
-  })
-
   it('signs the user out mid-flow', () => {
-    renderAt('/onboard/profile', SAAS)
+    renderAt('/onboard/tools', SAAS)
     fireEvent.click(screen.getByRole('button', { name: /sign out/i }))
     expect(logout).toHaveBeenCalled()
   })

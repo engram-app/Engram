@@ -47,7 +47,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["missing"] == ["profile"]
-    assert body["next_step"] == "profile"
+    assert body["next_step"] == "tools"
   end
 
   test "self-host passes through once profile is set (obsidian path)", %{conn: conn} do
@@ -126,7 +126,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["missing"] == ["profile"]
-    assert body["next_step"] == "profile"
+    assert body["next_step"] == "tools"
   end
 
   test "passes through when fresh-path profile is set AND a vault exists",

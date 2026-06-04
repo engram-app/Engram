@@ -130,10 +130,58 @@ const CARDS = {
     body: <ComingSoon name="ChatGPT" />,
     ready: false,
   },
-  continue_cline: {
-    key: 'continue_cline',
-    title: 'Configure Continue / Cline',
-    body: <ComingSoon name="Continue / Cline" />,
+  grok: {
+    key: 'grok',
+    title: 'Connect Grok',
+    body: <ComingSoon name="Grok" />,
+    ready: false,
+  },
+  mistral: {
+    key: 'mistral',
+    title: 'Connect Mistral (Le Chat)',
+    body: <ComingSoon name="Mistral Le Chat" />,
+    ready: false,
+  },
+  open_webui: {
+    key: 'open_webui',
+    title: 'Connect Open WebUI',
+    body: <ComingSoon name="Open WebUI" />,
+    ready: false,
+  },
+  lobechat: {
+    key: 'lobechat',
+    title: 'Connect LobeChat',
+    body: <ComingSoon name="LobeChat" />,
+    ready: false,
+  },
+  windsurf: {
+    key: 'windsurf',
+    title: 'Configure Windsurf MCP',
+    body: <ComingSoon name="Windsurf" />,
+    ready: false,
+  },
+  cline: {
+    key: 'cline',
+    title: 'Configure Cline',
+    body: <ComingSoon name="Cline" />,
+    ready: false,
+  },
+  continue: {
+    key: 'continue',
+    title: 'Configure Continue',
+    body: <ComingSoon name="Continue" />,
+    ready: false,
+  },
+  opencode: {
+    key: 'opencode',
+    title: 'Add Engram to OpenCode',
+    body: <ComingSoon name="OpenCode" />,
+    ready: false,
+  },
+  github_copilot: {
+    key: 'github_copilot',
+    title: 'Configure GitHub Copilot',
+    body: <ComingSoon name="GitHub Copilot" />,
     ready: false,
   },
   other_mcp: {
@@ -156,7 +204,7 @@ const CARDS = {
 function cardsFor(profile: OnboardingProfile): CardDef[] {
   const ordered: CardDef[] = []
   if (profile.uses_obsidian) ordered.push(CARDS.install_obsidian_plugin)
-  for (const slug of profile.tools) {
+  for (const slug of profile.tools ?? []) {
     const card = (CARDS as Record<string, CardDef | undefined>)[slug]
     if (card) ordered.push(card)
   }

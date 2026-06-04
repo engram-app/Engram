@@ -24,7 +24,7 @@ import OnboardLayout from './onboarding/onboard-layout'
 import OnboardRedirect from './onboarding/onboard-redirect'
 import AgreementPage from './onboarding/agreement-page'
 import OnboardBillingPage from './onboarding/onboard-billing-page'
-import OnboardProfilePage from './onboarding/onboard-profile-page'
+import OnboardToolsPage from './onboarding/onboard-tools-page'
 import OnboardVaultPage from './onboarding/onboard-vault-page'
 import { OnboardingShell } from './onboarding/onboarding-shell'
 import { Outlet } from 'react-router'
@@ -59,7 +59,7 @@ export const router = createBrowserRouter(
             { index: true, element: <OnboardRedirect /> },
             { path: 'agreement', element: <AgreementPage /> },
             { path: 'billing', element: <OnboardBillingPage /> },
-            { path: 'profile', element: <OnboardProfilePage /> },
+            { path: 'tools', element: <OnboardToolsPage /> },
             { path: 'vault', element: <OnboardVaultPage /> },
           ],
         },
