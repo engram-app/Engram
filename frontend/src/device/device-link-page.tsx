@@ -8,7 +8,7 @@ import AuthShell from '../layout/auth-shell'
 import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
+import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 
 type Vault = { id: number; name: string; note_count: number }
 
@@ -21,9 +21,10 @@ export default function DeviceLinkPage() {
   const [step, setStep] = useState<Step>('enter-code')
   const [userCode, setUserCode] = useState('')
   const [vaults, setVaults] = useState<Vault[]>([])
-  // `selection` doubles as the dropdown value: 'new' for create-new, or the
-  // existing vault id stringified (HTML <select> values are strings).
-  const [selection, setSelection] = useState<string>('new')
+  // `selection` is the radio-row value: 'matched' (create new with the
+  // plugin-suggested name), 'custom' (create new with the input below), or
+  // the existing vault id as a string.
+  const [selection, setSelection] = useState<string>('matched')
   const [suggestedName, setSuggestedName] = useState('')
   const [customName, setCustomName] = useState('')
   const [error, setError] = useState('')
@@ -60,10 +61,11 @@ export default function DeviceLinkPage() {
       )
       setUserCode(formattedCode)
       setVaults(data.vaults ?? [])
-      setSuggestedName(data.suggested_vault_name?.trim() || '')
-      // Default selection: always start on "create new" so the matched
-      // Obsidian name leads. Users with existing vaults can pick one explicitly.
-      setSelection('new')
+      const suggested = data.suggested_vault_name?.trim() || ''
+      setSuggestedName(suggested)
+      // Default to the matched-name row when the plugin sent a hint;
+      // otherwise drop straight to the custom-name input.
+      setSelection(suggested ? 'matched' : 'custom')
       setStep('pick-vault')
     } catch {
       setError('Failed to load vaults. Please try again.')
@@ -72,8 +74,14 @@ export default function DeviceLinkPage() {
     }
   }
 
-  const createNew = selection === 'new'
-  const effectiveNewName = (customName.trim() || suggestedName || '').trim()
+  const isMatched = selection === 'matched'
+  const isCustom = selection === 'custom'
+  const createNew = isMatched || isCustom
+  const effectiveNewName = isCustom
+    ? customName.trim()
+    : isMatched
+      ? suggestedName
+      : ''
 
   async function handleAuthorize() {
     setLoading(true)
@@ -105,7 +113,7 @@ export default function DeviceLinkPage() {
     }
   }
 
-  const canAuthorize = createNew ? effectiveNewName.length > 0 : selection !== 'new'
+  const canAuthorize = createNew ? effectiveNewName.length > 0 : true
 
   return (
     <AuthShell>
@@ -140,41 +148,75 @@ export default function DeviceLinkPage() {
               Code verified. Pick where these notes should sync:
             </p>
 
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="font-medium text-foreground">Sync target</span>
-              <select
-                value={selection}
-                onChange={(e) => setSelection(e.target.value)}
-                className={fieldInput}
-              >
-                <option value="new">
-                  {suggestedName
-                    ? `${suggestedName} (Match Obsidian vault name)`
-                    : 'Create a new vault'}
-                </option>
-                {vaults.map((v) => (
-                  <option key={v.id} value={String(v.id)}>
-                    {v.name} ({v.note_count} notes)
-                  </option>
-                ))}
-              </select>
-            </label>
+            <fieldset className="flex flex-col gap-2">
+              {suggestedName && (
+                <label className={selectableRow(isMatched)}>
+                  <input
+                    type="radio"
+                    name="vault-target"
+                    checked={isMatched}
+                    onChange={() => setSelection('matched')}
+                    className="accent-primary"
+                  />
+                  <span className="flex flex-col">
+                    <span className="text-sm font-medium text-foreground">
+                      Create a vault called &ldquo;{suggestedName}&rdquo;
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      Matches your Obsidian vault name
+                    </span>
+                  </span>
+                </label>
+              )}
 
-            {createNew && (
-              <label className="flex flex-col gap-2 text-sm">
-                <span className="font-medium text-foreground">
-                  Use a different name (optional)
-                </span>
+              {vaults.map((v) => {
+                const active = selection === String(v.id)
+                return (
+                  <label key={v.id} className={selectableRow(active)}>
+                    <input
+                      type="radio"
+                      name="vault-target"
+                      checked={active}
+                      onChange={() => setSelection(String(v.id))}
+                      className="accent-primary"
+                    />
+                    <span className="flex flex-col">
+                      <span className="text-sm font-medium text-foreground">{v.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Sync into this existing vault &middot; {v.note_count} notes
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+
+              <label className={selectableRow(isCustom)}>
                 <input
-                  type="text"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  placeholder="choose new name"
-                  maxLength={100}
-                  className={fieldInput}
+                  type="radio"
+                  name="vault-target"
+                  checked={isCustom}
+                  onChange={() => setSelection('custom')}
+                  className="accent-primary"
                 />
+                <span className="flex flex-1 flex-col gap-2">
+                  <span className="text-sm font-medium text-foreground">
+                    Create a vault with a custom name
+                  </span>
+                  <input
+                    type="text"
+                    value={customName}
+                    onChange={(e) => {
+                      setCustomName(e.target.value)
+                      if (!isCustom) setSelection('custom')
+                    }}
+                    onFocus={() => setSelection('custom')}
+                    placeholder="choose a new name"
+                    maxLength={100}
+                    className={fieldInput}
+                  />
+                </span>
               </label>
-            )}
+            </fieldset>
 
             <Button
               type="button"
