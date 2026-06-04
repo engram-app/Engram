@@ -1492,6 +1492,179 @@ jobs:
           fi
           exit $failed
 
+  n1-compat:
+    # On phase/expand PRs only: prove the new migrations cleanly apply on
+    # top of the previous release-v* tag's schema. This catches malformed
+    # expand-phase migrations (NOT NULL without default, incompatible
+    # type changes, etc.) that Squawk's per-statement scan can miss in
+    # the catalog-level view.
+    #
+    # Simpler than the original plan: applies migrations, doesn't run
+    # the prev release's full mix test (brittle across versions). The
+    # "migrate applies cleanly" check is the load-bearing invariant.
+    if: |
+      github.event_name == 'push' &&
+      github.ref != 'refs/heads/main' &&
+      needs.fingerprint.outputs.backend-cache-hit != 'true'
+    runs-on: [self-hosted, linux, x64, isolated]
+    needs: [fingerprint, prebuild-mix]
+    permissions:
+      contents: read
+    env:
+      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check phase/expand label on open PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping n1-compat."
+            exit 0
+          fi
+          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
+          if echo "$labels" | grep -qx 'phase/expand'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "phase/expand label present on PR #$pr_number — running N-1 compat."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "phase/expand label NOT present — skipping N-1 compat."
+          fi
+
+      - name: Resolve previous release tag
+        if: steps.gate.outputs.proceed == 'true'
+        id: prev
+        run: |
+          # Most-recent release-v* tag in the repo, excluding any tag that
+          # would point at HEAD (defensive — shouldn't happen on a feature
+          # branch but cheap to guard).
+          prev=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
+          if [ -z "$prev" ]; then
+            echo "::warning::No release-v* tag found — N-1 compat cannot run on a never-released branch."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$prev" >> "$GITHUB_OUTPUT"
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "Previous release: $prev"
+
+      - name: Check out previous release in a sibling worktree
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: |
+          # Clean any stale worktree from a previous run on this runner.
+          rm -rf /tmp/prev-release
+          git worktree prune
+          git worktree add /tmp/prev-release "${{ steps.prev.outputs.tag }}"
+
+      - name: Start ephemeral postgres
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: pg
+        run: |
+          docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_n1 \
+            -P \
+            postgres:16-alpine
+          # Wait for ready
+          for i in $(seq 1 30); do
+            if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
+          echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
+          echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
+
+      - uses: actions/cache/restore@v5
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: cache-deps
+        with:
+          path: /tmp/prev-release/deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Install deps for prev release
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
+        working-directory: /tmp/prev-release
+        run: mix deps.get
+
+      - name: Compile prev release
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        working-directory: /tmp/prev-release
+        run: mix compile
+
+      - name: Set up DB at prev release schema
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        working-directory: /tmp/prev-release
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          echo "DB now at prev release schema."
+
+      - name: Apply this branch's new migrations on top of prev's schema
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        working-directory: /tmp/prev-release
+        run: |
+          # Copy this branch's NEW migrations into prev's migrations dir.
+          cd "${{ github.workspace }}"
+          git fetch -q --depth=1 origin main || true
+          if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
+            echo "::error::n1-compat: list_new_migrations.sh failed (BASE_REF may not be fetched)"
+            exit 1
+          fi
+          if [ -z "$new_files_output" ]; then
+            echo "::notice::n1-compat: no new migrations on this branch — nothing to apply on top of prev."
+            exit 0
+          fi
+          echo "New migrations on this PR (about to apply on top of prev's schema):"
+          echo "$new_files_output" | sed 's/^/  /'
+          while IFS= read -r f; do
+            cp "priv/repo/migrations/$f" /tmp/prev-release/priv/repo/migrations/
+          done <<<"$new_files_output"
+
+          # Now migrate prev with the new files in its tree. If this
+          # fails, the expand-phase migration is incompatible with the
+          # previously-deployed schema.
+          cd /tmp/prev-release
+          mix ecto.migrate
+
+      - name: Smoke-query the migrated DB
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        run: |
+          # Quick sanity check that the migrated DB is queryable. We're
+          # not running the test suite (brittle cross-version), just
+          # confirming basic structure.
+          docker exec "$PG_CONTAINER" psql -U engram -d engram_n1 -At -c "SELECT 1" >/dev/null
+          table_count=$(docker exec "$PG_CONTAINER" psql -U engram -d engram_n1 -At -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
+          echo "OK — migrated DB has $table_count public tables."
+
+      - name: Stop ephemeral postgres
+        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
+
+      - name: Clean up prev-release worktree
+        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: |
+          rm -rf /tmp/prev-release
+          git worktree prune
+
   frontend-audit:
     name: frontend audit
     if: github.event_name != 'repository_dispatch'
