@@ -2,9 +2,12 @@ defmodule Engram.Onboarding do
   @moduledoc """
   Onboarding context: TOS acceptance tracking and wizard-state computation.
 
-  Wizard is fully disabled when `Application.get_env(:engram, :billing_enabled)`
-  is false (self-host mode). In that mode `status/1` reports `next_step: :done`
-  unconditionally and `RequireOnboarding` is a no-op.
+  Onboarding runs for every account. The only toggle is `:billing_enabled`,
+  which gates the hosted-only steps: agreement (ToS) and billing (Paddle).
+  When false (self-host: AUTH_PROVIDER=local + no PADDLE_API_KEY), the wizard
+  still runs but treats `terms_ok` and `subscription_ok` as auto-pass — the
+  operator owns their own legal posture and there is no paywall. Profile and
+  vault gate in every mode.
   """
 
   alias Engram.Billing
@@ -140,38 +143,57 @@ defmodule Engram.Onboarding do
   is still true, before the version's `effective_date`) and as the accept prompt
   once the version is effective and `terms_ok` has flipped false.
 
-  When `billing_enabled` is false (self-host), returns `{enabled: false,
-  next_step: :done}` immediately so callers can skip all gates.
+  When `billing_enabled` is false (self-host), agreement + billing steps
+  short-circuit to ok and the chain falls through to profile → vault.
+  `:enabled` is always true — every account onboards.
   """
   def status(user) do
-    if Application.get_env(:engram, :billing_enabled, false) do
-      floor = VersionCache.required_floor(@terms_document)
-      current_tos = VersionCache.current_version(@terms_document)
-      current_privacy = VersionCache.current_version(@privacy_document)
+    billing_active = Application.get_env(:engram, :billing_enabled, false)
 
-      accepted_tos = accepted_version(user, @terms_document)
-      terms_ok = accepted_satisfies?(accepted_tos, floor)
-      subscription_ok = Billing.active?(user)
-      profile = current_profile(user)
-      profile_complete = profile_complete?(profile)
-      has_vault = Vaults.has_vault?(user)
-      next = next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
+    {terms_ok, current_tos, current_privacy, terms_notice} =
+      terms_state(user, billing_active)
 
-      %{
-        enabled: true,
-        terms_ok: terms_ok,
-        subscription_ok: subscription_ok,
-        profile_complete: profile_complete,
-        profile: profile,
-        has_vault: has_vault,
-        current_tos_version: current_tos,
-        current_privacy_version: current_privacy,
-        terms_notice: notice(@terms_document, current_tos, accepted_tos),
-        next_step: next
-      }
-    else
-      %{enabled: false, next_step: :done}
-    end
+    subscription_ok = if billing_active, do: Billing.active?(user), else: true
+    profile = current_profile(user)
+    profile_complete = profile_complete?(profile)
+    has_vault = Vaults.has_vault?(user)
+    next = next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
+    steps = build_steps(billing_active, profile)
+
+    %{
+      enabled: true,
+      terms_ok: terms_ok,
+      subscription_ok: subscription_ok,
+      profile_complete: profile_complete,
+      profile: profile,
+      has_vault: has_vault,
+      current_tos_version: current_tos,
+      current_privacy_version: current_privacy,
+      terms_notice: terms_notice,
+      next_step: next,
+      steps: steps
+    }
+  end
+
+  # Enumerates the full step chain so the frontend can render "Step X of N"
+  # without re-deriving the gate rules. `:vault` drops once profile.uses_obsidian
+  # is true (plugin creates it on first OAuth sign-in).
+  defp build_steps(billing_active, profile) do
+    base = if billing_active, do: [:agreement, :billing, :profile], else: [:profile]
+    if profile_uses_obsidian?(profile), do: base, else: base ++ [:vault]
+  end
+
+  # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own
+  # their legal posture. Hosted mode performs the real cache-backed check.
+  defp terms_state(_user, false), do: {true, nil, nil, nil}
+
+  defp terms_state(user, true) do
+    floor = VersionCache.required_floor(@terms_document)
+    current_tos = VersionCache.current_version(@terms_document)
+    current_privacy = VersionCache.current_version(@privacy_document)
+    accepted_tos = accepted_version(user, @terms_document)
+    terms_ok = accepted_satisfies?(accepted_tos, floor)
+    {terms_ok, current_tos, current_privacy, notice(@terms_document, current_tos, accepted_tos)}
   end
 
   @doc """

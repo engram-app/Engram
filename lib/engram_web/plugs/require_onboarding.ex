@@ -1,9 +1,11 @@
 defmodule EngramWeb.Plugs.RequireOnboarding do
   @moduledoc """
   Halts authenticated requests with 403 `{error: "onboarding_required",
-  missing: [...]}` when the user has not completed the signup wizard
-  (TOS acceptance + active subscription). Bypassed in self-host mode
-  (`billing_enabled=false`).
+  missing: [...]}` when the user has not completed the signup wizard.
+  Onboarding is universal (every account needs profile + vault); the
+  `:billing_enabled` flag only affects which steps the wizard runs.
+  Self-host (billing off): profile + vault. SaaS: agreement + billing +
+  profile + vault.
 
   Must run after `EngramWeb.Plugs.Auth` (needs `conn.assigns.current_user`)
   and after `EngramWeb.Plugs.RotationLockCheck`. May run before or after
@@ -30,7 +32,6 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
     end
   end
 
-  defp gate(conn, %{enabled: false}), do: conn
   defp gate(conn, %{next_step: :done}), do: conn
 
   defp gate(

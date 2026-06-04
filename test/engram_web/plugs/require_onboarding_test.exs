@@ -36,16 +36,32 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     :ok
   end
 
-  test "passes through when billing is disabled (self-host)", %{conn: conn} do
+  test "self-host (billing disabled) still gates on profile + vault", %{conn: conn} do
     Application.put_env(:engram, :billing_enabled, false)
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
+
+    # Fresh self-host user: agreement + billing auto-pass, but profile is empty
+    # so the plug halts pointing at the profile step.
+    conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+    assert conn.halted
+    assert conn.status == 403
+    body = Phoenix.ConnTest.json_response(conn, 403)
+    assert body["missing"] == ["profile"]
+    assert body["next_step"] == "profile"
+  end
+
+  test "self-host passes through once profile is set (obsidian path)", %{conn: conn} do
+    Application.put_env(:engram, :billing_enabled, false)
+    user = insert(:user, onboarding_profile: %{})
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
   end
 
   test "halts 403 with missing=[profile,subscription,terms] when all three gates fail",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
@@ -56,7 +72,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "halts 403 with missing=[profile,subscription] when only terms is satisfied",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
@@ -67,7 +83,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "halts 403 with missing=[profile,terms] when only subscription is satisfied",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     insert(:subscription, user: user, status: "trialing")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
@@ -78,7 +94,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "halts 403 with missing=[vault] when fresh-path profile is set but no vault",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
@@ -92,7 +108,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "passes through for obsidian users without a vault (plugin creates it)",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
@@ -102,7 +118,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "halts 403 with missing=[profile] when terms+subscription ok but profile incomplete",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
@@ -115,7 +131,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
 
   test "passes through when fresh-path profile is set AND a vault exists",
        %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "trialing")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
@@ -140,14 +156,14 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
   end
 
   test "403 body includes next_step matching first missing gate", %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["next_step"] == "agreement"
   end
 
   test "403 next_step is 'billing' when terms accepted but no subscription", %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     body = Phoenix.ConnTest.json_response(conn, 403)
@@ -155,7 +171,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
   end
 
   test "403 includes Content-Type application/json", %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert Plug.Conn.get_resp_header(conn, "content-type") |> List.first() =~ "application/json"
   end

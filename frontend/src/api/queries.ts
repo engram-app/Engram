@@ -258,8 +258,16 @@ export interface OnboardingStatus {
   has_vault?: boolean
   current_tos_version?: string
   current_privacy_version?: string
-  next_step: 'agreement' | 'billing' | 'profile' | 'vault' | 'done'
+  next_step: OnboardingStep | 'done'
+  // Full intended step chain for THIS account at this moment. Self-host
+  // returns ["profile","vault"]; hosted returns ["agreement","billing",
+  // "profile","vault"]. `vault` drops once profile.uses_obsidian=true.
+  // The frontend uses this for "Step X of N" and to reject manual nav
+  // to a step not in the chain (e.g. /onboard/agreement on self-host).
+  steps: OnboardingStep[]
 }
+
+export type OnboardingStep = 'agreement' | 'billing' | 'profile' | 'vault'
 
 export interface OnboardingProfile {
   uses_obsidian: boolean

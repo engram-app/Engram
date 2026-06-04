@@ -32,7 +32,7 @@ defmodule EngramWeb.OnboardingControllerTest do
       Application.put_env(:engram, :billing_enabled, prev_enabled)
     end)
 
-    user = insert(:user)
+    user = insert(:user, onboarding_profile: %{})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
     grant_api_write!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
@@ -77,12 +77,16 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["terms_notice"]["version"] == "2026-06-01"
     end
 
-    test "returns enabled=false in self-host mode", %{conn: conn} do
+    test "self-host mode reports enabled=true but skips agreement + billing", %{conn: conn} do
       Application.put_env(:engram, :billing_enabled, false)
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
-      assert body["enabled"] == false
-      assert body["next_step"] == "done"
+      # Wizard runs (every account onboards), but agreement + billing auto-pass.
+      # Fresh user falls through to the profile (questionnaire) step.
+      assert body["enabled"] == true
+      assert body["terms_ok"] == true
+      assert body["subscription_ok"] == true
+      assert body["next_step"] == "profile"
     end
   end
 

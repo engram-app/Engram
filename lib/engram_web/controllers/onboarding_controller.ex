@@ -9,16 +9,11 @@ defmodule EngramWeb.OnboardingController do
     user = conn.assigns.current_user
 
     payload =
-      case Onboarding.status(user) do
-        %{enabled: false} = s ->
-          %{enabled: false, next_step: Atom.to_string(s.next_step)}
-
-        %{enabled: true} = s ->
-          s
-          |> Map.update!(:next_step, &Atom.to_string/1)
-          |> reject_nil_notice()
-          |> reject_empty_profile()
-      end
+      Onboarding.status(user)
+      |> Map.update!(:next_step, &Atom.to_string/1)
+      |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
+      |> reject_nil_notice()
+      |> reject_empty_profile()
 
     json(conn, payload)
   end

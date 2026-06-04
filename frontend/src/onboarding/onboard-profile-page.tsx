@@ -33,7 +33,13 @@ export default function OnboardProfilePage() {
     await mutateAsync({ uses_obsidian: usesObsidian, tools: Array.from(tools) })
     // Always route to the vault step (Step 4). Obsidian users see install
     // instructions + socket-driven wait; fresh users name their vault.
-    navigate('/onboard/vault', { replace: true })
+    // Thread the just-picked answer via router state so the vault page
+    // renders the correct variant on first paint without racing on the
+    // ['onboarding','status'] cache refetch.
+    navigate('/onboard/vault', {
+      replace: true,
+      state: { usesObsidian },
+    })
   }
 
   if (screen === 'obsidian') {

@@ -15,10 +15,20 @@ defmodule Engram.Factory do
   defp rand_binary(n \\ 16), do: :crypto.strong_rand_bytes(n)
 
   def user_factory do
+    # Default factory user is treated as already onboarded so controller
+    # tests behind RequireOnboarding don't all need to seed terms+sub+profile.
+    # `uses_obsidian=true` also skips the vault gate (plugin would create
+    # the vault later in real usage). Tests that exercise the onboarding
+    # gate must explicitly override `onboarding_profile: %{}`.
     %Engram.Accounts.User{
       email: sequence(:email, &"user#{&1}@test.com"),
       display_name: sequence(:display_name, &"User #{&1}"),
-      external_id: nil
+      external_id: nil,
+      onboarding_profile: %{
+        "uses_obsidian" => true,
+        "tools" => ["claude"],
+        "completed_at" => "2026-01-01T00:00:00Z"
+      }
     }
   end
 

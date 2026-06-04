@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Navigate, useLocation, useNavigate } from 'react-router'
 import { setActiveVaultId } from '../api/active-vault'
 import {
   useCreateVault,
@@ -8,6 +8,7 @@ import {
   useUpdateNote,
 } from '../api/queries'
 import AuthPanel from '@/layout/auth-panel'
+import LoadingScreen from '../layout/loading-screen'
 import { heading } from '@/lib/ui-classes'
 import { useVaultReadyEvents } from './use-vault-ready-events'
 import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from './welcome-note'
@@ -16,29 +17,50 @@ type View = 'obsidian' | 'fresh'
 
 export default function OnboardVaultPage() {
   const navigate = useNavigate()
-  const { data: status } = useOnboardingStatus()
+  const location = useLocation()
+  const { data: status, isLoading } = useOnboardingStatus()
   const { data: me } = useMe()
   const createVault = useCreateVault()
   const updateNote = useUpdateNote()
 
-  // Initial view depends on the user's questionnaire answer, but they can
-  // escape from the obsidian flow to fresh on demand ("or just make one
-  // here instead"). We don't reset it on profile-data refetch.
-  const usesObsidian = status?.profile?.uses_obsidian === true
-  const [view, setView] = useState<View>(usesObsidian ? 'obsidian' : 'fresh')
+  // Allow the user to override their original answer ("or skip — name a
+  // vault here instead"). `null` = follow whatever the profile said.
+  const [override, setOverride] = useState<View | null>(null)
 
-  // The questionnaire answer arrives async after the page mounts. Sync the
-  // initial view to it the first time it lands so an obsidian user doesn't
-  // briefly see the fresh-path form.
-  useEffect(() => {
-    if (status?.profile) setView(status.profile.uses_obsidian ? 'obsidian' : 'fresh')
-  }, [status?.profile?.uses_obsidian])
+  // Block render until status arrives so the obsidian user never briefly
+  // sees the fresh-path form before the page flips to install instructions.
+  if (isLoading || !status) {
+    return <LoadingScreen />
+  }
+
+  // Page can be reached by direct URL or a stale tab — make sure the user
+  // is actually at the vault step. Redirect back to whatever step the
+  // server thinks they're on. Without this, a user with an empty profile
+  // landing here from a refresh would see the fresh-path form even though
+  // they haven't answered the questionnaire yet.
+  if (status.next_step !== 'vault' && status.next_step !== 'done') {
+    return <RedirectToNextStep step={status.next_step} />
+  }
+  if (status.next_step === 'done') {
+    return <RedirectToDashboard />
+  }
+
+  // Source of truth, in priority order:
+  // 1. User override (clicked "or skip" to switch to fresh)
+  // 2. Router state from the questionnaire submit — deterministic, no
+  //    race on the status query refetch
+  // 3. Status query (covers deep-link / page-refresh cases)
+  const stateUsesObsidian = (location.state as { usesObsidian?: boolean } | null)
+    ?.usesObsidian
+  const profileUsesObsidian =
+    stateUsesObsidian ?? status.profile?.uses_obsidian === true
+  const view: View = override ?? (profileUsesObsidian ? 'obsidian' : 'fresh')
 
   if (view === 'obsidian') {
     return (
       <ObsidianView
         userId={me?.id ?? null}
-        onSwitchToFresh={() => setView('fresh')}
+        onSwitchToFresh={() => setOverride('fresh')}
         onSkipToDashboard={() => navigate('/', { replace: true })}
       />
     )
@@ -63,6 +85,14 @@ export default function OnboardVaultPage() {
       }}
     />
   )
+}
+
+function RedirectToNextStep({ step }: { step: string }) {
+  return <Navigate to={`/onboard/${step}`} replace />
+}
+
+function RedirectToDashboard() {
+  return <Navigate to="/" replace />
 }
 
 // ── Obsidian path ─────────────────────────────────────────────────────────────

@@ -8,8 +8,11 @@ export default function OnboardBillingPage() {
   const { data } = useOnboardingStatus()
 
   useEffect(() => {
-    if (data?.next_step === 'done') {
+    if (!data?.next_step) return
+    if (data.next_step === 'done') {
       navigate('/', { replace: true })
+    } else if (data.next_step !== 'billing') {
+      navigate(`/onboard/${data.next_step}`, { replace: true })
     }
   }, [data?.next_step, navigate])
 

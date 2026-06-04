@@ -71,7 +71,10 @@ describe('OnboardProfilePage', () => {
       uses_obsidian: true,
       tools: ['claude', 'cursor'],
     })
-    expect(navigate).toHaveBeenCalledWith('/onboard/vault', { replace: true })
+    expect(navigate).toHaveBeenCalledWith('/onboard/vault', {
+      replace: true,
+      state: { usesObsidian: true },
+    })
   })
 
   it('Back button on screen 2 returns to screen 1', () => {
