@@ -31,7 +31,11 @@ defmodule EngramWeb.VaultsController do
     payload =
       case Map.get(params, "user_code") do
         code when is_binary(code) and code != "" ->
-          Map.put(payload, :suggested_vault_name, DeviceFlow.suggested_vault_name(code))
+          Map.put(
+            payload,
+            :suggested_vault_name,
+            DeviceFlow.suggested_vault_name(code, user.id)
+          )
 
         _ ->
           payload

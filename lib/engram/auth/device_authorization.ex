@@ -12,6 +12,7 @@ defmodule Engram.Auth.DeviceAuthorization do
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
+    belongs_to :viewer_user, Engram.Accounts.User, foreign_key: :viewer_user_id
 
     timestamps(type: :utc_datetime, updated_at: false)
   end

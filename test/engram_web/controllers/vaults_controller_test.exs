@@ -9,6 +9,7 @@ defmodule EngramWeb.VaultsControllerTest do
   import Ecto.Query
 
   alias Engram.Accounts
+  alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
 
   setup %{conn: conn} do
@@ -60,7 +61,7 @@ defmodule EngramWeb.VaultsControllerTest do
     test "returns suggested_vault_name when ?user_code= matches a pending device flow",
          %{conn: conn} do
       {:ok, auth} =
-        Engram.Auth.DeviceFlow.start_device_flow("client_test", "My Obsidian Vault")
+        DeviceFlow.start_device_flow("client_test", "My Obsidian Vault")
 
       conn = get(conn, "/api/vaults?user_code=#{auth.user_code}")
       body = json_response(conn, 200)
@@ -68,7 +69,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "suggested_vault_name is nil when user_code has no hint stored", %{conn: conn} do
-      {:ok, auth} = Engram.Auth.DeviceFlow.start_device_flow("client_test")
+      {:ok, auth} = DeviceFlow.start_device_flow("client_test")
       conn = get(conn, "/api/vaults?user_code=#{auth.user_code}")
       body = json_response(conn, 200)
       assert Map.has_key?(body, "suggested_vault_name")
@@ -85,6 +86,33 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = get(conn, "/api/vaults?user_code=ZZZZ-ZZZZ")
       body = json_response(conn, 200)
       assert body["suggested_vault_name"] == nil
+    end
+
+    test "another user probing a code already claimed by someone else gets nil",
+         %{conn: conn} do
+      # First user claims by reading /vaults?user_code=
+      {:ok, auth} =
+        DeviceFlow.start_device_flow("client_test", "Sensitive Vault")
+
+      conn1 = get(conn, "/api/vaults?user_code=#{auth.user_code}")
+      assert json_response(conn1, 200)["suggested_vault_name"] == "Sensitive Vault"
+
+      # Second user (different account, valid auth) probes the same code —
+      # the row's viewer_user_id is locked to user 1, so user 2 gets nil.
+      other_user = insert(:user)
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => 5})
+
+      {:ok, other_raw_key, _api_key} =
+        Engram.Accounts.create_api_key(other_user, "probe")
+
+      grant_api_write!(other_user)
+
+      conn2 =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer #{other_raw_key}")
+        |> get("/api/vaults?user_code=#{auth.user_code}")
+
+      assert json_response(conn2, 200)["suggested_vault_name"] == nil
     end
 
     test "index includes note_count and attachment_count", %{conn: conn, user: user} do

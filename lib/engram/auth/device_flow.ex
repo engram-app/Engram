@@ -50,18 +50,41 @@ defmodule Engram.Auth.DeviceFlow do
   end
 
   # Read the suggested name a plugin sent at start_device_flow time. Returns
-  # nil if the code is unknown, expired, no longer pending, or never carried
-  # a hint. Used by GET /api/vaults to pre-fill the /link consent page.
-  def suggested_vault_name(user_code) do
+  # nil if the code is unknown, expired, no longer pending, never carried a
+  # hint, OR has already been viewed by a different authenticated user.
+  #
+  # The lookup is bound to the first authenticated user who reads the code
+  # — set atomically on the same row in this UPDATE. Without this binding
+  # any signed-in user could probe an observed user_code (shoulder-surfed
+  # off the plugin's modal, screen-shared, scraped from a chat thread, etc.)
+  # and read the original user's local Obsidian vault name. The row's main
+  # `user_id` is set later, at authorize time, and so is unsuitable as a
+  # pre-authorize ownership check.
+  def suggested_vault_name(user_code, user_id) when is_integer(user_id) do
     now = DateTime.utc_now()
 
     query =
       from(da in DeviceAuthorization,
-        where: da.user_code == ^user_code and da.status == "pending" and da.expires_at > ^now,
-        select: da.vault_name
+        where:
+          da.user_code == ^user_code and
+            da.status == "pending" and
+            da.expires_at > ^now and
+            (is_nil(da.viewer_user_id) or da.viewer_user_id == ^user_id)
       )
 
-    Repo.one(query, skip_tenant_check: true)
+    case Repo.update_all(query, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
+      {1, _} ->
+        Repo.one(
+          from(da in DeviceAuthorization,
+            where: da.user_code == ^user_code,
+            select: da.vault_name
+          ),
+          skip_tenant_check: true
+        )
+
+      _ ->
+        nil
+    end
   end
 
   def authorize_device(user_code, user, vault_id) do
