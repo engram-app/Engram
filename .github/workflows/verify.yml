@@ -1505,7 +1505,7 @@ jobs:
     #                         contract-phase-references job)
     #   phase/single-shot   - expand+contract in one release; accept downtime
     #                         even on SaaS. Use sparingly.
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    if: github.event_name == 'pull_request'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
@@ -1557,7 +1557,6 @@ jobs:
     # is dropped in a later release.
     if: |
       github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'phase/contract')
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [phase-label-required, prebuild-mix]
