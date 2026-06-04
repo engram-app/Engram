@@ -2,6 +2,8 @@
 
 > **Workspace:** For cross-project work, open `../engram-workspace/` instead. It provides unified context for both plugin and backend.
 
+> **For AI agents:** See `AGENTS.md` for migration-safety rules — every migration PR must carry a `phase/*` label, and contract-phase drops are CI-gated against surviving `lib/` references.
+
 Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $10/mo / Pro $20/mo (v2 reanchored 2026-05-20). Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md` + `docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md`; billing integration details in `docs/context/paddle-integration.md`.
 
 ## Issue Tracker
