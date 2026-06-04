@@ -45,6 +45,7 @@ config :engram, Oban,
      crontab: [
        {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
        {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
+       {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
        {"30 3 * * *", Engram.Workers.InactivityCleanup},
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
@@ -71,6 +72,8 @@ config :logger, :default_formatter,
     :category,
     :clerk_user_id,
     :column,
+    :drift_kind,
+    :duration_ms,
     :event_id,
     :event_type,
     :exception,
@@ -83,6 +86,8 @@ config :logger, :default_formatter,
     :method,
     :new_dek_version,
     :normalized_email_hash,
+    :paddle_price_id,
+    :paddle_subscription_id,
     :payload_keys,
     :phase,
     :price_id,
@@ -93,6 +98,7 @@ config :logger, :default_formatter,
     :request_id,
     :request_path,
     :request_query,
+    :result,
     :row_id,
     :status,
     :storage_key,
@@ -117,6 +123,14 @@ config :engram, :boot_canary_enabled, true
 # Rate limiter backend. Default ETS (per-node, single-node correct, no deps).
 # SaaS prod flips to :redis in runtime.exs when REDIS_URL is set (cluster-shared).
 config :engram, EngramWeb.RateLimiter, backend: :ets
+
+# Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
+# including the no-DSN dev/test case if a future test exercises a Sentry stub.
+# DSN, release tag, environment_name, and source-context flags live in
+# runtime.exs (gated on SENTRY_DSN).
+config :sentry,
+  context_lines: 5,
+  before_send: {Engram.Sentry.Scrubber, :scrub}
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
