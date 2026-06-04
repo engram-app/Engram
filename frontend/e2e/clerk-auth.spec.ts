@@ -22,10 +22,13 @@ const USER_MENU = { role: 'button' as const, name: 'User menu' }
  * Creates a sign-in token server-side, then uses it client-side via strategy: 'ticket'.
  * Requires CLERK_SECRET_KEY env var (set in global-setup).
  *
- * No retry on "No user found" here — global-setup probes POST /sign_in_tokens
- * until it stops 404'ing before writing .auth-state.json, so any 404 at this
- * point indicates a real problem (user deleted mid-run, instance swap, etc.)
- * and should surface immediately. See #193 + global-setup.ts waitUntilSignInReady.
+ * No retry on "No user found" here — global-setup probes BOTH endpoints
+ * @clerk/testing's signIn hits (GET /users?email_address for email→id
+ * resolution + POST /sign_in_tokens for token creation) before writing
+ * .auth-state.json, so any "No user found" here indicates a real problem
+ * (user deleted mid-run, instance swap, etc.) and should surface
+ * immediately. See #193 + global-setup.ts {waitUntilEmailResolvable,
+ * waitUntilSignInReady}.
  */
 async function clerkSignIn(page: Page, email: string) {
   // Navigate first so Clerk JS SDK loads on the page
