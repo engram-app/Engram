@@ -126,7 +126,7 @@ export default function DeviceLinkPage() {
         )}
       >
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          Link Obsidian Vault
+          {step === 'pick-vault' ? 'Choose a vault to sync' : 'Link Obsidian Vault'}
         </h1>
 
         {step === 'enter-code' && (
@@ -152,7 +152,7 @@ export default function DeviceLinkPage() {
         {step === 'pick-vault' && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
-              Code verified. Pick where these notes should sync:
+              Pick an existing one, or create a new vault for these notes.
             </p>
 
             <fieldset className="flex flex-col gap-2">
