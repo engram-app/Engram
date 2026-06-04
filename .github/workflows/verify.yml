@@ -2044,7 +2044,7 @@ jobs:
 
   ci:
     if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser]
+    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser, n1-compat]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
