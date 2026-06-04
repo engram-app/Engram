@@ -253,13 +253,16 @@ defmodule Engram.Accounts do
 
   defp guard_last_admin(_user), do: :ok
 
-  @doc "Spec §8/§10 — revokes all of a user's active refresh tokens (logout-everywhere)."
+  @doc "Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere)."
   def revoke_all_user_tokens(%User{id: user_id}) do
-    now = DateTime.utc_now(:second)
-
+    # Hard-delete the rows. Stamping `revoked_at: now` would put them inside
+    # the rotation-leeway window so a still-pending request from the user
+    # would be misread as a benign rotation race and re-issued — defeating
+    # the "logout everywhere" guarantee that password-reset / admin actions
+    # rely on. Matches the breach path's deletion strategy.
     RefreshToken
-    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
-    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+    |> where([rt], rt.user_id == ^user_id)
+    |> Repo.delete_all(skip_tenant_check: true)
   end
 
   def verify_password(email, password) do
@@ -289,6 +292,15 @@ defmodule Engram.Accounts do
   # ── Refresh Tokens ─────────────────────────────────────────────
 
   @refresh_token_ttl_days 30
+  # Leeway window after a refresh token is rotated during which the old token
+  # is still accepted, so a client that loses (or hasn't yet observed) the new
+  # cookie can recover instead of being forced to re-login. Mirrors the
+  # device-flow path in `Engram.Auth.DeviceFlow` and the Auth0 "rotation
+  # overlap period" pattern. Real concurrent rotation races resolve in <1s;
+  # 30s is comfortably wider than any legitimate replay window but well below
+  # the "stolen token used hours later" attacker case the breach-on-reuse
+  # detection is meant to catch.
+  @refresh_leeway_seconds 30
 
   def create_refresh_token(user, family_id \\ nil) do
     raw_token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
@@ -329,39 +341,11 @@ defmodule Engram.Accounts do
               if DateTime.compare(now, token.expires_at) == :gt do
                 Repo.rollback(:expired)
               else
-                user =
-                  Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id),
-                    skip_tenant_check: true
-                  )
-
-                # Spec §10: same guard as the login chokepoint (verify_password).
-                cond do
-                  not is_nil(user.suspended_at) -> Repo.rollback(:suspended)
-                  not is_nil(user.deleted_at) -> Repo.rollback(:deleted)
-                  true -> :ok
-                end
-
-                case create_refresh_token(user, token.family_id) do
-                  {:ok, new_raw, new_record} -> {user, new_raw, new_record}
-                  {:error, _reason} -> Repo.rollback(:refresh_token_creation_failed)
-                end
+                rotate_into_child(token)
               end
 
             {0, _} ->
-              # Token doesn't exist or already revoked — check which case
-              case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^token_hash),
-                     skip_tenant_check: true
-                   ) do
-                nil ->
-                  Repo.rollback(:invalid_token)
-
-                %RefreshToken{revoked_at: revoked} when revoked != nil ->
-                  # Signal reuse — revocation happens AFTER the transaction commits
-                  Repo.rollback({:token_reused, token_hash})
-
-                %RefreshToken{} ->
-                  Repo.rollback(:invalid_token)
-              end
+              classify_unrotated(token_hash, now)
           end
         end,
         skip_tenant_check: true
@@ -381,6 +365,54 @@ defmodule Engram.Accounts do
     end
   end
 
+  # Rotate `token` into a fresh child within its family. Guards on user
+  # suspended/deleted state (same chokepoint as `verify_password/2`). Called
+  # both from the normal "just-revoked-now" rotation and from the leeway
+  # branch in `classify_unrotated/2`.
+  defp rotate_into_child(token) do
+    user =
+      Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id),
+        skip_tenant_check: true
+      )
+
+    cond do
+      not is_nil(user.suspended_at) -> Repo.rollback(:suspended)
+      not is_nil(user.deleted_at) -> Repo.rollback(:deleted)
+      true -> :ok
+    end
+
+    case create_refresh_token(user, token.family_id) do
+      {:ok, new_raw, new_record} -> {user, new_raw, new_record}
+      {:error, _reason} -> Repo.rollback(:refresh_token_creation_failed)
+    end
+  end
+
+  # No row was just-revoked, so either the token never existed, was previously
+  # revoked, or is being raced. Inside the leeway → benign concurrent rotation,
+  # issue a child; outside → genuine reuse, breach.
+  defp classify_unrotated(token_hash, now) do
+    case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^token_hash),
+           skip_tenant_check: true
+         ) do
+      nil ->
+        Repo.rollback(:invalid_token)
+
+      %RefreshToken{revoked_at: revoked} = revoked_token when revoked != nil ->
+        leeway_cutoff =
+          DateTime.add(now, -@refresh_leeway_seconds, :second)
+          |> DateTime.truncate(:second)
+
+        if DateTime.compare(revoked, leeway_cutoff) == :gt do
+          rotate_into_child(revoked_token)
+        else
+          Repo.rollback({:token_reused, token_hash})
+        end
+
+      %RefreshToken{} ->
+        Repo.rollback(:invalid_token)
+    end
+  end
+
   def revoke_token_family(family_id_or_token_hash) do
     family_id =
       case Repo.one(
@@ -394,12 +426,18 @@ defmodule Engram.Accounts do
         fid -> fid
       end
 
-    now = DateTime.utc_now(:second)
+    require Logger
 
-    from(rt in RefreshToken,
-      where: rt.family_id == ^family_id and is_nil(rt.revoked_at)
-    )
-    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+    Logger.warning("refresh-token reuse detected; revoking family family_id=#{family_id}")
+
+    # Hard-delete the family (matches `DeviceFlow.invalidate_family/1`). Stamping
+    # `revoked_at` to "now" would put every member of the family inside the
+    # leeway window so a follow-up request with the current child would be
+    # mistaken for a benign rotation race and re-issue tokens — defeating the
+    # revocation. The family_id is owner-bound (never crosses users), so only
+    # the compromised lineage is touched.
+    from(rt in RefreshToken, where: rt.family_id == ^family_id)
+    |> Repo.delete_all(skip_tenant_check: true)
   end
 
   @doc "SHA-256 hash a raw refresh token for storage/lookup."
