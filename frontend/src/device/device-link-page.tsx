@@ -122,7 +122,7 @@ export default function DeviceLinkPage() {
           'flex flex-col gap-4',
           // pick-vault is a tighter, decision-focused step — narrow the
           // whole card so the radio rows + button don't feel oceanic.
-          step === 'pick-vault' && 'mx-auto sm:w-3/5',
+          step === 'pick-vault' && 'mx-auto sm:w-4/5',
         )}
       >
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
