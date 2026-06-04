@@ -8,7 +8,7 @@ defmodule Engram.Repo.Migrations.SmokeUnsafeContract do
 
   def change do
     alter table(:users) do
-      remove(:legacy_smoke_flag, :boolean, default: false, null: false)
+      remove_if_exists(:legacy_smoke_flag, :boolean)
     end
   end
 end
