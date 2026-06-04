@@ -67,6 +67,12 @@ services:
       # be enforced — breaking e2e tests like test_32 that assert 402 on
       # over-limit vault creation.
       ENGRAM_LIMITS_ENFORCED: "true"
+      # OAuth e2e tests (test_44/47/48/49) collectively call
+      # POST /api/auth/device + /auth/device/authorize + /auth/token/refresh
+      # well above the prod default 10 req/60s/IP from the test runner's
+      # single source IP — collisions yield flaky 429 "rate_limited" failures.
+      # Mirrors the override in docker-compose.ci-local.yml.
+      RATE_LIMIT_AUTH_OVERRIDE: "1000"
     healthcheck:
       # 1s interval (was 3s) so docker compose --wait detects "ready" with
       # finer granularity — BEAM cold boot finishes mid-interval and the
