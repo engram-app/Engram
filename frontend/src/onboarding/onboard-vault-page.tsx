@@ -267,13 +267,13 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
       <h2 className="text-lg font-semibold text-foreground">
-        Install the Engram plugin
+        Install the Engram Vault Sync plugin
       </h2>
       <ol className="flex list-decimal flex-col gap-3 pl-5 text-base text-foreground">
         <li className="flex flex-col gap-1">
           <span>
             In Obsidian: <strong>Settings → Community plugins → Browse</strong>,
-            search <em>Engram</em>, then install and enable it.
+            search <em>Engram Vault Sync</em>, then install and enable it.
           </span>
           <span className="text-sm text-muted-foreground">
             Or open the{' '}
