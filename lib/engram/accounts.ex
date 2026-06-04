@@ -254,7 +254,7 @@ defmodule Engram.Accounts do
   defp guard_last_admin(_user), do: :ok
 
   # Sentinel revocation timestamp used by admin and breach paths. Pinned at
-  # epoch 0 so it always falls OUTSIDE `@refresh_leeway_seconds` — without
+  # epoch 0 so it always falls OUTSIDE `Engram.Auth.RefreshLeeway` — without
   # this the next request after a logout-everywhere or family breach would
   # land inside the leeway window, get misread as a benign rotation race,
   # and silently re-issue a fresh token (defeating the revocation). Keeping
@@ -297,15 +297,8 @@ defmodule Engram.Accounts do
   # ── Refresh Tokens ─────────────────────────────────────────────
 
   @refresh_token_ttl_days 30
-  # Leeway window after a refresh token is rotated during which the old token
-  # is still accepted, so a client that loses (or hasn't yet observed) the new
-  # cookie can recover instead of being forced to re-login. Mirrors the
-  # device-flow path in `Engram.Auth.DeviceFlow` and the Auth0 "rotation
-  # overlap period" pattern. Real concurrent rotation races resolve in <1s;
-  # 30s is comfortably wider than any legitimate replay window but well below
-  # the "stolen token used hours later" attacker case the breach-on-reuse
-  # detection is meant to catch.
-  @refresh_leeway_seconds 30
+  # Leeway-window policy lives in `Engram.Auth.RefreshLeeway` so both
+  # local-auth and device-flow refresh paths share the same window.
 
   def create_refresh_token(user, family_id \\ nil) do
     raw_token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
@@ -371,15 +364,21 @@ defmodule Engram.Accounts do
   end
 
   # Rotate `token` into a fresh child within its family. Guards on user
-  # suspended/deleted state (same chokepoint as `verify_password/2`). Called
-  # both from the normal "just-revoked-now" rotation and from the leeway
-  # branch in `classify_unrotated/2`.
+  # suspended/deleted state (same chokepoint as `verify_password/2`). The
+  # 2-arity overload takes a preloaded user (used by `classify_unrotated/2`
+  # which already loads the user in its lookup query, avoiding an N+1); the
+  # 1-arity overload fetches the user separately and is used by the
+  # just-revoked-now path which can't preload through update_all.
   defp rotate_into_child(token) do
     user =
       Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^token.user_id),
         skip_tenant_check: true
       )
 
+    rotate_into_child(token, user)
+  end
+
+  defp rotate_into_child(token, %Engram.Accounts.User{} = user) do
     cond do
       not is_nil(user.suspended_at) -> Repo.rollback(:suspended)
       not is_nil(user.deleted_at) -> Repo.rollback(:deleted)
@@ -394,21 +393,22 @@ defmodule Engram.Accounts do
 
   # No row was just-revoked, so either the token never existed, was previously
   # revoked, or is being raced. Inside the leeway → benign concurrent rotation,
-  # issue a child; outside → genuine reuse, breach.
+  # issue a child; outside → genuine reuse, breach. Preloads :user so the
+  # leeway-branch rotation doesn't need a separate user fetch.
   defp classify_unrotated(token_hash, now) do
-    case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^token_hash),
+    case Repo.one(
+           from(rt in RefreshToken,
+             where: rt.token_hash == ^token_hash,
+             preload: [:user]
+           ),
            skip_tenant_check: true
          ) do
       nil ->
         Repo.rollback(:invalid_token)
 
-      %RefreshToken{revoked_at: revoked} = revoked_token when revoked != nil ->
-        leeway_cutoff =
-          DateTime.add(now, -@refresh_leeway_seconds, :second)
-          |> DateTime.truncate(:second)
-
-        if DateTime.compare(revoked, leeway_cutoff) == :gt do
-          rotate_into_child(revoked_token)
+      %RefreshToken{revoked_at: revoked, user: user} = revoked_token when revoked != nil ->
+        if Engram.Auth.RefreshLeeway.benign?(revoked, now) do
+          rotate_into_child(revoked_token, user)
         else
           Repo.rollback({:token_reused, token_hash})
         end

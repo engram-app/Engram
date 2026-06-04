@@ -18,12 +18,8 @@ defmodule Engram.Auth.DeviceFlow do
   @refresh_token_bytes 32
   @refresh_token_ttl_days 90
   @device_code_ttl_seconds 300
-  # Leeway window after a refresh token is rotated during which the old token is
-  # still accepted, so a client that loses the rotated token (e.g. a plugin
-  # reload mid-refresh, or a brief concurrent retry) can recover instead of
-  # being forced to re-login. Auth0 calls this the "rotation overlap period" and
-  # recommends the shortest viable value; plugin reload races resolve in <1s.
-  @refresh_leeway_seconds 30
+  # Leeway-window policy lives in `Engram.Auth.RefreshLeeway` so both
+  # local-auth and device-flow refresh paths share the same window.
 
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
@@ -148,7 +144,6 @@ defmodule Engram.Auth.DeviceFlow do
   def refresh_access_token(raw_refresh_token) do
     token_hash = hash_token(raw_refresh_token)
     now = DateTime.utc_now()
-    leeway_cutoff = DateTime.add(now, -@refresh_leeway_seconds, :second)
 
     # Look the token up regardless of revocation state — a *revoked* token still
     # has to be classified (benign retry within leeway vs. reuse breach), not
@@ -173,7 +168,7 @@ defmodule Engram.Auth.DeviceFlow do
         issue_child(old_token)
 
       old_token ->
-        if DateTime.compare(old_token.revoked_at, leeway_cutoff) == :gt do
+        if Engram.Auth.RefreshLeeway.benign?(old_token.revoked_at, now) do
           # Revoked within the leeway: benign retry (lost rotation, concurrent
           # request). Issue a child in the same family without re-revoking.
           issue_child(old_token)

@@ -14,6 +14,7 @@ import {
 import AuthPanel from '@/layout/auth-panel'
 import LoadingScreen from '../layout/loading-screen'
 import { heading } from '@/lib/ui-classes'
+import { SyncStatusPill } from './sync-status-pill'
 import { useVaultReadyEvents } from './use-vault-ready-events'
 import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from './welcome-note'
 
@@ -90,12 +91,18 @@ function VaultStep({
 
   async function pickSource(s: Source) {
     setSource(s)
-    if (s === 'obsidian' && !obsidianCommitted) {
+    // Re-entry guard: a fast double-click on the Obsidian card would
+    // otherwise dispatch two concurrent PATCHes. The `obsidianCommitted`
+    // flag catches the steady state; `setProfile.isPending` catches the
+    // racing-while-the-first-is-in-flight case.
+    if (s === 'obsidian' && !obsidianCommitted && !setProfile.isPending) {
       try {
         await setProfile.mutateAsync({ uses_obsidian: true })
         setObsidianCommitted(true)
-      } catch {
-        // Surface as the panel's normal error path on next interaction
+      } catch (_e) {
+        // Error is also reflected on setProfile.isError so the panel can
+        // surface it; swallowing here just prevents a console unhandled
+        // rejection. The user sees the inline error message below.
       }
     }
   }
@@ -133,6 +140,11 @@ function VaultStep({
       isCommitting={
         setProfile.isPending || createVault.isPending || updateNote.isPending
       }
+      pickError={
+        setProfile.isError && !obsidianCommitted
+          ? 'Could not save your choice. Try clicking again — if it keeps failing, refresh the page.'
+          : null
+      }
       onCommitObsidian={commitObsidian}
       onCommitFresh={commitFresh}
     />
@@ -146,6 +158,7 @@ interface SourceScreenProps {
   onPickSource: (s: Source) => void
   userId: number | null
   isCommitting: boolean
+  pickError: string | null
   onCommitObsidian: () => Promise<void>
   onCommitFresh: (name: string) => Promise<void>
 }
@@ -155,6 +168,7 @@ function SourceScreen({
   onPickSource,
   userId,
   isCommitting,
+  pickError,
   onCommitObsidian,
   onCommitFresh,
 }: SourceScreenProps) {
@@ -190,6 +204,12 @@ function SourceScreen({
           onClick={() => onPickSource('fresh')}
         />
       </div>
+
+      {pickError && (
+        <p role="alert" className="text-sm text-destructive">
+          {pickError}
+        </p>
+      )}
 
       {source === 'obsidian' ? (
         <ObsidianInlinePanel
@@ -326,16 +346,7 @@ function StatusRow({ stage }: { stage: 'waiting' | 'detected' | 'syncing' }) {
     detected: 'Vault detected. Waiting for your first sync…',
     syncing: 'Syncing your notes, almost there…',
   }
-  return (
-    <p
-      role="status"
-      aria-live="polite"
-      className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-    >
-      <span className="mr-2 inline-block size-2 animate-pulse rounded-full bg-primary align-middle" />
-      {labels[stage]}
-    </p>
-  )
+  return <SyncStatusPill message={labels[stage]} />
 }
 
 // ── Fresh-start inline panel ──────────────────────────────────────────────────
