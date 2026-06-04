@@ -271,33 +271,37 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
         Install the Engram Vault Sync plugin
       </h2>
       <ol className="flex list-decimal flex-col gap-3 pl-5 text-base text-foreground">
-        <li className="flex flex-col gap-1">
-          <span>
-            In Obsidian: <strong>Settings → Community plugins → Browse</strong>,
-            search <em>Engram Vault Sync</em>, then install and enable it.
-          </span>
-          <span className="text-sm text-muted-foreground">
-            Or open the{' '}
-            <a
-              href="https://community.obsidian.md/plugins/engram-vault-sync"
-              target="_blank"
-              rel="noreferrer noopener"
-              className="font-medium text-primary underline-offset-2 hover:underline"
-            >
-              plugin listing
-            </a>
-            {' '}in your browser first.
-          </span>
-        </li>
-        {config.authProvider === 'local' ? (
-          <li className="flex flex-col gap-1">
+        <li>
+          <div className="flex flex-col gap-1">
             <span>
-              Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter
-              your Engram server URL, and click <strong>Sign in</strong>.
+              In Obsidian: <strong>Settings → Community plugins → Browse</strong>,
+              search <em>Engram Vault Sync</em>, then install and enable it.
             </span>
             <span className="text-sm text-muted-foreground">
-              Use the same URL you used to reach this page.
+              Or open the{' '}
+              <a
+                href="https://community.obsidian.md/plugins/engram-vault-sync"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+              >
+                plugin listing
+              </a>
+              {' '}in your browser first.
             </span>
+          </div>
+        </li>
+        {config.authProvider === 'local' ? (
+          <li>
+            <div className="flex flex-col gap-1">
+              <span>
+                Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter
+                your Engram server URL, and click <strong>Sign in</strong>.
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Use the same URL you used to reach this page.
+              </span>
+            </div>
           </li>
         ) : (
           <li>
