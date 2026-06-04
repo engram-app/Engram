@@ -1560,7 +1560,7 @@ jobs:
       github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'phase/contract')
     runs-on: [self-hosted, linux, x64, isolated]
-    needs: phase-label-required
+    needs: [phase-label-required, prebuild-mix]
     permissions:
       contents: read
     steps:
@@ -1568,16 +1568,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore _build cache
-        uses: actions/cache@v4
+      # Restore prebuild-mix caches. Same pattern as the `lint` job: deps +
+      # _build/dev populated before any mix command so compile is a fast
+      # incremental no-op. Keys are pinned to the BEAM version emitted by
+      # prebuild-mix so a runner OTP/Elixir bump correctly invalidates the
+      # cache instead of feeding stale BEAM artifacts.
+      - name: Restore deps cache
+        id: cache-deps
+        uses: actions/cache/restore@v5
         with:
-          path: |
-            _build/dev
-            deps
-          key: contract-grep-${{ runner.os }}-${{ hashFiles('mix.lock') }}
-          restore-keys: contract-grep-${{ runner.os }}-
+          path: deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: |
+            mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Restore _build/dev cache
+        uses: actions/cache/restore@v5
+        with:
+          path: _build/dev
+          key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
+          restore-keys: |
+            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get --check-locked
 
       - name: Compile
