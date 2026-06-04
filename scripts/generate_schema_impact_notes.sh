@@ -20,12 +20,19 @@ HEAD_SHA="${2:?head sha required}"
 if [ -n "${GH_OUTPUT_OVERRIDE:-}" ]; then
   prs="$GH_OUTPUT_OVERRIDE"
 else
-  prs=$(gh search prs --repo "${GITHUB_REPOSITORY:-engram-app/Engram}" \
-        --merged \
-        --base main \
-        --json number,labels,title \
-        --limit 100 \
-        2>/dev/null || echo '[]')
+  # Capture gh output and exit separately. A gh failure (auth, network,
+  # rate limit) silently dropping the phase-PR list would skip the
+  # SCHEMA-IMPACT block for a release that actually changes the schema —
+  # defeating the entire feature. Surface gh failures via ::error:: so CI
+  # fails fast instead of producing a misleading release page.
+  if ! prs=$(gh search prs --repo "${GITHUB_REPOSITORY:-engram-app/Engram}" \
+          --merged \
+          --base main \
+          --json number,labels,title \
+          --limit 500 2>&1); then
+    echo "::error::generate_schema_impact_notes: gh search prs failed — cannot determine phase-labeled PRs in release range. Output: $prs" >&2
+    exit 1
+  fi
 fi
 
 # Filter to PRs carrying any phase/* label.
