@@ -82,6 +82,20 @@ defmodule EngramWeb.CSPTest do
 
       assert connect_src(header) =~ "https://*.ingest.sentry.io"
     end
+
+    test "always whitelists PostHog ingest hosts on connect-src" do
+      # Same silent-failure trap as Sentry. PostHog SDK is bundled, so
+      # only connect-src needs the wildcard regional ingest hosts
+      # (us.i.posthog.com, eu.i.posthog.com). Without this entry
+      # `posthog.capture(...)` returns successfully but the network
+      # POST is blocked by CSP and no funnel data lands.
+      Application.put_env(:engram, :clerk_issuer, nil)
+
+      header = CSP.header()
+
+      assert connect_src(header) =~ "https://*.i.posthog.com"
+      assert connect_src(header) =~ "https://*.posthog.com"
+    end
   end
 
   describe "Clerk integration — dev/test instance (CLERK_ISSUER under *.clerk.accounts.dev)" do

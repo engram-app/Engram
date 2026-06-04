@@ -28,11 +28,17 @@ ARG SENTRY_PROJECT
 # Cloudflare Web Analytics beacon — public per-site identifier.
 # Build-arg so self-host bundles don't ship the SaaS-side token.
 ARG VITE_CF_BEACON_TOKEN
+# PostHog — public project token (write-only event ingest, per-project).
+# Same self-host-shouldn't-emit-to-SaaS rationale as the CF beacon.
+ARG VITE_POSTHOG_KEY
+ARG VITE_POSTHOG_HOST
 ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
     VITE_GIT_SHA=${VITE_GIT_SHA} \
     SENTRY_ORG=${SENTRY_ORG} \
     SENTRY_PROJECT=${SENTRY_PROJECT} \
-    VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN}
+    VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN} \
+    VITE_POSTHOG_KEY=${VITE_POSTHOG_KEY} \
+    VITE_POSTHOG_HOST=${VITE_POSTHOG_HOST}
 
 WORKDIR /frontend
 COPY frontend/package.json frontend/bun.lock ./
