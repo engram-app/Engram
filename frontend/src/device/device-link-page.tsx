@@ -143,7 +143,7 @@ export default function DeviceLinkPage() {
         )}
 
         {step === 'pick-vault' && (
-          <div className="flex flex-col gap-3">
+          <div className="mx-auto flex w-full flex-col gap-3 sm:w-3/5">
             <p className="text-sm text-muted-foreground">
               Code verified. Pick where these notes should sync:
             </p>
@@ -160,7 +160,7 @@ export default function DeviceLinkPage() {
                   />
                   <span className="flex flex-col">
                     <span className="text-sm font-medium text-foreground">
-                      &ldquo;{suggestedName}&rdquo;
+                      {suggestedName}
                     </span>
                     <span className="text-xs text-muted-foreground">
                       Makes a new vault matching your Obsidian vault name
