@@ -20,25 +20,19 @@ BASE_REF="${BASE_REF:-origin/main}"
 SQUAWK="${SQUAWK_BIN:-squawk}"
 MIG_DIR="priv/repo/migrations"
 
-# Highest migration version already on the base branch.
-base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
-  | grep -oE '[0-9]{14}' | sort -u | tail -1 || true)
-
-if [ -z "$base_version" ]; then
-  echo "::error::squawk: could not read migrations from '$BASE_REF' (is it fetched?)"
-  exit 1
-fi
-
 # Migrations in the working tree newer than the base branch's tip.
-mapfile -t new_versions < <(
-  find "$MIG_DIR" -maxdepth 1 -name '*.exs' -printf '%f\n' \
-    | grep -oE '^[0-9]{14}' | sort -u | awk -v b="$base_version" '$0 > b'
-)
+mapfile -t new_files < <(bash priv/repo/list_new_migrations.sh)
+mapfile -t new_versions < <(printf '%s\n' "${new_files[@]}" | grep -oE '^[0-9]{14}')
 
 if [ "${#new_versions[@]}" -eq 0 ]; then
   echo "squawk: no migrations newer than $BASE_REF — nothing to lint"
   exit 0
 fi
+
+# Re-derive base_version locally for `mix ecto.migrate --to` below
+# (the helper doesn't print it).
+base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
+  | grep -oE '[0-9]{14}' | sort -u | tail -1)
 
 # Skip lint entirely if any new migration file carries the
 # `# squawk-ignore-file` marker. Used for schema-restore baselines whose
