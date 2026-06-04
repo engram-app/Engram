@@ -160,11 +160,10 @@ function SourceScreen({
   return (
     <AuthPanel className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
-        <h1 className={heading}>How would you like to get started?</h1>
+        <h1 className={heading}>Let's get your notes in.</h1>
         <p className="text-sm text-muted-foreground">
-          Your notes are stored as plain markdown files. You can use Obsidian
-          if you like, or just start typing here. Pick what sounds easier
-          and we'll set things up for you.
+          If you have an Obsidian vault, we'll pull it in on the first
+          connect. If not, we'll spin up a new vault for you.
         </p>
       </header>
 
