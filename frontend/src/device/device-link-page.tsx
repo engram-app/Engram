@@ -160,10 +160,10 @@ export default function DeviceLinkPage() {
                   />
                   <span className="flex flex-col">
                     <span className="text-sm font-medium text-foreground">
-                      Create a vault called &ldquo;{suggestedName}&rdquo;
+                      &ldquo;{suggestedName}&rdquo;
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      Matches your Obsidian vault name
+                      Makes a new vault matching your Obsidian vault name
                     </span>
                   </span>
                 </label>
