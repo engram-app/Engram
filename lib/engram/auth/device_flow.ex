@@ -28,7 +28,7 @@ defmodule Engram.Auth.DeviceFlow do
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  def start_device_flow(client_id) do
+  def start_device_flow(client_id, vault_name \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -43,9 +43,25 @@ defmodule Engram.Auth.DeviceFlow do
       user_code: user_code,
       client_id: client_id,
       status: "pending",
-      expires_at: expires_at
+      expires_at: expires_at,
+      vault_name: vault_name
     })
     |> Repo.insert(skip_tenant_check: true)
+  end
+
+  # Read the suggested name a plugin sent at start_device_flow time. Returns
+  # nil if the code is unknown, expired, no longer pending, or never carried
+  # a hint. Used by GET /api/vaults to pre-fill the /link consent page.
+  def suggested_vault_name(user_code) do
+    now = DateTime.utc_now()
+
+    query =
+      from(da in DeviceAuthorization,
+        where: da.user_code == ^user_code and da.status == "pending" and da.expires_at > ^now,
+        select: da.vault_name
+      )
+
+    Repo.one(query, skip_tenant_check: true)
   end
 
   def authorize_device(user_code, user, vault_id) do

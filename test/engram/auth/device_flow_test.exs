@@ -27,6 +27,48 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert auth1.device_code != auth2.device_code
       assert auth1.user_code != auth2.user_code
     end
+
+    test "stores optional vault_name hint" do
+      assert {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local Vault")
+      assert auth.vault_name == "Local Vault"
+    end
+
+    test "defaults vault_name to nil when omitted" do
+      assert {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      assert auth.vault_name == nil
+    end
+  end
+
+  describe "suggested_vault_name/1" do
+    test "returns the hint stored at start time for a pending code" do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Brainvault")
+      assert DeviceFlow.suggested_vault_name(auth.user_code) == "Brainvault"
+    end
+
+    test "returns nil for unknown code" do
+      assert DeviceFlow.suggested_vault_name("ZZZZ-ZZZZ") == nil
+    end
+
+    test "returns nil once the code has been authorized (no longer pending)" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      assert DeviceFlow.suggested_vault_name(auth.user_code) == nil
+    end
+
+    test "returns nil for expired code" do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(da in Engram.Auth.DeviceAuthorization, where: da.id == ^auth.id),
+        [set: [expires_at: past]],
+        skip_tenant_check: true
+      )
+
+      assert DeviceFlow.suggested_vault_name(auth.user_code) == nil
+    end
   end
 
   describe "authorize_device/3" do

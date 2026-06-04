@@ -8,6 +8,7 @@ defmodule Engram.Auth.DeviceAuthorization do
     field :client_id, :string
     field :status, :string, default: "pending"
     field :expires_at, :utc_datetime
+    field :vault_name, :string
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -17,8 +18,9 @@ defmodule Engram.Auth.DeviceAuthorization do
 
   def changeset(auth, attrs) do
     auth
-    |> cast(attrs, [:device_code, :user_code, :client_id, :status, :expires_at])
+    |> cast(attrs, [:device_code, :user_code, :client_id, :status, :expires_at, :vault_name])
     |> validate_required([:device_code, :user_code, :client_id, :status, :expires_at])
+    |> validate_length(:vault_name, max: 100)
     |> validate_inclusion(:status, ~w(pending authorized consumed expired))
     |> unique_constraint(:device_code)
     |> unique_constraint(:user_code)

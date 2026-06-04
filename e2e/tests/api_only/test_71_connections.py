@@ -433,11 +433,18 @@ async def test_free_tier_pat_minting_blocked(clerk_client):
 # ── Device-flow helpers ───────────────────────────────────────────────────────
 
 
-def device_start(client_id: str = "e2e-plugin") -> dict:
-    """POST /api/auth/device — initiate device flow. Returns JSON body."""
+def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -> dict:
+    """POST /api/auth/device — initiate device flow. Returns JSON body.
+
+    Optional vault_name is the plugin's local Obsidian vault name. It's stored
+    on the device-authorization row so /link can pre-fill the create-new field.
+    """
+    payload: dict = {"client_id": client_id}
+    if vault_name is not None:
+        payload["vault_name"] = vault_name
     resp = requests.post(
         f"{API_URL}/auth/device",
-        json={"client_id": client_id},
+        json=payload,
         timeout=10,
     )
     resp.raise_for_status()
@@ -599,6 +606,42 @@ async def test_device_flow_connection_appears_in_list(clerk_client):
             f"obsidian connection still listed after revoke: {obsidian_after}"
         )
 
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_device_flow_vault_name_hint_surfaces_on_link_page(clerk_client):
+    """Plugin sends its local Obsidian vault name with the device-flow start;
+    the /link consent page reads it back via GET /vaults?user_code=... so the
+    "create new vault" field pre-fills with a sensible default.
+    """
+    clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
+    try:
+        start = device_start("e2e-plugin", vault_name="My Obsidian Notes")
+        user_code = start["user_code"]
+
+        resp = requests.get(
+            f"{API_URL}/vaults",
+            params={"user_code": user_code},
+            headers={"Authorization": f"Bearer {jwt}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        assert body["suggested_vault_name"] == "My Obsidian Notes"
+
+        # And without the hint, the field stays absent so the wizard's
+        # blank-default UX is preserved.
+        start_no_hint = device_start("e2e-plugin-2")
+        resp2 = requests.get(
+            f"{API_URL}/vaults",
+            params={"user_code": start_no_hint["user_code"]},
+            headers={"Authorization": f"Bearer {jwt}"},
+            timeout=10,
+        )
+        resp2.raise_for_status()
+        assert resp2.json()["suggested_vault_name"] is None
     finally:
         clerk_client.delete_user(clerk_user_id)
 

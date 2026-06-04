@@ -1,6 +1,7 @@
 defmodule EngramWeb.VaultsController do
   use EngramWeb, :controller
 
+  alias Engram.Auth.DeviceFlow
   alias Engram.Billing
   alias Engram.Vaults
 
@@ -18,14 +19,25 @@ defmodule EngramWeb.VaultsController do
     })
   end
 
-  def index(conn, _params) do
+  def index(conn, params) do
     user = conn.assigns.current_user
     vaults = Vaults.list_vaults(user)
     counts = Vaults.content_counts_for(user, vaults)
 
-    json(conn, %{
+    payload = %{
       vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))
-    })
+    }
+
+    payload =
+      case Map.get(params, "user_code") do
+        code when is_binary(code) and code != "" ->
+          Map.put(payload, :suggested_vault_name, DeviceFlow.suggested_vault_name(code))
+
+        _ ->
+          payload
+      end
+
+    json(conn, payload)
   end
 
   # ── create ─────────────────────────────────────────────────────────────────

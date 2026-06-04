@@ -52,10 +52,15 @@ export default function DeviceLinkPage() {
     setLoading(true)
     setError('')
     try {
-      const data = await api.get<{ vaults: Vault[] }>('/vaults')
       const formattedCode = formatted.slice(0, 4) + '-' + formatted.slice(4)
+      const data = await api.get<{ vaults: Vault[]; suggested_vault_name?: string | null }>(
+        `/vaults?user_code=${encodeURIComponent(formattedCode)}`,
+      )
       setUserCode(formattedCode)
       setVaults(data.vaults ?? [])
+      if (data.suggested_vault_name && newVaultName === '') {
+        setNewVaultName(data.suggested_vault_name)
+      }
       if (!data.vaults || data.vaults.length === 0) {
         setCreateNew(true)
       }

@@ -249,14 +249,6 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
         </li>
       </ol>
       <StatusRow stage={stage} />
-      <button
-        type="button"
-        onClick={() => void onCommit()}
-        disabled={isCommitting}
-        className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {isCommitting ? 'Saving…' : "I've installed it — take me to my dashboard"}
-      </button>
     </div>
   )
 }
