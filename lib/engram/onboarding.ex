@@ -356,20 +356,16 @@ defmodule Engram.Onboarding do
     if profile_has_tools?(profile), do: :vault, else: :tools
   end
 
-  defp next_step(true, true, true, profile, has_vault) do
-    # uses_obsidian=true short-circuits past the vault-create gate: the plugin's
-    # OAuth flow creates the vault on first sign-in, so we don't block the
-    # dashboard waiting for it. Fresh-path users stay on `:vault` until a
-    # vault row exists (otherwise they'd hit an empty dashboard with no notes).
-    cond do
-      profile_uses_obsidian?(profile) -> :done
-      has_vault -> :done
-      true -> :vault
-    end
+  defp next_step(true, true, true, _profile, has_vault) do
+    # Wizard navigation requires an actual vault row regardless of source —
+    # Obsidian-path users wait here until the plugin's first sync creates one
+    # (the `vault_populated` channel broadcast then unblocks the wizard). Note
+    # the asymmetry with `RequireOnboarding`: the plug still SKIPS the vault
+    # gate for `uses_obsidian=true` so the plugin can actually push that first
+    # sync — runtime permission and wizard navigation are intentionally
+    # separated. See `EngramWeb.Plugs.RequireOnboarding`.
+    if has_vault, do: :done, else: :vault
   end
-
-  defp profile_uses_obsidian?(%{"uses_obsidian" => true}), do: true
-  defp profile_uses_obsidian?(_), do: false
 
   defp profile_has_tools?(%{"tools" => [_ | _]}), do: true
   defp profile_has_tools?(_), do: false

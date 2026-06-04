@@ -51,10 +51,12 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["current_privacy_version"] == "2026-05-15"
     end
 
-    test "returns next_step=done for fully onboarded obsidian user", %{conn: conn, user: user} do
+    test "returns next_step=done for fully onboarded obsidian user with vault",
+         %{conn: conn, user: user} do
       {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
       {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
 
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
