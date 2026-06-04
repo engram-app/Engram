@@ -24,6 +24,13 @@ defmodule Mix.Tasks.Engram.Preflight do
       # phase: single-shot
 
   If no tag is found, phase is reported as `:unknown`.
+
+  ## Lock-risk heuristic limitations
+
+  `detect_lock_risk/1` reads the migration source statically. It does not
+  analyze raw `execute("ALTER TABLE ...")` SQL, lower-cased SQL inside
+  string literals, or runtime-built migration code. When in doubt, treat
+  the lock impact as `:high` and plan downtime accordingly.
   """
 
   use Mix.Task
@@ -120,11 +127,38 @@ defmodule Mix.Tasks.Engram.Preflight do
 
   defp detect_lock_risk(source) do
     cond do
-      Regex.match?(~r/concurrently:\s*true/, source) -> :low
-      Regex.match?(~r/\bcreate\s+(unique_)?index\b/, source) -> :high
-      Regex.match?(~r/modify\s*\(\s*:\w+\s*,\s*:[a-z]+\s*\)/, source) -> :high
-      Regex.match?(~r/\balter\s+table\b/, source) -> :medium
-      true -> :low
+      # CONCURRENTLY indexes are safe (no table lock, no blocking writes).
+      Regex.match?(~r/concurrently:\s*true/, source) ->
+        :low
+
+      # Plain CREATE INDEX (no CONCURRENTLY) takes a SHARE lock for the
+      # duration — blocks writes on busy tables.
+      Regex.match?(~r/\bcreate\s+(unique_)?index\b/, source) ->
+        :high
+
+      # DROP TABLE takes ACCESS EXCLUSIVE — blocks all reads + writes.
+      Regex.match?(~r/\bdrop\s*\(?\s*table\b/, source) ->
+        :high
+
+      # RENAME TABLE / RENAME COLUMN take ACCESS EXCLUSIVE — instant for
+      # rename itself, but blocks all activity during the cache flush.
+      Regex.match?(~r/\brename\s+table\b/, source) ->
+        :high
+
+      # Column type change: ALTER COLUMN ... TYPE forces a table rewrite.
+      # Regex matches `modify(:col, :type)` OR `modify(:col, :type, opts)` —
+      # the prior version required `)` immediately after the type atom,
+      # missing the common `modify(:foo, :string, null: false)` form.
+      Regex.match?(~r/\bmodify\s*\(\s*:\w+\s*,\s*:[a-z]+/, source) ->
+        :high
+
+      # Generic alter table — adds, removes, defaults. Lock duration is
+      # proportional to table size; ranks below explicit high-lock ops.
+      Regex.match?(~r/\balter\s+table\b/, source) ->
+        :medium
+
+      true ->
+        :low
     end
   end
 
