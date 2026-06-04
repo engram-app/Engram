@@ -51,7 +51,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   other event types either map to a different funnel step (handled
   elsewhere) or are pure state-sync we don't expose to product analytics.
   """
-  @spec forward_paddle_event(map(), Engram.Billing.Subscription.t() | atom() | term()) :: :ok
+  @spec forward_paddle_event(map(), struct() | term()) :: :ok
   def forward_paddle_event(
         %{"event_type" => "subscription.activated", "data" => data},
         %Engram.Billing.Subscription{} = sub
