@@ -93,7 +93,7 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
 
   const tokenResp = await fetch(`${CLERK_API}/sessions/${sessionId}/tokens`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${secretKey}` },
+    headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
   })
   if (!tokenResp.ok) {
     throw new Error(`Clerk mint token failed: ${tokenResp.status} ${await tokenResp.text()}`)

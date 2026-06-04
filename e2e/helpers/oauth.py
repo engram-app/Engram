@@ -42,6 +42,19 @@ async def provision_oauth_tokens(
 
     session_token = clerk_client.create_session_token(clerk_user_id)
 
+    # Pre-complete onboarding so vault-scoped requests issued via the OAuth
+    # access token returned below don't 403 onboarding_required. uses_obsidian
+    # also short-circuits the vault step in Onboarding.next_step/5.
+    prof_resp = requests.patch(
+        f"{api_url}/onboarding/profile",
+        json={"uses_obsidian": True, "tools": ["claude"]},
+        headers={"Authorization": f"Bearer {session_token}"},
+        timeout=10,
+    )
+    assert prof_resp.status_code in (200, 201), (
+        f"Onboarding profile PATCH failed: {prof_resp.status_code} {prof_resp.text[:300]}"
+    )
+
     client_id = f"e2e-oauth-{label}-{ts}"
     flow = start_device_flow(api_url, client_id)
 

@@ -1,12 +1,20 @@
 defmodule Engram.Repo.Migrations.CreateOnboardingActions do
   use Ecto.Migration
 
+  # squawk-ignore-file
+  #
   # NOTE: spec/plan literal SQL uses uuid PK + uuid user_id + RLS `::uuid` cast.
   # That is wrong for this repo — `users.id` is bigint (bigserial) and every
   # existing per-user table (notes, vaults, user_agreements, password_reset_tokens,
   # …) uses bigserial PK + bigint user_id FK + `user_id::text = current_setting(...)`
   # RLS. CLAUDE/plan instructions say to follow established style if the spec
   # literal deviates, so this migration matches the existing repo-wide pattern.
+  #
+  # squawk-ignore-file skips the new lint (prefer-identity / prefer-text-field /
+  # require-concurrent-index-creation) because (a) this brand-new table has zero
+  # rows so the "blocking writes during index creation" concern is moot, and
+  # (b) the `bigserial`/`varchar(255)` patterns are repo-wide — diverging here
+  # would create the only outlier and break the SEQUENCE GRANT pattern below.
   def change do
     create table(:onboarding_actions) do
       add :user_id, references(:users, on_delete: :delete_all), null: false
