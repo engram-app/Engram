@@ -10,6 +10,7 @@
 #
 # Used by:
 #   - priv/repo/lint_migrations.sh (squawk)
+#   - priv/repo/test_rollback.sh (ecto.rollback test)
 #   - .github/workflows/verify.yml phase-label-required job
 #   - .github/workflows/verify.yml contract-phase-references job
 set -euo pipefail

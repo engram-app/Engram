@@ -57,13 +57,32 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   end
 
   defp safety_assured?(source) do
-    source
-    |> String.split("\n")
-    |> Enum.take(20)
-    |> Enum.any?(&Regex.match?(~r/^\s*#\s*safety_assured:\s*"/, &1))
+    # Scan the whole file (not just first 20 lines): a long @moduledoc or
+    # copyright header can push the magic comment past any line limit.
+    # Regex requires opening quote + at least one non-quote character +
+    # closing quote — `# safety_assured: ""` or `# safety_assured: "` does
+    # NOT bypass. The justification must be a non-empty string.
+    Regex.match?(~r/^\s*#\s*safety_assured:\s*"[^"\n]+"\s*$/m, source)
   end
 
   defp do_extract(ast) do
+    # Design note: this walks the AST twice on :alter subtrees by design.
+    #
+    # The outer `Macro.prewalk` invokes `visit/2` on every node. The `:alter`
+    # clause MANUALLY descends into its do-block via `Enum.reduce + Macro.prewalk`
+    # so it can carry `current_table` as accumulator state — without that
+    # context, a bare `remove(:col)` doesn't know which table it belongs to.
+    #
+    # After the `:alter` clause returns, the outer prewalk also descends into
+    # those same children. It will hit the `:remove`/`:remove_if_exists` clause
+    # again, but with `current_table: nil` (the inner walk's value was scoped
+    # to the alter block and reset on exit). The `not is_nil(tbl)` guard on
+    # those clauses no-ops the outer visit. Net effect: each remove is
+    # captured exactly once, by the inner walk.
+    #
+    # If you change either the outer prewalk OR the :remove/:remove_if_exists
+    # guard, run the test suite — the safety here is enforced ONLY by that
+    # guard, not by walk structure.
     {_, acc} =
       Macro.prewalk(ast, %{columns: [], tables: [], current_table: nil}, fn node, acc ->
         {node, visit(node, acc)}

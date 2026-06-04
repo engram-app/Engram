@@ -141,4 +141,51 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
       MigrationDrops.extract(path)
     end
   end
+
+  test "safety_assured: with empty content does NOT bypass extraction", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "100.exs", """
+      # safety_assured: ""
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          drop(table(:legacy_audit))
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: ["legacy_audit"]}
+  end
+
+  test "safety_assured: with unclosed quote does NOT bypass extraction", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "101.exs", """
+      # safety_assured: "
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          drop(table(:legacy_audit))
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: ["legacy_audit"]}
+  end
+
+  test "safety_assured: works when the comment is past the first 20 lines", %{tmp: tmp} do
+    long_header = String.duplicate("# preamble line\n", 25)
+
+    path =
+      write_migration(tmp, "102.exs", """
+      #{long_header}# safety_assured: "audited 2026-06-04 — column already unused in prod"
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          drop(table(:legacy_audit))
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: []}
+  end
 end
