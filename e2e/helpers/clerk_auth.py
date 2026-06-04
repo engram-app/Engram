@@ -84,4 +84,17 @@ def provision_clerk_user(
         raise RuntimeError(f"No key in API key response: {resp.json()}")
 
     logger.info("Created API key via Clerk auth for %s: %s...", email, api_key[:20])
+
+    # Pre-complete onboarding so subsequent /api/notes calls (using either
+    # the api_key or the clerk JWT) stop hitting 403 onboarding_required.
+    prof = session.patch(
+        f"{api_url.rstrip('/')}/onboarding/profile",
+        json={"uses_obsidian": True, "tools": ["claude"]},
+        timeout=10,
+    )
+    if prof.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Onboarding profile PATCH failed: HTTP {prof.status_code}\n{prof.text[:500]}"
+        )
+
     return clerk_user_id, clerk_auth, api_key
