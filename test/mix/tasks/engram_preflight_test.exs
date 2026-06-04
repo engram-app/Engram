@@ -136,4 +136,56 @@ defmodule Mix.Tasks.Engram.PreflightTest do
     assert result.pending == []
     assert is_nil(result.rollback_command)
   end
+
+  test "report/2 flags lock_risk: :high for drop table" do
+    dir =
+      tmp_migrations([
+        {"20260101000000_drop_tbl.exs",
+         """
+         defmodule M do
+           use Ecto.Migration
+           def change, do: drop(table(:legacy_audit))
+         end
+         """}
+      ])
+
+    result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
+    assert Enum.at(result.pending, 0).lock_risk == :high
+  end
+
+  test "report/2 flags lock_risk: :high for rename table" do
+    dir =
+      tmp_migrations([
+        {"20260101000000_rename.exs",
+         """
+         defmodule M do
+           use Ecto.Migration
+           def change, do: rename table(:users), to: table(:accounts)
+         end
+         """}
+      ])
+
+    result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
+    assert Enum.at(result.pending, 0).lock_risk == :high
+  end
+
+  test "report/2 flags lock_risk: :high for modify with options" do
+    dir =
+      tmp_migrations([
+        {"20260101000000_modify.exs",
+         """
+         defmodule M do
+           use Ecto.Migration
+           def change do
+             alter table(:users) do
+               modify(:email, :text, null: false)
+             end
+           end
+         end
+         """}
+      ])
+
+    result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
+    assert Enum.at(result.pending, 0).lock_risk == :high
+  end
 end
