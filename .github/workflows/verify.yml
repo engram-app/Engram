@@ -1492,6 +1492,63 @@ jobs:
           fi
           exit $failed
 
+  phase-label-required:
+    # A migration PR must declare its expand/contract phase via a label.
+    # This is what enforces the two-deploy fence (expand in release N,
+    # contract in release N+1, never both in the same image). Self-hosters
+    # do not see the label; it's a CI-time check only.
+    #
+    # Labels (exactly one required):
+    #   phase/expand        - additive, forward-compatible with current main
+    #   phase/migrate-data  - backfills, dual-writes, read switches
+    #   phase/contract      - drops old columns/tables (gated by
+    #                         contract-phase-references job)
+    #   phase/single-shot   - expand+contract in one release; accept downtime
+    #                         even on SaaS. Use sparingly.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect migration touches
+        id: detect
+        run: |
+          git fetch -q --depth=1 origin "${{ github.base_ref }}" || true
+          changed=$(git diff --name-only --diff-filter=ACMR \
+            "origin/${{ github.base_ref }}...HEAD" -- 'priv/repo/migrations/*.exs' || true)
+          if [ -z "$changed" ]; then
+            echo "touches=false" >> "$GITHUB_OUTPUT"
+            echo "No migration changes on this PR — phase label not required."
+          else
+            echo "touches=true" >> "$GITHUB_OUTPUT"
+            echo "Migrations changed on this PR:"
+            printf '  %s\n' $changed
+          fi
+
+      - name: Require exactly one phase/* label
+        if: steps.detect.outputs.touches == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          phase_labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" \
+            --jq '.[].name | select(startswith("phase/"))')
+          count=$(printf '%s\n' "$phase_labels" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Migration PR must carry exactly ONE phase/* label."
+            echo "::error::Found $count phase/* labels on PR #$PR_NUMBER."
+            echo "::error::Valid labels: phase/expand, phase/migrate-data, phase/contract, phase/single-shot"
+            echo "::error::See backend/AGENTS.md § Migration phases for guidance."
+            exit 1
+          fi
+          echo "OK — PR carries phase label: $phase_labels"
+
   frontend-audit:
     name: frontend audit
     if: github.event_name != 'repository_dispatch'
