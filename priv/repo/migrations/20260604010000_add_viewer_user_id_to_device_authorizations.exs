@@ -1,6 +1,11 @@
 defmodule Engram.Repo.Migrations.AddViewerUserIdToDeviceAuthorizations do
   use Ecto.Migration
 
+  # squawk-ignore-file — `device_authorizations` is short-lived (5-min TTL),
+  # so the adding-foreign-key + non-concurrent index lints don't earn their
+  # cost. FK + index are intentional for the new viewer-binding lookup
+  # (atomic UPDATE) and the on_delete: :nilify_all cascade.
+  #
   # Binds the suggested_vault_name lookup on /api/vaults?user_code=... to
   # the first authenticated user who reads the code. Without this anyone
   # signed in could probe an observed user_code (shoulder-surfed off the

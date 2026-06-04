@@ -1,6 +1,11 @@
 defmodule Engram.Repo.Migrations.IndexDeviceAuthorizationsPendingUserCode do
   use Ecto.Migration
 
+  # squawk-ignore-file — `device_authorizations` is short-lived (5-min TTL)
+  # and rarely accessed; non-concurrent index creation blocks for ~ms in the
+  # worst case. CONCURRENTLY adds operational complexity (no transaction,
+  # disable_ddl_transaction true) that the table doesn't need.
+  #
   # `DeviceFlow.suggested_vault_name/2` and `authorize_device/3` both hot-path
   # filter device_authorizations by `user_code = ? AND status = 'pending' AND
   # expires_at > NOW()`. The existing unique index on user_code alone helps
