@@ -253,16 +253,21 @@ defmodule Engram.Accounts do
 
   defp guard_last_admin(_user), do: :ok
 
+  # Sentinel revocation timestamp used by admin and breach paths. Pinned at
+  # epoch 0 so it always falls OUTSIDE `@refresh_leeway_seconds` — without
+  # this the next request after a logout-everywhere or family breach would
+  # land inside the leeway window, get misread as a benign rotation race,
+  # and silently re-issue a fresh token (defeating the revocation). Keeping
+  # the rows preserves audit history for `Engram.Connections.any_history?`
+  # and `device_history?`, which distinguish "already revoked" from "never
+  # existed" by row presence.
+  @admin_revoked_at ~U[1970-01-01 00:00:00Z]
+
   @doc "Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere)."
   def revoke_all_user_tokens(%User{id: user_id}) do
-    # Hard-delete the rows. Stamping `revoked_at: now` would put them inside
-    # the rotation-leeway window so a still-pending request from the user
-    # would be misread as a benign rotation race and re-issued — defeating
-    # the "logout everywhere" guarantee that password-reset / admin actions
-    # rely on. Matches the breach path's deletion strategy.
     RefreshToken
-    |> where([rt], rt.user_id == ^user_id)
-    |> Repo.delete_all(skip_tenant_check: true)
+    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+    |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
   end
 
   def verify_password(email, password) do
@@ -430,14 +435,16 @@ defmodule Engram.Accounts do
 
     Logger.warning("refresh-token reuse detected; revoking family family_id=#{family_id}")
 
-    # Hard-delete the family (matches `DeviceFlow.invalidate_family/1`). Stamping
-    # `revoked_at` to "now" would put every member of the family inside the
-    # leeway window so a follow-up request with the current child would be
-    # mistaken for a benign rotation race and re-issue tokens — defeating the
-    # revocation. The family_id is owner-bound (never crosses users), so only
-    # the compromised lineage is touched.
-    from(rt in RefreshToken, where: rt.family_id == ^family_id)
-    |> Repo.delete_all(skip_tenant_check: true)
+    # Mark every still-live member of the family as revoked using the
+    # `@admin_revoked_at` sentinel (epoch 0). Stamping with `now` would put
+    # them inside the leeway window so a follow-up request with the current
+    # child would be mistaken for a benign rotation race and re-issue tokens —
+    # defeating the revocation. Deleting (the prior approach) broke
+    # `Connections.any_history?`, which distinguishes "already revoked" from
+    # "never existed" by row presence. Sentinel gives us both: leeway always
+    # closes, and history queries still see the row.
+    from(rt in RefreshToken, where: rt.family_id == ^family_id and is_nil(rt.revoked_at))
+    |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
   end
 
   @doc "SHA-256 hash a raw refresh token for storage/lookup."

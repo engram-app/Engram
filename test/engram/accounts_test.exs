@@ -187,12 +187,31 @@ defmodule Engram.AccountsTest do
       |> Engram.Repo.update_all([set: [revoked_at: stale]], skip_tenant_check: true)
 
       # Now reuse counts as a breach: original 401s with :token_reused, and
-      # the family is hard-deleted so the legitimate current child becomes
-      # unrecognized (matches the DeviceFlow.invalidate_family behavior —
-      # deletion is what prevents the just-revoked child from being misread as
-      # a benign rotation race).
+      # every member of the family is stamped with the admin sentinel
+      # timestamp (epoch 0) — outside the leeway window — so the legitimate
+      # current child also 401s with :token_reused on next use. Rows stay
+      # in place so `Connections.any_history?` can still see the lineage.
       assert {:error, :token_reused} = Accounts.consume_refresh_token(raw_token)
-      assert {:error, :invalid_token} = Accounts.consume_refresh_token(new_raw)
+      assert {:error, :token_reused} = Accounts.consume_refresh_token(new_raw)
+    end
+
+    test "revoke_all_user_tokens preserves row history for Connections lookups",
+         %{user: user} do
+      import Ecto.Query
+
+      {:ok, _raw, _record} = Accounts.create_refresh_token(user)
+
+      Accounts.revoke_all_user_tokens(user)
+
+      # Row count unchanged (rows stamped with sentinel, not deleted).
+      count =
+        Engram.Repo.aggregate(
+          from(rt in Engram.Auth.RefreshToken, where: rt.user_id == ^user.id),
+          :count,
+          :id
+        )
+
+      assert count == 1
     end
 
     test "expired refresh token is rejected", %{user: user} do
