@@ -117,7 +117,14 @@ export default function DeviceLinkPage() {
 
   return (
     <AuthShell>
-      <AuthPanel className="flex flex-col gap-4">
+      <AuthPanel
+        className={cn(
+          'flex flex-col gap-4',
+          // pick-vault is a tighter, decision-focused step — narrow the
+          // whole card so the radio rows + button don't feel oceanic.
+          step === 'pick-vault' && 'mx-auto sm:w-3/5',
+        )}
+      >
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           Link Obsidian Vault
         </h1>
@@ -143,7 +150,7 @@ export default function DeviceLinkPage() {
         )}
 
         {step === 'pick-vault' && (
-          <div className="mx-auto flex w-full flex-col gap-3 sm:w-3/5">
+          <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               Code verified. Pick where these notes should sync:
             </p>
