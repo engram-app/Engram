@@ -20,24 +20,33 @@ BASE_REF="${BASE_REF:-origin/main}"
 SQUAWK="${SQUAWK_BIN:-squawk}"
 MIG_DIR="priv/repo/migrations"
 
-# Highest migration version already on the base branch.
-base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
-  | grep -oE '[0-9]{14}' | sort -u | tail -1 || true)
-
-if [ -z "$base_version" ]; then
-  echo "::error::squawk: could not read migrations from '$BASE_REF' (is it fetched?)"
+# Migrations in the working tree newer than the base branch's tip.
+# Capture stdout AND check exit explicitly — `mapfile -t arr < <(cmd)`
+# does NOT propagate cmd's exit code, so we'd silently no-op the gate
+# if BASE_REF was unfetched.
+if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
+  echo "::error::lint_migrations: list_new_migrations.sh failed (BASE_REF=$BASE_REF may not be fetched)" >&2
   exit 1
 fi
 
-# Migrations in the working tree newer than the base branch's tip.
-mapfile -t new_versions < <(
-  find "$MIG_DIR" -maxdepth 1 -name '*.exs' -printf '%f\n' \
-    | grep -oE '^[0-9]{14}' | sort -u | awk -v b="$base_version" '$0 > b'
-)
-
-if [ "${#new_versions[@]}" -eq 0 ]; then
+if [ -z "$new_files_output" ]; then
   echo "squawk: no migrations newer than $BASE_REF — nothing to lint"
   exit 0
+fi
+
+mapfile -t new_files <<<"$new_files_output"
+mapfile -t new_versions < <(printf '%s\n' "${new_files[@]}" | grep -oE '^[0-9]{14}')
+
+# Re-derive base_version locally for `mix ecto.migrate --to` below.
+# Empty result here would mean the helper succeeded but this second call
+# failed — refuse rather than silently calling `mix ecto.migrate --to ''`
+# (which can roll back the entire DB).
+base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
+  | grep -oE '[0-9]{14}' | sort -u | tail -1)
+
+if [ -z "$base_version" ]; then
+  echo "::error::lint_migrations: base_version empty on re-derivation — refusing to run 'mix ecto.migrate --to \"\"'" >&2
+  exit 1
 fi
 
 # Skip lint entirely if any new migration file carries the

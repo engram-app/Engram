@@ -15,23 +15,32 @@ set -euo pipefail
 BASE_REF="${BASE_REF:-origin/main}"
 MIG_DIR="priv/repo/migrations"
 
-base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
-  | grep -oE '[0-9]{14}' | sort -u | tail -1 || true)
-
-if [ -z "$base_version" ]; then
-  echo "::error::rollback test: could not read migrations from '$BASE_REF' (is it fetched?)"
+# Capture stdout AND check exit explicitly — mirrors lint_migrations.sh pattern.
+# `mapfile -t arr < <(cmd)` does NOT propagate cmd's exit code, so an
+# unfetched BASE_REF would silently make this gate a no-op.
+if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
+  echo "::error::rollback test: list_new_migrations.sh failed (BASE_REF=$BASE_REF may not be fetched)" >&2
   exit 1
 fi
 
-mapfile -t new_versions < <(
-  find "$MIG_DIR" -maxdepth 1 -name '*.exs' -printf '%f\n' \
-    | grep -oE '^[0-9]{14}' | sort -u | awk -v b="$base_version" '$0 > b'
-)
-n=${#new_versions[@]}
-
-if [ "$n" -eq 0 ]; then
+if [ -z "$new_files_output" ]; then
   echo "rollback test: no migrations newer than $BASE_REF — nothing to check"
   exit 0
+fi
+
+mapfile -t new_files <<<"$new_files_output"
+mapfile -t new_versions < <(printf '%s\n' "${new_files[@]}" | grep -oE '^[0-9]{14}')
+n=${#new_versions[@]}
+
+# Re-derive base_version locally for `mix ecto.migrate --to` below.
+# Refuse rather than silently calling `mix ecto.migrate --to ''` (which
+# can roll back the entire DB).
+base_version=$(git ls-tree -r --name-only "$BASE_REF" -- "$MIG_DIR" 2>/dev/null \
+  | grep -oE '[0-9]{14}' | sort -u | tail -1)
+
+if [ -z "$base_version" ]; then
+  echo "::error::rollback test: base_version empty on re-derivation — refusing to run 'mix ecto.migrate --to \"\"'" >&2
+  exit 1
 fi
 
 # Skip if any new migration carries `# rollback-irreversible`. Used for

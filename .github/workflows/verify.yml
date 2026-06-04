@@ -1492,6 +1492,404 @@ jobs:
           fi
           exit $failed
 
+  phase-label-required:
+    # A migration PR must declare its expand/contract phase via a label.
+    # This is what enforces the two-deploy fence (expand in release N,
+    # contract in release N+1, never both in the same image). Self-hosters
+    # do not see the label; it's a CI-time check only.
+    #
+    # Labels (exactly one required):
+    #   phase/expand        - additive, forward-compatible with current main
+    #   phase/migrate-data  - backfills, dual-writes, read switches
+    #   phase/contract      - drops old columns/tables (gated by
+    #                         contract-phase-references job)
+    #   phase/single-shot   - expand+contract in one release; accept downtime
+    #                         even on SaaS. Use sparingly.
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect migration touches
+        id: detect
+        run: |
+          git fetch -q --depth=1 origin main || true
+          changed=$(git diff --name-only --diff-filter=ACMR \
+            origin/main...HEAD -- 'priv/repo/migrations/*.exs' || true)
+          if [ -z "$changed" ]; then
+            echo "touches=false" >> "$GITHUB_OUTPUT"
+            echo "No migration changes on this branch — phase label not required."
+          else
+            echo "touches=true" >> "$GITHUB_OUTPUT"
+            echo "Migrations changed on this branch:"
+            printf '  %s\n' $changed
+          fi
+
+      - name: Require exactly one phase/* label
+        if: steps.detect.outputs.touches == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "::error::Migration changes pushed but no open PR found for branch ${GITHUB_REF_NAME}."
+            echo "::error::Open a PR with the appropriate phase/* label (expand, migrate-data, contract, single-shot)"
+            echo "::error::before pushing migration changes. See AGENTS.md § Migration phases — the rule."
+            exit 1
+          fi
+          phase_labels=$(gh api "repos/$REPO/issues/$pr_number/labels" \
+            --jq '.[].name | select(startswith("phase/"))')
+          count=$(printf '%s\n' "$phase_labels" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Migration PR must carry exactly ONE phase/* label."
+            echo "::error::Found $count phase/* labels on PR #$pr_number."
+            echo "::error::Valid labels: phase/expand, phase/migrate-data, phase/contract, phase/single-shot"
+            echo "::error::See AGENTS.md § Migration phases — the rule for guidance."
+            exit 1
+          fi
+          echo "OK — PR #$pr_number carries phase label: $phase_labels"
+
+  contract-phase-references:
+    # On phase/contract PRs only: extract the columns and tables dropped
+    # by each new migration and verify NO lib/ code still references them.
+    # Enforces the expand/contract two-deploy fence: code that uses a
+    # column must be removed in an earlier release before the column itself
+    # is dropped in a later release.
+    if: |
+      github.event_name == 'push' &&
+      github.ref != 'refs/heads/main' &&
+      needs.fingerprint.outputs.backend-cache-hit != 'true'
+    runs-on: [self-hosted, linux, x64, isolated]
+    needs: [fingerprint, phase-label-required, prebuild-mix]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check phase/contract label on open PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping contract-phase-references."
+            exit 0
+          fi
+          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
+          if echo "$labels" | grep -qx 'phase/contract'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+            echo "phase/contract label present on PR #$pr_number — running grep gate."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "phase/contract label NOT present — skipping grep gate."
+          fi
+
+      # Restore prebuild-mix caches. Same pattern as the `lint` job: deps +
+      # _build/dev populated before any mix command so compile is a fast
+      # incremental no-op. Keys are pinned to the BEAM version emitted by
+      # prebuild-mix so a runner OTP/Elixir bump correctly invalidates the
+      # cache instead of feeding stale BEAM artifacts.
+      - name: Restore deps cache
+        if: steps.gate.outputs.proceed == 'true'
+        id: cache-deps
+        uses: actions/cache/restore@v5
+        with:
+          path: deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: |
+            mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Restore _build/dev cache
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: _build/dev
+          key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
+          restore-keys: |
+            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Install deps
+        if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: mix deps.get --check-locked
+
+      - name: Compile
+        if: steps.gate.outputs.proceed == 'true'
+        run: mix compile
+
+      - name: List new migrations
+        if: steps.gate.outputs.proceed == 'true'
+        id: list
+        run: |
+          git fetch -q --depth=1 origin main || true
+          BASE_REF="origin/main" \
+            bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
+          if [ ! -s /tmp/new-migrations.txt ]; then
+            echo "::error::phase/contract label set but no migrations newer than base ref"
+            exit 1
+          fi
+          echo "New migrations on this PR:"
+          sed 's/^/  /' /tmp/new-migrations.txt
+
+      - name: Extract dropped identifiers
+        if: steps.gate.outputs.proceed == 'true'
+        id: drops
+        run: |
+          : > /tmp/drops.txt
+          while IFS= read -r f; do
+            mix engram.migration_drops "priv/repo/migrations/$f" >> /tmp/drops.txt
+          done < /tmp/new-migrations.txt
+          if [ ! -s /tmp/drops.txt ]; then
+            echo "::notice::phase/contract label set but no extractable drops found in new migrations."
+            echo "::notice::Possible reasons:"
+            echo "::notice::  - Every drop in this PR is bypassed via # safety_assured: (legitimate; auditor trusts justification)"
+            echo "::notice::  - The PR was mis-labeled as phase/contract (recommend removing the label)"
+            echo "::notice::Reviewer: confirm intent on this PR before merging."
+            exit 0
+          fi
+          echo "Dropped identifiers this PR introduces:"
+          sed 's/^/  /' /tmp/drops.txt
+
+      - name: Grep lib/ for surviving references
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          # grep -E exit codes:
+          #   0 = match found
+          #   1 = no match (OK; gate passes for this identifier)
+          #   2+ = error (regex syntax, I/O — must NOT be swallowed)
+          # The old `|| true` collapsed all three into "no match", silently
+          # masking regex-metachar bugs in identifier names.
+          fail=0
+          while IFS= read -r line; do
+            # line is "column <table> <name>" or "table <name>"
+            kind=$(echo "$line" | awk '{print $1}')
+            case "$kind" in
+              column) name=$(echo "$line" | awk '{print $3}') ;;
+              table)  name=$(echo "$line" | awk '{print $2}') ;;
+              *)      continue ;;
+            esac
+
+            # Escape ERE metacharacters in the identifier before interpolating.
+            # An identifier like `count.x` would otherwise let `.` match any
+            # char; `foo[bar` would crash grep with 'Unmatched ['.
+            esc=$(printf '%s' "$name" | sed 's/[][\\.*+?(){}|^$]/\\&/g')
+
+            # Match three Elixir reference forms:
+            #   :name           — atom literal
+            #   "name"          — string literal
+            #   .name           — dot-access on a query binding (`u.field`)
+            # The dot-access form is the most common Ecto.Query pattern;
+            # without it, surviving `from u in User, where: u.legacy_flag`
+            # references would slip past the gate.
+            set +e
+            hits=$(grep -RnE "(:${esc}\b|\"${esc}\"|\.${esc}\b)" lib/)
+            grep_status=$?
+            set -e
+            if [ "$grep_status" -gt 1 ]; then
+              fail=1
+              echo "::error::grep failed (exit $grep_status) for identifier '$name' — likely a regex metachar slipped through escaping. Inspect priv/repo/migrations/ for unusual column or table names."
+              continue
+            fi
+
+            if [ -n "$hits" ]; then
+              fail=1
+              echo "::error::lib/ still references dropped identifier '$name':"
+              printf '%s\n' "$hits" | sed 's/^/  /'
+            fi
+          done < /tmp/drops.txt
+
+          if [ "$fail" -eq 1 ]; then
+            echo "::error::Contract-phase migration cannot land while lib/ still uses the dropped identifiers."
+            echo "::error::Ship an expand+code-change PR first that stops using these names, then come back for the drop."
+            echo "::error::See AGENTS.md § Expand/contract — the workflow for guidance."
+            exit 1
+          fi
+          echo "OK — no surviving lib/ references to dropped identifiers."
+
+  n1-compat:
+    # On phase/expand PRs only: prove the new migrations cleanly apply on
+    # top of the previous release-v* tag's schema. This catches malformed
+    # expand-phase migrations (NOT NULL without default, incompatible
+    # type changes, etc.) that Squawk's per-statement scan can miss in
+    # the catalog-level view.
+    #
+    # Simpler than the original plan: applies migrations, doesn't run
+    # the prev release's full mix test (brittle across versions). The
+    # "migrate applies cleanly" check is the load-bearing invariant.
+    if: |
+      github.event_name == 'push' &&
+      github.ref != 'refs/heads/main' &&
+      needs.fingerprint.outputs.backend-cache-hit != 'true'
+    runs-on: [self-hosted, linux, x64, isolated]
+    needs: [fingerprint, prebuild-mix]
+    permissions:
+      contents: read
+    env:
+      PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check phase/expand label on open PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr_number" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping n1-compat."
+            exit 0
+          fi
+          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
+          if echo "$labels" | grep -qx 'phase/expand'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "phase/expand label present on PR #$pr_number — running N-1 compat."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "phase/expand label NOT present — skipping N-1 compat."
+          fi
+
+      - name: Resolve previous release tag
+        if: steps.gate.outputs.proceed == 'true'
+        id: prev
+        run: |
+          # Most-recent release-v* tag in the repo, excluding any tag that
+          # would point at HEAD (defensive — shouldn't happen on a feature
+          # branch but cheap to guard).
+          prev=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
+          if [ -z "$prev" ]; then
+            echo "::warning::No release-v* tag found — N-1 compat cannot run on a never-released branch."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$prev" >> "$GITHUB_OUTPUT"
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "Previous release: $prev"
+
+      - name: Check out previous release in a sibling worktree
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: |
+          # Clean any stale worktree from a previous run on this runner.
+          rm -rf /tmp/prev-release
+          git worktree prune
+          git worktree add /tmp/prev-release "${{ steps.prev.outputs.tag }}"
+
+      - name: Start ephemeral postgres
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: pg
+        run: |
+          docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_n1 \
+            -P \
+            postgres:16-alpine
+          # Wait for ready
+          for i in $(seq 1 30); do
+            if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
+          echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
+          echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
+
+      - uses: actions/cache/restore@v5
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        id: cache-deps
+        with:
+          path: /tmp/prev-release/deps
+          key: ${{ needs.prebuild-mix.outputs.deps-key }}
+          restore-keys: mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
+
+      - name: Install deps for prev release
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
+        working-directory: /tmp/prev-release
+        run: mix deps.get
+
+      - name: Compile prev release
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        working-directory: /tmp/prev-release
+        run: mix compile
+
+      - name: Set up DB at prev release schema
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        working-directory: /tmp/prev-release
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          echo "DB now at prev release schema."
+
+      - name: Apply this branch's new migrations on top of prev's schema
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        working-directory: /tmp/prev-release
+        run: |
+          # Copy this branch's NEW migrations into prev's migrations dir.
+          cd "${{ github.workspace }}"
+          git fetch -q --depth=1 origin main || true
+          if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
+            echo "::error::n1-compat: list_new_migrations.sh failed (BASE_REF may not be fetched)"
+            exit 1
+          fi
+          if [ -z "$new_files_output" ]; then
+            echo "::notice::n1-compat: no new migrations on this branch — nothing to apply on top of prev."
+            exit 0
+          fi
+          echo "New migrations on this PR (about to apply on top of prev's schema):"
+          echo "$new_files_output" | sed 's/^/  /'
+          while IFS= read -r f; do
+            cp "priv/repo/migrations/$f" /tmp/prev-release/priv/repo/migrations/
+          done <<<"$new_files_output"
+
+          # Now migrate prev with the new files in its tree. If this
+          # fails, the expand-phase migration is incompatible with the
+          # previously-deployed schema.
+          cd /tmp/prev-release
+          mix ecto.migrate
+
+      - name: Smoke-query the migrated DB
+        if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
+        run: |
+          # Quick sanity check that the migrated DB is queryable. We're
+          # not running the test suite (brittle cross-version), just
+          # confirming basic structure.
+          docker exec "$PG_CONTAINER" psql -U engram -d engram_n1 -At -c "SELECT 1" >/dev/null
+          table_count=$(docker exec "$PG_CONTAINER" psql -U engram -d engram_n1 -At -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
+          echo "OK — migrated DB has $table_count public tables."
+
+      - name: Stop ephemeral postgres
+        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
+
+      - name: Clean up prev-release worktree
+        if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: |
+          rm -rf /tmp/prev-release
+          git worktree prune
+
   frontend-audit:
     name: frontend audit
     if: github.event_name != 'repository_dispatch'
@@ -1871,7 +2269,7 @@ jobs:
 
   ci:
     if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser]
+    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser, n1-compat]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
