@@ -33,12 +33,21 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
   if (!login.ok) throw new Error(`login failed: ${login.status} ${await login.text()}`)
   const { access_token } = (await login.json()) as { access_token: string }
 
+  const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` }
   const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access_token}` },
+    headers: auth,
     body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
   })
   if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`)
+  // Vault is created later by the spec (createVault helper). Just suppress
+  // TourOfferModal so the dashboard doesn't intercept editor clicks.
+  const act = await fetch(`${baseURL}/api/onboarding/actions`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+  })
+  if (!act.ok) throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`)
 
   return access_token
 }

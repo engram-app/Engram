@@ -119,6 +119,29 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
   if (!profResp.ok) {
     throw new Error(`Engram onboarding profile PATCH failed: ${profResp.status} ${await profResp.text()}`)
   }
+
+  // Suppress TourOfferModal + CreateFirstVaultModal — they'd intercept every
+  // click on the dashboard, breaking sign-out / theme / mobile / note tests.
+  // The FTUX modal-specific tests already use idempotent "skip if absent"
+  // checks for these modals, so seeding here doesn't regress that coverage.
+  const actionResp = await fetch(`${CLERK_API_BASE}/onboarding/actions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+  })
+  if (!actionResp.ok) {
+    throw new Error(`Onboarding action POST failed: ${actionResp.status} ${await actionResp.text()}`)
+  }
+
+  const vaultResp = await fetch(`${CLERK_API_BASE}/vaults`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'E2E Default Vault' }),
+  })
+  if (!vaultResp.ok) {
+    throw new Error(`Vault POST failed: ${vaultResp.status} ${await vaultResp.text()}`)
+  }
+
   console.log(`Pre-completed onboarding for Clerk user ${userId}`)
 }
 

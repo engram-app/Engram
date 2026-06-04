@@ -13,14 +13,29 @@ async function registerUser(baseURL: string, email: string) {
   if (!res.ok) throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`)
 
   // Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
-  // instead of being bounced to /onboard/profile by OnboardingGate.
+  // instead of being bounced to /onboard/profile by OnboardingGate; record a
+  // tour_offered_skipped action and seed a default vault so the dashboard's
+  // TourOfferModal + CreateFirstVaultModal don't intercept every click.
   const { access_token: token } = await res.json()
+  const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
   const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: auth,
     body: JSON.stringify({ uses_obsidian: true, tools: ['claude'] }),
   })
   if (!prof.ok) throw new Error(`Onboarding profile PATCH failed: ${prof.status} ${await prof.text()}`)
+  const act = await fetch(`${baseURL}/api/onboarding/actions`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+  })
+  if (!act.ok) throw new Error(`Onboarding action POST failed: ${act.status} ${await act.text()}`)
+  const vault = await fetch(`${baseURL}/api/vaults`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ name: 'E2E Vault' }),
+  })
+  if (!vault.ok) throw new Error(`Vault POST failed: ${vault.status} ${await vault.text()}`)
 }
 
 /** Unique email per test — no cross-test dependency. */
