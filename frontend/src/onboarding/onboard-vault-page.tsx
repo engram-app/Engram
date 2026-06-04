@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router'
 import { FilePlus2 } from 'lucide-react'
 import obsidianMark from '@lobehub/icons-static-svg/icons/obsidian-color.svg?raw'
 import { setActiveVaultId } from '../api/active-vault'
+import { config } from '../config'
 import {
   useCreateVault,
   useMe,
@@ -288,10 +289,23 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
             {' '}in your browser first.
           </span>
         </li>
-        <li>
-          Inside the plugin, click <strong>Sign in</strong> and authenticate
-          with your Engram account.
-        </li>
+        {config.authProvider === 'local' ? (
+          <li className="flex flex-col gap-1">
+            <span>
+              Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter
+              your Engram server URL, and click <strong>Sign in</strong>.
+            </span>
+            <span className="text-sm text-muted-foreground">
+              Use the same URL you used to reach this page.
+            </span>
+          </li>
+        ) : (
+          <li>
+            Open the plugin's <strong>☁️ Cloud</strong> tab, click{' '}
+            <strong>Sign in</strong>, and authenticate with your Engram
+            account.
+          </li>
+        )}
         <li>
           Pick a vault to sync. The plugin creates a matching Engram vault
           and pushes your existing files.
