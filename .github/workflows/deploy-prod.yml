@@ -43,9 +43,17 @@ jobs:
         run: |
           # github.sha is the commit the release tag points at.
           SHA=$(git rev-parse --short=7 "${{ github.sha }}")
+          FULL_SHA="${{ github.sha }}"
           echo "image_tag=sha-$SHA" >> "$GITHUB_OUTPUT"
+          # Backend Sentry SDK release tag — must match what
+          # `getsentry/action-release@v3` registers in verify.yml
+          # (`version: ${{ github.sha }}` — full 40-char SHA). Sourced as
+          # an ECS env var via the engram_release_sha TF variable so the
+          # backend SDK's `release` matches the frontend SDK + the Sentry
+          # UI release entry exactly.
+          echo "release_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
           echo "release=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          echo "Deploying $GITHUB_REF_NAME → image sha-$SHA"
+          echo "Deploying $GITHUB_REF_NAME → image sha-$SHA (release=$FULL_SHA)"
 
       # Mint a short-lived installation token for the engram-infra-tf
       # GitHub App, scoped to engram-app/engram-infra only. Required
@@ -78,10 +86,11 @@ jobs:
           # bump-infra-tfvars job.
           persist-credentials: false
 
-      - name: Rewrite engram_image_tag default in variables.tf
+      - name: Rewrite engram_image_tag + engram_release_sha defaults in variables.tf
         id: rewrite
         env:
           IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
+          RELEASE_SHA: ${{ steps.tags.outputs.release_sha }}
         run: |
           python3 - <<'PY'
           import os
@@ -89,25 +98,35 @@ jobs:
 
           path = "engram-infra/main/envs/prod/variables.tf"
           image_tag = os.environ["IMAGE_TAG"]
+          release_sha = os.environ["RELEASE_SHA"]
           gh_output = os.environ["GITHUB_OUTPUT"]
 
           text = open(path).read()
-          # Anchored on the variable block name so adding other
-          # `default = ` lines elsewhere in the file is safe.
-          pattern = re.compile(
-              r'(variable\s+"engram_image_tag"[^}]*?default\s*=\s*)"[^"]+"',
-              re.DOTALL,
-          )
-          new, count = pattern.subn(rf'\g<1>"{image_tag}"', text)
-          if count != 1:
-              raise SystemExit(
-                  f"expected exactly 1 engram_image_tag block, got {count}; "
-                  "variables.tf shape changed — adjust the regex"
+
+          # Each rewrite is anchored on the variable block name + must match
+          # exactly once. Adding other `default = ` lines elsewhere is safe.
+          # Hard-fail on count != 1 — silent shape changes are how the prod
+          # task def would diverge from the GitOps source of truth.
+          def rewrite(text, var_name, value):
+              pattern = re.compile(
+                  rf'(variable\s+"{var_name}"[^}}]*?default\s*=\s*)"[^"]*"',
+                  re.DOTALL,
               )
-          open(path, "w").write(new)
+              new, count = pattern.subn(rf'\g<1>"{value}"', text)
+              if count != 1:
+                  raise SystemExit(
+                      f"expected exactly 1 {var_name} block, got {count}; "
+                      "variables.tf shape changed — adjust the regex"
+                  )
+              print(f"rewrote {var_name} default → {value}")
+              return new
+
+          text = rewrite(text, "engram_image_tag", image_tag)
+          text = rewrite(text, "engram_release_sha", release_sha)
+
+          open(path, "w").write(text)
           with open(gh_output, "a") as f:
               f.write("rewrote=true\n")
-          print(f"rewrote engram_image_tag default → {image_tag}")
           PY
 
           echo "::group::variables.tf after rewrite"
@@ -140,7 +159,9 @@ jobs:
 
             Source commit: ${{ github.repository }}@${{ github.sha }}
 
-            Bumps `engram_image_tag` default in `main/envs/prod/variables.tf` to **`${{ steps.tags.outputs.image_tag }}`**.
+            Bumps two defaults in `main/envs/prod/variables.tf`:
+            - `engram_image_tag` → **`${{ steps.tags.outputs.image_tag }}`** (ECR tag rolled by `terraform (prod)`)
+            - `engram_release_sha` → **`${{ steps.tags.outputs.release_sha }}`** (full git SHA — backend Sentry SDK release tag, must match `getsentry/action-release@v3` registration)
 
             ## What this triggers
 

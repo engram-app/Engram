@@ -603,11 +603,29 @@ end
 # SOPS (`sentry_dsn_backend`); follow-up engram-infra PR wires the
 # `aws_ssm_parameter` and `ecs_secrets.tf` mapping.
 if dsn = System.get_env("SENTRY_DSN") do
+  # `release` MUST equal what `getsentry/action-release@v3` registers in
+  # verify.yml — currently `version: ${{ github.sha }}` (full 40-char
+  # commit SHA). Frontend Sentry SDK uses the same value via VITE_GIT_SHA
+  # at build time. Backend ECS injects RELEASE_SHA from
+  # `var.engram_release_sha` (engram-infra) so all three sources agree
+  # on the same string and the Sentry "Releases" view + suspect-commits
+  # + cross-event grouping work.
+  #
+  # Empty-string would register events under release "" — a real Sentry
+  # release that clutters the picker — so coerce blank → nil to mirror
+  # the "unset" semantic.
+  release =
+    case System.get_env("RELEASE_SHA") do
+      v when is_binary(v) and v != "" -> v
+      _ -> nil
+    end
+
   config :sentry,
     dsn: dsn,
     environment_name: to_string(config_env()),
     enable_source_code_context: true,
     root_source_code_paths: [File.cwd!()],
+    release: release,
     tags: %{env: to_string(config_env())},
     # Tracing off in Tier 1 — OpenTelemetry → Tempo lands in Tier 2 with
     # a 10% sample rate. Setting traces_sample_rate: nil makes Sentry

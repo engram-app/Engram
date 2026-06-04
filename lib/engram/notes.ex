@@ -82,10 +82,23 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
-          # FTUX vault page listens for this — fires when an empty vault
-          # gets its first note (typical case: Obsidian plugin completes
-          # its first sync push). `prev_hash == nil` ⇒ insert path.
-          if prev_hash == nil, do: maybe_broadcast_vault_populated(user, vault)
+
+          if is_nil(prev_hash) do
+            # FTUX vault page listens for this — fires when an empty vault
+            # gets its first note (typical case: Obsidian plugin completes
+            # its first sync push).
+            maybe_broadcast_vault_populated(user, vault)
+
+            # Funnel telemetry — emit once per real creation so the funnel
+            # doesn't double-count idempotent re-pushes of unchanged notes.
+            :ok =
+              Engram.Observability.PostHog.capture(
+                Engram.Observability.PostHog.distinct_id_for(user),
+                "note_created",
+                %{vault_id: vault.id}
+              )
+          end
+
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
