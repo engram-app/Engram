@@ -1974,13 +1974,25 @@ jobs:
             -f description="E2E tests passed (cached fingerprint match)" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-  # Build + push the release image to GHCR. Container swap on FastRaid
-  # happens downstream: `bump-infra-tfvars` opens a PR in
-  # engram-app/engram-infra bumping `engram_saas_image_tag`; merge of
-  # that PR triggers `tf-apply.yml` which POSTs the daemon's `/tf-apply`
-  # endpoint → `terraform apply` recreates the container on the new tag.
-  # `tf-apply` is now the SOLE image-mover; the legacy `/deploy` endpoint
-  # on engram-deployer is kept live as break-glass only (not called from CI).
+  # Build + push the release image to GHCR (staging-fastraid) AND ECR
+  # (prod ECS Fargate) in a single buildx invocation. Layers build once,
+  # push to both registries; multi-registry login is set up upfront.
+  #
+  # GHCR side feeds the FastRaid staging chain: `bump-infra-tfvars` opens
+  # a PR in engram-app/engram-infra bumping `engram_saas_image_tag`;
+  # merge of that PR triggers `tf-apply.yml` which POSTs the daemon's
+  # `/tf-apply` endpoint → `terraform apply` recreates the container on
+  # the new tag. `tf-apply` is the SOLE image-mover for FastRaid; the
+  # legacy `/deploy` endpoint on engram-deployer is kept live as
+  # break-glass only (not called from CI).
+  #
+  # ECR side feeds the prod GitOps chain: image lives in ECR tagged
+  # `sha-<7chars>` (deterministic deploy handle) plus a `v<X.Y.Z>` tag
+  # when HEAD has an annotated `v*` git tag (marketing/audit milestone —
+  # NOT `release-v*`, that's the deploy trigger handled by
+  # deploy-prod.yml). Image lives in ECR until an operator pushes a
+  # `release-v*` tag, at which point deploy-prod.yml opens an infra PR
+  # rewriting the prod image tag.
   build-and-publish-image:
     # Build when EITHER (a) full CI just succeeded OR (b) BOTH fingerprints
     # already proved green for this content. Both must be cached, because
@@ -1995,8 +2007,17 @@ jobs:
       && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
     needs: [fingerprint, ci]
     runs-on: [self-hosted, linux, x64, isolated]
+    # Inherited from the pre-fold build-ecr.yml (workflow-level there;
+    # job-level here): don't cancel an in-flight push — every main commit
+    # gets its own `sha-` tag in ECR + (when bumped) its own semver in
+    # GHCR. ECR lifecycle policy in TF (ecr.tf) caps tagged images at 20
+    # + expires untagged after 7 days.
+    concurrency:
+      group: build-and-publish-image-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
-      packages: write
+      packages: write   # GHCR push
+      id-token: write   # aws-actions/configure-aws-credentials OIDC for ECR
       contents: read
 
     steps:
@@ -2012,8 +2033,10 @@ jobs:
           fi
 
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need tags for `git describe --exact-match` (vtag)
 
-      - name: Extract and validate version
+      - name: Compute tags and decide build vs skip
         id: version
         env:
           # True when both fingerprints already proved green for this content
@@ -2023,6 +2046,7 @@ jobs:
           # path TF-driven pushes to `.github/CODEOWNERS` (and any other
           # admin file outside the BACKEND_HASH input set) take.
           CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
+          ECR_REPO: ${{ vars.AWS_ECR_REPOSITORY }}
         run: |
           VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -2030,8 +2054,16 @@ jobs:
             exit 1
           fi
 
-          IMAGE_LC="ghcr.io/${{ github.repository_owner }}/engram"
-          IMAGE_LC=$(echo "$IMAGE_LC" | tr '[:upper:]' '[:lower:]')
+          GHCR_IMAGE=$(echo "ghcr.io/${{ github.repository_owner }}/engram" | tr '[:upper:]' '[:lower:]')
+          SHA_SHORT="${GITHUB_SHA::7}"
+          SHA_TAG="sha-$SHA_SHORT"
+
+          # Optional annotated `v*` git tag for ECR (NOT `release-v*` — that
+          # triggers deploy-prod.yml, not an image marker).
+          VTAG=""
+          if VRAW=$(git describe --tags --exact-match 2>/dev/null) && [[ "$VRAW" =~ ^v[0-9] ]]; then
+            VTAG="$VRAW"
+          fi
 
           # Check whether this version already exists in GHCR.
           #
@@ -2058,29 +2090,58 @@ jobs:
           #   first or rerun + missing               → BUILD + PUSH + DEPLOY
           #                                            as normal
           #
+          # When we SKIP, we skip ECR push too — re-running on the same
+          # commit produces a byte-identical image, and ECR's existing
+          # `sha-` tag already serves the prod GitOps chain.
+          #
           # github.run_attempt is 1 on the first push-triggered run, 2+ on
           # any `gh run rerun` invocation. Cleanly distinguishes "operator
           # didn't bump" from "operator is retrying a known-good build".
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
-          if docker manifest inspect "${IMAGE_LC}:${VERSION}" > /dev/null 2>&1; then
+          if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
             if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ]; then
               echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
               exit 1
             fi
-            echo "::notice::Image ${IMAGE_LC}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}); skipping build, jumping to deploy."
+            echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}); skipping build, jumping to deploy."
             IMAGE_EXISTS=true
           fi
 
-          SHA_SHORT="${GITHUB_SHA::7}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "image=$IMAGE_LC" >> "$GITHUB_OUTPUT"
-          echo "sha_short=$SHA_SHORT" >> "$GITHUB_OUTPUT"
-          echo "image_exists=$IMAGE_EXISTS" >> "$GITHUB_OUTPUT"
+          # Emit a newline-separated tag list spanning both registries for
+          # docker/build-push-action's `tags:` input. Building the list
+          # here (vs an inline ternary in the action) keeps the conditional
+          # vtag append out of YAML. Each echo writes its own line — do
+          # not collapse into a shell here-string with embedded newlines
+          # (YAML indentation would leak into the tag values).
+          {
+            echo "version=$VERSION"
+            echo "ghcr_image=$GHCR_IMAGE"
+            echo "sha_short=$SHA_SHORT"
+            echo "sha_tag=$SHA_TAG"
+            echo "vtag=$VTAG"
+            echo "image_exists=$IMAGE_EXISTS"
+            echo "tags<<EOF"
+            echo "${GHCR_IMAGE}:latest"
+            echo "${GHCR_IMAGE}:${VERSION}"
+            echo "${GHCR_IMAGE}:${SHA_SHORT}"
+            echo "${ECR_REPO}:${SHA_TAG}"
+            if [ -n "$VTAG" ]; then
+              echo "${ECR_REPO}:${VTAG}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
           if [ "$IMAGE_EXISTS" = "true" ]; then
-            echo "Version ${VERSION} already built; will skip build + push."
+            echo "Version ${VERSION} already built; will skip build + push (both registries)."
           else
-            echo "Version ${VERSION} is new — proceeding with build."
+            echo "Version ${VERSION} is new — proceeding with build + push to GHCR + ECR."
+            echo "GHCR tags: latest, ${VERSION}, ${SHA_SHORT}"
+            if [ -n "$VTAG" ]; then
+              echo "ECR  tags: ${SHA_TAG}, ${VTAG}"
+            else
+              echo "ECR  tags: ${SHA_TAG}"
+            fi
           fi
 
       # Host daemon on the runner has Docker 29's containerd-snapshotter enabled,
@@ -2101,9 +2162,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install AWS CLI v2 (idempotent)
+        # Self-hosted runner pool doesn't ship awscli + the runner user has no
+        # passwordless sudo. Install into $HOME/.aws-cli (userspace) and add
+        # the bin dir to GITHUB_PATH every run.
+        #
+        # The `[ ! -x "$BIN" ]` path-based check is more reliable than
+        # `command -v aws` — GITHUB_PATH additions don't persist across runs,
+        # so a PATH-shaped check fails even on a runner where awscli is
+        # already present at the expected $HOME/.aws-cli path.
+        #
+        # `--update` makes `aws/install` idempotent even when an existing
+        # install is present (otherwise it errors with "Found preexisting AWS
+        # CLI installation"). The path check above keeps the fast path;
+        # --update is the safety net for race conditions.
+        if: steps.version.outputs.image_exists != 'true'
+        run: |
+          BIN="$HOME/.aws-cli/bin/aws"
+          if [ ! -x "$BIN" ]; then
+            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            rm -rf /tmp/awscli
+            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
+            /tmp/awscli/aws/install \
+              --install-dir "$HOME/.aws-cli" \
+              --bin-dir "$HOME/.aws-cli/bin" \
+              --update
+            rm -rf /tmp/awscliv2.zip /tmp/awscli
+          fi
+          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
+          "$BIN" --version
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.version.outputs.image_exists != 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        if: steps.version.outputs.image_exists != 'true'
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin \
+              "${{ vars.AWS_ECR_REPOSITORY }}"
+
       # Local FS cache on the self-hosted runner — bounded by disk speed
       # instead of GHCR latency. The old registry cache fetched every layer
       # over HTTPS on every build; local cache is ~10× faster for cache hits.
+      # Pre-fold, ECR built without this cache (cold every time); ECR push
+      # now benefits from the same warm layers GHCR has used since #391.
       - name: Restore buildx cache
         if: steps.version.outputs.image_exists != 'true'
         uses: actions/cache@v5
@@ -2113,6 +2220,13 @@ jobs:
           restore-keys: |
             buildx-${{ runner.os }}-
 
+      # ONE build, pushed to GHCR (3 tags) + ECR (1-2 tags). Buildx pushes
+      # layers per-registry but the underlying build runs once. Sentry
+      # source maps + build-args get baked into the same image both
+      # registries serve. `secrets:` mounts SENTRY_AUTH_TOKEN via tmpfs —
+      # never written to image layers. The Vite plugin self-disables when
+      # the token is empty, so an unset secret is a graceful no-op (stack
+      # traces ship un-symbolicated until the token lands).
       - name: Build and push image
         if: steps.version.outputs.image_exists != 'true'
         uses: docker/build-push-action@v7
@@ -2124,10 +2238,14 @@ jobs:
           platforms: linux/amd64
           cache-from: type=local,src=/tmp/buildx-cache
           cache-to: type=local,dest=/tmp/buildx-cache-new,mode=max
-          tags: |
-            ${{ steps.version.outputs.image }}:latest
-            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.sha_short }}
+          tags: ${{ steps.version.outputs.tags }}
+          build-args: |
+            VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
+            VITE_GIT_SHA=${{ github.sha }}
+            SENTRY_ORG=${{ vars.SENTRY_ORG }}
+            SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
 
       # Atomically swap new cache over old. actions/cache@v5 has no built-in
       # rotation; without this step the cache grows unbounded across runs.
@@ -2138,6 +2256,56 @@ jobs:
             rm -rf /tmp/buildx-cache
             mv /tmp/buildx-cache-new /tmp/buildx-cache
           fi
+
+      # Lift SENTRY_AUTH_TOKEN into a step output so the next two steps
+      # can gate on it. GH Actions doesn't allow the `secrets` context in
+      # step-level `if:` conditions, so the env-indirection is the
+      # documented workaround.
+      - name: Detect Sentry auth token
+        id: sentry-token
+        if: steps.version.outputs.image_exists != 'true'
+        env:
+          TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SENTRY_AUTH_TOKEN unset — skipping Sentry release steps. Stack traces will ship un-symbolicated until the secret lands."
+          fi
+
+      # Create + finalize a Sentry release tagged with the commit SHA.
+      # action-release uploads no source maps itself (the Vite plugin in
+      # the frontend stage of Dockerfile already pushed them under the
+      # same release name) — it just registers the release in Sentry's
+      # UI and associates commits, so the "Releases" view shows what's
+      # running and "Suspect Commits" can finger a likely-culprit commit
+      # on a new error.
+      - name: Sentry frontend release
+        if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          environment: prod
+          version: ${{ github.sha }}
+          finalize: true
+          sourcemaps: ''
+
+      - name: Sentry backend release
+        if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        with:
+          environment: prod
+          version: ${{ github.sha }}
+          finalize: true
+          sourcemaps: ''
 
   # Auto-open a PR in engram-app/engram-infra bumping the staging-fastraid
   # image tag(s) to the just-published version. Second leg of the
@@ -2333,202 +2501,6 @@ jobs:
         run: |
           gh pr merge --auto --squash --repo engram-app/engram-infra "$PR_NUMBER"
 
-  # Build + push the prod image to ECR (folded from build-ecr.yml).
-  # Tagged `sha-<7chars>` (deterministic deploy handle) plus a `v<X.Y.Z>`
-  # tag when HEAD has a `v*` annotated git tag (marketing/audit milestone —
-  # NOT `release-v*`, that's the deploy trigger). Image lives in ECR until
-  # an operator pushes a `release-v*` tag, at which point deploy-prod.yml
-  # opens an infra PR rewriting the prod image tag.
-  #
-  # Gate matches build-and-publish-image: ci-green OR cache-hit-both, so a
-  # TF-driven push to .github/CODEOWNERS (outside BACKEND_HASH inputs)
-  # doesn't block ECR builds.
-  build-and-push-ecr:
-    if: |
-      always()
-      && github.ref == 'refs/heads/main'
-      && github.event_name == 'push'
-      && (needs.ci.result == 'success' || (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true'))
-    needs: [fingerprint, ci]
-    runs-on: [self-hosted, linux, x64, isolated]
-    # Pre-fold (build-ecr.yml), this was workflow-level concurrency. Job-level
-    # preserves the "don't cancel an in-flight push — every main commit gets
-    # its own sha-tagged image" semantic; lifecycle policy in TF (ecr.tf) caps
-    # tagged images at 20 + expires untagged after 7 days.
-    concurrency:
-      group: build-ecr-${{ github.ref }}
-      cancel-in-progress: false
-    permissions:
-      id-token: write  # required for aws-actions/configure-aws-credentials OIDC
-      contents: read
-    steps:
-      - name: Reset sparse-checkout leaked from cross-repo jobs
-        run: |
-          # See comment in e2e-clerk's "Pre-cleanup stale resources" step.
-          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
-            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
-            rm -rf .git
-          fi
-
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0  # need tags for git describe
-
-      - name: Compute image tags
-        id: tags
-        run: |
-          SHA=$(git rev-parse --short=7 HEAD)
-          echo "sha=sha-$SHA" >> "$GITHUB_OUTPUT"
-          # `v*` exact-match tag → add as a second image tag.
-          # Ignore `release-v*` (that's the deploy trigger, not an image marker).
-          if VTAG=$(git describe --tags --exact-match 2>/dev/null) && [[ "$VTAG" =~ ^v[0-9] ]]; then
-            echo "vtag=$VTAG" >> "$GITHUB_OUTPUT"
-            echo "Tagging with: sha-$SHA, $VTAG"
-          else
-            echo "Tagging with: sha-$SHA"
-          fi
-
-      - name: Install AWS CLI v2 (idempotent)
-        # Self-hosted runner pool doesn't ship awscli + the runner user has no
-        # passwordless sudo. Install into $HOME/.aws-cli (userspace) and add
-        # the bin dir to GITHUB_PATH every run.
-        #
-        # The `[ ! -x "$BIN" ]` path-based check is more reliable than
-        # `command -v aws` — GITHUB_PATH additions don't persist across runs,
-        # so a PATH-shaped check fails even on a runner where awscli is
-        # already present at the expected $HOME/.aws-cli path.
-        #
-        # `--update` makes `aws/install` idempotent even when an existing
-        # install is present (otherwise it errors with "Found preexisting AWS
-        # CLI installation"). The path check above keeps the fast path;
-        # --update is the safety net for race conditions.
-        run: |
-          BIN="$HOME/.aws-cli/bin/aws"
-          if [ ! -x "$BIN" ]; then
-            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-            rm -rf /tmp/awscli
-            unzip -q /tmp/awscliv2.zip -d /tmp/awscli
-            /tmp/awscli/aws/install \
-              --install-dir "$HOME/.aws-cli" \
-              --bin-dir "$HOME/.aws-cli/bin" \
-              --update
-            rm -rf /tmp/awscliv2.zip /tmp/awscli
-          fi
-          echo "$HOME/.aws-cli/bin" >> "$GITHUB_PATH"
-          "$BIN" --version
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Login to ECR
-        run: |
-          aws ecr get-login-password --region us-east-1 \
-            | docker login --username AWS --password-stdin \
-              "${{ vars.AWS_ECR_REPOSITORY }}"
-
-      - name: Build & push
-        env:
-          REPO: ${{ vars.AWS_ECR_REPOSITORY }}
-          SHA_TAG: ${{ steps.tags.outputs.sha }}
-          VTAG: ${{ steps.tags.outputs.vtag }}
-          # Plain progress writer — see ci.yml prebuild-ci-image for the
-          # docker/buildx race rationale (#334).
-          BUILDKIT_PROGRESS: plain
-          # Sentry frontend wiring (no-op when SENTRY_* secrets unset).
-          # VITE_GIT_SHA is the 7-char tag from the step above without
-          # the `sha-` prefix so Sentry release names match the values
-          # passed to action-release below + to the runtime SDK's
-          # release option.
-          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
-          VITE_GIT_SHA: ${{ github.sha }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT_FRONTEND: ${{ vars.SENTRY_PROJECT_FRONTEND }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          # Cloudflare Web Analytics beacon — cookieless RUM. Public
-          # per-site identifier, so a plain build-arg is fine; the
-          # secret name is set to keep self-host bundles from shipping
-          # the SaaS token.
-          VITE_CF_BEACON_TOKEN: ${{ secrets.VITE_CF_BEACON_TOKEN }}
-          # PostHog product analytics — public project token (write-only
-          # event ingest, per-project). Host defaults to us.i.posthog.com
-          # in main.tsx if VITE_POSTHOG_HOST is unset.
-          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
-          VITE_POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
-        run: |
-          TAGS=(--tag "$REPO:$SHA_TAG")
-          if [ -n "$VTAG" ]; then
-            TAGS+=(--tag "$REPO:$VTAG")
-          fi
-          # --secret pipes SENTRY_AUTH_TOKEN to the build via a tmpfs
-          # mount, never written to image layers. The Vite plugin
-          # self-disables if the token isn't present, so an empty
-          # secret is a graceful no-op (degraded UX: stack traces
-          # ship un-symbolicated until the token lands).
-          docker buildx build \
-            "${TAGS[@]}" \
-            --push \
-            --build-arg "VITE_SENTRY_DSN=${VITE_SENTRY_DSN}" \
-            --build-arg "VITE_GIT_SHA=${VITE_GIT_SHA}" \
-            --build-arg "SENTRY_ORG=${SENTRY_ORG}" \
-            --build-arg "SENTRY_PROJECT=${SENTRY_PROJECT_FRONTEND}" \
-            --build-arg "VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN}" \
-            --build-arg "VITE_POSTHOG_KEY=${VITE_POSTHOG_KEY}" \
-            --build-arg "VITE_POSTHOG_HOST=${VITE_POSTHOG_HOST}" \
-            --secret "id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" \
-            .
-
-      # Lift SENTRY_AUTH_TOKEN into a step env so the next two steps
-      # can gate on `env.HAS_TOKEN`. GH Actions doesn't allow the
-      # `secrets` context in step-level `if:` conditions, so the
-      # env-indirection is the documented workaround.
-      - name: Detect Sentry auth token
-        id: sentry-token
-        env:
-          TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then
-            echo "has_token=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_token=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::SENTRY_AUTH_TOKEN unset — skipping Sentry release steps. Stack traces will ship un-symbolicated until the secret lands."
-          fi
-
-      # Create + finalize a Sentry release tagged with the commit SHA.
-      # action-release uploads no source maps itself (the Vite plugin
-      # in the frontend stage of Dockerfile already pushed them under
-      # the same release name) — it just registers the release in
-      # Sentry's UI and associates commits, so the "Releases" view
-      # shows what's running and the "Suspect Commits" feature can
-      # finger a likely-culprit commit on a new error.
-      - name: Sentry frontend release
-        if: steps.sentry-token.outputs.has_token == 'true'
-        uses: getsentry/action-release@v3
-        env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        with:
-          environment: prod
-          version: ${{ github.sha }}
-          finalize: true
-          sourcemaps: ''
-
-      - name: Sentry backend release
-        if: steps.sentry-token.outputs.has_token == 'true'
-        uses: getsentry/action-release@v3
-        env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        with:
-          environment: prod
-          version: ${{ github.sha }}
-          finalize: true
-          sourcemaps: ''
-
   # Submit the Hex SBOM to GitHub's dependency-submission API after merge.
   # GitHub's static mix.lock parser silently fails on this repo (verified
   # 2026-05-22: the repo's SBOM contained 0 `pkg:hex` packages despite 200+
@@ -2543,7 +2515,7 @@ jobs:
   # do NOT include ci.yml in the guard (every ci.yml edit shouldn't
   # republish the SBOM); workflow_dispatch path lives in cron.yml.
   #
-  # Gate matches build-and-publish-image / build-and-push-ecr.
+  # Gate matches build-and-publish-image.
   submit-dep-graph:
     if: |
       always()

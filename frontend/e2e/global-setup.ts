@@ -51,11 +51,15 @@ export default async function globalSetup() {
   const user = await resp.json()
   console.log(`Clerk test user created: ${email} (${user.id})`)
 
-  // Block until Clerk's sign-in-tokens endpoint can see this user.
-  // Without this, the first test calling clerk.signIn() races Clerk's
-  // propagation lag (issue #193). Concentrates the wait into one site
-  // so test code doesn't need retries.
+  // Block until BOTH endpoints @clerk/testing's signIn helper uses can see
+  // this user. Splitting the probe in two because Clerk's user-list-by-email
+  // lookup (called FIRST by signIn) and sign-in-tokens (called second) can
+  // sit on different read replicas — the existing tokens probe alone was
+  // insufficient and we still hit "No user found with email" deep in test
+  // code (issue #193 recurrence post-#415). Concentrates the wait into one
+  // site so test code doesn't need retries.
   await waitUntilSignInReady(user.id, secretKey)
+  await waitUntilEmailResolvable(email, user.id, secretKey)
 
   // Pre-complete onboarding for the Clerk test user against the clerk backend.
   // RequireOnboarding gates /api/* with 403 `onboarding_required` until the
@@ -205,6 +209,63 @@ async function waitUntilSignInReady(userId: string, secretKey: string): Promise<
     const sleepFor = Math.min(jittered(backoff), remaining)
     console.warn(
       `Clerk sign-in-tokens probe 404 for ${userId} (attempt ${attempt}, sleeping ${Math.round(sleepFor)}ms, ${remaining}ms remaining)`,
+    )
+    await new Promise((r) => setTimeout(r, sleepFor))
+    backoff = Math.min(backoff * 2, SIGN_IN_READY_MAX_BACKOFF_MS)
+  }
+}
+
+/**
+ * Block until Clerk's GET /users?email_address=<email> returns the user.
+ *
+ * Mirror of waitUntilSignInReady but for the OTHER endpoint @clerk/testing
+ * hits first: the email→user_id resolution. clerk.signIn({emailAddress})
+ * calls clerkClient.users.getUserList({emailAddress:[email]}) before any
+ * sign-in token is created, and that lookup returns an empty 200 (not 404)
+ * while the email index lags behind the create. Without this probe we
+ * still hit "No user found with email" deep in test code after
+ * waitUntilSignInReady succeeded — same replica-divergence pattern that
+ * motivated splitting the probes in #415.
+ */
+async function waitUntilEmailResolvable(
+  email: string,
+  expectedUserId: string,
+  secretKey: string,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${secretKey}` }
+  const deadline = Date.now() + SIGN_IN_READY_MAX_WAIT_MS
+  let backoff = SIGN_IN_READY_INITIAL_BACKOFF_MS
+  let attempt = 0
+  const jittered = (ms: number) => ms + ms * (Math.random() * 0.4 - 0.2)
+
+  while (true) {
+    attempt++
+    const resp = await fetch(
+      `${CLERK_API}/users?email_address=${encodeURIComponent(email)}`,
+      { headers },
+    )
+    if (!resp.ok) {
+      throw new Error(
+        `Clerk email-lookup probe failed (non-2xx): ${resp.status} ${await resp.text()}`,
+      )
+    }
+    const users = (await resp.json()) as Array<{ id?: string }>
+    if (Array.isArray(users) && users.some((u) => u.id === expectedUserId)) {
+      console.log(
+        `Clerk email-lookup probe succeeded for ${email} on attempt ${attempt}`,
+      )
+      return
+    }
+    // 200 + empty/wrong-user = email index still lagging; back off + retry.
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new Error(
+        `Clerk GET /users?email_address still did not return user ${expectedUserId} after ${SIGN_IN_READY_MAX_WAIT_MS}ms (${attempt} attempts)`,
+      )
+    }
+    const sleepFor = Math.min(jittered(backoff), remaining)
+    console.warn(
+      `Clerk email-lookup probe empty for ${email} (attempt ${attempt}, sleeping ${Math.round(sleepFor)}ms, ${remaining}ms remaining)`,
     )
     await new Promise((r) => setTimeout(r, sleepFor))
     backoff = Math.min(backoff * 2, SIGN_IN_READY_MAX_BACKOFF_MS)
