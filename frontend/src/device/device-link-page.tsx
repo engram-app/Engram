@@ -63,9 +63,14 @@ export default function DeviceLinkPage() {
       setVaults(data.vaults ?? [])
       const suggested = data.suggested_vault_name?.trim() || ''
       setSuggestedName(suggested)
-      // Default to the matched-name row when the plugin sent a hint;
-      // otherwise drop straight to the custom-name input.
-      setSelection(suggested ? 'matched' : 'custom')
+      // Default selection:
+      // - existing vault with the same name → pre-select that vault (link, don't dup)
+      // - suggested name with no existing match → 'matched' (create new with that name)
+      // - no hint at all → 'custom' (force user to type a name)
+      const existing = suggested
+        ? (data.vaults ?? []).find((v) => v.name === suggested)
+        : undefined
+      setSelection(existing ? String(existing.id) : suggested ? 'matched' : 'custom')
       setStep('pick-vault')
     } catch {
       setError('Failed to load vaults. Please try again.')
@@ -155,75 +160,114 @@ export default function DeviceLinkPage() {
               Pick an existing one, or create a new vault for these notes.
             </p>
 
-            <fieldset className="flex flex-col gap-2">
-              {suggestedName && (
-                <label className={selectableRow(isMatched)}>
-                  <input
-                    type="radio"
-                    name="vault-target"
-                    checked={isMatched}
-                    onChange={() => setSelection('matched')}
-                    className="accent-primary"
-                  />
-                  <span className="flex flex-col">
-                    <span className="text-sm font-medium text-foreground">
-                      {suggestedName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Makes a new vault matching your Obsidian vault name
-                    </span>
-                  </span>
-                </label>
-              )}
+            {(() => {
+              // If a vault already exists with the suggested name, offer to
+              // link into THAT one as the top row instead of dangling a
+              // "create a duplicate" option. The duplicated vault then gets
+              // hidden from the regular existing-vaults list below.
+              const matchedExisting = suggestedName
+                ? vaults.find((v) => v.name === suggestedName)
+                : undefined
+              const otherVaults = matchedExisting
+                ? vaults.filter((v) => v.id !== matchedExisting.id)
+                : vaults
+              return (
+                <fieldset className="flex flex-col gap-2">
+                  {matchedExisting ? (
+                    <label
+                      className={selectableRow(selection === String(matchedExisting.id))}
+                    >
+                      <input
+                        type="radio"
+                        name="vault-target"
+                        checked={selection === String(matchedExisting.id)}
+                        onChange={() => setSelection(String(matchedExisting.id))}
+                        className="accent-primary"
+                      />
+                      <span className="flex flex-col">
+                        <span className="text-sm font-medium text-foreground">
+                          {matchedExisting.name}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          Sync into your existing vault &middot;{' '}
+                          {matchedExisting.note_count} notes
+                        </span>
+                      </span>
+                    </label>
+                  ) : (
+                    suggestedName && (
+                      <label className={selectableRow(isMatched)}>
+                        <input
+                          type="radio"
+                          name="vault-target"
+                          checked={isMatched}
+                          onChange={() => setSelection('matched')}
+                          className="accent-primary"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-medium text-foreground">
+                            {suggestedName}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            Makes a new vault matching your Obsidian vault name
+                          </span>
+                        </span>
+                      </label>
+                    )
+                  )}
 
-              {vaults.map((v) => {
-                const active = selection === String(v.id)
-                return (
-                  <label key={v.id} className={selectableRow(active)}>
+                  {otherVaults.map((v) => {
+                    const active = selection === String(v.id)
+                    return (
+                      <label key={v.id} className={selectableRow(active)}>
+                        <input
+                          type="radio"
+                          name="vault-target"
+                          checked={active}
+                          onChange={() => setSelection(String(v.id))}
+                          className="accent-primary"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-medium text-foreground">
+                            {v.name}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            Sync into this existing vault &middot; {v.note_count} notes
+                          </span>
+                        </span>
+                      </label>
+                    )
+                  })}
+
+                  <label className={selectableRow(isCustom)}>
                     <input
                       type="radio"
                       name="vault-target"
-                      checked={active}
-                      onChange={() => setSelection(String(v.id))}
+                      checked={isCustom}
+                      onChange={() => setSelection('custom')}
                       className="accent-primary"
                     />
-                    <span className="flex flex-col">
-                      <span className="text-sm font-medium text-foreground">{v.name}</span>
-                      <span className="text-xs text-muted-foreground">
-                        Sync into this existing vault &middot; {v.note_count} notes
+                    <span className="flex flex-1 flex-col gap-2">
+                      <span className="text-sm font-medium text-foreground">
+                        Create a vault with a custom name
                       </span>
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => {
+                          setCustomName(e.target.value)
+                          if (!isCustom) setSelection('custom')
+                        }}
+                        onFocus={() => setSelection('custom')}
+                        placeholder="choose a new name"
+                        maxLength={100}
+                        className={fieldInput}
+                      />
                     </span>
                   </label>
-                )
-              })}
-
-              <label className={selectableRow(isCustom)}>
-                <input
-                  type="radio"
-                  name="vault-target"
-                  checked={isCustom}
-                  onChange={() => setSelection('custom')}
-                  className="accent-primary"
-                />
-                <span className="flex flex-1 flex-col gap-2">
-                  <span className="text-sm font-medium text-foreground">
-                    Create a vault with a custom name
-                  </span>
-                  <input
-                    type="text"
-                    value={customName}
-                    onChange={(e) => {
-                      setCustomName(e.target.value)
-                      if (!isCustom) setSelection('custom')
-                    }}
-                    onFocus={() => setSelection('custom')}
-                    placeholder="choose a new name"
-                    maxLength={100}
-                    className={fieldInput}
-                  />
-                </span>
-              </label>
-            </fieldset>
+                </fieldset>
+              )
+            })()}
 
             <Button
               type="button"
