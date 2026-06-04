@@ -89,26 +89,37 @@ defmodule EngramWeb.OnboardingController do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
 
-  # FTUX questionnaire submit. Body shape:
-  #   { uses_obsidian: bool, tools: [string] }
+  # FTUX questionnaire submit. Body shape (either or both):
+  #   { tools: [string] }              — submitted from /onboard/tools
+  #   { uses_obsidian: bool }          — submitted from /onboard/vault
+  #   { tools: [...], uses_obsidian }  — combined (e.g. mid-flow re-POST)
   # The Onboarding context owns validation (catalog membership + non-empty
   # + boolean type); we render its error atom verbatim as the JSON error
   # so the SPA can switch on a stable string instead of a translated message.
-  def set_profile(conn, %{"uses_obsidian" => uses_obsidian, "tools" => tools})
-      when is_list(tools) do
-    case Onboarding.set_profile(conn.assigns.current_user, %{
-           uses_obsidian: uses_obsidian,
-           tools: tools
-         }) do
-      {:ok, user} ->
-        conn |> put_status(:created) |> json(user.onboarding_profile)
+  def set_profile(conn, params) do
+    attrs =
+      %{}
+      |> maybe_put_attr(params, "tools", :tools)
+      |> maybe_put_attr(params, "uses_obsidian", :uses_obsidian)
 
-      {:error, reason} when reason in [:invalid_uses_obsidian, :empty_tools, :invalid_tool] ->
-        conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
+    if attrs == %{} do
+      conn |> put_status(422) |> json(%{error: "missing_fields"})
+    else
+      case Onboarding.set_profile(conn.assigns.current_user, attrs) do
+        {:ok, user} ->
+          conn |> put_status(:created) |> json(user.onboarding_profile)
+
+        {:error, reason}
+        when reason in [:invalid_uses_obsidian, :empty_tools, :invalid_tool] ->
+          conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
+      end
     end
   end
 
-  def set_profile(conn, _params) do
-    conn |> put_status(422) |> json(%{error: "missing_fields"})
+  defp maybe_put_attr(attrs, params, json_key, atom_key) do
+    case Map.fetch(params, json_key) do
+      {:ok, value} -> Map.put(attrs, atom_key, value)
+      :error -> attrs
+    end
   end
 end

@@ -51,10 +51,12 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["current_privacy_version"] == "2026-05-15"
     end
 
-    test "returns next_step=done for fully onboarded obsidian user", %{conn: conn, user: user} do
+    test "returns next_step=done for fully onboarded obsidian user with vault",
+         %{conn: conn, user: user} do
       {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
       {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
 
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
@@ -225,8 +227,42 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert json_response(conn, 422)["error"] == "invalid_uses_obsidian"
     end
 
-    test "returns 422 missing_fields when uses_obsidian or tools are absent", %{conn: conn} do
+    test "accepts a tools-only partial PATCH (wizard's tools step)", %{conn: conn, user: user} do
       conn = patch(conn, "/api/onboarding/profile", %{"tools" => ["claude"]})
+      body = json_response(conn, 201)
+      assert body["tools"] == ["claude"]
+      refute Map.has_key?(body, "uses_obsidian")
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.onboarding_profile["tools"] == ["claude"]
+    end
+
+    test "accepts a uses_obsidian-only partial PATCH (wizard's vault step)",
+         %{conn: conn, user: user} do
+      conn = patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+      body = json_response(conn, 201)
+      assert body["uses_obsidian"] == true
+      refute Map.has_key?(body, "tools")
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.onboarding_profile["uses_obsidian"] == true
+    end
+
+    test "two partial PATCHes merge and stamp completed_at", %{conn: conn, user: user} do
+      patch(conn, "/api/onboarding/profile", %{"tools" => ["claude"]})
+      conn = patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+      body = json_response(conn, 201)
+      assert body["tools"] == ["claude"]
+      assert body["uses_obsidian"] == true
+      assert is_binary(body["completed_at"])
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.onboarding_profile["completed_at"] |> is_binary()
+    end
+
+    test "returns 422 missing_fields when neither uses_obsidian nor tools provided",
+         %{conn: conn} do
+      conn = patch(conn, "/api/onboarding/profile", %{"unrelated" => "value"})
       assert json_response(conn, 422)["error"] == "missing_fields"
     end
   end

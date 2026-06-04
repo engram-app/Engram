@@ -56,11 +56,19 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
       |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
       |> Enum.sort()
 
-    body = %{error: "onboarding_required", missing: missing, next_step: next_step}
+    if missing == [] do
+      # All enforced gates pass even though wizard navigation isn't `:done`
+      # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
+      # Runtime traffic permission and wizard state are intentionally
+      # decoupled — see `Engram.Onboarding.next_step/5`.
+      conn
+    else
+      body = %{error: "onboarding_required", missing: missing, next_step: next_step}
 
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(403, Jason.encode!(body))
-    |> halt()
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(403, Jason.encode!(body))
+      |> halt()
+    end
   end
 end

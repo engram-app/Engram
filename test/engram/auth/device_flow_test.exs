@@ -27,6 +27,66 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert auth1.device_code != auth2.device_code
       assert auth1.user_code != auth2.user_code
     end
+
+    test "stores optional vault_name hint" do
+      assert {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local Vault")
+      assert auth.vault_name == "Local Vault"
+    end
+
+    test "defaults vault_name to nil when omitted" do
+      assert {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      assert auth.vault_name == nil
+    end
+  end
+
+  describe "suggested_vault_name/2" do
+    test "returns the hint stored at start time for a pending code" do
+      reader = insert(:user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Brainvault")
+      assert DeviceFlow.suggested_vault_name(auth.user_code, reader.id) == "Brainvault"
+    end
+
+    test "returns nil for unknown code" do
+      reader = insert(:user)
+      assert DeviceFlow.suggested_vault_name("ZZZZ-ZZZZ", reader.id) == nil
+    end
+
+    test "returns nil once the code has been authorized (no longer pending)" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      assert DeviceFlow.suggested_vault_name(auth.user_code, user.id) == nil
+    end
+
+    test "returns nil for expired code" do
+      reader = insert(:user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Local")
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(da in Engram.Auth.DeviceAuthorization, where: da.id == ^auth.id),
+        [set: [expires_at: past]],
+        skip_tenant_check: true
+      )
+
+      assert DeviceFlow.suggested_vault_name(auth.user_code, reader.id) == nil
+    end
+
+    test "the first reader claims the code; subsequent reads by other users return nil" do
+      first = insert(:user)
+      second = insert(:user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1", "Sensitive Vault")
+
+      # First user gets the name and atomically claims the row.
+      assert DeviceFlow.suggested_vault_name(auth.user_code, first.id) == "Sensitive Vault"
+
+      # Second user (e.g. someone who shoulder-surfed the code) is blocked.
+      assert DeviceFlow.suggested_vault_name(auth.user_code, second.id) == nil
+
+      # First user can re-read their own claim.
+      assert DeviceFlow.suggested_vault_name(auth.user_code, first.id) == "Sensitive Vault"
+    end
   end
 
   describe "authorize_device/3" do

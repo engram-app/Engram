@@ -28,6 +28,32 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["expires_in"] == 300
       assert resp["interval"] == 5
     end
+
+    test "persists optional vault_name on the authorization row", %{conn: conn} do
+      reader = insert(:user)
+
+      conn =
+        post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "My Notes"})
+
+      resp = json_response(conn, 200)
+      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == "My Notes"
+    end
+
+    test "ignores blank vault_name", %{conn: conn} do
+      reader = insert(:user)
+      conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: "   "})
+      resp = json_response(conn, 200)
+      assert DeviceFlow.suggested_vault_name(resp["user_code"], reader.id) == nil
+    end
+
+    test "truncates long vault_name to 100 chars", %{conn: conn} do
+      reader = insert(:user)
+      long = String.duplicate("a", 250)
+      conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: long})
+      resp = json_response(conn, 200)
+      stored = DeviceFlow.suggested_vault_name(resp["user_code"], reader.id)
+      assert String.length(stored) == 100
+    end
   end
 
   describe "POST /api/auth/device/authorize" do

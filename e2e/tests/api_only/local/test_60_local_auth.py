@@ -243,9 +243,21 @@ class TestRefresh:
         assert me_resp.status_code == 200
         assert me_resp.json()["user"]["email"] == self.email
 
-    def test_old_refresh_token_rejected_after_rotation(self):
-        """After rotation, the old refresh token should be rejected."""
-        # Use the token (rotates it)
+    def test_old_refresh_token_within_leeway_is_treated_as_benign_rotation_race(self):
+        """Within the rotation-leeway window (Engram.Auth.RefreshLeeway = 30s),
+        re-presenting the just-rotated token is treated as a legitimate race
+        (lost rotation, concurrent retry, tab refresh mid-mount) — server
+        issues a sibling child in the same family rather than triggering the
+        reuse-breach response. RFC 9700 §4.14.2 mitigation pattern.
+
+        Breach detection outside the leeway window is exhaustively covered in
+        ExUnit (`test/engram/accounts_test.exs` — "reuse of refresh token
+        OUTSIDE the leeway window revokes the family"); reproducing the
+        outside-window case in E2E would require either a >30s sleep or a
+        test-only timestamp-aging hook, neither of which earns its cost on
+        every run.
+        """
+        # Use the token (rotates it).
         resp1 = http.post(
             f"{API_URL}/auth/refresh",
             cookies={"refresh_token": self.refresh_cookie},
@@ -253,14 +265,14 @@ class TestRefresh:
         )
         assert resp1.status_code == 200
 
-        # Reuse the old token — should fail (reuse detection)
+        # Re-present the rotated cookie immediately — leeway lets it through.
         resp2 = http.post(
             f"{API_URL}/auth/refresh",
             cookies={"refresh_token": self.refresh_cookie},
             timeout=10,
         )
-        assert resp2.status_code == 401, (
-            f"Reused token should be rejected, got {resp2.status_code}"
+        assert resp2.status_code == 200, (
+            f"Within-leeway re-use should succeed, got {resp2.status_code}"
         )
 
     def test_missing_cookie_rejected(self):

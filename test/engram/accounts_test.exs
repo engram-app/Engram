@@ -150,17 +150,68 @@ defmodule Engram.AccountsTest do
       assert {:error, :invalid_token} = Accounts.consume_refresh_token("bogus_token")
     end
 
-    test "reuse of revoked token triggers family-wide revocation", %{user: user} do
+    test "concurrent rotation within leeway issues a child without breach", %{user: user} do
       {:ok, raw_token, _record} = Accounts.create_refresh_token(user)
 
-      # Consume once — rotates to a new token
+      # First rotation — succeeds normally.
+      {:ok, _user, new_raw_1, _record_1} = Accounts.consume_refresh_token(raw_token)
+
+      # A racing request that still holds the original (just-revoked) cookie
+      # presents it again — this is a legitimate concurrent rotation race, NOT
+      # a breach. It should succeed and yield a sibling child in the same
+      # family, without invalidating any tokens.
+      assert {:ok, same_user, new_raw_2, _record_2} = Accounts.consume_refresh_token(raw_token)
+      assert same_user.id == user.id
+      assert new_raw_2 != new_raw_1
+      assert new_raw_2 != raw_token
+
+      # Both rotated tokens still work — no family-wide revoke happened.
+      assert {:ok, _, _, _} = Accounts.consume_refresh_token(new_raw_1)
+      assert {:ok, _, _, _} = Accounts.consume_refresh_token(new_raw_2)
+    end
+
+    test "reuse of refresh token OUTSIDE the leeway window revokes the family",
+         %{user: user} do
+      import Ecto.Query
+
+      {:ok, raw_token, _record} = Accounts.create_refresh_token(user)
+
+      # Rotate once.
       {:ok, _user, new_raw, _new_record} = Accounts.consume_refresh_token(raw_token)
 
-      # Replay the OLD token — should detect reuse and revoke the family
-      assert {:error, :token_reused} = Accounts.consume_refresh_token(raw_token)
+      # Age the revocation past the leeway window so a replay is genuinely
+      # outside the legitimate-race grace period.
+      stale = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
 
-      # The rotated token should ALSO be revoked (entire family)
+      from(rt in Engram.Auth.RefreshToken, where: not is_nil(rt.revoked_at))
+      |> Engram.Repo.update_all([set: [revoked_at: stale]], skip_tenant_check: true)
+
+      # Now reuse counts as a breach: original 401s with :token_reused, and
+      # every member of the family is stamped with the admin sentinel
+      # timestamp (epoch 0) — outside the leeway window — so the legitimate
+      # current child also 401s with :token_reused on next use. Rows stay
+      # in place so `Connections.any_history?` can still see the lineage.
+      assert {:error, :token_reused} = Accounts.consume_refresh_token(raw_token)
       assert {:error, :token_reused} = Accounts.consume_refresh_token(new_raw)
+    end
+
+    test "revoke_all_user_tokens preserves row history for Connections lookups",
+         %{user: user} do
+      import Ecto.Query
+
+      {:ok, _raw, _record} = Accounts.create_refresh_token(user)
+
+      Accounts.revoke_all_user_tokens(user)
+
+      # Row count unchanged (rows stamped with sentinel, not deleted).
+      count =
+        Engram.Repo.aggregate(
+          from(rt in Engram.Auth.RefreshToken, where: rt.user_id == ^user.id),
+          :count,
+          :id
+        )
+
+      assert count == 1
     end
 
     test "expired refresh token is rejected", %{user: user} do

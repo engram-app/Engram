@@ -18,17 +18,13 @@ defmodule Engram.Auth.DeviceFlow do
   @refresh_token_bytes 32
   @refresh_token_ttl_days 90
   @device_code_ttl_seconds 300
-  # Leeway window after a refresh token is rotated during which the old token is
-  # still accepted, so a client that loses the rotated token (e.g. a plugin
-  # reload mid-refresh, or a brief concurrent retry) can recover instead of
-  # being forced to re-login. Auth0 calls this the "rotation overlap period" and
-  # recommends the shortest viable value; plugin reload races resolve in <1s.
-  @refresh_leeway_seconds 30
+  # Leeway-window policy lives in `Engram.Auth.RefreshLeeway` so both
+  # local-auth and device-flow refresh paths share the same window.
 
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  def start_device_flow(client_id) do
+  def start_device_flow(client_id, vault_name \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -43,9 +39,48 @@ defmodule Engram.Auth.DeviceFlow do
       user_code: user_code,
       client_id: client_id,
       status: "pending",
-      expires_at: expires_at
+      expires_at: expires_at,
+      vault_name: vault_name
     })
     |> Repo.insert(skip_tenant_check: true)
+  end
+
+  # Read the suggested name a plugin sent at start_device_flow time. Returns
+  # nil if the code is unknown, expired, no longer pending, never carried a
+  # hint, OR has already been viewed by a different authenticated user.
+  #
+  # The lookup is bound to the first authenticated user who reads the code
+  # — set atomically on the same row in this UPDATE. Without this binding
+  # any signed-in user could probe an observed user_code (shoulder-surfed
+  # off the plugin's modal, screen-shared, scraped from a chat thread, etc.)
+  # and read the original user's local Obsidian vault name. The row's main
+  # `user_id` is set later, at authorize time, and so is unsuitable as a
+  # pre-authorize ownership check.
+  def suggested_vault_name(user_code, user_id) when is_integer(user_id) do
+    now = DateTime.utc_now()
+
+    query =
+      from(da in DeviceAuthorization,
+        where:
+          da.user_code == ^user_code and
+            da.status == "pending" and
+            da.expires_at > ^now and
+            (is_nil(da.viewer_user_id) or da.viewer_user_id == ^user_id)
+      )
+
+    case Repo.update_all(query, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
+      {1, _} ->
+        Repo.one(
+          from(da in DeviceAuthorization,
+            where: da.user_code == ^user_code,
+            select: da.vault_name
+          ),
+          skip_tenant_check: true
+        )
+
+      _ ->
+        nil
+    end
   end
 
   def authorize_device(user_code, user, vault_id) do
@@ -109,7 +144,6 @@ defmodule Engram.Auth.DeviceFlow do
   def refresh_access_token(raw_refresh_token) do
     token_hash = hash_token(raw_refresh_token)
     now = DateTime.utc_now()
-    leeway_cutoff = DateTime.add(now, -@refresh_leeway_seconds, :second)
 
     # Look the token up regardless of revocation state — a *revoked* token still
     # has to be classified (benign retry within leeway vs. reuse breach), not
@@ -134,7 +168,7 @@ defmodule Engram.Auth.DeviceFlow do
         issue_child(old_token)
 
       old_token ->
-        if DateTime.compare(old_token.revoked_at, leeway_cutoff) == :gt do
+        if Engram.Auth.RefreshLeeway.benign?(old_token.revoked_at, now) do
           # Revoked within the leeway: benign retry (lost rotation, concurrent
           # request). Issue a child in the same family without re-revoking.
           issue_child(old_token)

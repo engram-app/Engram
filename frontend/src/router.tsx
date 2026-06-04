@@ -64,6 +64,11 @@ export const router = createBrowserRouter(
           ],
         },
 
+        // /link is reachable mid-onboarding — the wizard's Obsidian branch
+        // requires the user to complete device-flow here before progressing.
+        // Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
+        { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
+
         // Dashboard tree — gated by OnboardingGate.
         {
           element: <OnboardingGate />,
@@ -120,7 +125,6 @@ export const router = createBrowserRouter(
                   : []),
               ],
             },
-            { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
             { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
           ],
         },

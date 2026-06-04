@@ -89,11 +89,24 @@ defmodule Engram.OnboardingTest do
       assert %{profile_complete: false, next_step: :vault} = Onboarding.status(user)
     end
 
-    test "profile complete with uses_obsidian=true → :done (no vault required)" do
+    test "profile complete with uses_obsidian=true and no vault yet → :vault" do
+      # The plugin hasn't created the vault yet; wizard waits for the
+      # `vault_populated` broadcast before navigating. `RequireOnboarding`
+      # still skips the vault gate for `uses_obsidian=true`, so the plugin
+      # can sync — but wizard navigation is intentionally stricter.
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
-      assert %{enabled: true, profile_complete: true, next_step: :done} =
+      assert %{enabled: true, profile_complete: true, has_vault: false, next_step: :vault} =
+               Onboarding.status(user)
+    end
+
+    test "profile complete with uses_obsidian=true AND vault exists → :done" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
+
+      assert %{enabled: true, profile_complete: true, has_vault: true, next_step: :done} =
                Onboarding.status(user)
     end
 
@@ -108,6 +121,7 @@ defmodule Engram.OnboardingTest do
     test "missing agreement does not block — self-host operator owns legal posture" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
       # Explicitly no Onboarding.accept_terms/3 call.
       assert %{terms_ok: true, next_step: :done} = Onboarding.status(user)
     end
@@ -115,6 +129,7 @@ defmodule Engram.OnboardingTest do
     test "missing subscription does not block — self-host has no paywall" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
       # No insert(:subscription, ...) call.
       assert %{subscription_ok: true, next_step: :done} = Onboarding.status(user)
     end
@@ -201,11 +216,12 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=done when terms accepted, active subscription, profile set (obsidian user)" do
+    test "next_step=done when terms accepted, active subscription, profile set (obsidian user with vault)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
 
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
@@ -220,11 +236,12 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=done when terms accepted, past_due subscription, profile set (obsidian user)" do
+    test "next_step=done when terms accepted, past_due subscription, profile set (obsidian user with vault)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "past_due")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
 
       assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
@@ -591,13 +608,23 @@ defmodule Engram.OnboardingTest do
       assert %{has_vault: false, next_step: :vault} = Onboarding.status(user)
     end
 
-    test "next_step :done for obsidian user with no vault (plugin will create it)" do
+    test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
-      assert %{has_vault: false, next_step: :done} = Onboarding.status(user)
+      assert %{has_vault: false, next_step: :vault} = Onboarding.status(user)
+    end
+
+    test "next_step :done for obsidian user once the plugin creates a vault" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "trialing")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
+
+      assert %{has_vault: true, next_step: :done} = Onboarding.status(user)
     end
 
     test "next_step :done for fresh user once a vault has been created" do
@@ -667,13 +694,25 @@ defmodule Engram.OnboardingTest do
              } = Onboarding.status(user)
     end
 
-    test "next_step :done once profile is set (obsidian user — vault gate skipped)" do
+    test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "trialing")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
-      assert %{profile_complete: true, next_step: :done} = Onboarding.status(user)
+      assert %{profile_complete: true, has_vault: false, next_step: :vault} =
+               Onboarding.status(user)
+    end
+
+    test "next_step :done once an obsidian user has a vault row" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "trialing")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      insert(:vault, user: user)
+
+      assert %{profile_complete: true, has_vault: true, next_step: :done} =
+               Onboarding.status(user)
     end
 
     test "next_step :billing still wins over :tools when subscription missing" do

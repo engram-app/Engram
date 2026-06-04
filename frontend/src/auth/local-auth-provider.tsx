@@ -21,34 +21,51 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
   const [isLoaded, setIsLoaded] = useState(false)
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null)
 
-  // On mount, attempt a silent refresh to restore session from cookie
-  useEffect(() => {
-    fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+  const doRefresh = useCallback((): Promise<string | null> => {
+    // Single in-flight refresh at a time. Two concurrent /api/auth/refresh
+    // calls present the same cookie value; the second would land at the
+    // backend with a token revoked microseconds ago. The backend's leeway
+    // window catches that race, but client-side dedup is still the cheaper
+    // first line of defense (avoids the round-trip + an extra DB rotate).
+    if (refreshPromiseRef.current) return refreshPromiseRef.current
+
+    const promise = fetch('/api/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
       .then(async (res) => {
         if (res.ok) {
           const data = await res.json()
           const payload = parseJwtPayload(data.access_token)
+          setAccessToken(data.access_token)
           if (payload?.email) {
-            setAccessToken(data.access_token)
             setUser({ email: payload.email as string })
           }
+          return data.access_token as string
         }
+        setAccessToken(null)
+        setUser(null)
+        return null
       })
-      .catch((err) => console.error('Silent refresh failed:', err))
-      .finally(() => setIsLoaded(true))
+      .catch((err) => {
+        console.error('Refresh failed:', err)
+        return null
+      })
+      .finally(() => {
+        refreshPromiseRef.current = null
+      })
+
+    refreshPromiseRef.current = promise
+    return promise
   }, [])
 
-  const doRefresh = useCallback(async (): Promise<string | null> => {
-    const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
-    if (res.ok) {
-      const data = await res.json()
-      setAccessToken(data.access_token)
-      return data.access_token
-    }
-    setAccessToken(null)
-    setUser(null)
-    return null
-  }, [])
+  // On mount, attempt a silent refresh to restore session from cookie.
+  // Routes through doRefresh so it shares the refreshPromiseRef dedup with
+  // any in-flight API call that simultaneously demands a token (e.g. an
+  // immediate useOnboardingStatus query firing on app load).
+  useEffect(() => {
+    doRefresh().finally(() => setIsLoaded(true))
+  }, [doRefresh])
 
   const getToken = useCallback(async () => {
     if (!accessToken) return null
@@ -59,13 +76,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
       return accessToken
     }
 
-    // Deduplicate concurrent refresh requests
-    if (!refreshPromiseRef.current) {
-      refreshPromiseRef.current = doRefresh().finally(() => {
-        refreshPromiseRef.current = null
-      })
-    }
-    return refreshPromiseRef.current
+    return doRefresh()
   }, [accessToken, doRefresh])
 
   useEffect(() => {

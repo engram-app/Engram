@@ -12,8 +12,9 @@ defmodule EngramWeb.DeviceAuthController do
 
   def start(conn, params) do
     client_id = Map.get(params, "client_id", "unknown")
+    vault_name = params |> Map.get("vault_name") |> normalize_vault_name()
 
-    case DeviceFlow.start_device_flow(client_id) do
+    case DeviceFlow.start_device_flow(client_id, vault_name) do
       {:ok, auth} ->
         base_url = EngramWeb.Endpoint.url()
 
@@ -83,6 +84,15 @@ defmodule EngramWeb.DeviceAuthController do
         conn |> put_status(410) |> json(%{error: "expired_or_invalid"})
     end
   end
+
+  defp normalize_vault_name(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> nil
+      trimmed -> String.slice(trimmed, 0, 100)
+    end
+  end
+
+  defp normalize_vault_name(_), do: nil
 
   def refresh(conn, %{"refresh_token" => refresh_token}) do
     case DeviceFlow.refresh_access_token(refresh_token) do

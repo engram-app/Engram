@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router'
+import { FilePlus2 } from 'lucide-react'
+import obsidianMark from '@lobehub/icons-static-svg/icons/obsidian-color.svg?raw'
 import { setActiveVaultId } from '../api/active-vault'
+import { config } from '../config'
 import {
   useCreateVault,
   useMe,
@@ -11,6 +14,7 @@ import {
 import AuthPanel from '@/layout/auth-panel'
 import LoadingScreen from '../layout/loading-screen'
 import { heading } from '@/lib/ui-classes'
+import { SyncStatusPill } from './sync-status-pill'
 import { useVaultReadyEvents } from './use-vault-ready-events'
 import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from './welcome-note'
 
@@ -77,9 +81,37 @@ function VaultStep({
   const [source, setSource] = useState<Source>(
     profileSaved ? (savedUsesObsidian ? 'obsidian' : 'fresh') : null,
   )
+  // Track whether we've eager-committed `uses_obsidian: true` so the plugin's
+  // first sync isn't blocked by RequireOnboarding. The gate skips the vault
+  // check when uses_obsidian is true — without this, /api/notes 403s mid-sync
+  // and `vault_populated` never fires.
+  const [obsidianCommitted, setObsidianCommitted] = useState<boolean>(
+    profileSaved && savedUsesObsidian,
+  )
+
+  async function pickSource(s: Source) {
+    setSource(s)
+    // Re-entry guard: a fast double-click on the Obsidian card would
+    // otherwise dispatch two concurrent PATCHes. The `obsidianCommitted`
+    // flag catches the steady state; `setProfile.isPending` catches the
+    // racing-while-the-first-is-in-flight case.
+    if (s === 'obsidian' && !obsidianCommitted && !setProfile.isPending) {
+      try {
+        await setProfile.mutateAsync({ uses_obsidian: true })
+        setObsidianCommitted(true)
+      } catch (_e) {
+        // Error is also reflected on setProfile.isError so the panel can
+        // surface it; swallowing here just prevents a console unhandled
+        // rejection. The user sees the inline error message below.
+      }
+    }
+  }
 
   async function commitObsidian() {
-    await setProfile.mutateAsync({ uses_obsidian: true })
+    if (!obsidianCommitted) {
+      await setProfile.mutateAsync({ uses_obsidian: true })
+      setObsidianCommitted(true)
+    }
     navigate('/', { replace: true })
   }
 
@@ -103,10 +135,15 @@ function VaultStep({
   return (
     <SourceScreen
       source={source}
-      onPickSource={setSource}
+      onPickSource={pickSource}
       userId={userId}
       isCommitting={
         setProfile.isPending || createVault.isPending || updateNote.isPending
+      }
+      pickError={
+        setProfile.isError && !obsidianCommitted
+          ? 'Could not save your choice. Try clicking again — if it keeps failing, refresh the page.'
+          : null
       }
       onCommitObsidian={commitObsidian}
       onCommitFresh={commitFresh}
@@ -121,6 +158,7 @@ interface SourceScreenProps {
   onPickSource: (s: Source) => void
   userId: number | null
   isCommitting: boolean
+  pickError: string | null
   onCommitObsidian: () => Promise<void>
   onCommitFresh: (name: string) => Promise<void>
 }
@@ -130,34 +168,48 @@ function SourceScreen({
   onPickSource,
   userId,
   isCommitting,
+  pickError,
   onCommitObsidian,
   onCommitFresh,
 }: SourceScreenProps) {
   return (
     <AuthPanel className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
-        <h1 className={heading}>Where do your notes live?</h1>
+        <h1 className={heading}>Let's get your notes in.</h1>
         <p className="text-sm text-muted-foreground">
-          Engram stores your notes as plain markdown files. Obsidian is one
-          way to read them — not required. Pick a side and we'll get you set
-          up right here.
+          If you have an Obsidian vault, we'll pull it in on the first
+          connect. If not, we'll spin up a new vault for you.
         </p>
       </header>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SourceCard
+          icon={
+            <span
+              aria-hidden
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center [&_svg]:h-full [&_svg]:w-full"
+              dangerouslySetInnerHTML={{ __html: obsidianMark }}
+            />
+          }
           title="I already use Obsidian"
-          body="Install our plugin and your first sync creates the vault — no empty placeholder."
+          body="Install our plugin and your existing notes sync over on the first connect."
           selected={source === 'obsidian'}
           onClick={() => onPickSource('obsidian')}
         />
         <SourceCard
+          icon={<FilePlus2 aria-hidden className="h-6 w-6 shrink-0 text-foreground" />}
           title="I'm starting fresh"
-          body="We'll create your first vault now. You can rename or add more later from settings."
+          body="We'll create your first vault right now. You can rename it or add more later from settings."
           selected={source === 'fresh'}
           onClick={() => onPickSource('fresh')}
         />
       </div>
+
+      {pickError && (
+        <p role="alert" className="text-sm text-destructive">
+          {pickError}
+        </p>
+      )}
 
       {source === 'obsidian' ? (
         <ObsidianInlinePanel
@@ -173,13 +225,14 @@ function SourceScreen({
 }
 
 interface SourceCardProps {
+  icon: React.ReactNode
   title: string
   body: string
   selected: boolean
   onClick: () => void
 }
 
-function SourceCard({ title, body, selected, onClick }: SourceCardProps) {
+function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
   return (
     <button
       type="button"
@@ -192,8 +245,11 @@ function SourceCard({ title, body, selected, onClick }: SourceCardProps) {
           : 'border-border bg-background hover:border-primary hover:bg-accent/30')
       }
     >
-      <span className="text-base font-semibold text-foreground group-hover:text-primary">
-        {title}
+      <span className="flex items-center gap-2">
+        {icon}
+        <span className="text-base font-semibold text-foreground group-hover:text-primary">
+          {title}
+        </span>
       </span>
       <span className="text-sm text-muted-foreground">{body}</span>
     </button>
@@ -231,32 +287,55 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
-      <h2 className="text-base font-semibold text-foreground">
-        Install the Engram plugin
+      <h2 className="text-lg font-semibold text-foreground">
+        Install the Engram Vault Sync plugin
       </h2>
-      <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm text-foreground">
+      <ol className="flex list-decimal flex-col gap-3 pl-5 text-base text-foreground">
         <li>
-          Open Obsidian → <strong>Settings → Community plugins → Browse</strong>,
-          search for <em>Engram</em>, install and enable it.
+          <div className="flex flex-col gap-1">
+            <span>
+              In Obsidian: <strong>Settings → Community plugins → Browse</strong>,
+              search <em>Engram Vault Sync</em>, then install and enable it.
+            </span>
+            <span className="text-sm text-muted-foreground">
+              Or open the{' '}
+              <a
+                href="https://community.obsidian.md/plugins/engram-vault-sync"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+              >
+                plugin listing
+              </a>
+              {' '}in your browser first.
+            </span>
+          </div>
         </li>
-        <li>
-          Inside the plugin, click <strong>Sign in</strong> and authenticate
-          with your Engram account.
-        </li>
+        {config.authProvider === 'local' ? (
+          <li>
+            <div className="flex flex-col gap-1">
+              <span>
+                Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter
+                your Engram server URL, and click <strong>Sign in</strong>.
+              </span>
+              <span className="text-sm text-muted-foreground">
+                Use the same URL you used to reach this page.
+              </span>
+            </div>
+          </li>
+        ) : (
+          <li>
+            Open the plugin's <strong>☁️ Cloud</strong> tab, click{' '}
+            <strong>Sign in</strong>, and authenticate with your Engram
+            account.
+          </li>
+        )}
         <li>
           Pick a vault to sync. The plugin creates a matching Engram vault
           and pushes your existing files.
         </li>
       </ol>
       <StatusRow stage={stage} />
-      <button
-        type="button"
-        onClick={() => void onCommit()}
-        disabled={isCommitting}
-        className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {isCommitting ? 'Saving…' : "I've installed it — take me to my dashboard"}
-      </button>
     </div>
   )
 }
@@ -265,18 +344,9 @@ function StatusRow({ stage }: { stage: 'waiting' | 'detected' | 'syncing' }) {
   const labels: Record<typeof stage, string> = {
     waiting: 'Waiting for the plugin to sign in…',
     detected: 'Vault detected. Waiting for your first sync…',
-    syncing: 'Syncing your notes — almost there…',
+    syncing: 'Syncing your notes, almost there…',
   }
-  return (
-    <p
-      role="status"
-      aria-live="polite"
-      className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-    >
-      <span className="mr-2 inline-block size-2 animate-pulse rounded-full bg-primary align-middle" />
-      {labels[stage]}
-    </p>
-  )
+  return <SyncStatusPill message={labels[stage]} />
 }
 
 // ── Fresh-start inline panel ──────────────────────────────────────────────────
