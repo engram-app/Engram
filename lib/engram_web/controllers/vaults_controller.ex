@@ -62,6 +62,16 @@ defmodule EngramWeb.VaultsController do
       {:ok, vault_id} ->
         case Vaults.get_vault(user, vault_id) do
           {:ok, vault} ->
+            # Fires once per SPA navigation to /v/:id. The list endpoint
+            # /vaults (index/2) is the picker fetch — emitting there would
+            # conflate browsing with opening, so the event stays on show/2.
+            _ =
+              Engram.Observability.PostHog.capture(
+                Engram.Observability.PostHog.distinct_id_for(user),
+                "vault_opened",
+                %{vault_id: vault.id}
+              )
+
             json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
           {:error, :not_found} ->

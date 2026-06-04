@@ -80,4 +80,17 @@ defmodule Engram.Observability.PostHog do
 
   defp to_distinct_id(:anon), do: "anonymous"
   defp to_distinct_id(id) when is_binary(id), do: id
+
+  @doc """
+  Resolve the PostHog distinct_id for a user. Must equal the frontend's
+  `posthog.identify(clerk.user.id)` value (see
+  frontend/src/auth/clerk-auth-provider.tsx) or funnels won't join across
+  the client/server timeline.
+
+  Users without a Clerk external_id (self-host, internal flows) fall back
+  to `:anon` — bucketed under a stable "anonymous" id on PostHog's side.
+  """
+  @spec distinct_id_for(map() | struct() | nil) :: String.t() | :anon
+  def distinct_id_for(%{external_id: ext}) when is_binary(ext) and byte_size(ext) > 0, do: ext
+  def distinct_id_for(_), do: :anon
 end
