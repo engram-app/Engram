@@ -55,16 +55,38 @@ defmodule Engram.Search do
   """
   def search(user, vault, query, opts \\ []) do
     cross_vault = Keyword.get(opts, :cross_vault, false)
+    started_at = System.monotonic_time(:millisecond)
 
-    if cross_vault do
-      case Engram.Billing.check_feature(user, :cross_vault_search) do
-        :ok -> do_search(user, nil, query, opts)
-        {:error, _} = err -> err
+    result =
+      if cross_vault do
+        case Engram.Billing.check_feature(user, :cross_vault_search) do
+          :ok -> do_search(user, nil, query, opts)
+          {:error, _} = err -> err
+        end
+      else
+        do_search(user, vault, query, opts)
       end
-    else
-      do_search(user, vault, query, opts)
-    end
+
+    emit_search_performed(user, result, started_at, cross_vault)
+    result
   end
+
+  defp emit_search_performed(user, {:ok, results}, started_at, cross_vault)
+       when is_list(results) do
+    latency_ms = System.monotonic_time(:millisecond) - started_at
+
+    Engram.Observability.PostHog.capture(
+      Engram.Observability.PostHog.distinct_id_for(user),
+      "search_performed",
+      %{
+        result_count: length(results),
+        latency_ms: latency_ms,
+        cross_vault: cross_vault
+      }
+    )
+  end
+
+  defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok
 
   defp do_search(user, vault, query, opts) do
     limit = Keyword.get(opts, :limit, 5)

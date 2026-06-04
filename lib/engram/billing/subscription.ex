@@ -2,6 +2,8 @@ defmodule Engram.Billing.Subscription do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
+
   schema "subscriptions" do
     field :paddle_customer_id, :string
     field :paddle_subscription_id, :string

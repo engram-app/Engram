@@ -82,6 +82,19 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          # prev_hash == nil iff insert_new_note returned a freshly inserted
+          # row (see insert_new_note/5). Updates carry the prior content_hash.
+          # Emit only on real creation so the funnel doesn't double-count
+          # idempotent re-pushes of unchanged notes.
+          if is_nil(prev_hash) do
+            :ok =
+              Engram.Observability.PostHog.capture(
+                Engram.Observability.PostHog.distinct_id_for(user),
+                "note_created",
+                %{vault_id: vault.id}
+              )
+          end
+
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->

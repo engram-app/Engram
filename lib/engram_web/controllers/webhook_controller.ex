@@ -5,6 +5,7 @@ defmodule EngramWeb.WebhookController do
   alias Engram.Billing
   alias Engram.Email.Suppression
   alias Engram.Webhooks.Svix
+  alias EngramWeb.Webhooks.PostHogForwarder
 
   require Logger
 
@@ -18,6 +19,7 @@ defmodule EngramWeb.WebhookController do
          :ok <- Svix.verify(id, ts, payload, sig_header, clerk_webhook_secret()) do
       event = Jason.decode!(payload)
       _ = ClerkWebhook.handle(event)
+      _ = PostHogForwarder.forward_clerk_event(event)
       json(conn, %{status: "ok"})
     else
       {:error, reason} ->
@@ -32,7 +34,8 @@ defmodule EngramWeb.WebhookController do
       event = Jason.decode!(payload)
 
       case Billing.upsert_from_paddle_event(event) do
-        {:ok, _} ->
+        {:ok, result} ->
+          _ = PostHogForwarder.forward_paddle_event(event, result)
           json(conn, %{status: "ok"})
 
         {:error, reason} ->
