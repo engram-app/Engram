@@ -1538,8 +1538,10 @@ jobs:
         run: |
           pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -z "$pr_number" ]; then
-            echo "::warning::No open PR found for branch ${GITHUB_REF_NAME} — phase label check skipped."
-            exit 0
+            echo "::error::Migration changes pushed but no open PR found for branch ${GITHUB_REF_NAME}."
+            echo "::error::Open a PR with the appropriate phase/* label (expand, migrate-data, contract, single-shot)"
+            echo "::error::before pushing migration changes. See AGENTS.md § Migration phases — the rule."
+            exit 1
           fi
           phase_labels=$(gh api "repos/$REPO/issues/$pr_number/labels" \
             --jq '.[].name | select(startswith("phase/"))')
@@ -1649,9 +1651,12 @@ jobs:
             mix engram.migration_drops "priv/repo/migrations/$f" >> /tmp/drops.txt
           done < /tmp/new-migrations.txt
           if [ ! -s /tmp/drops.txt ]; then
-            echo "::warning::phase/contract label set but no drops found in new migrations."
-            echo "::warning::Either remove the label or include the actual drop in this PR."
-            exit 1
+            echo "::notice::phase/contract label set but no extractable drops found in new migrations."
+            echo "::notice::Possible reasons:"
+            echo "::notice::  - Every drop in this PR is bypassed via # safety_assured: (legitimate; auditor trusts justification)"
+            echo "::notice::  - The PR was mis-labeled as phase/contract (recommend removing the label)"
+            echo "::notice::Reviewer: confirm intent on this PR before merging."
+            exit 0
           fi
           echo "Dropped identifiers this PR introduces:"
           sed 's/^/  /' /tmp/drops.txt
@@ -1659,30 +1664,51 @@ jobs:
       - name: Grep lib/ for surviving references
         if: steps.gate.outputs.proceed == 'true'
         run: |
+          # grep -E exit codes:
+          #   0 = match found
+          #   1 = no match (OK; gate passes for this identifier)
+          #   2+ = error (regex syntax, I/O — must NOT be swallowed)
+          # The old `|| true` collapsed all three into "no match", silently
+          # masking regex-metachar bugs in identifier names.
           fail=0
           while IFS= read -r line; do
             # line is "column <table> <name>" or "table <name>"
             kind=$(echo "$line" | awk '{print $1}')
             case "$kind" in
-              column)
-                name=$(echo "$line" | awk '{print $3}')
-                # Match :name as an atom or "name" as a string.
-                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ || true)
-                ;;
-              table)
-                name=$(echo "$line" | awk '{print $2}')
-                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ || true)
-                ;;
-              *)
-                continue
-                ;;
+              column) name=$(echo "$line" | awk '{print $3}') ;;
+              table)  name=$(echo "$line" | awk '{print $2}') ;;
+              *)      continue ;;
             esac
+
+            # Escape ERE metacharacters in the identifier before interpolating.
+            # An identifier like `count.x` would otherwise let `.` match any
+            # char; `foo[bar` would crash grep with 'Unmatched ['.
+            esc=$(printf '%s' "$name" | sed 's/[][\\.*+?(){}|^$]/\\&/g')
+
+            # Match three Elixir reference forms:
+            #   :name           — atom literal
+            #   "name"          — string literal
+            #   .name           — dot-access on a query binding (`u.field`)
+            # The dot-access form is the most common Ecto.Query pattern;
+            # without it, surviving `from u in User, where: u.legacy_flag`
+            # references would slip past the gate.
+            set +e
+            hits=$(grep -RnE "(:${esc}\b|\"${esc}\"|\.${esc}\b)" lib/)
+            grep_status=$?
+            set -e
+            if [ "$grep_status" -gt 1 ]; then
+              fail=1
+              echo "::error::grep failed (exit $grep_status) for identifier '$name' — likely a regex metachar slipped through escaping. Inspect priv/repo/migrations/ for unusual column or table names."
+              continue
+            fi
+
             if [ -n "$hits" ]; then
               fail=1
               echo "::error::lib/ still references dropped identifier '$name':"
               printf '%s\n' "$hits" | sed 's/^/  /'
             fi
           done < /tmp/drops.txt
+
           if [ "$fail" -eq 1 ]; then
             echo "::error::Contract-phase migration cannot land while lib/ still uses the dropped identifiers."
             echo "::error::Ship an expand+code-change PR first that stops using these names, then come back for the drop."
