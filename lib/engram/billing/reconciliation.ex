@@ -80,7 +80,7 @@ defmodule Engram.Billing.Reconciliation do
 
     case Engram.Paddle.Client.impl().list_subscriptions(since) do
       {:ok, paddle_subs} ->
-        diff(paddle_subs, since, nil)
+        diff(paddle_subs, nil)
 
       {:partial, paddle_subs, reason} when reason in [:max_pages_exceeded, :pagination_loop] ->
         # HTTP layer truncated the list (page cap hit or Paddle returned a
@@ -93,7 +93,7 @@ defmodule Engram.Billing.Reconciliation do
           reason_label: reason
         )
 
-        diff(paddle_subs, since, reason)
+        diff(paddle_subs, reason)
 
       {:error, reason} ->
         Logger.error("paddle_reconcile_fetch_failed",
@@ -115,8 +115,9 @@ defmodule Engram.Billing.Reconciliation do
     end
   end
 
-  defp diff(paddle_subs, since, skipped_reason) do
-    local_subs = recent_local_subscriptions(since)
+  defp diff(paddle_subs, skipped_reason) do
+    paddle_ids = Enum.map(paddle_subs, & &1["id"])
+    local_subs = local_subscriptions_for(paddle_ids)
     local_by_paddle_id = Map.new(local_subs, &{&1.paddle_subscription_id, &1})
 
     drift =
@@ -141,8 +142,18 @@ defmodule Engram.Billing.Reconciliation do
     }
   end
 
-  defp recent_local_subscriptions(since) do
-    from(s in Subscription, where: s.updated_at >= ^since)
+  # Look up local rows by the paddle IDs Paddle just returned, NOT by
+  # local `updated_at`. Paddle's `updated_at[GTE]` filter happily returns
+  # subs whose local row hasn't been touched in months (e.g. Paddle ticks
+  # its own `updated_at` for an internal reindex or `scheduled_change`
+  # processing). Filtering local by `updated_at` would miss those rows
+  # and falsely flag them `:missing_local`. `paddle_subscription_id` is
+  # the indexed unique key — bounded by paddle's page cap (`@max_pages *
+  # per_page`) and safe to send IN-list.
+  defp local_subscriptions_for([]), do: []
+
+  defp local_subscriptions_for(paddle_ids) do
+    from(s in Subscription, where: s.paddle_subscription_id in ^paddle_ids)
     |> Repo.all(skip_tenant_check: true)
   end
 

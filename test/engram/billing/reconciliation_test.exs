@@ -1,6 +1,7 @@
 defmodule Engram.Billing.ReconciliationTest do
   use Engram.DataCase, async: false
 
+  import Ecto.Query
   import Mox
 
   alias Engram.Billing.Reconciliation
@@ -258,6 +259,40 @@ defmodule Engram.Billing.ReconciliationTest do
       end)
 
       assert %{skipped: :pagination_loop, paddle_total: 0} = Reconciliation.run(7)
+    end
+
+    test "does NOT report :missing_local for an idle local row Paddle just re-ticked" do
+      # Regression: local was created long ago (updated_at older than the
+      # reconciliation window) but Paddle re-emitted it (their `updated_at`
+      # advanced — e.g. scheduled_change processing). Lookup by
+      # paddle_subscription_id, not local updated_at, so the match holds.
+      user = insert(:user)
+
+      sub =
+        insert(:subscription,
+          user: user,
+          paddle_subscription_id: "sub_idle_local",
+          paddle_customer_id: "ctm_idle_local",
+          tier: "starter",
+          status: "active",
+          current_period_end: ~U[2026-06-30 00:00:00Z]
+        )
+
+      # Backdate local updated_at to 30 days ago — well outside the 7-day window.
+      stale_at = DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)
+
+      Engram.Repo.update_all(
+        from(s in Engram.Billing.Subscription, where: s.id == ^sub.id),
+        [set: [updated_at: stale_at]],
+        skip_tenant_check: true
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok, [paddle_sub(%{"id" => "sub_idle_local", "customer_id" => "ctm_idle_local"})]}
+      end)
+
+      assert %{drift: [], paddle_total: 1, local_total: 1} = Reconciliation.run(7)
     end
 
     test "tolerates period skew in both directions (symmetric ±2 minutes)" do
