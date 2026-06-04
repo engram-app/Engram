@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router'
+import { FilePlus2 } from 'lucide-react'
+import obsidianMark from '@lobehub/icons-static-svg/icons/obsidian-color.svg?raw'
 import { setActiveVaultId } from '../api/active-vault'
 import {
   useCreateVault,
@@ -158,24 +160,32 @@ function SourceScreen({
   return (
     <AuthPanel className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
-        <h1 className={heading}>Where do your notes live?</h1>
+        <h1 className={heading}>How would you like to get started?</h1>
         <p className="text-sm text-muted-foreground">
-          Engram stores your notes as plain markdown files. Obsidian is one
-          way to read them — not required. Pick a side and we'll get you set
-          up right here.
+          Your notes are stored as plain markdown files. You can use Obsidian
+          if you like, or just start typing here. Pick what sounds easier
+          and we'll set things up for you.
         </p>
       </header>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SourceCard
+          icon={
+            <span
+              aria-hidden
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center [&_svg]:h-full [&_svg]:w-full"
+              dangerouslySetInnerHTML={{ __html: obsidianMark }}
+            />
+          }
           title="I already use Obsidian"
-          body="Install our plugin and your first sync creates the vault — no empty placeholder."
+          body="Install our plugin and your existing notes sync over on the first connect. Nothing empty to fill in."
           selected={source === 'obsidian'}
           onClick={() => onPickSource('obsidian')}
         />
         <SourceCard
+          icon={<FilePlus2 aria-hidden className="h-6 w-6 shrink-0 text-foreground" />}
           title="I'm starting fresh"
-          body="We'll create your first vault now. You can rename or add more later from settings."
+          body="We'll create your first vault right now. You can rename it or add more later from settings."
           selected={source === 'fresh'}
           onClick={() => onPickSource('fresh')}
         />
@@ -195,13 +205,14 @@ function SourceScreen({
 }
 
 interface SourceCardProps {
+  icon: React.ReactNode
   title: string
   body: string
   selected: boolean
   onClick: () => void
 }
 
-function SourceCard({ title, body, selected, onClick }: SourceCardProps) {
+function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
   return (
     <button
       type="button"
@@ -214,8 +225,11 @@ function SourceCard({ title, body, selected, onClick }: SourceCardProps) {
           : 'border-border bg-background hover:border-primary hover:bg-accent/30')
       }
     >
-      <span className="text-base font-semibold text-foreground group-hover:text-primary">
-        {title}
+      <span className="flex items-center gap-2">
+        {icon}
+        <span className="text-base font-semibold text-foreground group-hover:text-primary">
+          {title}
+        </span>
       </span>
       <span className="text-sm text-muted-foreground">{body}</span>
     </button>
@@ -279,7 +293,7 @@ function StatusRow({ stage }: { stage: 'waiting' | 'detected' | 'syncing' }) {
   const labels: Record<typeof stage, string> = {
     waiting: 'Waiting for the plugin to sign in…',
     detected: 'Vault detected. Waiting for your first sync…',
-    syncing: 'Syncing your notes — almost there…',
+    syncing: 'Syncing your notes, almost there…',
   }
   return (
     <p
