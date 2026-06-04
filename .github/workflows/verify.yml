@@ -1548,7 +1548,7 @@ jobs:
             echo "::error::Migration PR must carry exactly ONE phase/* label."
             echo "::error::Found $count phase/* labels on PR #$pr_number."
             echo "::error::Valid labels: phase/expand, phase/migrate-data, phase/contract, phase/single-shot"
-            echo "::error::See backend/AGENTS.md § Migration phases for guidance."
+            echo "::error::See AGENTS.md § Migration phases — the rule for guidance."
             exit 1
           fi
           echo "OK — PR #$pr_number carries phase label: $phase_labels"
@@ -1559,9 +1559,12 @@ jobs:
     # Enforces the expand/contract two-deploy fence: code that uses a
     # column must be removed in an earlier release before the column itself
     # is dropped in a later release.
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    if: |
+      github.event_name == 'push' &&
+      github.ref != 'refs/heads/main' &&
+      needs.fingerprint.outputs.backend-cache-hit != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
-    needs: [phase-label-required, prebuild-mix]
+    needs: [fingerprint, phase-label-required, prebuild-mix]
     permissions:
       contents: read
     steps:
@@ -1683,7 +1686,7 @@ jobs:
           if [ "$fail" -eq 1 ]; then
             echo "::error::Contract-phase migration cannot land while lib/ still uses the dropped identifiers."
             echo "::error::Ship an expand+code-change PR first that stops using these names, then come back for the drop."
-            echo "::error::See backend/AGENTS.md § Contract phase for guidance."
+            echo "::error::See AGENTS.md § Expand/contract — the workflow for guidance."
             exit 1
           fi
           echo "OK — no surviving lib/ references to dropped identifiers."
