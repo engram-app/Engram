@@ -45,8 +45,14 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
     if safety_assured?(source) do
       %{columns: [], tables: []}
     else
-      {:ok, ast} = Code.string_to_quoted(source)
-      do_extract(ast)
+      case Code.string_to_quoted(source) do
+        {:ok, ast} ->
+          do_extract(ast)
+
+        {:error, {meta, msg, token}} ->
+          line = meta[:line] || "?"
+          Mix.raise("#{path}: syntax error at line #{line} - #{msg}#{token}")
+      end
     end
   end
 
@@ -72,8 +78,8 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
          {:alter, _, [{:table, _, [tbl | _]} | rest]} = _node,
          acc
        )
-       when is_atom(tbl) do
-    table_name = Atom.to_string(tbl)
+       when is_atom(tbl) or is_binary(tbl) do
+    table_name = if is_atom(tbl), do: Atom.to_string(tbl), else: tbl
     inner_acc = %{acc | current_table: table_name}
 
     inner_acc =
@@ -93,8 +99,9 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
 
   # `drop(table(:foo))` or `drop_if_exists(table(:foo))` — top-level table drop.
   defp visit({fun, _, [{:table, _, [tbl | _]}]}, acc)
-       when fun in [:drop, :drop_if_exists] and is_atom(tbl) do
-    %{acc | tables: [Atom.to_string(tbl) | acc.tables]}
+       when fun in [:drop, :drop_if_exists] and (is_atom(tbl) or is_binary(tbl)) do
+    table_name = if is_atom(tbl), do: Atom.to_string(tbl), else: tbl
+    %{acc | tables: [table_name | acc.tables]}
   end
 
   defp visit(_node, acc), do: acc

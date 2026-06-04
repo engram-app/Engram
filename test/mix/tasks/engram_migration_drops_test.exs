@@ -107,4 +107,38 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
 
     assert MigrationDrops.extract(path) == %{columns: [], tables: []}
   end
+
+  test "extracts drops when table name is a string literal", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "006.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          alter table("users") do
+            remove(:legacy_col)
+          end
+          drop(table("old_cache"))
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{
+             columns: [{"users", "legacy_col"}],
+             tables: ["old_cache"]
+           }
+  end
+
+  test "raises a clear Mix error on syntax-broken migration", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "007.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          alter table(:users)  # missing `do` block
+      """)
+
+    assert_raise Mix.Error, ~r/#{Regex.escape(path)}: syntax error at line/, fn ->
+      MigrationDrops.extract(path)
+    end
+  end
 end
