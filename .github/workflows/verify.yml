@@ -1549,6 +1549,105 @@ jobs:
           fi
           echo "OK — PR carries phase label: $phase_labels"
 
+  contract-phase-references:
+    # On phase/contract PRs only: extract the columns and tables dropped
+    # by each new migration and verify NO lib/ code still references them.
+    # Enforces the expand/contract two-deploy fence: code that uses a
+    # column must be removed in an earlier release before the column itself
+    # is dropped in a later release.
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'phase/contract')
+    runs-on: [self-hosted, linux, x64, isolated]
+    needs: phase-label-required
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore _build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/dev
+            deps
+          key: contract-grep-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+          restore-keys: contract-grep-${{ runner.os }}-
+
+      - name: Install deps
+        run: mix deps.get --check-locked
+
+      - name: Compile
+        run: mix compile
+
+      - name: List new migrations
+        id: list
+        run: |
+          git fetch -q --depth=1 origin "${{ github.base_ref }}" || true
+          BASE_REF="origin/${{ github.base_ref }}" \
+            bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
+          if [ ! -s /tmp/new-migrations.txt ]; then
+            echo "::error::phase/contract label set but no migrations newer than base ref"
+            exit 1
+          fi
+          echo "New migrations on this PR:"
+          sed 's/^/  /' /tmp/new-migrations.txt
+
+      - name: Extract dropped identifiers
+        id: drops
+        run: |
+          : > /tmp/drops.txt
+          while IFS= read -r f; do
+            mix engram.migration_drops "priv/repo/migrations/$f" >> /tmp/drops.txt
+          done < /tmp/new-migrations.txt
+          if [ ! -s /tmp/drops.txt ]; then
+            echo "::warning::phase/contract label set but no drops found in new migrations."
+            echo "::warning::Either remove the label or include the actual drop in this PR."
+            exit 1
+          fi
+          echo "Dropped identifiers this PR introduces:"
+          sed 's/^/  /' /tmp/drops.txt
+
+      - name: Grep lib/ for surviving references
+        run: |
+          fail=0
+          while IFS= read -r line; do
+            # line is "column <table> <name>" or "table <name>"
+            kind=$(echo "$line" | awk '{print $1}')
+            case "$kind" in
+              column)
+                name=$(echo "$line" | awk '{print $3}')
+                # Match :name as an atom or "name" as a string; skip files
+                # explicitly marked as fixtures for this branch.
+                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ \
+                  --exclude='*smoke_contract_reference*' || true)
+                ;;
+              table)
+                name=$(echo "$line" | awk '{print $2}')
+                hits=$(grep -RnE "(:${name}\b|\"${name}\")" lib/ \
+                  --exclude='*smoke_contract_reference*' || true)
+                ;;
+              *)
+                continue
+                ;;
+            esac
+            if [ -n "$hits" ]; then
+              fail=1
+              echo "::error::lib/ still references dropped identifier '$name':"
+              printf '%s\n' "$hits" | sed 's/^/  /'
+            fi
+          done < /tmp/drops.txt
+          if [ "$fail" -eq 1 ]; then
+            echo "::error::Contract-phase migration cannot land while lib/ still uses the dropped identifiers."
+            echo "::error::Ship an expand+code-change PR first that stops using these names, then come back for the drop."
+            echo "::error::See backend/AGENTS.md § Contract phase for guidance."
+            exit 1
+          fi
+          echo "OK — no surviving lib/ references to dropped identifiers."
+
   frontend-audit:
     name: frontend audit
     if: github.event_name != 'repository_dispatch'
