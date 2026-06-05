@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Pre-push hook: refuse to push branches whose mix.exs version still matches
-# main. CI's `version-check` job enforces the same rule, but failing here
+# main, then run quality gates (format / compile / credo / sobelow). CI's
+# `version-check` and quality jobs enforce the same rules, but failing here
 # shaves ~30s off the feedback loop and avoids burning a CI runner.
 #
 # Bypass for WIP / draft branches with: git push --no-verify
@@ -66,29 +67,69 @@ fi
 
 echo "✓ pre-push: mix.exs version differs from main (main=$main_version, branch=$branch_version)"
 
-# ── Quality gates (informational in Phase 1; promoted to fatal in later phases) ──
-# Phase 2 → format + warnings-as-errors fatal
-# Phase 3 → sobelow fatal
-# Phase 5 → credo fatal
-# Dialyzer skipped from pre-push (too slow). Runs in CI only.
+# ── Quality gates ────────────────────────────────────────────────────────
+# Two stages, each parallelized. Cuts wall time roughly in half:
+#   Stage A: mix format + mix compile        — format finishes during
+#                                              compile's setup phase.
+#   Stage B: mix credo + mix sobelow         — sobelow needs a valid
+#                                              _build, so it waits for
+#                                              Stage A.
+# Each backgrounded job writes its stdout/stderr to a temp file and its
+# exit code to <prefix>.rc. After each stage's `wait`, results are
+# printed in declaration order so logs read deterministically even
+# though the work was interleaved.
+#
+# Dialyzer is skipped from pre-push (too slow for the dev loop). CI runs it.
 #
 # Bypass any check with: git push --no-verify
 
-run_check() {
-  local name="$1"; shift
-  local fatal="$1"; shift
-  echo "▸ $name..."
-  if "$@"; then
-    echo "  ✓ $name"
-  elif [ "$fatal" = "fatal" ]; then
-    echo "  ✖ $name failed; bypass with: git push --no-verify" >&2
-    exit 1
-  else
-    echo "  ⚠ $name has findings (informational; not blocking yet)" >&2
-  fi
+QUALITY_LOGDIR="$(mktemp -d)"
+trap 'rm -rf "$QUALITY_LOGDIR"' EXIT
+
+run_bg() {
+  # run_bg <log-prefix> <cmd...>
+  local prefix="$1"; shift
+  ( "$@" >"$QUALITY_LOGDIR/$prefix.log" 2>&1 ; echo $? >"$QUALITY_LOGDIR/$prefix.rc" ) &
 }
 
-run_check "mix format"                       fatal         mix format --check-formatted
-run_check "mix compile --warnings-as-errors" fatal         mix compile --warnings-as-errors
-run_check "credo"                            fatal         mix credo --strict
-run_check "sobelow"                          fatal         mix sobelow --exit low
+report() {
+  # report <name> <log-prefix> — returns 0 on pass, 1 on fail
+  local name="$1" prefix="$2"
+  local rc
+  rc="$(cat "$QUALITY_LOGDIR/$prefix.rc" 2>/dev/null || echo 1)"
+  if [ "$rc" = "0" ]; then
+    echo "  ✓ $name"
+    return 0
+  fi
+  echo "  ✖ $name failed; bypass with: git push --no-verify" >&2
+  echo "  ── $name output ──" >&2
+  cat "$QUALITY_LOGDIR/$prefix.log" >&2 || true
+  echo "  ── end $name output ──" >&2
+  return 1
+}
+
+FAILED=0
+
+echo "▸ Stage A (parallel): mix format, mix compile..."
+run_bg format  mix format --check-formatted
+run_bg compile mix compile --warnings-as-errors
+wait
+report "mix format"                       format  || FAILED=1
+report "mix compile --warnings-as-errors" compile || FAILED=1
+
+# Sobelow analyzes the compiled app — only run Stage B if compile passed.
+# Credo could run unconditionally (parses source), but in practice a broken
+# compile usually means credo output is noise the user can't act on yet.
+COMPILE_RC="$(cat "$QUALITY_LOGDIR/compile.rc" 2>/dev/null || echo 1)"
+if [ "$COMPILE_RC" != "0" ]; then
+  exit 1
+fi
+
+echo "▸ Stage B (parallel): credo, sobelow..."
+run_bg credo   mix credo --strict
+run_bg sobelow mix sobelow --exit low
+wait
+report "credo"   credo   || FAILED=1
+report "sobelow" sobelow || FAILED=1
+
+[ "$FAILED" = "0" ] || exit 1
