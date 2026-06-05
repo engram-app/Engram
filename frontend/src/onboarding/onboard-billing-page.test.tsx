@@ -144,6 +144,13 @@ describe('OnboardBillingPage — bug #440 repro', () => {
       expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0),
     )
 
+    // User clicks "Start free trial" — Paddle overlay loads. The watcher
+    // transitions out of idle on CHECKOUT_LOADED.
+    await waitFor(() => expect(capturedEventCallback).toBeDefined())
+    await act(async () => {
+      capturedEventCallback!({ name: 'checkout.loaded' })
+    })
+
     // Phase 2: webhook "lands" server-side — backend now reports the user
     // is active and onboarding should advance to /onboard/tools. But Paddle
     // never fires CHECKOUT_COMPLETED (the bug condition: redirect via

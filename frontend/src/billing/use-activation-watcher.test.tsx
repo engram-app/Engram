@@ -45,17 +45,76 @@ describe('useActivationWatcher', () => {
     vi.useRealTimers()
   })
 
-  it('starts in background state and polls every 10s', async () => {
+  it('starts in background after onCheckoutOpened and polls every 10s', async () => {
     get.mockResolvedValue(billingStatus())
     const onActivated = vi.fn()
-    renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
 
     expect(get).not.toHaveBeenCalled()
+    act(() => { result.current.onCheckoutOpened() })
+    expect(result.current.state).toBe('background')
+
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(get).toHaveBeenCalledTimes(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(get).toHaveBeenCalledTimes(2)
     expect(onActivated).not.toHaveBeenCalled()
+  })
+
+  it('starts in idle state with no polling until onCheckoutOpened is called', async () => {
+    get.mockResolvedValue(billingStatus())
+    const onActivated = vi.fn()
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    expect(result.current.state).toBe('idle')
+
+    // 60 seconds with no checkout event — zero polls fire.
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(get).not.toHaveBeenCalled()
+    expect(result.current.state).toBe('idle')
+  })
+
+  it('transitions idle → background on onCheckoutOpened and starts polling at 10s', async () => {
+    get.mockResolvedValue(billingStatus())
+    const onActivated = vi.fn()
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    act(() => { result.current.onCheckoutOpened() })
+    expect(result.current.state).toBe('background')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('onPaymentFailed resets state to idle (not background) so a failed checkout stops polling', async () => {
+    get.mockResolvedValue(billingStatus())
+    const onActivated = vi.fn()
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    act(() => { result.current.onCheckoutOpened() })
+    act(() => { result.current.onPaymentInitiated() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(get).toHaveBeenCalledTimes(1)
+
+    act(() => { result.current.onPaymentFailed() })
+    expect(result.current.state).toBe('idle')
+
+    // No further polls.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('onCheckoutOpened is idempotent — calling it during accelerated does not regress to background', async () => {
+    get.mockResolvedValue(billingStatus())
+    const onActivated = vi.fn()
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    act(() => { result.current.onCheckoutOpened() })
+    act(() => { result.current.onPaymentInitiated() })
+    expect(result.current.state).toBe('accelerated')
+
+    act(() => { result.current.onCheckoutOpened() })  // second call — should be no-op
+    expect(result.current.state).toBe('accelerated')
   })
 
   it('accelerates to 1s after onPaymentInitiated', async () => {
@@ -105,7 +164,7 @@ describe('useActivationWatcher', () => {
     expect(get).toHaveBeenCalledTimes(16)
   })
 
-  it('returns to background after onPaymentFailed', async () => {
+  it('returns to idle after onPaymentFailed and stops polling', async () => {
     get.mockResolvedValue(billingStatus())
     const onActivated = vi.fn()
     const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
@@ -115,12 +174,11 @@ describe('useActivationWatcher', () => {
     expect(get).toHaveBeenCalledTimes(1)
 
     act(() => { result.current.onPaymentFailed() })
-    expect(result.current.state).toBe('background')
+    expect(result.current.state).toBe('idle')
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    // Idle does not poll — even after generous time, count stays at 1.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
     expect(get).toHaveBeenCalledTimes(1)
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-    expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('does not poll when enabled is false', async () => {
@@ -137,7 +195,10 @@ describe('useActivationWatcher', () => {
     )
 
     const onActivated = vi.fn()
-    const { unmount } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+    const { result, unmount } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    // Kick out of idle so polling starts.
+    act(() => { result.current.onCheckoutOpened() })
 
     // Advance to trigger first tick (background = 10s).
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })

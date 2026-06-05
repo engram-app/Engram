@@ -57,7 +57,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [paddle, setPaddle] = useState<Paddle>()
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
 
-  const { state: watcherState, subscriptionOk, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
+  const { state: watcherState, subscriptionOk, onCheckoutOpened, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
     onActivated: onActivated ?? (() => {}),
     enabled: true,
   })
@@ -73,6 +73,14 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       eventCallback: (event) => {
         if (cancelled) return
         switch (event.name) {
+          case CheckoutEventNames.CHECKOUT_LOADED: {
+            // User opened the Paddle overlay — credible "user intends to
+            // check out" signal. Kick the watcher out of idle so it can
+            // catch a webhook-driven activation (we've seen Paddle drop
+            // CHECKOUT_COMPLETED on trial-signup redirects).
+            onCheckoutOpened()
+            break
+          }
           case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
@@ -118,7 +126,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       cancelled = true
       setPaddle(undefined)
     }
-  }, [config, resolved, qc, onActivated, onPaymentInitiated, onPaymentFailed])
+  }, [config, resolved, qc, onActivated, onCheckoutOpened, onPaymentInitiated, onPaymentFailed])
 
   if (isLoading || !billing) {
     return <p className="text-muted-foreground">Loading billing info...</p>

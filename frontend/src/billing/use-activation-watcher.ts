@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { OnboardingStatus } from '../api/queries'
 
-export type WatcherState = 'background' | 'accelerated' | 'cooldown' | 'activated'
+export type WatcherState = 'idle' | 'background' | 'accelerated' | 'cooldown' | 'activated'
 
 const BACKGROUND_MS = 10_000
 const ACCELERATED_MS = 1_000
@@ -18,12 +18,14 @@ interface Options {
 interface WatcherApi {
   state: WatcherState
   subscriptionOk: boolean
+  onCheckoutOpened: () => void
   onPaymentInitiated: () => void
   onPaymentFailed: () => void
 }
 
 function cadenceFor(state: WatcherState): number | null {
   switch (state) {
+    case 'idle': return null
     case 'background': return BACKGROUND_MS
     case 'accelerated': return ACCELERATED_MS
     case 'cooldown': return COOLDOWN_MS
@@ -32,14 +34,14 @@ function cadenceFor(state: WatcherState): number | null {
 }
 
 export function useActivationWatcher({ onActivated, enabled }: Options): WatcherApi {
-  const [state, setState] = useState<WatcherState>('background')
+  const [state, setState] = useState<WatcherState>('idle')
   const [subscriptionOk, setSubscriptionOk] = useState(false)
   const qc = useQueryClient()
 
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const activatedRef = useRef(false)
   const acceleratedStartRef = useRef<number | null>(null)
-  const stateRef = useRef<WatcherState>('background')
+  const stateRef = useRef<WatcherState>('idle')
   const onActivatedRef = useRef(onActivated)
   const subscriptionOkRef = useRef(false)
   const mountedRef = useRef(true)
@@ -130,6 +132,11 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
     }
   }, [enabled, state, schedule])
 
+  const onCheckoutOpened = useCallback(() => {
+    if (activatedRef.current) return
+    setState((prev) => (prev === 'idle' ? 'background' : prev))
+  }, [])
+
   const onPaymentInitiated = useCallback(() => {
     if (activatedRef.current) return
     // Idempotent: if PAYMENT_INITIATED already accelerated us, a follow-up
@@ -137,14 +144,20 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
     // t=0 timestamp.
     if (acceleratedStartRef.current !== null) return
     acceleratedStartRef.current = Date.now()
+    // Transition from any non-activated state (idle, background, cooldown)
+    // into accelerated. This keeps PAYMENT_INITIATED a credible "user is
+    // checking out" signal even if CHECKOUT_LOADED dropped.
     setState('accelerated')
   }, [])
 
   const onPaymentFailed = useCallback(() => {
     if (activatedRef.current) return
     acceleratedStartRef.current = null
-    setState('background')
+    // Reset to idle (not background) — a failed payment should NOT keep us
+    // polling forever. The next CHECKOUT_LOADED or PAYMENT_INITIATED will
+    // re-arm the watcher.
+    setState('idle')
   }, [])
 
-  return { state, subscriptionOk, onPaymentInitiated, onPaymentFailed }
+  return { state, subscriptionOk, onCheckoutOpened, onPaymentInitiated, onPaymentFailed }
 }
