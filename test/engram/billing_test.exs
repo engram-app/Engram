@@ -598,6 +598,74 @@ defmodule Engram.BillingTest do
       event = %{"event_type" => "transaction.completed", "data" => %{}}
       assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
     end
+
+    test "subscription.created broadcasts subscription_activated on user:{id} topic" do
+      user = insert(:user)
+      EngramWeb.Endpoint.subscribe("user:#{user.id}")
+
+      event = %{
+        "event_type" => "subscription.created",
+        "data" => %{
+          "id" => "sub_broadcast_1",
+          "status" => "trialing",
+          "customer_id" => "ctm_broadcast_1",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"},
+          "custom_data" => %{"user_id" => user.id}
+        }
+      }
+
+      assert {:ok, _sub} = Billing.upsert_from_paddle_event(event)
+
+      expected_topic = "user:#{user.id}"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^expected_topic,
+        event: "subscription_activated",
+        payload: payload
+      }
+
+      assert payload.status == "trialing"
+      assert payload.tier == "starter"
+      assert payload.subscription_id == "sub_broadcast_1"
+    end
+
+    test "subscription.updated broadcasts subscription_activated on user:{id} topic" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_upd_broadcast_1",
+        status: "trialing",
+        tier: "starter"
+      )
+
+      EngramWeb.Endpoint.subscribe("user:#{user.id}")
+
+      event = %{
+        "event_type" => "subscription.activated",
+        "data" => %{
+          "id" => "sub_upd_broadcast_1",
+          "status" => "active",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, %Subscription{status: "active"}} = Billing.upsert_from_paddle_event(event)
+
+      expected_topic = "user:#{user.id}"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^expected_topic,
+        event: "subscription_activated",
+        payload: payload
+      }
+
+      assert payload.status == "active"
+      assert payload.subscription_id == "sub_upd_broadcast_1"
+    end
   end
 
   describe "subscription memoization" do
