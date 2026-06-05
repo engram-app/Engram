@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Post-checkout hook: when a fresh worktree is created via `git worktree add`,
+# hardlink `deps/`, `_build/`, and `frontend/node_modules/` from the canonical
+# checkout so the first `mix compile` / lint / pre-push doesn't take ~5 minutes
+# rebuilding everything from scratch.
+#
+# Hardlinks are inode-shared — instant copy, zero disk overhead. Mix's
+# incremental compiler sees identical mtimes and skips work for unchanged
+# files; only files the new branch actually edited recompile. When a build
+# tool writes (mix, bun), it creates a NEW file rather than mutating in-place,
+# so the hardlink chain detaches naturally — no cross-worktree corruption risk.
+#
+# Why a hook (and not a wrapper script): `git worktree add` fires post-checkout
+# directly. The hook runs BEFORE any human or AI agent touches the new tree,
+# so the optimization is unmissable and deterministic. No memory, no convention
+# documents, no remembering to invoke `bin/worktree-add`.
+#
+# post-checkout args: $1 = previous HEAD, $2 = new HEAD, $3 = branch-flag
+# (1 = branch checkout incl. worktree add, 0 = file checkout). We only act
+# on branch checkouts.
+set -euo pipefail
+
+[ "${3:-0}" = "1" ] || exit 0
+
+# `git rev-parse --git-common-dir` always resolves to the main repo's `.git`,
+# regardless of which worktree we're in. The canonical checkout is its parent.
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
+# Resolve to absolute path (--git-common-dir can be relative).
+CANONICAL=$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)
+THIS_DIR=$(git rev-parse --show-toplevel)
+
+# Don't link a worktree to itself.
+[ "$CANONICAL" = "$THIS_DIR" ] && exit 0
+
+link_if_missing() {
+  local rel="$1"
+  local src="$CANONICAL/$rel"
+  local dst="$THIS_DIR/$rel"
+  if [ -e "$dst" ] || [ ! -d "$src" ]; then
+    return 0
+  fi
+  # `cp -al`: archive + hardlink. Recurses into directories, hardlinks each
+  # file. Stays on the same filesystem (cross-fs hardlinks are impossible).
+  if cp -al "$src" "$dst" 2>/dev/null; then
+    echo "post-checkout: hardlinked $rel from $CANONICAL"
+  else
+    echo "post-checkout: skipped $rel (cp -al failed — likely cross-filesystem)" >&2
+  fi
+}
+
+link_if_missing deps
+link_if_missing _build
+link_if_missing frontend/node_modules
