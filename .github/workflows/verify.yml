@@ -183,11 +183,18 @@ jobs:
           # decision on whether the new image tag already exists in GHCR —
           # version bump → new tag → fresh image, regardless of cache state.
           MIX_EXS_NO_VERSION=$(grep -vE '^[[:space:]]*version: "[0-9]+\.[0-9]+\.[0-9]+"' mix.exs | sha256sum | cut -d' ' -f1)
+          # Root-level lint/format configs are NOT under lib/priv/config/test/frontend,
+          # so they need to be listed explicitly. Without them, editing (e.g.)
+          # `.credo.exs` to disable a check produces no fingerprint change → the
+          # next push hits the cache → `lint` skips → loosened rule rides in
+          # without ever being re-validated. `.dockerignore` affects what's
+          # in the Docker build context, which can change image bytes.
           BACKEND_HASH=$({
             git ls-tree -r HEAD -- \
               lib priv config test frontend \
-              Dockerfile entrypoint.sh \
+              Dockerfile entrypoint.sh .dockerignore \
               mix.lock \
+              .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf \
               docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
               .github/workflows/verify.yml
             echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
@@ -2765,7 +2772,10 @@ jobs:
           BACKEND_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
           VERSION: ${{ github.sha }}
         run: |
-          INSTALL_DIR="${RUNNER_TEMP}" curl -sL https://sentry.io/get-cli/ | bash
+          # `INSTALL_DIR=` belongs on the `bash` side of the pipe — the env on
+          # the curl side stays with the curl process and the install script
+          # falls back to /usr/local/bin, which then needs sudo on this runner.
+          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${RUNNER_TEMP}" bash
           CLI="${RUNNER_TEMP}/sentry-cli"
 
           # Single release name (commit SHA) associated with BOTH projects via
