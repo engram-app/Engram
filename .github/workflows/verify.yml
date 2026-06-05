@@ -2679,8 +2679,18 @@ jobs:
       # UI and associates commits, so the "Releases" view shows what's
       # running and "Suspect Commits" can finger a likely-culprit commit
       # on a new error.
+      #
+      # continue-on-error: true — Sentry release-tagging is UI-only
+      # nicety, NOT a deploy gate. After the 2026-06-04 project rename
+      # (#284 / sentry-ops.md), the existing SENTRY_AUTH_TOKEN may have
+      # been scoped to the pre-rename project slugs and now hits "API
+      # request failed" on finalize. The deploy itself (build → ECR
+      # push → tf bump → ECS rolling) must not get blocked by a stale
+      # Sentry token. Tracked in #444; rotate the token in the Sentry
+      # dashboard then remove this `continue-on-error`.
       - name: Sentry frontend release
         if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
+        continue-on-error: true
         uses: getsentry/action-release@v3
         env:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
@@ -2694,6 +2704,7 @@ jobs:
 
       - name: Sentry backend release
         if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
+        continue-on-error: true
         uses: getsentry/action-release@v3
         env:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
