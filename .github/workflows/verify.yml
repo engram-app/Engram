@@ -2376,8 +2376,9 @@ jobs:
   # (prod ECS Fargate) in a single buildx invocation. Layers build once,
   # push to both registries; multi-registry login is set up upfront.
   #
-  # GHCR side feeds the FastRaid staging chain: `bump-infra-tfvars` opens
-  # a PR in engram-app/engram-infra bumping `engram_saas_image_tag`;
+  # GHCR side feeds the FastRaid staging chain: trailing steps in this
+  # same job (folded from the former `bump-infra-tfvars` job 2026-06-05)
+  # open a PR in engram-app/engram-infra bumping `engram_saas_image_tag`;
   # merge of that PR triggers `tf-apply.yml` which POSTs the daemon's
   # `/tf-apply` endpoint → `terraform apply` recreates the container on
   # the new tag. `tf-apply` is the SOLE image-mover for FastRaid; the
@@ -2705,42 +2706,38 @@ jobs:
           finalize: true
           sourcemaps: ''
 
-  # Auto-open a PR in engram-app/engram-infra bumping the staging-fastraid
-  # image tag(s) to the just-published version. Second leg of the
-  # TF-via-daemon control plane: release → infra PR → TF apply via
-  # daemon recreates the container on the new tag.
-  #
-  # tf-apply is the SOLE image-mover. The legacy `/deploy` endpoint on
-  # engram-deployer stays live on FastRaid as break-glass only; CI no
-  # longer calls it. Health verification of the post-apply container
-  # lives in engram-infra's `tf-apply.yml` (same workflow as the apply,
-  # so a verification failure marks the same job red).
-  #
-  # Future: once selfhost lands under TF (Path E.3b / Phase C of the
-  # cutover plan), the regex below picks up `engram_selfhost_image_tag`
-  # too and the bump covers both containers.
-  bump-infra-tfvars:
-    needs: build-and-publish-image
-    if: |
-      always()
-      && needs.build-and-publish-image.result == 'success'
-      && github.ref == 'refs/heads/main'
-      && github.event_name == 'push'
-    runs-on: [self-hosted, linux, x64, isolated]
-    permissions:
-      contents: read
-
-    steps:
-      # Generates a short-lived installation token for the engram-infra-tf
-      # GitHub App, scoped to engram-app/engram-infra only. The App's PEM
-      # already lives in this repo's secrets (set manually — chicken-egg
-      # with TF authenticating using it).
+      # ── Infra bump (folded from former bump-infra-tfvars job) ─────────
+      #
+      # Second leg of the TF-via-daemon control plane: release → infra PR →
+      # TF apply via daemon recreates the container on the new tag.
+      #
+      # Folded into this job (2026-06-05) to eliminate the cross-job
+      # boundary — the prior split made bump re-clone the repo just to
+      # re-read `mix.exs` for VERSION, since GitHub Actions can't pass
+      # step outputs between jobs without explicit `outputs:` plumbing.
+      # Now both phases share `steps.version.outputs.version` directly.
+      #
+      # Runs on BOTH the fresh-build path AND the cache-hit/rerun path:
+      # a TF-driven push to `.github/**` (image unchanged, bump is skipped
+      # by the early version step) still needs to fire an infra PR for
+      # the deploy chain to advance. Hence the bump steps below don't
+      # gate on `image_exists`.
+      #
+      # `tf-apply` in engram-infra is the SOLE image-mover. The legacy
+      # `/deploy` endpoint stays live as break-glass only; CI no longer
+      # calls it. Health verification of the post-apply container lives
+      # in engram-infra's `tf-apply.yml` — a verification failure marks
+      # the infra PR's check red, not this job's.
+      #
+      # Future: once selfhost lands under TF (Path E.3b / Phase C of the
+      # cutover plan), the regex picks up `engram_selfhost_image_tag` too
+      # and the bump covers both containers in one PR.
       #
       # Required App permissions on engram-infra:
       #   - contents: read & write  (push branch)
       #   - pull-requests: read & write  (open PR)
       # Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf
-      # if this step 403s.
+      # if a step below 403s.
       - name: Generate engram-infra App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -2749,26 +2746,6 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: engram-app
           repositories: engram-infra
-
-      - name: Re-extract version (job-isolated)
-        id: version
-        run: |
-          # build-and-publish-image produces VERSION as a job output, but
-          # jobs can only pass outputs through `needs.<job>.outputs.*` —
-          # which means the source job has to declare them upstream.
-          # Easier to re-read mix.exs here; we know the build already
-          # succeeded with this exact version.
-          git clone --depth 1 https://github.com/${{ github.repository }} repo
-          cd repo
-          git fetch --depth 1 origin ${{ github.sha }}
-          git checkout ${{ github.sha }}
-          VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: Invalid semver in mix.exs: '$VERSION'" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Bumping engram-infra to ${VERSION}"
 
       - name: Checkout engram-infra
         uses: actions/checkout@v6
@@ -2802,8 +2779,8 @@ jobs:
           #
           # If variables.tf is absent (e.g. after a Phase-A-style revert)
           # emit `bumped=false` and exit clean. The bump step downstream is
-          # gated on `bumped=true` so this job becomes a no-op until TF
-          # state catches up.
+          # gated on `bumped=true` so this becomes a no-op until TF state
+          # catches up.
           python3 - <<'PY'
           import os
           import re
@@ -2883,15 +2860,13 @@ jobs:
             tf-image-bump
 
       - name: Enable auto-merge on bot PR
-        # Auto-merge queues the PR for merge once required checks
-        # (CODEOWNERS review + status checks) pass. Without this the bot
-        # PR sits open waiting for a human click — that's how the
-        # 2026-05-22 cascade started (4-day-old bot PR carrying stale
-        # template env on engram-infra). Engram-infra has
-        # `allow_auto_merge=true` set in repos.tf so the GraphQL
-        # mutation succeeds. Reuses the existing engram-infra-tf App
-        # token; `pull_requests: write` is already granted for the
-        # create-pull-request step.
+        # Auto-merge queues the PR for merge once required checks pass.
+        # Without this the bot PR sits open waiting for a human click —
+        # that's how the 2026-05-22 cascade started (4-day-old bot PR
+        # carrying stale template env on engram-infra). Engram-infra has
+        # `allow_auto_merge=true` set in repos.tf so the GraphQL mutation
+        # succeeds. Reuses the existing engram-infra-tf App token;
+        # `pull_requests: write` is already granted for create-pull-request.
         if: steps.open-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
