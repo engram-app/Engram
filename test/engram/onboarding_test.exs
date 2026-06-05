@@ -1,7 +1,6 @@
 defmodule Engram.OnboardingTest do
   use Engram.DataCase, async: false
 
-  alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
@@ -173,8 +172,8 @@ defmodule Engram.OnboardingTest do
         effective_date: nil
       )
 
-      VersionCache.invalidate_all()
-      on_exit(&VersionCache.invalidate_all/0)
+      LegalFixtures.reset_version_cache()
+      on_exit(&LegalFixtures.reset_version_cache/0)
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
@@ -294,8 +293,8 @@ defmodule Engram.OnboardingTest do
       prev_enabled = Application.get_env(:engram, :billing_enabled)
       Application.put_env(:engram, :billing_enabled, true)
 
-      VersionCache.invalidate_all()
-      on_exit(&VersionCache.invalidate_all/0)
+      LegalFixtures.reset_version_cache()
+      on_exit(&LegalFixtures.reset_version_cache/0)
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
@@ -319,7 +318,7 @@ defmodule Engram.OnboardingTest do
         effective_date: ~D[2099-01-01]
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h_tos", "2026-05-19", "h_priv", %{})
@@ -336,7 +335,7 @@ defmodule Engram.OnboardingTest do
         effective_date: ~D[2000-01-01]
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h_tos", "2026-05-19", "h_priv", %{})
@@ -352,7 +351,7 @@ defmodule Engram.OnboardingTest do
       )
 
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{})
 
@@ -384,7 +383,7 @@ defmodule Engram.OnboardingTest do
       )
 
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{})
 
@@ -395,12 +394,12 @@ defmodule Engram.OnboardingTest do
   describe "computed floor gate + terms_notice" do
     setup do
       prev_enabled = Application.get_env(:engram, :billing_enabled)
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
       Application.put_env(:engram, :billing_enabled, true)
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
-        VersionCache.invalidate_all()
+        LegalFixtures.reset_version_cache()
       end)
 
       :ok
@@ -414,7 +413,7 @@ defmodule Engram.OnboardingTest do
       )
 
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
@@ -440,7 +439,7 @@ defmodule Engram.OnboardingTest do
         effective_date: ~D[2099-01-01]
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       status = Onboarding.status(user)
       assert status.terms_ok
@@ -465,7 +464,7 @@ defmodule Engram.OnboardingTest do
         effective_date: ~D[2000-01-01]
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       refute Onboarding.status(user).terms_ok
     end
@@ -490,11 +489,11 @@ defmodule Engram.OnboardingTest do
         effective_date: nil
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
-        VersionCache.invalidate_all()
+        LegalFixtures.reset_version_cache()
       end)
 
       :ok
@@ -589,11 +588,11 @@ defmodule Engram.OnboardingTest do
         effective_date: nil
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
-        VersionCache.invalidate_all()
+        LegalFixtures.reset_version_cache()
       end)
 
       :ok
@@ -657,11 +656,11 @@ defmodule Engram.OnboardingTest do
         effective_date: nil
       )
 
-      VersionCache.invalidate_all()
+      LegalFixtures.reset_version_cache()
 
       on_exit(fn ->
         Application.put_env(:engram, :billing_enabled, prev_enabled)
-        VersionCache.invalidate_all()
+        LegalFixtures.reset_version_cache()
       end)
 
       :ok
