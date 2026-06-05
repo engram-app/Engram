@@ -1,7 +1,6 @@
 defmodule Engram.OnboardingTest do
   use Engram.DataCase, async: false
 
-  alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
