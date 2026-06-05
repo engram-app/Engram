@@ -201,8 +201,8 @@ describe('OnboardBillingPage — push activation', () => {
     // Channel must be wired by now.
     await waitFor(() => expect(channelHandlers['subscription_activated']).toBeDefined())
 
-    // User clicks "Start free trial" — Paddle overlay opens, then payment
-    // initiates. The activation overlay appears.
+    // Simulate the post-Start-trial flow: payment initiates inside Paddle's
+    // inline frame (which here is mocked — we just drive the event directly).
     await waitFor(() => expect(capturedEventCallback).toBeDefined())
     await act(async () => {
       capturedEventCallback!({
