@@ -44,6 +44,7 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
   const stateRef = useRef<WatcherState>('background')
   const onActivatedRef = useRef(onActivated)
   const subscriptionOkAtRef = useRef<number | null>(null)
+  const mountedRef = useRef(true)
 
   stateRef.current = state
   onActivatedRef.current = onActivated
@@ -53,6 +54,7 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
   const tick = useCallback(async () => {
     try {
       const status = await api.get<OnboardingStatus>('/onboarding/status')
+      if (!mountedRef.current) return
       qc.setQueryData(['onboarding', 'status'], status)
       // Always refresh the live billing surface so settings-mode users see
       // CurrentPlanCard / plan-gate update the moment the webhook lands.
@@ -73,6 +75,7 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
       console.error('activation poll failed; retrying', err)
     }
 
+    if (!mountedRef.current) return
     if (activatedRef.current) return
 
     if (
@@ -89,6 +92,7 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
 
   const schedule = useCallback(() => {
     clearTimeout(timer.current)
+    if (!mountedRef.current) return
     if (activatedRef.current) return
     const cadence = cadenceFor(stateRef.current)
     if (cadence === null) return
@@ -98,9 +102,13 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
   scheduleRef.current = schedule
 
   useEffect(() => {
+    mountedRef.current = true
     if (!enabled) return
     schedule()
-    return () => clearTimeout(timer.current)
+    return () => {
+      mountedRef.current = false
+      clearTimeout(timer.current)
+    }
   }, [enabled, state, schedule])
 
   const onPaymentInitiated = useCallback(() => {

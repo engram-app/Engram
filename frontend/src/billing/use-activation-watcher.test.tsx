@@ -130,6 +130,30 @@ describe('useActivationWatcher', () => {
     expect(get).not.toHaveBeenCalled()
   })
 
+  it('does not reschedule polls after unmount, even if tick is mid-await', async () => {
+    let resolveTick: (v: OnboardingStatus) => void = () => {}
+    get.mockImplementation(
+      () => new Promise<OnboardingStatus>((r) => { resolveTick = r }),
+    )
+
+    const onActivated = vi.fn()
+    const { unmount } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    // Advance to trigger first tick (background = 10s).
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(get).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    // Resolve the in-flight api.get AFTER unmount.
+    act(() => { resolveTick(billingStatus()) })
+    await act(async () => { await Promise.resolve() })
+
+    // Advance plenty more time — no new polls should fire.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
   it('survives a transient poll error without crashing', async () => {
     get
       .mockRejectedValueOnce(new Error('boom'))
