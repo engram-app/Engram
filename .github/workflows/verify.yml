@@ -2663,7 +2663,9 @@ jobs:
 
       - name: Configure AWS credentials (OIDC)
         if: steps.version.outputs.image_exists != 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        # v6 (Node 24). v4 used Node 20, which GH deprecates 2026-09-16.
+        # Inputs `role-to-assume` and `aws-region` are stable across both.
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
           aws-region: us-east-1

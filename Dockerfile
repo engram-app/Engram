@@ -1,4 +1,17 @@
 # syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+#
+# `check=skip=SecretsUsedInArgOrEnv`: BuildKit's lint flags any ARG/ENV whose
+# name contains KEY/TOKEN/SECRET. Our `VITE_CF_BEACON_TOKEN` and
+# `VITE_POSTHOG_KEY` trip this heuristic but are NOT secrets — Vite bakes
+# `import.meta.env.VITE_*` into the JS bundle that ships to every browser.
+# Both are public per-site identifiers (CF beacon: rate-limited per-site;
+# PostHog: write-only event ingest per project). They cannot be hidden by
+# any build-time mechanism. The check is a true false-positive; skipping
+# the rule for the whole Dockerfile keeps the build clean without changing
+# real risk posture. Real secrets in this Dockerfile use `RUN
+# --mount=type=secret` (see `sentry_auth_token` usage in the frontend stage).
+#
 # Multi-stage build: compile release in builder, run in minimal image
 # cache-bust: 2026-04-18-encryption-auto-provision
 ARG ELIXIR_VERSION=1.17.3
