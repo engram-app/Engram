@@ -57,7 +57,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [paddle, setPaddle] = useState<Paddle>()
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
 
-  const watcher = useActivationWatcher({
+  const { state: watcherState, subscriptionOkAt, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
     onActivated: onActivated ?? (() => {}),
     enabled: typeof onActivated === 'function',
   })
@@ -76,25 +76,33 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
-            setOverlayVisible(true)
-            watcher.onPaymentInitiated()
+            if (onActivated) {
+              setOverlayVisible(true)
+              onPaymentInitiated()
+            }
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
           }
           case CheckoutEventNames.CHECKOUT_COMPLETED: {
             // Belt-and-suspenders: if PAYMENT_INITIATED dropped, this still
-            // brings the watcher into accelerated mode.
-            setOverlayVisible(true)
-            watcher.onPaymentInitiated()
+            // brings the watcher into accelerated mode (onboarding only).
+            if (onActivated) {
+              setOverlayVisible(true)
+              onPaymentInitiated()
+            }
+            qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+            qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
           }
           case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED:
           case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
           case CheckoutEventNames.CHECKOUT_ERROR: {
-            setOverlayVisible(false)
-            watcher.onPaymentFailed()
-            toast.error('Payment did not go through. Please try again.')
+            if (onActivated) {
+              setOverlayVisible(false)
+              onPaymentFailed()
+              toast.error('Payment did not go through. Please try again.')
+            }
             break
           }
           default:
@@ -116,11 +124,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       cancelled = true
       setPaddle(undefined)
     }
-    // watcher returns a new object each render (state-driven), so we pin to the
-    // two stable useCallback handlers to avoid re-initializing Paddle on every
-    // state transition.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, resolved, qc, watcher.onPaymentInitiated, watcher.onPaymentFailed])
+  }, [config, resolved, qc, onActivated, onPaymentInitiated, onPaymentFailed])
 
   if (isLoading || !billing) {
     return <p className="text-muted-foreground">Loading billing info...</p>
@@ -162,7 +166,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
 
       {needsSubscription && (
         <section className="relative space-y-4">
-          <div className={overlayVisible ? 'pointer-events-none opacity-40' : ''}>
+          <div className={onActivated && overlayVisible ? 'pointer-events-none opacity-40' : ''}>
             {!hideHeading && (
               <>
                 <h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
@@ -196,10 +200,10 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               />
             </ul>
           </div>
-          {overlayVisible && (
+          {onActivated && overlayVisible && (
             <ActivationOverlay
-              state={watcher.state}
-              subscriptionOk={watcher.subscriptionOkAt !== null}
+              state={watcherState}
+              subscriptionOk={subscriptionOkAt !== null}
               nextStep={qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])?.next_step ?? 'billing'}
               transactionId={transactionId}
               onRefresh={() => window.location.reload()}
