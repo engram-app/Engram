@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { ThemeProvider } from '../theme/theme-provider'
@@ -248,6 +248,45 @@ describe('BillingPage — Paddle effect cleanup', () => {
     // Mount target gone, plan cards back
     expect(container.querySelector('.paddle-checkout')).toBeNull()
     expect(queryByText('Starter')).toBeInTheDocument()
+  })
+
+  it('onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner', async () => {
+    // Pre-#440 belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
+    // redirects (and so may COMPLETED). The cooldown timer must be anchored
+    // to whichever event fires first, otherwise a missing COMPLETED leaves
+    // the user stuck on Paddle's inline frame forever with no recovery.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    mockBillingApi()
+    let captured: ((event: { name: string; data?: unknown }) => void) | undefined
+    initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+      captured = opts.eventCallback
+      return { Checkout: { open: vi.fn(), close: vi.fn() } }
+    })
+
+    renderBilling({ inline: true })
+
+    await waitFor(() => expect(captured).toBeDefined())
+    // Let the initializePaddle .then() resolve.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // PAYMENT_INITIATED fires; COMPLETED never does (the drop case).
+    await act(async () => {
+      captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'txn_drop_99' } })
+      await Promise.resolve()
+    })
+
+    // Past the 15s cooldown window, recovery banner must appear.
+    await act(async () => {
+      vi.advanceTimersByTime(15_500)
+      await Promise.resolve()
+    })
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Payment received\. We're finishing your activation/i)).toBeInTheDocument(),
+    )
   })
 
   it('onboarding (inline): closes Paddle and fires onActivated when subscription_activated push arrives', async () => {

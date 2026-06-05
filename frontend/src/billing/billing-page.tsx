@@ -166,8 +166,14 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
         if (cancelled) return
         switch (event.name) {
           case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
+            // Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
+            // drop on trial-signup redirects. Arm the cooldown timer on
+            // whichever fires first (`?? Date.now()` guards against reset)
+            // so a dropped COMPLETED still surfaces the recovery banner
+            // instead of stranding the user on Paddle's inline frame.
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
+            setCompletedAt((prev) => prev ?? Date.now())
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
@@ -176,7 +182,8 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             // Don't close Paddle — its built-in "Payment successful" screen
             // is the visible confirmation while we wait for the backend
             // webhook to fire the subscription_activated push. The cooldown
-            // timer is the fallback if the push never arrives.
+            // timer is the fallback if the push never arrives (and is also
+            // armed here in case PAYMENT_INITIATED dropped).
             setCompletedAt((prev) => prev ?? Date.now())
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
