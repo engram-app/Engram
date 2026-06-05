@@ -113,6 +113,10 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
 
   const onPaymentInitiated = useCallback(() => {
     if (activatedRef.current) return
+    // Idempotent: if PAYMENT_INITIATED already accelerated us, a follow-up
+    // CHECKOUT_COMPLETED must NOT reset the 15s budget. Keep the original
+    // t=0 timestamp.
+    if (acceleratedStartRef.current !== null) return
     setPaymentInitiatedAt(Date.now())
     acceleratedStartRef.current = Date.now()
     setState('accelerated')

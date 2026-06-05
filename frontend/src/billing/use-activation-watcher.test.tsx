@@ -154,6 +154,22 @@ describe('useActivationWatcher', () => {
     expect(get).toHaveBeenCalledTimes(1)
   })
 
+  it('onPaymentInitiated called twice does not extend the 15s accelerated budget', async () => {
+    get.mockResolvedValue(billingStatus())
+    const onActivated = vi.fn()
+    const { result } = renderHook(() => useActivationWatcher({ onActivated, enabled: true }), { wrapper })
+
+    act(() => { result.current.onPaymentInitiated() })
+    // 5 seconds in, call again (e.g., CHECKOUT_COMPLETED arrives later).
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    act(() => { result.current.onPaymentInitiated() })
+
+    // Total budget should still expire at the original 15s mark, not 15s
+    // after the second call.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(result.current.state).toBe('cooldown')
+  })
+
   it('survives a transient poll error without crashing', async () => {
     get
       .mockRejectedValueOnce(new Error('boom'))
