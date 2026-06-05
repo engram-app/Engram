@@ -59,7 +59,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
 
   const { state: watcherState, subscriptionOkAt, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
     onActivated: onActivated ?? (() => {}),
-    enabled: typeof onActivated === 'function',
+    enabled: true,
   })
   const [overlayVisible, setOverlayVisible] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
@@ -76,21 +76,17 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
-            if (onActivated) {
-              setOverlayVisible(true)
-              onPaymentInitiated()
-            }
+            setOverlayVisible(true)
+            onPaymentInitiated()
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
           }
           case CheckoutEventNames.CHECKOUT_COMPLETED: {
             // Belt-and-suspenders: if PAYMENT_INITIATED dropped, this still
-            // brings the watcher into accelerated mode (onboarding only).
-            if (onActivated) {
-              setOverlayVisible(true)
-              onPaymentInitiated()
-            }
+            // brings the watcher into accelerated mode.
+            setOverlayVisible(true)
+            onPaymentInitiated()
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
@@ -98,11 +94,9 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED:
           case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
           case CheckoutEventNames.CHECKOUT_ERROR: {
-            if (onActivated) {
-              setOverlayVisible(false)
-              onPaymentFailed()
-              toast.error('Payment did not go through. Please try again.')
-            }
+            setOverlayVisible(false)
+            onPaymentFailed()
+            toast.error('Payment did not go through. Please try again.')
             break
           }
           default:
@@ -166,7 +160,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
 
       {needsSubscription && (
         <section className="relative space-y-4">
-          <div className={onActivated && overlayVisible ? 'pointer-events-none opacity-40' : ''}>
+          <div className={overlayVisible ? 'pointer-events-none opacity-40' : ''}>
             {!hideHeading && (
               <>
                 <h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
@@ -200,7 +194,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               />
             </ul>
           </div>
-          {onActivated && overlayVisible && (
+          {overlayVisible && (
             <ActivationOverlay
               state={watcherState}
               subscriptionOk={subscriptionOkAt !== null}

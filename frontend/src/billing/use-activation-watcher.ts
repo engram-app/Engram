@@ -54,6 +54,9 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
     try {
       const status = await api.get<OnboardingStatus>('/onboarding/status')
       qc.setQueryData(['onboarding', 'status'], status)
+      // Always refresh the live billing surface so settings-mode users see
+      // CurrentPlanCard / plan-gate update the moment the webhook lands.
+      qc.invalidateQueries({ queryKey: ['billing', 'status'] })
       if (status.subscription_ok && subscriptionOkAtRef.current === null) {
         subscriptionOkAtRef.current = Date.now()
         setSubscriptionOkAt(subscriptionOkAtRef.current)
