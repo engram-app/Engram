@@ -30,6 +30,128 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Creates an explicit empty-folder marker row (kind="folder").
+
+  Idempotent: if a marker for this folder_hmac already exists, it is
+  returned. A soft-deleted marker is undeleted in place (preserves id /
+  the AAD-bound envelope). Rejects root folder ("") — root is implicit
+  whenever any note exists at the top level.
+
+  The encrypted folder name lives in `folder_ciphertext` / `folder_nonce`
+  using the same row-id-bound AAD anchor existing notes already use
+  (`row_aad(:notes, :folder, id, dek_version)`). No new crypto surface.
+  """
+  @spec create_folder_marker(map(), map(), String.t()) ::
+          {:ok, Note.t()} | {:error, term()}
+  def create_folder_marker(_user, _vault, ""), do: {:error, :root_folder_not_marker}
+
+  def create_folder_marker(user, vault, folder) when is_binary(folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+      # Unwrap once so the public contract is {:ok, note} | {:error, _}.
+      case Repo.with_tenant(user.id, fn ->
+             case find_folder_marker(user, vault, folder_hmac) do
+               {:ok, %Note{deleted_at: nil} = existing} ->
+                 {:ok, hydrate_folder_marker(existing, dek)}
+
+               {:ok, %Note{} = soft_deleted} ->
+                 soft_deleted
+                 |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+                 |> Repo.update()
+                 |> case do
+                   {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
+                   {:error, _} = err -> err
+                 end
+
+               :not_found ->
+                 insert_folder_marker(user, vault, dek, folder, folder_hmac)
+             end
+           end) do
+        {:ok, inner} -> inner
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  # Folder marker rows have only folder_* ciphertext populated, so
+  # Crypto.maybe_decrypt_note_fields/2 short-circuits (needs path or
+  # content present). Decrypt the folder field directly here.
+  defp hydrate_folder_marker(%Note{} = marker, dek) do
+    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
+
+    case Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad) do
+      {:ok, folder} -> %{marker | folder: folder}
+      :error -> raise "failed to decrypt folder marker id=#{marker.id}"
+    end
+  end
+
+  defp find_folder_marker(user, vault, folder_hmac) do
+    row =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and
+              n.vault_id == ^vault.id and
+              n.kind == "folder" and
+              n.folder_hmac == ^folder_hmac
+        )
+      )
+
+    if row, do: {:ok, row}, else: :not_found
+  end
+
+  defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
+    marker_id = Crypto.next_row_id(:notes)
+    now = DateTime.utc_now()
+    folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
+    {folder_ct, folder_nonce} = Envelope.encrypt(folder, dek, folder_aad)
+
+    attrs = %{
+      kind: "folder",
+      user_id: user.id,
+      vault_id: vault.id,
+      version: 1,
+      dek_version: Crypto.row_version_aad_bound(),
+      mtime: DateTime.to_unix(now) + 0.0,
+      folder_ciphertext: folder_ct,
+      folder_nonce: folder_nonce,
+      folder_hmac: folder_hmac
+    }
+
+    %Note{id: marker_id}
+    |> Note.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, marker} ->
+        {:ok, hydrate_folder_marker(marker, dek)}
+
+      {:error, %Ecto.Changeset{errors: errors}} = err ->
+        # Race: concurrent insert of the same marker collapses to the
+        # winner. Re-fetch and return rather than surface a constraint
+        # error — keeps the API idempotent under load.
+        if has_unique_conflict?(errors) do
+          case find_folder_marker(user, vault, folder_hmac) do
+            {:ok, existing} -> {:ok, hydrate_folder_marker(existing, dek)}
+            :not_found -> err
+          end
+        else
+          err
+        end
+    end
+  end
+
+  defp has_unique_conflict?(errors) do
+    Enum.any?(errors, fn
+      {_field, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
+    end)
+  end
+
+  @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
