@@ -1077,4 +1077,21 @@ defmodule Engram.NotesTest do
       refute after_row.path_hmac == before.path_hmac
     end
   end
+
+  describe "list_notes_in_folder/3 with markers" do
+    test "excludes folder marker rows from the result", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Mixed")
+      assert length(notes) == 1
+      assert hd(notes).path == "Mixed/a.md"
+    end
+  end
 end

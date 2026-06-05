@@ -780,6 +780,7 @@ defmodule Engram.Notes do
               from(n in Note,
                 where:
                   n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    n.kind == "note" and
                     n.folder_hmac == ^target_hmac,
                 order_by: [asc: n.id]
               )
