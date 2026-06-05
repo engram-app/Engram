@@ -1,0 +1,90 @@
+# Engram self-host — VOYAGE variant.
+# Voyage API embeddings (better retrieval quality, requires API key) +
+# MinIO attachments. Drops Ollama from the stack.
+# Get a Voyage key at https://voyageai.com/ — set VOYAGE_API_KEY in .env.
+#
+#   cp .env.voyage.example .env
+#   # fill in VOYAGE_API_KEY + the three secrets
+#   docker compose -f docker-compose.voyage.yml up --build
+
+services:
+  engram:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
+      QDRANT_URL: http://qdrant:6333
+      STORAGE_SCHEME: "http://"
+      STORAGE_HOST: minio
+      STORAGE_PORT: "9000"
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/api/health || exit 1"]
+      start_period: 30s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: engram
+      POSTGRES_DB: engram
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engram"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: create the attachments bucket, then exit.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${STORAGE_ACCESS_KEY_ID:-minioadmin} ${STORAGE_SECRET_ACCESS_KEY:-minioadmin};
+      mc mb --ignore-existing local/${STORAGE_BUCKET:-engram-attachments};
+      exit 0;
+      "
+    restart: "no"
+
+volumes:
+  pg_data:
+  qdrant_data:
+  minio_data:
