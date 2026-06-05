@@ -671,6 +671,44 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns just the explicit folder marker names (sorted, decrypted).
+  Used by the plugin's GET /folders/explicit consumer to maintain its
+  disk-side explicitFolders set. Derived folders (those inferred from
+  notes living under a path) are excluded — only kind='folder' rows.
+  """
+  @spec list_explicit_folders(map(), map()) :: {:ok, [String.t()]}
+  def list_explicit_folders(user, vault) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Crypto.get_dek(user)
+
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at) and n.kind == "folder",
+                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
+              )
+            )
+          end)
+
+        names =
+          rows
+          |> Enum.map(fn {id, dv, ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
+          end)
+          |> Enum.sort()
+
+        {:ok, names}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
+  end
+
+  @doc """
   Returns tags with counts across all non-deleted notes for a user.
 
   Phase B.3: tags are envelope-encrypted per note. Decrypts each note's

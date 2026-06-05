@@ -10,6 +10,13 @@ defmodule EngramWeb.FoldersController do
     json(conn, %{folders: Enum.map(folders, fn f -> %{name: f.folder, count: f.count} end)})
   end
 
+  def explicit(conn, _params) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+    {:ok, names} = Notes.list_explicit_folders(user, vault)
+    json(conn, %{folders: Enum.map(names, &%{name: &1})})
+  end
+
   def list(conn, %{"folder" => folder}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
