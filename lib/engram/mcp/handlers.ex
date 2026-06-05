@@ -148,8 +148,11 @@ defmodule Engram.MCP.Handlers do
       {:error, :root_folder_not_marker} ->
         {:error, "folder must be a non-empty path"}
 
-      {:error, reason} ->
-        {:error, "Failed to create folder: #{inspect(reason)}"}
+      {:error, atom} when is_atom(atom) ->
+        {:error, "Failed: #{atom}"}
+
+      {:error, _other} ->
+        {:error, "Failed to create folder."}
     end
   end
 

@@ -65,8 +65,16 @@ defmodule EngramWeb.FoldersController do
 
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
-      {:ok, _} -> send_resp(conn, 204, "")
-      {:error, :no_dek} -> send_resp(conn, 204, "")
+      {:ok, _} ->
+        send_resp(conn, 204, "")
+
+      {:error, :no_dek} ->
+        send_resp(conn, 204, "")
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: format_error(reason)})
     end
   end
 
