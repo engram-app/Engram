@@ -104,6 +104,18 @@ defmodule Engram.Accounts.ProfileTest do
       assert Accounts.list_api_keys(reloaded) == []
     end
 
+    test "force-disconnects live sockets" do
+      {:ok, _admin} = Accounts.create_user_with_password("keep-admin2@example.com", "password123")
+      {:ok, user} = Accounts.create_user_with_password("kick@example.com", "password123")
+
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert :ok = Accounts.delete_self(user, "password123")
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
     test "returns :invalid_password when password is wrong" do
       {:ok, _admin} = Accounts.create_user_with_password("admin3@example.com", "password123")
       {:ok, user} = Accounts.create_user_with_password("wrong@example.com", "password123")

@@ -436,7 +436,7 @@ defmodule Engram.Billing do
            from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
            skip_tenant_check: true
          ) do
-      %Subscription{} = sub ->
+      %Subscription{tier: prev_tier, status: prev_status} = sub ->
         result =
           sub
           |> Subscription.changeset(%{
@@ -452,6 +452,15 @@ defmodule Engram.Billing do
             # listener re-fetches /onboarding/status to decide what to do,
             # so plan changes and trial→active flips both push downstream UI.
             broadcast_subscription_activated(updated.user_id, updated)
+
+            # Realtime sync (and other tier-gated features) are evaluated at
+            # channel-join, so an open SyncChannel keeps streaming after a
+            # tier or status change. Force-disconnect when either changed so
+            # the next reconnect re-runs the gate with the fresh subscription.
+            if updated.tier != prev_tier or updated.status != prev_status do
+              Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
+            end
+
             {:ok, updated}
 
           err ->

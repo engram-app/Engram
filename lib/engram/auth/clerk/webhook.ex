@@ -26,7 +26,28 @@ defmodule Engram.Auth.Clerk.Webhook do
   @spec handle(event()) :: :ok
   def handle(%{"type" => "user.created", "data" => data}), do: handle_user_created(data)
   def handle(%{"type" => "user.updated", "data" => data}), do: handle_user_updated(data)
+  def handle(%{"type" => "user.deleted", "data" => data}), do: handle_user_deleted(data)
   def handle(_), do: :ok
+
+  # Clerk fires `user.deleted` when an admin deletes a user from the Clerk
+  # dashboard, when Clerk itself revokes a user (e.g. the duplicate-signup
+  # branch in `apply_user_created/3`), or when a user self-deletes via the
+  # Clerk account portal. Mirror the deletion locally so the user can no
+  # longer auth — and force-disconnect any live sockets, since the JWT
+  # cached in `socket.assigns.current_user` would otherwise keep streaming
+  # data until the connection drops.
+  defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
+    case Accounts.find_by_external_id(clerk_id) do
+      {:ok, user} ->
+        _ = Accounts.soft_delete_user(user)
+        :ok
+
+      {:error, :user_not_found} ->
+        :ok
+    end
+  end
+
+  defp handle_user_deleted(_), do: :ok
 
   defp handle_user_created(%{"id" => clerk_id} = data) do
     case Accounts.find_by_external_id(clerk_id) do

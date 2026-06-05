@@ -8,6 +8,7 @@ defmodule Engram.Accounts do
   alias Engram.Accounts.{ApiKey, User}
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
+  alias Engram.Auth.SessionInvalidator
   alias Engram.Repo
 
   @api_key_prefix "engram_"
@@ -265,9 +266,13 @@ defmodule Engram.Accounts do
 
   @doc "Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere)."
   def revoke_all_user_tokens(%User{id: user_id}) do
-    RefreshToken
-    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
-    |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+    result =
+      RefreshToken
+      |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+      |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+
+    SessionInvalidator.disconnect_user(user_id)
+    result
   end
 
   def verify_password(email, password) do
@@ -443,8 +448,25 @@ defmodule Engram.Accounts do
     # `Connections.any_history?`, which distinguishes "already revoked" from
     # "never existed" by row presence. Sentinel gives us both: leeway always
     # closes, and history queries still see the row.
-    from(rt in RefreshToken, where: rt.family_id == ^family_id and is_nil(rt.revoked_at))
-    |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+    # Snapshot the distinct user_ids in the family BEFORE revoke so we can
+    # force-disconnect every affected user's live sockets — the realtime
+    # gate in UserSocket is connect-time only.
+    affected_user_ids =
+      Repo.all(
+        from(rt in RefreshToken,
+          where: rt.family_id == ^family_id and is_nil(rt.revoked_at),
+          select: rt.user_id,
+          distinct: true
+        ),
+        skip_tenant_check: true
+      )
+
+    result =
+      from(rt in RefreshToken, where: rt.family_id == ^family_id and is_nil(rt.revoked_at))
+      |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+
+    Enum.each(affected_user_ids, &SessionInvalidator.disconnect_user/1)
+    result
   end
 
   @doc "SHA-256 hash a raw refresh token for storage/lookup."
@@ -550,9 +572,15 @@ defmodule Engram.Accounts do
       end)
 
     case result do
-      {:ok, {:ok, _}} -> :ok
-      {:ok, {:error, :not_found}} -> {:error, :not_found}
-      {:ok, {:error, changeset}} -> {:error, changeset}
+      {:ok, {:ok, _}} ->
+        SessionInvalidator.disconnect_user(user.id)
+        :ok
+
+      {:ok, {:error, :not_found}} ->
+        {:error, :not_found}
+
+      {:ok, {:error, changeset}} ->
+        {:error, changeset}
     end
   end
 
@@ -608,20 +636,23 @@ defmodule Engram.Accounts do
 
   @doc "Suspends a user (blocks login + refresh). Refuses the last active admin."
   def suspend(%User{} = user) do
-    with_admin_lock(fn ->
-      user = Repo.reload!(user, skip_tenant_check: true)
+    result =
+      with_admin_lock(fn ->
+        user = Repo.reload!(user, skip_tenant_check: true)
 
-      if would_orphan_admins?(user) do
-        Repo.rollback(:last_admin)
-      else
-        case user
-             |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
-             |> Repo.update(skip_tenant_check: true) do
-          {:ok, u} -> u
-          {:error, cs} -> Repo.rollback(cs)
+        if would_orphan_admins?(user) do
+          Repo.rollback(:last_admin)
+        else
+          case user
+               |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
+               |> Repo.update(skip_tenant_check: true) do
+            {:ok, u} -> u
+            {:error, cs} -> Repo.rollback(cs)
+          end
         end
-      end
-    end)
+      end)
+
+    disconnect_on_commit(result)
   end
 
   @doc "Clears suspension."
@@ -633,21 +664,33 @@ defmodule Engram.Accounts do
 
   @doc "Soft-deletes a user. Refuses the last active admin."
   def soft_delete_user(%User{} = user) do
-    with_admin_lock(fn ->
-      user = Repo.reload!(user, skip_tenant_check: true)
+    result =
+      with_admin_lock(fn ->
+        user = Repo.reload!(user, skip_tenant_check: true)
 
-      if would_orphan_admins?(user) do
-        Repo.rollback(:last_admin)
-      else
-        case user
-             |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
-             |> Repo.update(skip_tenant_check: true) do
-          {:ok, u} -> u
-          {:error, cs} -> Repo.rollback(cs)
+        if would_orphan_admins?(user) do
+          Repo.rollback(:last_admin)
+        else
+          case user
+               |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+               |> Repo.update(skip_tenant_check: true) do
+            {:ok, u} -> u
+            {:error, cs} -> Repo.rollback(cs)
+          end
         end
-      end
-    end)
+      end)
+
+    disconnect_on_commit(result)
   end
+
+  # Fire SessionInvalidator only after the admin-lock transaction COMMITS so
+  # a rolled-back suspend/soft-delete does not spuriously kick live sockets.
+  defp disconnect_on_commit({:ok, %User{id: user_id}} = ok) do
+    SessionInvalidator.disconnect_user(user_id)
+    ok
+  end
+
+  defp disconnect_on_commit(other), do: other
 
   # Serializes admin-count-sensitive ops (set_role/suspend/soft_delete) against
   # each other via the same advisory lock that gates bootstrap. Without it,
