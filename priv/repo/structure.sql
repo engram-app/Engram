@@ -11,6 +11,7 @@ SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
@@ -231,7 +232,9 @@ CREATE TABLE public.device_authorizations (
     vault_id bigint,
     status character varying(255) DEFAULT 'pending'::character varying NOT NULL,
     expires_at timestamp(0) without time zone NOT NULL,
-    inserted_at timestamp(0) without time zone NOT NULL
+    inserted_at timestamp(0) without time zone NOT NULL,
+    vault_name character varying(255),
+    viewer_user_id bigint
 );
 
 
@@ -299,7 +302,7 @@ CREATE TABLE public.email_suppressions (
     email character varying(255) NOT NULL,
     reason character varying(255) NOT NULL,
     inserted_at timestamp without time zone NOT NULL,
-    CONSTRAINT reason_must_be_valid CHECK (((reason)::text = ANY ((ARRAY['bounced'::character varying, 'complained'::character varying])::text[])))
+    CONSTRAINT reason_must_be_valid CHECK (((reason)::text = ANY (ARRAY[('bounced'::character varying)::text, ('complained'::character varying)::text])))
 );
 
 
@@ -397,20 +400,21 @@ CREATE TABLE public.notes (
     updated_at timestamp without time zone NOT NULL,
     embed_hash text,
     vault_id bigint NOT NULL,
-    content_ciphertext bytea NOT NULL,
-    content_nonce bytea NOT NULL,
-    title_ciphertext bytea NOT NULL,
-    title_nonce bytea NOT NULL,
-    tags_ciphertext bytea NOT NULL,
-    tags_nonce bytea NOT NULL,
-    path_ciphertext bytea NOT NULL,
-    path_nonce bytea NOT NULL,
-    path_hmac bytea NOT NULL,
+    content_ciphertext bytea,
+    content_nonce bytea,
+    title_ciphertext bytea,
+    title_nonce bytea,
+    tags_ciphertext bytea,
+    tags_nonce bytea,
+    path_ciphertext bytea,
+    path_nonce bytea,
+    path_hmac bytea,
     folder_ciphertext bytea NOT NULL,
     folder_nonce bytea NOT NULL,
     folder_hmac bytea NOT NULL,
     tags_hmac bytea[] DEFAULT ARRAY[]::bytea[],
-    dek_version integer DEFAULT 1 NOT NULL
+    dek_version integer DEFAULT 1 NOT NULL,
+    kind text DEFAULT 'note'::text NOT NULL
 );
 
 ALTER TABLE ONLY public.notes FORCE ROW LEVEL SECURITY;
@@ -498,7 +502,7 @@ CREATE TABLE public.oauth_clients (
     logo_uri text,
     tos_uri text,
     policy_uri text,
-    CONSTRAINT oauth_clients_kind_check CHECK (((kind)::text = ANY ((ARRAY['mcp'::character varying, 'obsidian'::character varying])::text[])))
+    CONSTRAINT oauth_clients_kind_check CHECK (((kind)::text = ANY (ARRAY[('mcp'::character varying)::text, ('obsidian'::character varying)::text])))
 );
 
 
@@ -611,6 +615,40 @@ CREATE UNLOGGED TABLE public.oban_peers (
 
 
 --
+-- Name: onboarding_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.onboarding_actions (
+    id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    action character varying(255) NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    inserted_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+ALTER TABLE ONLY public.onboarding_actions FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: onboarding_actions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.onboarding_actions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: onboarding_actions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.onboarding_actions_id_seq OWNED BY public.onboarding_actions.id;
+
+
+--
 -- Name: password_reset_tokens; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -703,6 +741,16 @@ CREATE SEQUENCE public.refresh_tokens_id_seq
 --
 
 ALTER SEQUENCE public.refresh_tokens_id_seq OWNED BY public.refresh_tokens.id;
+
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_migrations (
+    version bigint NOT NULL,
+    inserted_at timestamp(0) without time zone
+);
 
 
 --
@@ -799,7 +847,7 @@ CREATE TABLE public.terms_versions (
     effective_date date,
     changelog text,
     inserted_at timestamp without time zone NOT NULL,
-    CONSTRAINT document_must_be_valid CHECK (((document)::text = ANY ((ARRAY['terms_of_service'::character varying, 'privacy_policy'::character varying])::text[])))
+    CONSTRAINT document_must_be_valid CHECK (((document)::text = ANY (ARRAY[('terms_of_service'::character varying)::text, ('privacy_policy'::character varying)::text])))
 );
 
 
@@ -936,7 +984,8 @@ CREATE TABLE public.users (
     deleted_at timestamp without time zone,
     inactivity_warning_60_at timestamp without time zone,
     inactivity_warning_80_at timestamp without time zone,
-    suspended_at timestamp with time zone
+    suspended_at timestamp with time zone,
+    onboarding_profile jsonb DEFAULT '{}'::jsonb NOT NULL
 );
 
 
@@ -1076,6 +1125,13 @@ ALTER TABLE ONLY public.oauth_refresh_tokens ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY public.oban_jobs ALTER COLUMN id SET DEFAULT nextval('public.oban_jobs_id_seq'::regclass);
+
+
+--
+-- Name: onboarding_actions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.onboarding_actions ALTER COLUMN id SET DEFAULT nextval('public.onboarding_actions_id_seq'::regclass);
 
 
 --
@@ -1238,6 +1294,14 @@ ALTER TABLE public.oban_jobs
 
 
 --
+-- Name: notes notes_kind_shape_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.notes
+    ADD CONSTRAINT notes_kind_shape_check CHECK ((((kind = 'note'::text) AND (path_hmac IS NOT NULL) AND (content_ciphertext IS NOT NULL) AND (title_ciphertext IS NOT NULL) AND (tags_ciphertext IS NOT NULL) AND (folder_hmac IS NOT NULL)) OR ((kind = 'folder'::text) AND (path_hmac IS NULL) AND (content_ciphertext IS NULL) AND (title_ciphertext IS NULL) AND (tags_ciphertext IS NULL) AND (folder_hmac IS NOT NULL)))) NOT VALID;
+
+
+--
 -- Name: notes notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1286,6 +1350,14 @@ ALTER TABLE ONLY public.oban_peers
 
 
 --
+-- Name: onboarding_actions onboarding_actions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.onboarding_actions
+    ADD CONSTRAINT onboarding_actions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: password_reset_tokens password_reset_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1307,6 +1379,14 @@ ALTER TABLE ONLY public.plans
 
 ALTER TABLE ONLY public.refresh_tokens
     ADD CONSTRAINT refresh_tokens_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
 
 
 --
@@ -1445,6 +1525,13 @@ CREATE INDEX device_authorizations_expires_at_index ON public.device_authorizati
 
 
 --
+-- Name: device_authorizations_pending_user_code_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX device_authorizations_pending_user_code_index ON public.device_authorizations USING btree (user_code) WHERE ((status)::text = 'pending'::text);
+
+
+--
 -- Name: device_authorizations_user_code_index; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1463,6 +1550,13 @@ CREATE INDEX device_authorizations_user_id_index ON public.device_authorizations
 --
 
 CREATE INDEX device_authorizations_vault_id_index ON public.device_authorizations USING btree (vault_id);
+
+
+--
+-- Name: device_authorizations_viewer_user_id_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX device_authorizations_viewer_user_id_index ON public.device_authorizations USING btree (viewer_user_id);
 
 
 --
@@ -1546,7 +1640,7 @@ CREATE INDEX idx_client_logs_user_level ON public.client_logs USING btree (user_
 -- Name: idx_notes_embed_pending; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_notes_embed_pending ON public.notes USING btree (embed_hash) WHERE ((deleted_at IS NULL) AND ((embed_hash IS NULL) OR (embed_hash <> content_hash)));
+CREATE INDEX idx_notes_embed_pending ON public.notes USING btree (embed_hash) WHERE ((deleted_at IS NULL) AND (kind = 'note'::text) AND ((embed_hash IS NULL) OR (embed_hash <> content_hash)));
 
 
 --
@@ -1603,6 +1697,20 @@ CREATE INDEX notes_user_id_vault_id_folder_hmac_index ON public.notes USING btre
 --
 
 CREATE UNIQUE INDEX notes_user_id_vault_id_path_hmac_index ON public.notes USING btree (user_id, vault_id, path_hmac) WHERE (deleted_at IS NULL);
+
+
+--
+-- Name: notes_user_vault_folder_marker; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX notes_user_vault_folder_marker ON public.notes USING btree (user_id, vault_id, folder_hmac) WHERE ((deleted_at IS NULL) AND (kind = 'folder'::text));
+
+
+--
+-- Name: notes_user_vault_path_v2; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX notes_user_vault_path_v2 ON public.notes USING btree (user_id, vault_id, path_hmac) WHERE ((deleted_at IS NULL) AND (kind = 'note'::text));
 
 
 --
@@ -1715,6 +1823,13 @@ CREATE INDEX oban_jobs_state_discarded_at_index ON public.oban_jobs USING btree 
 --
 
 CREATE INDEX oban_jobs_state_queue_priority_scheduled_at_id_index ON public.oban_jobs USING btree (state, queue, priority, scheduled_at, id);
+
+
+--
+-- Name: onboarding_actions_user_id_action_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX onboarding_actions_user_id_action_index ON public.onboarding_actions USING btree (user_id, action);
 
 
 --
@@ -2003,6 +2118,14 @@ ALTER TABLE ONLY public.device_authorizations
 
 
 --
+-- Name: device_authorizations device_authorizations_viewer_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_authorizations
+    ADD CONSTRAINT device_authorizations_viewer_user_id_fkey FOREIGN KEY (viewer_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: device_refresh_tokens device_refresh_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2072,6 +2195,14 @@ ALTER TABLE ONLY public.oauth_refresh_tokens
 
 ALTER TABLE ONLY public.oauth_refresh_tokens
     ADD CONSTRAINT oauth_refresh_tokens_vault_id_fkey FOREIGN KEY (vault_id) REFERENCES public.vaults(id) ON DELETE CASCADE;
+
+
+--
+-- Name: onboarding_actions onboarding_actions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.onboarding_actions
+    ADD CONSTRAINT onboarding_actions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
@@ -2171,6 +2302,12 @@ ALTER TABLE public.chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: onboarding_actions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.onboarding_actions ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: api_keys tenant_isolation_api_keys; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -2196,6 +2333,13 @@ CREATE POLICY tenant_isolation_chunks ON public.chunks USING (((user_id)::text =
 --
 
 CREATE POLICY tenant_isolation_notes ON public.notes USING (((user_id)::text = ( SELECT current_setting('app.current_tenant'::text, true) AS current_setting))) WITH CHECK (((user_id)::text = ( SELECT current_setting('app.current_tenant'::text, true) AS current_setting)));
+
+
+--
+-- Name: onboarding_actions tenant_isolation_onboarding_actions; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY tenant_isolation_onboarding_actions ON public.onboarding_actions USING (((user_id)::text = ( SELECT current_setting('app.current_tenant'::text, true) AS current_setting))) WITH CHECK (((user_id)::text = ( SELECT current_setting('app.current_tenant'::text, true) AS current_setting)));
 
 
 --
@@ -2225,383 +2369,43 @@ ALTER TABLE public.user_agreements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vaults ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: SCHEMA public; Type: ACL; Schema: -; Owner: -
+-- PostgreSQL database dump complete
 --
 
-GRANT USAGE ON SCHEMA public TO engram_app;
 
-
---
--- Name: TABLE api_key_vaults; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.api_key_vaults TO engram_app;
-
-
---
--- Name: TABLE api_keys; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.api_keys TO engram_app;
-
-
---
--- Name: SEQUENCE api_keys_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.api_keys_id_seq TO engram_app;
-
-
---
--- Name: TABLE attachments; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.attachments TO engram_app;
-
-
---
--- Name: SEQUENCE attachments_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.attachments_id_seq TO engram_app;
-
-
---
--- Name: TABLE chunks; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.chunks TO engram_app;
-
-
---
--- Name: SEQUENCE chunks_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.chunks_id_seq TO engram_app;
-
-
---
--- Name: TABLE client_logs; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.client_logs TO engram_app;
-
-
---
--- Name: SEQUENCE client_logs_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.client_logs_id_seq TO engram_app;
-
-
---
--- Name: TABLE client_origin_stats; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.client_origin_stats TO engram_app;
-
-
---
--- Name: TABLE device_authorizations; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.device_authorizations TO engram_app;
-
-
---
--- Name: SEQUENCE device_authorizations_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.device_authorizations_id_seq TO engram_app;
-
-
---
--- Name: TABLE device_refresh_tokens; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.device_refresh_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE device_refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.device_refresh_tokens_id_seq TO engram_app;
-
-
---
--- Name: TABLE email_suppressions; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.email_suppressions TO engram_app;
-
-
---
--- Name: SEQUENCE email_suppressions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.email_suppressions_id_seq TO engram_app;
-
-
---
--- Name: TABLE instance_settings; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.instance_settings TO engram_app;
-
-
---
--- Name: SEQUENCE instance_settings_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.instance_settings_id_seq TO engram_app;
-
-
---
--- Name: TABLE invites; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.invites TO engram_app;
-
-
---
--- Name: SEQUENCE invites_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.invites_id_seq TO engram_app;
-
-
---
--- Name: TABLE notes; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.notes TO engram_app;
-
-
---
--- Name: SEQUENCE notes_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.notes_id_seq TO engram_app;
-
-
---
--- Name: TABLE oauth_authorization_codes; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_authorization_codes TO engram_app;
-
-
---
--- Name: SEQUENCE oauth_authorization_codes_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.oauth_authorization_codes_id_seq TO engram_app;
-
-
---
--- Name: TABLE oauth_clients; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_clients TO engram_app;
-
-
 --
--- Name: TABLE oauth_refresh_tokens; Type: ACL; Schema: public; Owner: -
+-- PostgreSQL database dump
 --
 
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_refresh_tokens TO engram_app;
 
+-- Dumped from database version 16.13
+-- Dumped by pg_dump version 16.13
 
---
--- Name: SEQUENCE oauth_refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.oauth_refresh_tokens_id_seq TO engram_app;
-
-
---
--- Name: TABLE oban_jobs; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oban_jobs TO engram_app;
-
-
---
--- Name: SEQUENCE oban_jobs_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.oban_jobs_id_seq TO engram_app;
-
-
---
--- Name: TABLE oban_peers; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oban_peers TO engram_app;
-
-
---
--- Name: TABLE password_reset_tokens; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.password_reset_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE password_reset_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.password_reset_tokens_id_seq TO engram_app;
-
-
---
--- Name: TABLE plans; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.plans TO engram_app;
-
-
---
--- Name: SEQUENCE plans_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.plans_id_seq TO engram_app;
-
-
---
--- Name: TABLE refresh_tokens; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.refresh_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.refresh_tokens_id_seq TO engram_app;
-
-
---
--- Name: TABLE storage_objects; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.storage_objects TO engram_app;
-
-
---
--- Name: TABLE subscriptions; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.subscriptions TO engram_app;
-
-
---
--- Name: SEQUENCE subscriptions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.subscriptions_id_seq TO engram_app;
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
 
-
---
--- Name: TABLE system_canaries; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.system_canaries TO engram_app;
-
-
---
--- Name: SEQUENCE system_canaries_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.system_canaries_id_seq TO engram_app;
-
-
---
--- Name: TABLE terms_versions; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.terms_versions TO engram_app;
-
-
---
--- Name: SEQUENCE terms_versions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.terms_versions_id_seq TO engram_app;
-
-
---
--- Name: TABLE usage_meters; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.usage_meters TO engram_app;
-
-
---
--- Name: TABLE user_agreements; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_agreements TO engram_app;
-
-
---
--- Name: SEQUENCE user_agreements_id_seq; Type: ACL; Schema: public; Owner: -
 --
-
-GRANT SELECT,USAGE ON SEQUENCE public.user_agreements_id_seq TO engram_app;
-
-
---
--- Name: TABLE user_limit_overrides; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_limit_overrides TO engram_app;
-
-
---
--- Name: SEQUENCE user_limit_overrides_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.user_limit_overrides_id_seq TO engram_app;
-
-
---
--- Name: TABLE users; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.users TO engram_app;
-
-
---
--- Name: SEQUENCE users_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.users_id_seq TO engram_app;
-
-
---
--- Name: TABLE vaults; Type: ACL; Schema: public; Owner: -
+-- Data for Name: schema_migrations; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.vaults TO engram_app;
+COPY public.schema_migrations (version, inserted_at) FROM stdin;
+20260602000000	2026-06-05 00:07:34
+20260603000000	2026-06-05 00:07:35
+20260603000010	2026-06-05 00:07:35
+20260604000000	2026-06-05 00:07:35
+20260604010000	2026-06-05 00:07:35
+20260604020000	2026-06-05 00:07:35
+20260605000353	2026-06-05 00:07:35
+\.
 
-
---
--- Name: SEQUENCE vaults_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.vaults_id_seq TO engram_app;
-
-
---
--- DEFAULT PRIVILEGES are wired by Engram.Release.prepare_database/0
--- (CURRENT_USER-bound) instead of being baked into the dump. The
--- prior `ALTER DEFAULT PRIVILEGES FOR ROLE engram` form assumed the
--- dev superuser was named `engram`, which breaks on RDS where the
--- master is `engram_admin`. Keep this dump role-name-portable.
---
 
 --
 -- PostgreSQL database dump complete
