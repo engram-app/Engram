@@ -50,7 +50,7 @@ defmodule EngramWeb.FoldersController do
       {:error, reason} ->
         conn
         |> put_status(500)
-        |> json(%{error: inspect(reason)})
+        |> json(%{error: format_error(reason)})
     end
   end
 
@@ -61,7 +61,7 @@ defmodule EngramWeb.FoldersController do
   def delete(conn, %{"path" => path_segments}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    folder = path_segments |> Enum.map(&URI.decode/1) |> Enum.join("/")
+    folder = Enum.map_join(path_segments, "/", &URI.decode/1)
 
     # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
     case Notes.delete_folder_marker(user, vault, folder) do
@@ -81,6 +81,12 @@ defmodule EngramWeb.FoldersController do
       json(conn, %{renamed: true, old_folder: old_folder, new_folder: new_folder, count: count})
     end
   end
+
+  # Low-cardinality error formatter for JSON responses; avoids inspect/1 leaking term shape.
+  defp format_error(%{__exception__: true} = e), do: Exception.message(e)
+  defp format_error(atom) when is_atom(atom), do: Atom.to_string(atom)
+  defp format_error(binary) when is_binary(binary), do: binary
+  defp format_error(_), do: "internal_error"
 
   defp note_summary(note) do
     %{
