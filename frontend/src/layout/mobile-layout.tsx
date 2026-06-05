@@ -1,6 +1,6 @@
 import { Menu, PanelRightOpen, X } from 'lucide-react'
-import { type MouseEvent, useState } from 'react'
-import { Link, NavLink, Outlet } from 'react-router'
+import { type MouseEvent, useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -46,6 +46,15 @@ export default function MobileLayout() {
   const { content: rightContent } = useRightSidebar()
   const [leftOpen, setLeftOpen] = useState(false)
   const [rightOpen, setRightOpen] = useState(false)
+  const { pathname } = useLocation()
+
+  // Programmatic navigations (e.g. clicking "New note" in FolderActions) don't
+  // trigger closeOnLinkClick. Close both drawers on any route change so the
+  // editor isn't hidden behind a still-open sheet on small screens.
+  useEffect(() => {
+    setLeftOpen(false)
+    setRightOpen(false)
+  }, [pathname])
 
   return (
     <section className="flex h-dvh flex-col bg-background text-foreground">
