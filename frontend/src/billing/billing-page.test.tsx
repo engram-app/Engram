@@ -126,6 +126,75 @@ describe('BillingPage — Paddle effect cleanup', () => {
     ).not.toThrow()
   })
 
+  it('closes Paddle overlay on CHECKOUT_COMPLETED so activation overlay is visible', async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status')
+        return {
+          tier: 'free',
+          active: false,
+          trial_days_remaining: 0,
+          subscription: null,
+          caps: {},
+        }
+      if (url === '/billing/config')
+        return {
+          client_token: 'tok',
+          environment: 'sandbox',
+          price_ids: {
+            starter: { monthly: 'p1', annual: 'p2' },
+            pro: { monthly: 'p3', annual: 'p4' },
+          },
+          customer_email: 'u@example.com',
+          custom_data: { user_id: '1' },
+          vaults_cap: null,
+        }
+      if (url === '/me') return { user: ME }
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    const closeMock = vi.fn()
+    let captured: ((event: { name: string; data?: unknown }) => void) | undefined
+    initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+      captured = opts.eventCallback
+      return { Checkout: { open: vi.fn(), close: closeMock } }
+    })
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AuthContext.Provider value={authAdapter}>
+          <ThemeProvider>
+            <MemoryRouter>
+              <BillingPage onActivated={() => {}} />
+            </MemoryRouter>
+          </ThemeProvider>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(captured).toBeDefined())
+    // Let the initializePaddle .then() resolve so the paddle instance ref is
+    // populated before the event callback fires.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'txn_1' } })
+      await Promise.resolve()
+    })
+    // PAYMENT_INITIATED is still mid-checkout (3DS, etc) — must NOT close
+    expect(closeMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      captured!({ name: 'checkout.completed', data: { transaction_id: 'txn_1' } })
+      await Promise.resolve()
+    })
+
+    expect(closeMock).toHaveBeenCalledTimes(1)
+  })
+
   it('invalidates billing/status on subscription_activated channel event (settings flow)', async () => {
     let billingActive = false
     get.mockImplementation(async (url: string) => {
