@@ -126,7 +126,9 @@ describe('BillingPage — Paddle effect cleanup', () => {
     ).not.toThrow()
   })
 
-  it('closes Paddle overlay on CHECKOUT_COMPLETED so activation overlay is visible', async () => {
+  // Mocks for the inline-checkout flow tests below. Returns the same shapes
+  // as the other tests; factored so the new tests stay short.
+  function mockBillingApi() {
     get.mockImplementation(async (url: string) => {
       if (url === '/billing/status')
         return {
@@ -151,48 +153,143 @@ describe('BillingPage — Paddle effect cleanup', () => {
       if (url === '/me') return { user: ME }
       throw new Error(`unexpected GET ${url}`)
     })
+  }
 
-    const closeMock = vi.fn()
+  function renderBilling({ inline }: { inline: boolean }) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const utils = render(
+      <QueryClientProvider client={qc}>
+        <AuthContext.Provider value={authAdapter}>
+          <ThemeProvider>
+            <MemoryRouter>
+              {inline ? <BillingPage onActivated={() => {}} /> : <BillingPage />}
+            </MemoryRouter>
+          </ThemeProvider>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+    return { qc, ...utils }
+  }
+
+  it('onboarding (inline): initializes Paddle with displayMode=inline and frameTarget', async () => {
+    mockBillingApi()
+    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: vi.fn(), close: vi.fn() } }))
+
+    renderBilling({ inline: true })
+
+    await waitFor(() => expect(initializePaddleMock).toHaveBeenCalled())
+    const settings = initializePaddleMock.mock.calls[0]![0].checkout.settings
+    expect(settings.displayMode).toBe('inline')
+    expect(settings.frameTarget).toBe('paddle-checkout')
+  })
+
+  it('settings (overlay): initializes Paddle with displayMode=overlay', async () => {
+    mockBillingApi()
+    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: vi.fn(), close: vi.fn() } }))
+
+    renderBilling({ inline: false })
+
+    await waitFor(() => expect(initializePaddleMock).toHaveBeenCalled())
+    const settings = initializePaddleMock.mock.calls[0]![0].checkout.settings
+    expect(settings.displayMode).toBe('overlay')
+  })
+
+  it('onboarding (inline): clicking Start trial swaps plan cards for inline mount target', async () => {
+    mockBillingApi()
+    const openMock = vi.fn()
+    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: openMock, close: vi.fn() } }))
+
+    const { container, queryByText } = renderBilling({ inline: true })
+
+    // Wait for the Paddle instance to land and plan cards to render
+    await waitFor(() => expect(queryByText('Starter')).toBeInTheDocument())
+
+    const startButtons = container.querySelectorAll('button')
+    const startBtn = Array.from(startButtons).find((b) => b.textContent === 'Start free trial')
+    expect(startBtn).toBeDefined()
+
+    await act(async () => {
+      startBtn!.click()
+      await Promise.resolve()
+    })
+
+    // Plan cards hidden, mount target rendered, Paddle.Checkout.open invoked
+    expect(container.querySelector('.paddle-checkout')).not.toBeNull()
+    expect(queryByText('Starter')).not.toBeInTheDocument()
+    expect(openMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('onboarding (inline): CHECKOUT_PAYMENT_FAILED restores the plan picker', async () => {
+    mockBillingApi()
     let captured: ((event: { name: string; data?: unknown }) => void) | undefined
     initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
       captured = opts.eventCallback
-      return { Checkout: { open: vi.fn(), close: closeMock } }
+      return { Checkout: { open: vi.fn(), close: vi.fn() } }
     })
 
+    const { container, queryByText } = renderBilling({ inline: true })
+
+    await waitFor(() => expect(queryByText('Starter')).toBeInTheDocument())
+    const startBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Start free trial',
+    )!
+    await act(async () => {
+      startBtn.click()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.paddle-checkout')).not.toBeNull()
+
+    await act(async () => {
+      captured!({ name: 'checkout.payment.failed', data: { transaction_id: 'txn_x' } })
+      await Promise.resolve()
+    })
+
+    // Mount target gone, plan cards back
+    expect(container.querySelector('.paddle-checkout')).toBeNull()
+    expect(queryByText('Starter')).toBeInTheDocument()
+  })
+
+  it('onboarding (inline): closes Paddle and fires onActivated when subscription_activated push arrives', async () => {
+    mockBillingApi()
+    const closeMock = vi.fn()
+    initializePaddleMock.mockImplementation(async () => ({
+      Checkout: { open: vi.fn(), close: closeMock },
+    }))
+
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    qc.setQueryData(['onboarding', 'status'], { next_step: 'tools' })
+    const onActivated = vi.fn()
     render(
       <QueryClientProvider client={qc}>
         <AuthContext.Provider value={authAdapter}>
           <ThemeProvider>
             <MemoryRouter>
-              <BillingPage onActivated={() => {}} />
+              <BillingPage onActivated={onActivated} />
             </MemoryRouter>
           </ThemeProvider>
         </AuthContext.Provider>
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(captured).toBeDefined())
-    // Let the initializePaddle .then() resolve so the paddle instance ref is
-    // populated before the event callback fires.
+    await waitFor(() => expect(channelHandlers['subscription_activated']).toBeDefined())
+    // Wait for paddle instance to land
     await act(async () => {
       await Promise.resolve()
       await Promise.resolve()
     })
 
     await act(async () => {
-      captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'txn_1' } })
-      await Promise.resolve()
-    })
-    // PAYMENT_INITIATED is still mid-checkout (3DS, etc) — must NOT close
-    expect(closeMock).not.toHaveBeenCalled()
-
-    await act(async () => {
-      captured!({ name: 'checkout.completed', data: { transaction_id: 'txn_1' } })
+      channelHandlers['subscription_activated']!({
+        tier: 'starter',
+        status: 'trialing',
+        subscription_id: 'sub_1',
+      })
       await Promise.resolve()
     })
 
-    expect(closeMock).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onActivated).toHaveBeenCalled())
+    expect(closeMock).toHaveBeenCalled()
   })
 
   it('invalidates billing/status on subscription_activated channel event (settings flow)', async () => {
@@ -231,7 +328,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
       throw new Error(`unexpected GET ${url}`)
     })
 
-    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: vi.fn() } }))
+    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: vi.fn(), close: vi.fn() } }))
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')

@@ -50,7 +50,7 @@ vi.mock('@paddle/paddle-js', () => ({
   initializePaddle: vi.fn(async (opts: { eventCallback?: typeof capturedEventCallback }) => {
     capturedEventCallback = opts.eventCallback
     return {
-      Checkout: { open: vi.fn() },
+      Checkout: { open: vi.fn(), close: vi.fn() },
     }
   }),
   CheckoutEventNames: {
@@ -320,7 +320,7 @@ describe('OnboardBillingPage — push activation', () => {
     expect(toolsPageMounts).toBe(1)
   })
 
-  it('hides overlay and re-enables plan picker on CHECKOUT_PAYMENT_FAILED', async () => {
+  it('returns from inline Paddle frame back to plan picker on CHECKOUT_PAYMENT_FAILED', async () => {
     get.mockImplementation(async (url: string) => {
       if (url === '/billing/status') return BILLING_INACTIVE
       if (url === '/billing/config') return BILLING_CONFIG
@@ -329,38 +329,26 @@ describe('OnboardBillingPage — push activation', () => {
       throw new Error(`unexpected GET ${url}`)
     })
 
-    renderOnboardBilling()
+    const { container } = renderOnboardBilling()
 
     await waitFor(() =>
       expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0),
     )
     await waitFor(() => expect(capturedEventCallback).toBeDefined())
 
-    // Step 1: payment initiated — overlay should show.
+    // Click "Start free trial" — inline mount target replaces plan cards.
     await act(async () => {
-      capturedEventCallback!({
-        name: 'checkout.payment.initiated',
-        data: { transaction_id: 'txn_fail_77' },
-      })
+      screen.getAllByRole('button', { name: /start free trial/i })[0]!.click()
+      await Promise.resolve()
     })
-    await waitFor(() =>
-      expect(
-        screen.getByRole('heading', { name: /Activating your subscription/i }),
-      ).toBeInTheDocument(),
-    )
+    expect(container.querySelector('.paddle-checkout')).not.toBeNull()
 
-    // Step 2: payment failed — overlay should hide.
+    // Payment fails — plan picker comes back.
     await act(async () => {
       capturedEventCallback!({ name: 'checkout.payment.failed' })
     })
 
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('heading', { name: /Activating your subscription/i }),
-      ).not.toBeInTheDocument(),
-    )
-
-    const trialButtons = screen.getAllByRole('button', { name: /start free trial/i })
-    expect(trialButtons.length).toBeGreaterThan(0)
+    await waitFor(() => expect(container.querySelector('.paddle-checkout')).toBeNull())
+    expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0)
   })
 })
