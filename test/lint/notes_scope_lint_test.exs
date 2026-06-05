@@ -1,14 +1,14 @@
 defmodule Engram.NotesScopeLintTest do
   @moduledoc """
-  Grep-style lint: every `from(n in Note, ...)` in `lib/` must either
-  be paired with a `kind == "note"` predicate or live in an
-  explicitly-allowlisted file (kind-aware sites that intentionally
-  scan all kinds: list_folders_with_counts, list_explicit_folders,
-  do_rename_folder, find_folder_marker).
+  Grep-style lint: every `from(<binding> in Note, ...)` (or the fully-qualified
+  `Engram.Notes.Note` form) anywhere under `lib/` must either be paired with a
+  `<binding>.kind == "note"` predicate or live in an explicitly-allowlisted
+  file. The walker scans all of `lib/` (not just `lib/engram/`) so that
+  controllers, channels, mix tasks, and any other layer are covered.
   """
   use ExUnit.Case, async: true
 
-  @lib_dir Path.expand("../../lib/engram", __DIR__)
+  @lib_dir Path.expand("../../lib", __DIR__)
 
   # Files allowed to query notes without `kind == "note"`.
   #
@@ -18,22 +18,27 @@ defmodule Engram.NotesScopeLintTest do
   @allowlist [
     # Folder-aware CRUD (list_folders_with_counts, list_explicit_folders,
     # do_rename_folder, find_folder_marker) intentionally scans all kinds.
-    "notes.ex",
-    # AAD rebind is an encryption-layer maintenance pass over every row that
-    # holds encrypted fields — markers carry encrypted folder/path/title too
-    # and must be rebound, so kind is irrelevant.
-    "crypto/aad_rebind.ex",
+    "engram/notes.ex",
+    # AAD rebind operates only on legacy rows (`dek_version == legacy_version`).
+    # Folder markers are created at the current dek_version, so they cannot
+    # match the predicate and are excluded structurally — no kind filter needed.
+    "engram/crypto/aad_rebind.ex",
+    # Per-user DEK rotation (T3.7) MUST re-wrap every encrypted column on every
+    # row that belongs to the user — including folder markers' `folder_*`
+    # ciphertext. Restricting to `kind == "note"` would skip markers and leave
+    # them wrapped under the old DEK, breaking rotation correctness.
+    "engram/crypto/user_dek_rotation.ex",
     # Content-hash HMAC backfill is gated by `not is_nil(content_hash)`, which
     # already excludes markers (no content) implicitly; the worker treats the
     # row purely as a cryptographic blob.
-    "workers/backfill_content_hash_hmac.ex",
+    "engram/workers/backfill_content_hash_hmac.ex",
     # `stamp_embed_hash` is a point-update by primary key on a Note already
     # selected upstream by the embed pipeline (which excludes markers via
     # notes_only/0); the query itself is kind-agnostic by design.
-    "workers/embed_note.ex"
+    "engram/workers/embed_note.ex"
   ]
 
-  test "every from(n in Note, ...) in lib/ filters by kind or is allowlisted" do
+  test "every from(_ in Note, ...) in lib/ filters by kind or is allowlisted" do
     offenders =
       walk(@lib_dir)
       |> Enum.flat_map(&scan_file/1)
@@ -61,11 +66,17 @@ defmodule Engram.NotesScopeLintTest do
   defp scan_file(path) do
     content = File.read!(path)
 
-    Regex.scan(~r/from\(n in Note,.{1,500}/s, content)
-    |> Enum.map(fn [block] -> {Path.relative_to(path, @lib_dir), block} end)
-    |> Enum.reject(fn {_path, block} ->
-      block =~ ~r/n\.kind\s*==\s*"note"/
+    # Match both `from(n in Note, ...)` and `from(n in Engram.Notes.Note, ...)`.
+    # Capture the binding name so we can require `<binding>.kind == "note"`
+    # inside the same `from(...)` block (not some unrelated nearby code).
+    Regex.scan(~r/from\((\w+)\s+in\s+(?:Engram\.Notes\.)?Note,.{1,500}/s, content)
+    |> Enum.map(fn [block, binding] ->
+      {Path.relative_to(path, @lib_dir), block, binding}
     end)
+    |> Enum.reject(fn {_path, block, binding} ->
+      Regex.match?(~r/#{Regex.escape(binding)}\.kind\s*==\s*"note"/, block)
+    end)
+    |> Enum.map(fn {path, block, _binding} -> {path, block} end)
   end
 
   defp format(offenders) do

@@ -565,7 +565,9 @@ defmodule Engram.Notes do
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+                n.kind == "note",
             order_by: [asc: n.updated_at]
           )
         )

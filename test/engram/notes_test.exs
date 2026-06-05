@@ -367,6 +367,26 @@ defmodule Engram.NotesTest do
       assert changes == []
     end
 
+    test "omits folder marker rows (kind != 'note')", %{user: user, vault: vault} do
+      # Markers carry only folder ciphertext — no path/content/title — so they
+      # cannot be decrypted as notes. Spec invariant: channels broadcast notes
+      # only; markers propagate via folder-listing endpoints, not change polls.
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "EmptyFolder")
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Real.md",
+          "content" => "# real",
+          "mtime" => 1_000.0
+        })
+
+      past = DateTime.add(note.updated_at, -60, :second)
+      {:ok, changes} = Notes.list_changes(user, vault, past)
+
+      paths = Enum.map(changes, & &1.path)
+      assert paths == ["Real.md"]
+    end
+
     test "includes changes when since equals updated_at (>= not >)", %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{

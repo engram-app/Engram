@@ -275,7 +275,9 @@ defmodule Engram.Vaults do
   defp do_content_counts(user_id, ids) do
     note_counts =
       from(n in Engram.Notes.Note,
-        where: n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at),
+        where:
+          n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at) and
+            n.kind == "note",
         group_by: n.vault_id,
         select: {n.vault_id, count(n.id)}
       )

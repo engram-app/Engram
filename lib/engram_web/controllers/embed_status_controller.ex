@@ -12,7 +12,7 @@ defmodule EngramWeb.EmbedStatusController do
     {:ok, stats} =
       Repo.with_tenant(user.id, fn ->
         from(n in Note,
-          where: n.user_id == ^user.id and is_nil(n.deleted_at),
+          where: n.user_id == ^user.id and is_nil(n.deleted_at) and n.kind == "note",
           select: %{
             total: count(n.id),
             indexed: count(fragment("CASE WHEN ? = ? THEN 1 END", n.embed_hash, n.content_hash)),

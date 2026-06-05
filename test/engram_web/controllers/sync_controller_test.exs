@@ -3,11 +3,11 @@ defmodule EngramWeb.SyncControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   describe "GET /sync/manifest" do
@@ -77,6 +77,21 @@ defmodule EngramWeb.SyncControllerTest do
         |> get("/api/sync/manifest")
 
       assert json_response(conn, 401)
+    end
+
+    test "omits folder marker rows", %{conn: conn, user: user, vault: vault} do
+      # Folder markers have path_ciphertext=nil; if the manifest query doesn't
+      # filter by kind='note', `decrypt_path!` raises and the endpoint 500s.
+      {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "EmptyFolder")
+
+      post(conn, "/api/notes", %{path: "Real.md", content: "# real", mtime: 1_000.0})
+
+      conn2 = get(conn, "/api/sync/manifest")
+      body = json_response(conn2, 200)
+
+      assert body["total_notes"] == 1
+      paths = Enum.map(body["notes"], & &1["path"])
+      assert paths == ["Real.md"]
     end
   end
 end
