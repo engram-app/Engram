@@ -91,17 +91,28 @@ defmodule Engram.Notes.Note do
 
   defp validate_required_for_kind(changeset) do
     required_note = [
-      :user_id, :vault_id,
-      :path_hmac, :path_ciphertext, :path_nonce,
-      :folder_hmac, :folder_ciphertext, :folder_nonce,
-      :content_ciphertext, :content_nonce,
-      :title_ciphertext, :title_nonce,
-      :tags_ciphertext, :tags_nonce
+      :user_id,
+      :vault_id,
+      :path_hmac,
+      :path_ciphertext,
+      :path_nonce,
+      :folder_hmac,
+      :folder_ciphertext,
+      :folder_nonce,
+      :content_ciphertext,
+      :content_nonce,
+      :title_ciphertext,
+      :title_nonce,
+      :tags_ciphertext,
+      :tags_nonce
     ]
 
     required_folder = [
-      :user_id, :vault_id,
-      :folder_hmac, :folder_ciphertext, :folder_nonce
+      :user_id,
+      :vault_id,
+      :folder_hmac,
+      :folder_ciphertext,
+      :folder_nonce
     ]
 
     required =
