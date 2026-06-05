@@ -57,7 +57,7 @@ describe('DeviceLinkPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /verify/i }))
 
     fireEvent.click(await screen.findByRole('radio', { name: /personal/i }))
-    fireEvent.click(screen.getByRole('button', { name: /authorize/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^sync$/i }))
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith(
@@ -82,7 +82,7 @@ describe('DeviceLinkPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /verify/i }))
 
     fireEvent.click(await screen.findByRole('radio', { name: /work/i }))
-    fireEvent.click(screen.getByRole('button', { name: /authorize/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^sync$/i }))
 
     await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(9))
   })
