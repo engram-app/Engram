@@ -2737,37 +2737,42 @@ jobs:
           fi
 
       # Create + finalize a Sentry release tagged with the commit SHA.
-      # action-release uploads no source maps itself (the Vite plugin in
-      # the frontend stage of Dockerfile already pushed them under the
-      # same release name) — it just registers the release in Sentry's
-      # UI and associates commits, so the "Releases" view shows what's
-      # running and "Suspect Commits" can finger a likely-culprit commit
-      # on a new error.
-      - name: Sentry frontend release
+      # The Vite plugin in the frontend stage of Dockerfile already pushed
+      # source maps under the same release name; this step only registers
+      # the release in Sentry's UI and tags the deploy environment so
+      # "Releases" shows what's running and "Suspect Commits" can finger a
+      # likely-culprit commit on a new error.
+      #
+      # NB: was `getsentry/action-release@v3` until 2026-06-05. That
+      # composite action invokes `docker://ghcr.io/getsentry/action-release-image:<tag>`
+      # and upstream made the image package private — every historical tag
+      # returns 404 to anonymous pulls. GH pre-pulls all docker:// images
+      # at job init, before any step's `continue-on-error` applies, so the
+      # job dies in init and #449's strict-mode re-enable can't help.
+      # Inlining sentry-cli sidesteps the upstream dependency; same end
+      # state in Sentry (release + finalize + deploy env tag).
+      #
+      # continue-on-error: true — release-tagging is UI-only nicety, not a
+      # deploy gate. Keep soft until the upstream regression has signal of
+      # being stable; revisit per #444 close-out criteria.
+      - name: Sentry releases (frontend + backend)
         if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
-        uses: getsentry/action-release@v3
+        continue-on-error: true
         env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        with:
-          environment: prod
-          version: ${{ github.sha }}
-          finalize: true
-          sourcemaps: ''
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          FRONTEND_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          BACKEND_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
+          VERSION: ${{ github.sha }}
+        run: |
+          INSTALL_DIR="${RUNNER_TEMP}" curl -sL https://sentry.io/get-cli/ | bash
+          CLI="${RUNNER_TEMP}/sentry-cli"
 
-      - name: Sentry backend release
-        if: steps.version.outputs.image_exists != 'true' && steps.sentry-token.outputs.has_token == 'true'
-        uses: getsentry/action-release@v3
-        env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        with:
-          environment: prod
-          version: ${{ github.sha }}
-          finalize: true
-          sourcemaps: ''
+          # Single release name (commit SHA) associated with BOTH projects via
+          # repeated `-p`. finalize/deploys are release-scoped, run once.
+          "$CLI" releases new -p "$FRONTEND_PROJECT" -p "$BACKEND_PROJECT" "$VERSION"
+          "$CLI" releases finalize "$VERSION"
+          "$CLI" releases deploys "$VERSION" new -e prod
 
       # ── Infra bump (folded from former bump-infra-tfvars job) ─────────
       #
