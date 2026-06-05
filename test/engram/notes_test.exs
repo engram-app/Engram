@@ -1020,6 +1020,37 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "rename_folder/4 with markers" do
+    test "renames a folder marker alongside real notes", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Old")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _count} = Notes.rename_folder(user, vault, "Old", "New")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      assert "New" in names
+      refute "Old" in names
+    end
+
+    test "renames a marker-only folder", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "LonelyOld")
+
+      {:ok, _count} = Notes.rename_folder(user, vault, "LonelyOld", "LonelyNew")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      assert "LonelyNew" in names
+      refute "LonelyOld" in names
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # rename_note/4 path_hmac regression
   # ---------------------------------------------------------------------------

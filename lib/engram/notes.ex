@@ -829,7 +829,21 @@ defmodule Engram.Notes do
         )
       end)
 
-    decrypted = Enum.map(all_notes, &decrypt_or_raise!(&1, user))
+    # Marker rows have nil path_ciphertext, so the standard decrypt path
+    # short-circuits before unwrapping the folder envelope (gated on
+    # path_ciphertext != nil). Branch on kind so markers go through the
+    # dedicated hydrate path Task 4 introduced — they still carry a
+    # folder, so the prefix-match filter below catches them alongside
+    # real notes.
+    {:ok, dek} = Crypto.get_dek(user)
+
+    decrypted =
+      Enum.map(all_notes, fn note ->
+        case note.kind do
+          "folder" -> hydrate_folder_marker(note, dek)
+          _ -> decrypt_or_raise!(note, user)
+        end
+      end)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -846,6 +860,10 @@ defmodule Engram.Notes do
       # then apply as a single update per note (avoids N+1 per-row queries).
       # Each tuple now carries the source note (decrypted) so the bulk loop
       # can re-encrypt content + tags with the row-id-bound AAD.
+      #
+      # Marker rows have no path/content/title to rewrite — only the
+      # folder envelope. Carry nil new_path/new_title so the bulk loop
+      # can branch on kind.
       updates =
         Enum.map(notes, fn note ->
           new_note_folder =
@@ -855,33 +873,60 @@ defmodule Engram.Notes do
               new_folder <> String.slice(note.folder, old_len..-1//1)
             end
 
-          new_path = new_note_folder <> String.slice(note.path, String.length(note.folder)..-1//1)
-          new_title = Helpers.extract_title(note.content || "", new_path)
+          {new_path, new_title} =
+            case note.kind do
+              "folder" ->
+                {nil, nil}
+
+              _ ->
+                np =
+                  new_note_folder <>
+                    String.slice(note.path, String.length(note.folder)..-1//1)
+
+                {np, Helpers.extract_title(note.content || "", np)}
+            end
 
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
       Repo.with_tenant(user.id, fn ->
         Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-          full_kw =
-            full_aad_bound_kw(
-              user,
-              note.id,
-              note.content || "",
-              new_title,
-              new_path,
-              new_note_folder,
-              note.tags || []
-            )
+          case note.kind do
+            "folder" ->
+              {ct, nonce, hmac} =
+                folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-          from(n in Note, where: n.id == ^note.id)
-          |> Repo.update_all(
-            set:
-              [
-                embed_hash: nil,
-                updated_at: now
-              ] ++ full_kw
-          )
+              from(n in Note, where: n.id == ^note.id)
+              |> Repo.update_all(
+                set: [
+                  folder_ciphertext: ct,
+                  folder_nonce: nonce,
+                  folder_hmac: hmac,
+                  updated_at: now
+                ]
+              )
+
+            _ ->
+              full_kw =
+                full_aad_bound_kw(
+                  user,
+                  note.id,
+                  note.content || "",
+                  new_title,
+                  new_path,
+                  new_note_folder,
+                  note.tags || []
+                )
+
+              from(n in Note, where: n.id == ^note.id)
+              |> Repo.update_all(
+                set:
+                  [
+                    embed_hash: nil,
+                    updated_at: now
+                  ] ++ full_kw
+              )
+          end
         end)
       end)
 
@@ -889,10 +934,14 @@ defmodule Engram.Notes do
       # includes delete signals. Without these, polling clients retain stale
       # files at old paths after a folder rename. Tombstones are full-row
       # inserts so each must carry the encrypted path/folder/tags fields too.
+      # Marker rows have no path to tombstone — skip them.
       mtime_float = DateTime.to_unix(now) + 0.0
 
+      real_note_updates =
+        Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
+
       tombstones =
-        Enum.map(updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+        Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
           # T3.6 — pre-allocate the tombstone id so the AAD bind string can
           # be constructed before insert. Tombstones are full-row inserts
           # written with empty content/title/tags but the row-id-bound AAD
@@ -924,7 +973,8 @@ defmodule Engram.Notes do
 
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-      Enum.each(updates, fn {note, old_note_path, new_path, _folder, _title} ->
+      # Marker rows have no path / no embedding, skip the broadcast+enqueue.
+      Enum.each(real_note_updates, fn {note, old_note_path, new_path, _folder, _title} ->
         _ =
           Enqueue.enqueue(
             Engram.Workers.EmbedNote.new_debounced(note.id,
@@ -1108,6 +1158,20 @@ defmodule Engram.Notes do
         tags_hmac: Enum.map(tags, &Crypto.hmac_field(filter_key, &1)),
         dek_version: Crypto.row_version_aad_bound()
       ]
+  end
+
+  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
+  # row-id-bound AAD and recomputes the folder_hmac. Returns
+  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
+  # No content/title/path/tags work because markers have none of those.
+  defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    {ct, nonce} =
+      Envelope.encrypt(folder, dek, Crypto.aad_for_row(:notes, :folder, row_id))
+
+    {ct, nonce, Crypto.hmac_field(filter_key, folder)}
   end
 
   # T3.6 — full re-encrypt of every encrypted column on a note, with row-id
