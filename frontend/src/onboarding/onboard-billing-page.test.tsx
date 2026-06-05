@@ -227,6 +227,40 @@ describe('OnboardBillingPage — bug #440 repro', () => {
     expect(toolsPageMounts).toBe(1)
   })
 
+  it('navigates immediately if cached onboarding status is already past billing', async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status') return BILLING_ACTIVE
+      if (url === '/billing/config') return BILLING_CONFIG
+      if (url === '/onboarding/status') return STATUS_TOOLS
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    })
+    // Pre-warm the cache: simulate the user having already advanced past
+    // billing in another tab.
+    qc.setQueryData(['onboarding', 'status'], STATUS_TOOLS)
+
+    render(
+      <QueryClientProvider client={qc}>
+        <ThemeProvider>
+          <MemoryRouter initialEntries={['/onboard/billing']}>
+            <Routes>
+              <Route path="/onboard/billing" element={<OnboardBillingPage />} />
+              <Route path="/onboard/tools" element={<ToolsPageProbe />} />
+              <Route path="/" element={<div data-testid="home-page" />} />
+            </Routes>
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    )
+
+    // Should redirect on mount cache check, NOT wait the 10s background poll.
+    await waitFor(() => expect(screen.getByTestId('tools-page')).toBeInTheDocument())
+    expect(toolsPageMounts).toBe(1)
+  })
+
   it('hides overlay and re-enables plan picker on CHECKOUT_PAYMENT_FAILED', async () => {
     get.mockImplementation(async (url: string) => {
       if (url === '/billing/status') return BILLING_INACTIVE

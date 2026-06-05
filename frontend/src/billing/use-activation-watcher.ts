@@ -101,6 +101,26 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
 
   scheduleRef.current = schedule
 
+  // Mount-time cache check: if the user lands on the billing step with a
+  // cached onboarding status already past 'billing' (paid in another tab,
+  // browser-back, refresh), fire onActivated synchronously instead of
+  // waiting for the first background poll (10s).
+  //
+  // Only relevant in onboarding mode (onActivated is a real function), not
+  // settings mode where there is no "past billing" navigation.
+  useEffect(() => {
+    if (typeof onActivated !== 'function') return
+    const cached = qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])
+    if (cached && cached.next_step !== 'billing' && !activatedRef.current) {
+      activatedRef.current = true
+      setState('activated')
+      onActivatedRef.current(cached)
+    }
+    // Intentionally mount-only — qc is stable, onActivated identity is
+    // captured via ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     if (!enabled) return
