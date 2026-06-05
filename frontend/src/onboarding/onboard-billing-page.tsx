@@ -1,20 +1,18 @@
-import { useEffect } from 'react'
+import { useCallback } from 'react'
 import { useNavigate } from 'react-router'
-import { useOnboardingStatus } from '../api/queries'
+import type { OnboardingStatus } from '../api/queries'
 import BillingPage from '../billing/billing-page'
 
 export default function OnboardBillingPage() {
   const navigate = useNavigate()
-  const { data } = useOnboardingStatus()
 
-  useEffect(() => {
-    if (!data?.next_step) return
-    if (data.next_step === 'done') {
-      navigate('/', { replace: true })
-    } else if (data.next_step !== 'billing') {
-      navigate(`/onboard/${data.next_step}`, { replace: true })
-    }
-  }, [data?.next_step, navigate])
+  const onActivated = useCallback(
+    (status: OnboardingStatus) => {
+      const next = status.next_step === 'done' ? '/' : `/onboard/${status.next_step}`
+      navigate(next, { replace: true })
+    },
+    [navigate],
+  )
 
   return (
     <section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pb-[14vh] pt-8">
@@ -25,7 +23,7 @@ export default function OnboardBillingPage() {
             Start with a 7-day free trial — a card is required, but you won't be charged until it ends.
           </p>
         </header>
-        <BillingPage hideHeading />
+        <BillingPage hideHeading onActivated={onActivated} />
       </div>
     </section>
   )

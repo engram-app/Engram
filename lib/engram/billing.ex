@@ -396,22 +396,32 @@ defmodule Engram.Billing do
         # Omit :custom_data from the replace list. Paddle delivers at-least-once,
         # so a retried subscription.created must NOT clobber the affiliate /
         # utm attribution captured on first delivery.
-        %Subscription{}
-        |> Subscription.changeset(attrs)
-        |> Repo.insert(
-          on_conflict:
-            {:replace,
-             [
-               :paddle_customer_id,
-               :paddle_subscription_id,
-               :tier,
-               :status,
-               :current_period_end,
-               :updated_at
-             ]},
-          conflict_target: :user_id,
-          skip_tenant_check: true
-        )
+        result =
+          %Subscription{}
+          |> Subscription.changeset(attrs)
+          |> Repo.insert(
+            on_conflict:
+              {:replace,
+               [
+                 :paddle_customer_id,
+                 :paddle_subscription_id,
+                 :tier,
+                 :status,
+                 :current_period_end,
+                 :updated_at
+               ]},
+            conflict_target: :user_id,
+            skip_tenant_check: true
+          )
+
+        case result do
+          {:ok, sub} ->
+            broadcast_subscription_activated(user_id, sub)
+            {:ok, sub}
+
+          err ->
+            err
+        end
 
       :error ->
         {:error, :missing_user_id}
@@ -427,13 +437,26 @@ defmodule Engram.Billing do
            skip_tenant_check: true
          ) do
       %Subscription{} = sub ->
-        sub
-        |> Subscription.changeset(%{
-          status: data["status"],
-          tier: tier_from_subscription(data),
-          current_period_end: parse_period_end(data)
-        })
-        |> Repo.update(skip_tenant_check: true)
+        result =
+          sub
+          |> Subscription.changeset(%{
+            status: data["status"],
+            tier: tier_from_subscription(data),
+            current_period_end: parse_period_end(data)
+          })
+          |> Repo.update(skip_tenant_check: true)
+
+        case result do
+          {:ok, updated} ->
+            # Same broadcast event for activated/updated — the frontend
+            # listener re-fetches /onboarding/status to decide what to do,
+            # so plan changes and trial→active flips both push downstream UI.
+            broadcast_subscription_activated(updated.user_id, updated)
+            {:ok, updated}
+
+          err ->
+            err
+        end
 
       nil ->
         {:error, :subscription_not_found}
@@ -441,6 +464,27 @@ defmodule Engram.Billing do
   end
 
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
+
+  # Notify the user's open browser tabs that their subscription state
+  # changed server-side, so the activation overlay can hand off to the
+  # next onboarding step (or settings billing UI can refresh) in
+  # milliseconds rather than waiting on a polling loop. Mirrors the
+  # vault_created broadcast in Engram.Vaults. Fire-and-forget: if nobody
+  # is listening, Phoenix.PubSub drops it.
+  defp broadcast_subscription_activated(user_id, %Subscription{} = sub) do
+    _ =
+      EngramWeb.Endpoint.broadcast(
+        "user:#{user_id}",
+        "subscription_activated",
+        %{
+          tier: sub.tier,
+          status: sub.status,
+          subscription_id: sub.paddle_subscription_id
+        }
+      )
+
+    :ok
+  end
 
   # ── Helpers ────────────────────────────────────────────────────
 

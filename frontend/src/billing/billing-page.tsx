@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CheckoutEventNames, initializePaddle, type Paddle } from '@paddle/paddle-js'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import {
   useBillingConfig,
   useBillingSubscriptionDetail,
   useBillingHistory,
+  useMe,
   type BillingCadence,
   type BillingConfig,
   type OnboardingStatus,
@@ -19,6 +20,14 @@ import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
 import BillingHistoryTable from './billing-history-table'
 import PendingChangeBanner from './pending-change-banner'
+import { ActivationOverlay } from './activation-overlay'
+import { useSubscriptionActivatedEvents } from './use-subscription-activated-events'
+
+// Window after CHECKOUT_PAYMENT_INITIATED during which we still expect the
+// push to arrive promptly. Past this, the overlay shifts into "taking longer
+// than usual" copy with Refresh + Contact support affordances. The channel
+// listener stays connected — the broadcast may still land.
+const COOLDOWN_MS = 15_000
 
 async function openPortal(action?: string) {
   try {
@@ -39,77 +48,132 @@ async function downloadInvoice(transactionId: string) {
   }
 }
 
-// Paddle confirms checkout client-side (checkout.completed) before its webhook
-// reaches our backend and flips the subscription active, so a single refetch
-// races the webhook and reads stale state. Poll the onboarding gate until it
-// catches up (or we give up), writing each result into the query cache so the
-// onboarding redirect fires without a manual reload.
-const ACTIVATION_POLL_MS = 2000
-const ACTIVATION_POLL_TIMEOUT_MS = 30000
+interface BillingPageProps {
+  hideHeading?: boolean
+  onActivated?: (status: OnboardingStatus) => void
+}
 
-export default function BillingPage({ hideHeading = false }: { hideHeading?: boolean }) {
+export default function BillingPage({ hideHeading = false, onActivated }: BillingPageProps) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
+  const { data: me } = useMe()
   const hasSubscription = Boolean(billing?.subscription)
   const { data: detail } = useBillingSubscriptionDetail(hasSubscription)
   const { data: history } = useBillingHistory(hasSubscription)
   const { resolved } = useTheme()
   const qc = useQueryClient()
   const [paddle, setPaddle] = useState<Paddle>()
-  const [activationStuck, setActivationStuck] = useState(false)
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
-  const pollTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const activeRef = useRef(true)
 
+  const [overlayVisible, setOverlayVisible] = useState(false)
+  const [paymentInitiatedAt, setPaymentInitiatedAt] = useState<number | null>(null)
+  const [cooldownActive, setCooldownActive] = useState(false)
+  const [activated, setActivated] = useState(false)
+  const [transactionId, setTransactionId] = useState<string | null>(null)
+
+  // Latch — onActivated must fire at most once even if the broadcast lands
+  // multiple times (e.g. subscription.created followed by subscription.activated
+  // on a trial→active flip).
+  const onActivatedFiredRef = useRef(false)
+  const onActivatedRef = useRef(onActivated)
+  onActivatedRef.current = onActivated
+
+  // Cooldown timer — shifts overlay copy to "taking longer than usual"
+  // after 15s without a push event. The channel listener stays connected.
   useEffect(() => {
-    activeRef.current = true
-    return () => {
-      activeRef.current = false
-      clearTimeout(pollTimer.current)
+    if (paymentInitiatedAt === null) return
+    const t = setTimeout(() => setCooldownActive(true), COOLDOWN_MS)
+    return () => clearTimeout(t)
+  }, [paymentInitiatedAt])
+
+  // Push handler — Paddle webhook flipped the subscription server-side and
+  // the user channel just told us. Refresh local query state and (in
+  // onboarding mode) fetch the fresh onboarding/status to decide where to
+  // route the user next.
+  const handleSubscriptionActivated = useCallback(async () => {
+    setActivated(true)
+    await qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+    await qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+    await qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+    await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+
+    if (onActivatedRef.current && !onActivatedFiredRef.current) {
+      try {
+        const status = await qc.fetchQuery<OnboardingStatus>({
+          queryKey: ['onboarding', 'status'],
+          queryFn: () => api.get<OnboardingStatus>('/onboarding/status'),
+          staleTime: 0,
+        })
+        if (!onActivatedFiredRef.current) {
+          onActivatedFiredRef.current = true
+          onActivatedRef.current(status)
+        }
+      } catch (err) {
+        console.error('failed to refetch onboarding/status after activation', err)
+      }
     }
+  }, [qc])
+
+  useSubscriptionActivatedEvents({
+    userId: me?.id ?? null,
+    enabled: true,
+    onActivated: handleSubscriptionActivated,
+  })
+
+  // Mount-time cache check: if the user lands on billing with a cached
+  // onboarding status already past 'billing' (paid in another tab, browser-
+  // back, refresh), fire onActivated synchronously instead of waiting on
+  // a push event. Only meaningful in onboarding mode.
+  useEffect(() => {
+    if (!onActivatedRef.current) return
+    const cached = qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])
+    if (cached && cached.next_step !== 'billing' && !onActivatedFiredRef.current) {
+      onActivatedFiredRef.current = true
+      setActivated(true)
+      onActivatedRef.current(cached)
+    }
+    // mount-only — qc identity is stable, onActivated read via ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!config) return
-
-    function pollUntilActive(deadline: number) {
-      clearTimeout(pollTimer.current)
-      pollTimer.current = setTimeout(async () => {
-        try {
-          const status = await api.get<OnboardingStatus>('/onboarding/status')
-          if (!activeRef.current) return
-          qc.setQueryData(['onboarding', 'status'], status)
-          qc.invalidateQueries({ queryKey: ['billing', 'status'] })
-          if (status.next_step === 'done') return
-        } catch (err) {
-          // A transient 401 (token refresh mid-checkout), 429, or 5xx must not
-          // kill the poll — log and fall through to retry within the deadline.
-          console.error('billing activation poll request failed; retrying', err)
-        }
-        if (!activeRef.current) return
-        if (Date.now() < deadline) {
-          pollUntilActive(deadline)
-        } else {
-          // Paid, but the webhook hasn't flipped us active in time. Surface it
-          // rather than silently stranding the user on the plan page.
-          console.error('billing activation timed out before subscription became active')
-          setActivationStuck(true)
-        }
-      }, ACTIVATION_POLL_MS)
-    }
-
+    let cancelled = false
     initializePaddle({
       token: config.client_token,
       environment: config.environment,
       eventCallback: (event) => {
-        if (event.name === CheckoutEventNames.CHECKOUT_COMPLETED) {
-          setActivationStuck(false)
-          // Refresh the live billing surface so an updated card / plan shows
-          // without a reload. The subscription-activation poll handles the
-          // separate onboarding-gate race below.
-          qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
-          qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
-          pollUntilActive(Date.now() + ACTIVATION_POLL_TIMEOUT_MS)
+        if (cancelled) return
+        switch (event.name) {
+          case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
+            const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
+            setTransactionId(txn)
+            setOverlayVisible(true)
+            setPaymentInitiatedAt((prev) => prev ?? Date.now())
+            qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+            qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+            break
+          }
+          case CheckoutEventNames.CHECKOUT_COMPLETED: {
+            // Belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
+            // redirects. Don't reset the cooldown timestamp if it's already set.
+            setOverlayVisible(true)
+            setPaymentInitiatedAt((prev) => prev ?? Date.now())
+            qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+            qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+            break
+          }
+          case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED:
+          case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
+          case CheckoutEventNames.CHECKOUT_ERROR: {
+            setOverlayVisible(false)
+            setPaymentInitiatedAt(null)
+            setCooldownActive(false)
+            toast.error('Payment did not go through. Please try again.')
+            break
+          }
+          default:
+            break
         }
       },
       checkout: {
@@ -120,8 +184,13 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
         },
       },
     }).then((instance) => {
+      if (cancelled) return
       if (instance) setPaddle(instance)
     })
+    return () => {
+      cancelled = true
+      setPaddle(undefined)
+    }
   }, [config, resolved, qc])
 
   if (isLoading || !billing) {
@@ -160,52 +229,66 @@ export default function BillingPage({ hideHeading = false }: { hideHeading?: boo
         </header>
       )}
 
-      {activationStuck && (
-        <div role="alert" className="rounded-lg border border-border bg-card p-4 text-sm">
-          <p className="font-medium text-foreground">Payment received — finishing activation</p>
-          <p className="mt-1 text-muted-foreground">
-            This is taking longer than usual. Refresh the page in a moment; if it persists,
-            contact support and we’ll sort it out.
-          </p>
-        </div>
-      )}
-
       {!hideHeading && <CurrentPlanCard billing={billing} />}
 
       {needsSubscription && (
-        <section className="space-y-4">
-          {!hideHeading && (
-            <>
-              <h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
-              <p className="text-sm text-muted-foreground">Both plans include a 7-day free trial.</p>
-            </>
+        <section className="relative space-y-4">
+          <div className={overlayVisible ? 'pointer-events-none opacity-40' : ''}>
+            {!hideHeading && (
+              <>
+                <h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
+                <p className="text-sm text-muted-foreground">Both plans include a 7-day free trial.</p>
+              </>
+            )}
+            <CadenceToggle cadence={cadence} onChange={setCadence} />
+            <ul className="grid items-stretch gap-4 sm:grid-cols-2">
+              <PlanCard
+                name="Starter"
+                cadence={cadence}
+                monthlyPrice={7}
+                annualPrice={70}
+                features={['5 vaults', 'Unlimited devices', '3 GB attachments', '500 AI queries/day']}
+                tier="starter"
+                paddle={paddle}
+                config={config}
+                disabled={!checkoutReady}
+              />
+              <PlanCard
+                name="Pro"
+                cadence={cadence}
+                monthlyPrice={14}
+                annualPrice={140}
+                features={['15 vaults', 'Unlimited devices', '15 GB attachments', 'Unlimited AI', 'Smart retrieval (coming)']}
+                tier="pro"
+                paddle={paddle}
+                config={config}
+                disabled={!checkoutReady}
+                recommended
+              />
+            </ul>
+          </div>
+          {(overlayVisible || activated) && (
+            <ActivationOverlay
+              state={
+                activated
+                  ? 'activated'
+                  : cooldownActive
+                    ? 'cooldown'
+                    : 'accelerated'
+              }
+              subscriptionOk={activated}
+              nextStep={qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])?.next_step ?? 'billing'}
+              transactionId={transactionId}
+              onRefresh={() => window.location.reload()}
+              onContactSupport={() => {
+                const subject = encodeURIComponent('Activation taking too long')
+                const body = encodeURIComponent(
+                  `Hi — my payment went through but my account hasn't activated.\n\nReference: ${transactionId ?? 'n/a'}`,
+                )
+                window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`
+              }}
+            />
           )}
-          <CadenceToggle cadence={cadence} onChange={setCadence} />
-          <ul className="grid items-stretch gap-4 sm:grid-cols-2">
-            <PlanCard
-              name="Starter"
-              cadence={cadence}
-              monthlyPrice={7}
-              annualPrice={70}
-              features={['5 vaults', 'Unlimited devices', '3 GB attachments', '500 AI queries/day']}
-              tier="starter"
-              paddle={paddle}
-              config={config}
-              disabled={!checkoutReady}
-            />
-            <PlanCard
-              name="Pro"
-              cadence={cadence}
-              monthlyPrice={14}
-              annualPrice={140}
-              features={['15 vaults', 'Unlimited devices', '15 GB attachments', 'Unlimited AI', 'Smart retrieval (coming)']}
-              tier="pro"
-              paddle={paddle}
-              config={config}
-              disabled={!checkoutReady}
-              recommended
-            />
-          </ul>
         </section>
       )}
 
@@ -313,9 +396,6 @@ function PlanCard({
       items: [{ priceId: config.price_ids[tier][cadence], quantity: 1 }],
       customer: { email: config.customer_email },
       customData: config.custom_data,
-      settings: {
-        successUrl: `${window.location.origin}/settings/billing?status=success`,
-      },
     })
   }
 
