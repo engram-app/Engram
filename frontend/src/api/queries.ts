@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './client'
+import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
+import { api, ApiError } from './client'
 import { useActiveVaultId } from './active-vault'
 import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
+import { collideBump } from '@/lib/collide-bump'
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -143,6 +146,114 @@ export function useUpdateNote() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['note', vaultId, vars.path] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+function encodePathForRouter(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+export function useCreateNote() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  const navigate = useNavigate()
+
+  return useMutation<{ path: string }, ApiError, { folder: string }>({
+    mutationFn: async ({ folder }) => {
+      const existingNotes =
+        qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
+      const existingNames = new Set(
+        existingNotes.map((n) => {
+          const segments = n.path.split('/')
+          return segments[segments.length - 1] ?? n.path
+        }),
+      )
+
+      const MAX_RACES = 5
+      for (let attempt = 0; attempt < MAX_RACES; attempt++) {
+        const name = collideBump(existingNames, 'Untitled.md', { cap: 1000 })
+        const path = folder ? `${folder}/${name}` : name
+        try {
+          await api.post<{ note: Note }>('/notes', {
+            path,
+            content: '',
+            mtime: Date.now() / 1000,
+          })
+          return { path }
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            existingNames.add(name)
+            continue
+          }
+          throw err
+        }
+      }
+      throw new ApiError(500, 'useCreateNote: exceeded race retries')
+    },
+    onSuccess: ({ path }, vars) => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
+      navigate(`/note/${encodePathForRouter(path)}`)
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 402) {
+        toast.error("You've hit your note limit — upgrade to add more.")
+      } else if (err instanceof ApiError && err.status === 403) {
+        toast.error("You don't have permission to create notes here.")
+      } else {
+        toast.error("Couldn't create the note. Try again.")
+      }
+    },
+  })
+}
+
+export function useCreateFolder() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+
+  return useMutation<{ folder: string }, ApiError, { parent: string }>({
+    mutationFn: async ({ parent }) => {
+      const cached = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+      const existingFolders = cached?.folders.map((f) => f.name) ?? []
+
+      // Restrict to direct children of the parent — siblings only.
+      const prefix = parent ? `${parent}/` : ''
+      const childNames = new Set(
+        existingFolders
+          .filter((f) => (parent === '' ? !f.includes('/') : f.startsWith(prefix)))
+          .map((f) => (parent === '' ? f : f.slice(prefix.length)))
+          .map((f) => f.split('/')[0] ?? f),
+      )
+
+      const MAX_RACES = 5
+      for (let attempt = 0; attempt < MAX_RACES; attempt++) {
+        const name = collideBump(childNames, 'Untitled folder', { cap: 1000 })
+        const folder = parent ? `${parent}/${name}` : name
+        try {
+          await api.post<{ folder: { name: string; count: number } }>('/folders', { folder })
+          return { folder }
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            childNames.add(name)
+            continue
+          }
+          throw err
+        }
+      }
+      throw new ApiError(500, 'useCreateFolder: exceeded race retries')
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 422) {
+        toast.error("That folder name isn't allowed.")
+      } else if (err instanceof ApiError && err.status === 403) {
+        toast.error("You don't have permission to create folders here.")
+      } else {
+        toast.error("Couldn't create the folder. Try again.")
+      }
     },
   })
 }

@@ -1,5 +1,6 @@
 import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical } from 'lucide-react'
 import { Fragment } from 'react'
+import { useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -10,6 +11,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { useCreateFolder, useCreateNote } from '@/api/queries'
+import { deriveActiveFolder } from '@/lib/active-folder'
 import { type SortKey, useFolderTreeState } from './folder-tree-context'
 
 const ICON = 'size-5'
@@ -46,17 +55,52 @@ const SORT_SECTIONS: ReadonlyArray<SortSection> = [
 
 export default function FolderActions() {
   const { collapseAll, sort, setSort } = useFolderTreeState()
+  const { pathname } = useLocation()
+  const activeFolder = deriveActiveFolder(pathname)
+  const targetLabel = activeFolder === '' ? 'vault root' : `"${activeFolder}"`
+
+  const createNote = useCreateNote()
+  const createFolder = useCreateFolder()
+
   return (
     <section
       aria-label="File actions"
       className="flex items-center justify-around border-t border-border bg-card px-4 py-0.5"
     >
-      <Button variant="ghost" size="icon" aria-label="New note" title="New note" disabled className={BUTTON}>
-        <FilePlus className={ICON} />
-      </Button>
-      <Button variant="ghost" size="icon" aria-label="New folder" title="New folder" disabled className={BUTTON}>
-        <FolderPlus className={ICON} />
-      </Button>
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="New note"
+              className={BUTTON}
+              onClick={() => createNote.mutate({ folder: activeFolder })}
+              disabled={createNote.isPending}
+            >
+              <FilePlus className={ICON} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Creates in {targetLabel}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="New folder"
+              className={BUTTON}
+              onClick={() => createFolder.mutate({ parent: activeFolder })}
+              disabled={createFolder.isPending}
+            >
+              <FolderPlus className={ICON} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Creates in {targetLabel}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon" aria-label="Sort" title="Sort" className={BUTTON}>
