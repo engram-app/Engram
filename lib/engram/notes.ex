@@ -716,6 +716,9 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
+        # Per folder_hmac, pick any one row (for envelope decryption) and
+        # count only kind='note' rows. Marker-only folders yield count 0;
+        # mixed folders yield the note count (markers excluded).
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
@@ -729,7 +732,12 @@ defmodule Engram.Notes do
                   dv: n.dek_version,
                   ct: n.folder_ciphertext,
                   nonce: n.folder_nonce,
-                  count: fragment("COUNT(*) OVER (PARTITION BY ?)", n.folder_hmac)
+                  count:
+                    fragment(
+                      "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
+                      n.kind,
+                      n.folder_hmac
+                    )
                 }
               )
             )

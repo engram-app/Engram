@@ -703,6 +703,42 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "list_folders_with_counts/2 with markers" do
+    test "marker for an otherwise-empty folder appears with count 0",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      empty = Enum.find(folders, &(&1.folder == "Empty"))
+      assert empty
+      assert empty.count == 0
+    end
+
+    test "marker + real notes dedupe by folder_hmac, count reflects notes",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/b.md",
+          "content" => "b",
+          "mtime" => 1.0
+        })
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      mixed = Enum.filter(folders, &(&1.folder == "Mixed"))
+      assert length(mixed) == 1
+      assert hd(mixed).count == 2
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # list_notes_in_folder/3
   # ---------------------------------------------------------------------------
