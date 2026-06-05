@@ -217,6 +217,12 @@ defmodule Engram.Notes do
       now = DateTime.utc_now()
 
       base_attrs = %{
+        # Belt-and-suspenders: schema default is "note", but stamping it
+        # explicitly here keeps the kind invariant intact even if a future
+        # caller bypasses the default (e.g., raw insert_all). The partial
+        # unique indexes split by kind, so this is what lets a real note
+        # coexist with a folder marker at the same path string.
+        kind: "note",
         content: content,
         title: title,
         tags: tags,

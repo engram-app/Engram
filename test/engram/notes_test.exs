@@ -193,6 +193,24 @@ defmodule Engram.NotesTest do
 
       assert errors_on(changeset).path
     end
+
+    test "upsert with same path as a folder marker creates a separate note row",
+         %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Both")
+
+      assert {:ok, note} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "Both",
+                 "content" => "I am extensionless",
+                 "mtime" => 1.0
+               })
+
+      assert note.kind == "note"
+      assert note.path == "Both"
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      assert Enum.any?(folders, &(&1.folder == "Both"))
+    end
   end
 
   # ---------------------------------------------------------------------------
