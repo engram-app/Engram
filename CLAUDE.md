@@ -68,6 +68,8 @@ SEARCH:            MCP/REST → Voyage embed query → Qdrant similarity → top
 
 ## Local Development
 
+**Worktrees**: `git worktree add` fires `.githooks/post-checkout`, which hardlinks `deps/`, `_build/`, and `frontend/node_modules/` from the canonical checkout into the new tree. First-compile time drops from ~3min to ~10sec because mix's incremental compiler skips unchanged files. No setup needed — just `git worktree add <path> -b <branch> origin/main` and start working.
+
 ```bash
 # Docker Compose (Elixir + PostgreSQL + Qdrant)
 docker compose -f docker-compose.elixir.yml up --build
