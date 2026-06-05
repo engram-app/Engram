@@ -4,7 +4,7 @@
 
 > **For AI agents:** See `AGENTS.md` for migration-safety rules — every migration PR must carry a `phase/*` label, and contract-phase drops are CI-gated against surviving `lib/` references.
 
-Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $10/mo / Pro $20/mo (v2 reanchored 2026-05-20). Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md` + `docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md`; billing integration details in `docs/context/paddle-integration.md`.
+Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $7/mo / Pro $14/mo (v3 reanchored 2026-05-31). Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md` + `docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md`; billing integration details in `docs/context/paddle-integration.md`.
 
 ## Issue Tracker
 
@@ -142,8 +142,8 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | Tier | Price | Features |
 |------|-------|----------|
 | **Free** | $0 | 1 vault, 1 device (12h swap cooldown), 1GB attachments, manual sync, 10k notes, 5 AI conversations/day, MCP enabled, 90-day inactivity auto-delete |
-| **Starter** | $10/mo ($100/yr) | 5 vaults, unlimited devices, 3GB attachments, real-time SSE sync, 50k notes, 500 AI queries/day, API write access |
-| **Pro** | $20/mo ($200/yr) | 15 vaults, unlimited devices, 15GB attachments, real-time sync, unlimited notes, unlimited AI (10k/day fair-use), priority support, higher API rate |
+| **Starter** | $7/mo ($70/yr) | 5 vaults, unlimited devices, 3GB attachments, real-time SSE sync, 50k notes, 500 AI queries/day, API write access |
+| **Pro** | $14/mo ($140/yr) | 15 vaults, unlimited devices, 15GB attachments, real-time sync, unlimited notes, unlimited AI (10k/day fair-use), priority support, higher API rate |
 
 Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md` + `../engram-workspace/docs/superpowers/specs/2026-05-20-pricing-tiers-v2-design.md` for the canonical v2 design.
 

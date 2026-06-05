@@ -1,0 +1,84 @@
+# Engram self-host — LITE variant.
+# Ollama embeddings (in-stack) + Postgres bytea attachments. Drops MinIO.
+# Suited to modest vaults (#297). Trade-off: bytea TOAST caps ~1 GB/blob
+# and bloats WAL — for large/many attachments use the default stack.
+#
+#   cp .env.lite.example .env
+#   docker compose -f docker-compose.lite.yml up --build
+
+services:
+  engram:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: http://ollama:11434
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/api/health || exit 1"]
+      start_period: 30s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: engram
+      POSTGRES_DB: engram
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engram"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot: pull the default self-host embedding model so the first note
+  # indexes without a manual step. Exits 0 once the model is present.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull nomic-embed-text"]
+    restart: "no"
+
+volumes:
+  pg_data:
+  qdrant_data:
+  ollama_data:

@@ -42,6 +42,8 @@ priv/static/app/
 
 .env*
 !.env.example
+!.env.lite.example
+!.env.voyage.example
 frontend/.vite/
 .worktrees/
 

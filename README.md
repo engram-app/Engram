@@ -90,20 +90,23 @@ Most operators should follow the **public docs** — they're more complete than 
 
 ### Quickstart (Docker Compose)
 
-The repo root ships a canonical [`docker-compose.yml`](./docker-compose.yml) (app + Postgres + Qdrant + Ollama + MinIO) and [`.env.example`](./.env.example):
+Three preset stacks ship in the repo. Pick the one that matches what you want:
+
+| You want | Copy | Run |
+|---|---|---|
+| Default — Ollama embeds + MinIO attachments (no API keys) | `cp .env.example .env` | `docker compose up --build` |
+| Smaller — Ollama embeds + Postgres-bytea attachments (drops MinIO, #297) | `cp .env.lite.example .env` | `docker compose -f docker-compose.lite.yml up --build` |
+| Better embeds — Voyage API + MinIO attachments (needs a Voyage key) | `cp .env.voyage.example .env` | `docker compose -f docker-compose.voyage.yml up --build` |
+
+After copying, open `.env` and fill in the three generated secrets:
 
 ```bash
-git clone https://github.com/engram-app/engram
-cd engram
-cp .env.example .env
-# generate the three secrets and paste them into .env:
-#   openssl rand -base64 48   # SECRET_KEY_BASE
-#   openssl rand -base64 48   # JWT_SECRET
-#   openssl rand -base64 32   # ENCRYPTION_MASTER_KEY  (back this up!)
-docker compose up --build     # first build compiles the release (~few min)
+openssl rand -base64 48   # SECRET_KEY_BASE
+openssl rand -base64 48   # JWT_SECRET
+openssl rand -base64 32   # ENCRYPTION_MASTER_KEY  (back this up!)
 ```
 
-The app comes up on `http://localhost:4000` (the only host-exposed port; everything else stays on the private network). Migrations run automatically on boot, and `ollama-init` pulls the default `nomic-embed-text` embedding model on first start.
+The app comes up on `http://localhost:4000`. Only port 4000 is host-exposed; Postgres, Qdrant, Ollama (if present), and MinIO (if present) stay on the private Docker network. Migrations run automatically on boot.
 
 **License:** Engram self-host is **PolyForm Small Business 1.0.0** — free for organizations with ≤ $1M/year in revenue/funding. Larger orgs need a commercial license (`support@engram.page`). See [`LICENSE`](./LICENSE) for the full terms + manual CLA flow for external contributors.
 
@@ -162,18 +165,18 @@ docker compose -f docker-compose.elixir.yml up --build
 
 ```bash
 # Register
-curl -X POST http://localhost:4000/register \
+curl -X POST http://localhost:4000/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "your-password"}'
 
 # Login
-TOKEN=$(curl -s -X POST http://localhost:4000/login \
+TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "your-password"}' \
   | jq -r '.token')
 
 # Create API key
-curl -X POST http://localhost:4000/api-keys \
+curl -X POST http://localhost:4000/api/api-keys \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-key"}'
@@ -184,7 +187,7 @@ Save the returned API key — it starts with `engram_` and is only shown once.
 ### 5. Push a Note
 
 ```bash
-curl -X POST http://localhost:4000/notes \
+curl -X POST http://localhost:4000/api/notes \
   -H "Authorization: Bearer engram_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
@@ -197,7 +200,7 @@ curl -X POST http://localhost:4000/notes \
 ### 6. Search
 
 ```bash
-curl -X POST http://localhost:4000/search \
+curl -X POST http://localhost:4000/api/search \
   -H "Authorization: Bearer engram_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"query": "hello", "limit": 5}'
@@ -221,7 +224,7 @@ The plugin handles full vault sync, live WebSocket updates, offline queueing, an
   "mcpServers": {
     "engram": {
       "type": "sse",
-      "url": "http://your-server:4000/mcp",
+      "url": "http://your-server:4000/api/mcp",
       "headers": {
         "Authorization": "Bearer engram_your_key_here"
       }
@@ -236,7 +239,7 @@ The plugin handles full vault sync, live WebSocket updates, offline queueing, an
 {
   "mcpServers": {
     "engram": {
-      "url": "http://your-server:4000/mcp",
+      "url": "http://your-server:4000/api/mcp",
       "transport": "sse",
       "headers": {
         "Authorization": "Bearer engram_your_key_here"
@@ -252,38 +255,38 @@ The plugin handles full vault sync, live WebSocket updates, offline queueing, an
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/notes` | Upsert a note (creates or updates, triggers async indexing) |
-| `GET` | `/notes/{path}` | Get full note by path |
-| `DELETE` | `/notes/{path}` | Soft-delete a note |
-| `GET` | `/notes/changes?since=<timestamp>` | Notes changed since timestamp (for sync) |
+| `POST` | `/api/notes` | Upsert a note (creates or updates, triggers async indexing) |
+| `GET` | `/api/notes/{path}` | Get full note by path |
+| `DELETE` | `/api/notes/{path}` | Soft-delete a note |
+| `GET` | `/api/notes/changes?since=<timestamp>` | Notes changed since timestamp (for sync) |
 
 ### Search
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/search` | Semantic search with optional tag/folder filtering |
-| `GET` | `/tags` | All tags with document counts |
-| `GET` | `/folders` | Folder tree with note counts |
+| `POST` | `/api/search` | Semantic search with optional tag/folder filtering |
+| `GET` | `/api/tags` | All tags with document counts |
+| `GET` | `/api/folders` | Folder tree with note counts |
 
 ### Attachments
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/attachments` | Upsert binary file (base64-encoded) |
-| `GET` | `/attachments/{path}` | Get attachment |
-| `DELETE` | `/attachments/{path}` | Soft-delete attachment |
-| `GET` | `/attachments/changes?since=<timestamp>` | Attachment changes (for sync) |
-| `GET` | `/user/storage` | Storage usage stats |
+| `POST` | `/api/attachments` | Upsert binary file (base64-encoded) |
+| `GET` | `/api/attachments/{path}` | Get attachment |
+| `DELETE` | `/api/attachments/{path}` | Soft-delete attachment |
+| `GET` | `/api/attachments/changes?since=<timestamp>` | Attachment changes (for sync) |
+| `GET` | `/api/user/storage` | Storage usage stats |
 
 ### Auth
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/register` | Register a new user |
-| `POST` | `/login` | Login, returns JWT |
-| `POST` | `/api-keys` | Create an API key (JWT auth) |
-| `DELETE` | `/api-keys/{id}` | Revoke an API key |
-| `GET` | `/api-keys` | List API keys |
+| `POST` | `/api/auth/register` | Register a new user (when `AUTH_PROVIDER=local`) |
+| `POST` | `/api/auth/login` | Login, returns JWT |
+| `POST` | `/api/api-keys` | Create an API key (JWT auth) |
+| `DELETE` | `/api/api-keys/{id}` | Revoke an API key |
+| `GET` | `/api/api-keys` | List API keys |
 
 ### Real-time Sync
 
@@ -295,10 +298,10 @@ The plugin handles full vault sync, live WebSocket updates, offline queueing, an
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Liveness check |
-| `GET` | `/health/deep` | Checks PostgreSQL, Qdrant, embedding backend |
+| `GET` | `/api/health` | Liveness check |
+| `GET` | `/api/health/deep` | Checks PostgreSQL, Qdrant, embedding backend |
 
-All endpoints except `/health`, `/register`, and `/login` require `Authorization: Bearer <api_key>` header.
+All endpoints except `/api/health`, `/api/auth/register`, and `/api/auth/login` require `Authorization: Bearer <api_key>` header.
 
 ## Testing
 
@@ -314,17 +317,7 @@ See `docs/context/testing-strategy.md` for the full testing strategy.
 
 ## Production Deployment
 
-Engram deploys to [Fly.io](https://fly.io) with first-class Phoenix support:
-
-```bash
-fly launch              # Auto-detects Phoenix, generates Dockerfile + fly.toml
-fly postgres create     # Managed PostgreSQL with daily snapshots
-fly storage create      # Tigris S3 for attachments
-fly secrets set ...     # Voyage API key, Qdrant URL, JWT secret
-fly deploy              # Runs migrations, rolling deploy
-```
-
-See `docs/context/production-deployment.md` for full infrastructure details.
+SaaS production (`app.engram.page`) is operator-internal — infrastructure-as-code, secrets, and deploy pipeline live in a private repo. For self-hosting, see the **Self-Host** section above and the [public docs](https://engram.page/docs/self-host/).
 
 ## License
 
