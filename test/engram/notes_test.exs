@@ -193,6 +193,24 @@ defmodule Engram.NotesTest do
 
       assert errors_on(changeset).path
     end
+
+    test "upsert with same path as a folder marker creates a separate note row",
+         %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Both")
+
+      assert {:ok, note} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "Both",
+                 "content" => "I am extensionless",
+                 "mtime" => 1.0
+               })
+
+      assert note.kind == "note"
+      assert note.path == "Both"
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      assert Enum.any?(folders, &(&1.folder == "Both"))
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -347,6 +365,26 @@ defmodule Engram.NotesTest do
     test "returns empty list when no changes since timestamp", %{user: user, vault: vault} do
       {:ok, changes} = Notes.list_changes(user, vault, ~U[2099-01-01 00:00:00Z])
       assert changes == []
+    end
+
+    test "omits folder marker rows (kind != 'note')", %{user: user, vault: vault} do
+      # Markers carry only folder ciphertext — no path/content/title — so they
+      # cannot be decrypted as notes. Spec invariant: channels broadcast notes
+      # only; markers propagate via folder-listing endpoints, not change polls.
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "EmptyFolder")
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Real.md",
+          "content" => "# real",
+          "mtime" => 1_000.0
+        })
+
+      past = DateTime.add(note.updated_at, -60, :second)
+      {:ok, changes} = Notes.list_changes(user, vault, past)
+
+      paths = Enum.map(changes, & &1.path)
+      assert paths == ["Real.md"]
     end
 
     test "includes changes when since equals updated_at (>= not >)", %{user: user, vault: vault} do
@@ -703,6 +741,42 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "list_folders_with_counts/2 with markers" do
+    test "marker for an otherwise-empty folder appears with count 0",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      empty = Enum.find(folders, &(&1.folder == "Empty"))
+      assert empty
+      assert empty.count == 0
+    end
+
+    test "marker + real notes dedupe by folder_hmac, count reflects notes",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/b.md",
+          "content" => "b",
+          "mtime" => 1.0
+        })
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      mixed = Enum.filter(folders, &(&1.folder == "Mixed"))
+      assert length(mixed) == 1
+      assert hd(mixed).count == 2
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # list_notes_in_folder/3
   # ---------------------------------------------------------------------------
@@ -984,6 +1058,37 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "rename_folder/4 with markers" do
+    test "renames a folder marker alongside real notes", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Old")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _count} = Notes.rename_folder(user, vault, "Old", "New")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      assert "New" in names
+      refute "Old" in names
+    end
+
+    test "renames a marker-only folder", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "LonelyOld")
+
+      {:ok, _count} = Notes.rename_folder(user, vault, "LonelyOld", "LonelyNew")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      assert "LonelyNew" in names
+      refute "LonelyOld" in names
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # rename_note/4 path_hmac regression
   # ---------------------------------------------------------------------------
@@ -1008,6 +1113,23 @@ defmodule Engram.NotesTest do
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       assert after_row.path_hmac == Engram.Crypto.hmac_field(filter_key, "Folder/New.md")
       refute after_row.path_hmac == before.path_hmac
+    end
+  end
+
+  describe "list_notes_in_folder/3 with markers" do
+    test "excludes folder marker rows from the result", %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Mixed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Mixed")
+      assert length(notes) == 1
+      assert hd(notes).path == "Mixed/a.md"
     end
   end
 end

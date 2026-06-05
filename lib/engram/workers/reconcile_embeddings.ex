@@ -44,6 +44,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       note_ids =
         Note
         |> where([n], n.vault_id == ^vault.id)
+        |> where([n], n.kind == "note")
         |> where([n], is_nil(n.deleted_at))
         |> where([n], is_nil(n.embed_hash) or n.embed_hash != n.content_hash)
         |> order_by([n], asc: n.updated_at)

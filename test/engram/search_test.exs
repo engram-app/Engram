@@ -431,6 +431,77 @@ defmodule Engram.SearchTest do
       result = Search.search(user, vault, "query")
       refute result == {:error, :feature_not_available}
     end
+
+    test "folder marker rows do not appear in search results", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # Defense-in-depth: markers carry no content and no embedding (Task 10
+      # filters them at the EmbedNote enqueue boundary), so they can never
+      # legitimately reach Qdrant. This test pins the contract — create a
+      # marker AND a real note in the same folder, search, assert that only
+      # the real note's source_path can come back. Qdrant is mocked to return
+      # exactly what the embedding pipeline would have indexed (one row for
+      # the real note, none for the marker).
+      {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "Findable")
+
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Findable/Real.md",
+          "content" => "Findable target body",
+          "mtime" => 1.0
+        })
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Findable target body", title: "Real", heading_path: "Real"},
+          user,
+          "engram_notes",
+          "uuid-real"
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => "uuid-real",
+            "score" => 0.9,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "source_path" => "Findable/Real.md",
+              "tags" => [],
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      assert {:ok, results} = Search.search(user, vault, "Findable")
+      assert length(results) == 1
+
+      Enum.each(results, fn r ->
+        # Markers have no path — if one ever leaked into results, source_path
+        # would be nil/empty. Pin that this never happens.
+        assert r.source_path not in [nil, ""]
+        refute r.source_path == "Findable"
+      end)
+    end
   end
 
   describe "search/4 with encrypted vaults" do

@@ -17,6 +17,182 @@ defmodule Engram.Notes do
   require Logger
 
   @doc """
+  Composable query scope that restricts a `Note` query to kind='note' rows.
+  Every site that wants real notes (excluding folder markers) should
+  start from `notes_only/0` or include `WHERE kind = 'note'` explicitly.
+
+  The accompanying lint test (`notes_scope_lint_test.exs`) flags raw
+  `from(n in Note, ...)` queries that do not include the kind filter.
+  """
+  @spec notes_only() :: Ecto.Query.t()
+  def notes_only do
+    from(n in Note, where: n.kind == "note")
+  end
+
+  @doc """
+  Creates an explicit empty-folder marker row (kind="folder").
+
+  Idempotent: if a marker for this folder_hmac already exists, it is
+  returned. A soft-deleted marker is undeleted in place (preserves id /
+  the AAD-bound envelope). Rejects root folder ("") — root is implicit
+  whenever any note exists at the top level.
+
+  The encrypted folder name lives in `folder_ciphertext` / `folder_nonce`
+  using the same row-id-bound AAD anchor existing notes already use
+  (`row_aad(:notes, :folder, id, dek_version)`). No new crypto surface.
+  """
+  @spec create_folder_marker(map(), map(), String.t()) ::
+          {:ok, Note.t()} | {:error, term()}
+  def create_folder_marker(_user, _vault, ""), do: {:error, :root_folder_not_marker}
+
+  def create_folder_marker(user, vault, folder) when is_binary(folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+      # Unwrap once so the public contract is {:ok, note} | {:error, _}.
+      case Repo.with_tenant(user.id, fn ->
+             case find_folder_marker(user, vault, folder_hmac) do
+               {:ok, %Note{deleted_at: nil} = existing} ->
+                 {:ok, hydrate_folder_marker(existing, dek)}
+
+               {:ok, %Note{} = soft_deleted} ->
+                 soft_deleted
+                 |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+                 |> Repo.update()
+                 |> case do
+                   {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
+                   {:error, _} = err -> err
+                 end
+
+               :not_found ->
+                 insert_folder_marker(user, vault, dek, folder, folder_hmac)
+             end
+           end) do
+        {:ok, inner} -> inner
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  # Folder marker rows have only folder_* ciphertext populated, so
+  # Crypto.maybe_decrypt_note_fields/2 short-circuits (needs path or
+  # content present). Decrypt the folder field directly here.
+  defp hydrate_folder_marker(%Note{} = marker, dek) do
+    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
+
+    case Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad) do
+      {:ok, folder} -> %{marker | folder: folder}
+      :error -> raise "failed to decrypt folder marker id=#{marker.id}"
+    end
+  end
+
+  defp find_folder_marker(user, vault, folder_hmac) do
+    row =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and
+              n.vault_id == ^vault.id and
+              n.kind == "folder" and
+              n.folder_hmac == ^folder_hmac
+        )
+      )
+
+    if row, do: {:ok, row}, else: :not_found
+  end
+
+  defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
+    marker_id = Crypto.next_row_id(:notes)
+    now = DateTime.utc_now()
+    folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
+    {folder_ct, folder_nonce} = Envelope.encrypt(folder, dek, folder_aad)
+
+    attrs = %{
+      kind: "folder",
+      user_id: user.id,
+      vault_id: vault.id,
+      version: 1,
+      dek_version: Crypto.row_version_aad_bound(),
+      mtime: DateTime.to_unix(now) + 0.0,
+      folder_ciphertext: folder_ct,
+      folder_nonce: folder_nonce,
+      folder_hmac: folder_hmac
+    }
+
+    %Note{id: marker_id}
+    |> Note.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, marker} ->
+        {:ok, hydrate_folder_marker(marker, dek)}
+
+      {:error, %Ecto.Changeset{errors: errors}} = err ->
+        # Race: concurrent insert of the same marker collapses to the
+        # winner. Re-fetch and return rather than surface a constraint
+        # error — keeps the API idempotent under load.
+        if has_unique_conflict?(errors) do
+          case find_folder_marker(user, vault, folder_hmac) do
+            {:ok, existing} -> {:ok, hydrate_folder_marker(existing, dek)}
+            :not_found -> err
+          end
+        else
+          err
+        end
+    end
+  end
+
+  defp has_unique_conflict?(errors) do
+    Enum.any?(errors, fn
+      {_field, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
+    end)
+  end
+
+  @doc """
+  Soft-deletes an explicit folder marker. Has no effect on real notes
+  living under the same folder path — those continue to derive the
+  folder in `list_folders_with_counts/2`.
+
+  Returns `{:ok, :deleted}` when a marker was found and removed, or
+  `{:ok, :not_found}` for idempotent no-op. The controller surfaces 204
+  in both cases.
+  """
+  @spec delete_folder_marker(map(), map(), String.t()) ::
+          {:ok, :deleted | :not_found} | {:error, term()}
+  def delete_folder_marker(user, vault, folder) when is_binary(folder) do
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+      # Unwrap once so the public contract is {:ok, :deleted | :not_found} | {:error, _}.
+      case Repo.with_tenant(user.id, fn ->
+             case find_folder_marker(user, vault, folder_hmac) do
+               {:ok, %Note{deleted_at: nil} = marker} ->
+                 marker
+                 |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+                 |> Repo.update()
+                 |> case do
+                   {:ok, _} -> {:ok, :deleted}
+                   {:error, _} = err -> err
+                 end
+
+               {:ok, _already_soft_deleted} ->
+                 {:ok, :not_found}
+
+               :not_found ->
+                 {:ok, :not_found}
+             end
+           end) do
+        {:ok, inner} -> inner
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
@@ -41,6 +217,12 @@ defmodule Engram.Notes do
       now = DateTime.utc_now()
 
       base_attrs = %{
+        # Belt-and-suspenders: schema default is "note", but stamping it
+        # explicitly here keeps the kind invariant intact even if a future
+        # caller bypasses the default (e.g., raw insert_all). The partial
+        # unique indexes split by kind, so this is what lets a real note
+        # coexist with a folder marker at the same path string.
+        kind: "note",
         content: content,
         title: title,
         tags: tags,
@@ -383,7 +565,9 @@ defmodule Engram.Notes do
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+                n.kind == "note",
             order_by: [asc: n.updated_at]
           )
         )
@@ -489,6 +673,44 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns just the explicit folder marker names (sorted, decrypted).
+  Used by the plugin's GET /folders/explicit consumer to maintain its
+  disk-side explicitFolders set. Derived folders (those inferred from
+  notes living under a path) are excluded — only kind='folder' rows.
+  """
+  @spec list_explicit_folders(map(), map()) :: {:ok, [String.t()]}
+  def list_explicit_folders(user, vault) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, _filter_key} ->
+        {:ok, dek} = Crypto.get_dek(user)
+
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at) and n.kind == "folder",
+                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
+              )
+            )
+          end)
+
+        names =
+          rows
+          |> Enum.map(fn {id, dv, ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
+          end)
+          |> Enum.sort()
+
+        {:ok, names}
+
+      {:error, :no_dek} ->
+        {:ok, []}
+    end
+  end
+
+  @doc """
   Returns tags with counts across all non-deleted notes for a user.
 
   Phase B.3: tags are envelope-encrypted per note. Decrypts each note's
@@ -540,6 +762,9 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
+        # Per folder_hmac, pick any one row (for envelope decryption) and
+        # count only kind='note' rows. Marker-only folders yield count 0;
+        # mixed folders yield the note count (markers excluded).
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
@@ -553,7 +778,12 @@ defmodule Engram.Notes do
                   dv: n.dek_version,
                   ct: n.folder_ciphertext,
                   nonce: n.folder_nonce,
-                  count: fragment("COUNT(*) OVER (PARTITION BY ?)", n.folder_hmac)
+                  count:
+                    fragment(
+                      "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
+                      n.kind,
+                      n.folder_hmac
+                    )
                 }
               )
             )
@@ -596,6 +826,7 @@ defmodule Engram.Notes do
               from(n in Note,
                 where:
                   n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                    n.kind == "note" and
                     n.folder_hmac == ^target_hmac,
                 order_by: [asc: n.id]
               )
@@ -645,7 +876,21 @@ defmodule Engram.Notes do
         )
       end)
 
-    decrypted = Enum.map(all_notes, &decrypt_or_raise!(&1, user))
+    # Marker rows have nil path_ciphertext, so the standard decrypt path
+    # short-circuits before unwrapping the folder envelope (gated on
+    # path_ciphertext != nil). Branch on kind so markers go through the
+    # dedicated hydrate path Task 4 introduced — they still carry a
+    # folder, so the prefix-match filter below catches them alongside
+    # real notes.
+    {:ok, dek} = Crypto.get_dek(user)
+
+    decrypted =
+      Enum.map(all_notes, fn note ->
+        case note.kind do
+          "folder" -> hydrate_folder_marker(note, dek)
+          _ -> decrypt_or_raise!(note, user)
+        end
+      end)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -662,6 +907,10 @@ defmodule Engram.Notes do
       # then apply as a single update per note (avoids N+1 per-row queries).
       # Each tuple now carries the source note (decrypted) so the bulk loop
       # can re-encrypt content + tags with the row-id-bound AAD.
+      #
+      # Marker rows have no path/content/title to rewrite — only the
+      # folder envelope. Carry nil new_path/new_title so the bulk loop
+      # can branch on kind.
       updates =
         Enum.map(notes, fn note ->
           new_note_folder =
@@ -671,33 +920,60 @@ defmodule Engram.Notes do
               new_folder <> String.slice(note.folder, old_len..-1//1)
             end
 
-          new_path = new_note_folder <> String.slice(note.path, String.length(note.folder)..-1//1)
-          new_title = Helpers.extract_title(note.content || "", new_path)
+          {new_path, new_title} =
+            case note.kind do
+              "folder" ->
+                {nil, nil}
+
+              _ ->
+                np =
+                  new_note_folder <>
+                    String.slice(note.path, String.length(note.folder)..-1//1)
+
+                {np, Helpers.extract_title(note.content || "", np)}
+            end
 
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
       Repo.with_tenant(user.id, fn ->
         Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-          full_kw =
-            full_aad_bound_kw(
-              user,
-              note.id,
-              note.content || "",
-              new_title,
-              new_path,
-              new_note_folder,
-              note.tags || []
-            )
+          case note.kind do
+            "folder" ->
+              {ct, nonce, hmac} =
+                folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-          from(n in Note, where: n.id == ^note.id)
-          |> Repo.update_all(
-            set:
-              [
-                embed_hash: nil,
-                updated_at: now
-              ] ++ full_kw
-          )
+              from(n in Note, where: n.id == ^note.id)
+              |> Repo.update_all(
+                set: [
+                  folder_ciphertext: ct,
+                  folder_nonce: nonce,
+                  folder_hmac: hmac,
+                  updated_at: now
+                ]
+              )
+
+            _ ->
+              full_kw =
+                full_aad_bound_kw(
+                  user,
+                  note.id,
+                  note.content || "",
+                  new_title,
+                  new_path,
+                  new_note_folder,
+                  note.tags || []
+                )
+
+              from(n in Note, where: n.id == ^note.id)
+              |> Repo.update_all(
+                set:
+                  [
+                    embed_hash: nil,
+                    updated_at: now
+                  ] ++ full_kw
+              )
+          end
         end)
       end)
 
@@ -705,10 +981,14 @@ defmodule Engram.Notes do
       # includes delete signals. Without these, polling clients retain stale
       # files at old paths after a folder rename. Tombstones are full-row
       # inserts so each must carry the encrypted path/folder/tags fields too.
+      # Marker rows have no path to tombstone — skip them.
       mtime_float = DateTime.to_unix(now) + 0.0
 
+      real_note_updates =
+        Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
+
       tombstones =
-        Enum.map(updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+        Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
           # T3.6 — pre-allocate the tombstone id so the AAD bind string can
           # be constructed before insert. Tombstones are full-row inserts
           # written with empty content/title/tags but the row-id-bound AAD
@@ -740,7 +1020,8 @@ defmodule Engram.Notes do
 
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
-      Enum.each(updates, fn {note, old_note_path, new_path, _folder, _title} ->
+      # Marker rows have no path / no embedding, skip the broadcast+enqueue.
+      Enum.each(real_note_updates, fn {note, old_note_path, new_path, _folder, _title} ->
         _ =
           Enqueue.enqueue(
             Engram.Workers.EmbedNote.new_debounced(note.id,
@@ -924,6 +1205,20 @@ defmodule Engram.Notes do
         tags_hmac: Enum.map(tags, &Crypto.hmac_field(filter_key, &1)),
         dek_version: Crypto.row_version_aad_bound()
       ]
+  end
+
+  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
+  # row-id-bound AAD and recomputes the folder_hmac. Returns
+  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
+  # No content/title/path/tags work because markers have none of those.
+  defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    {ct, nonce} =
+      Envelope.encrypt(folder, dek, Crypto.aad_for_row(:notes, :folder, row_id))
+
+    {ct, nonce, Crypto.hmac_field(filter_key, folder)}
   end
 
   # T3.6 — full re-encrypt of every encrypted column on a note, with row-id

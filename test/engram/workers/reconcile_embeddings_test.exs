@@ -49,6 +49,21 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
+    test "skips folder marker rows (kind='folder')" do
+      user = insert(:user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+
+      {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "Empty")
+      # Sanity: marker has nil embed_hash, so the unfiltered query would pick it up.
+      assert marker.kind == "folder"
+      assert is_nil(marker.embed_hash)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => marker.id})
+    end
+
     test "batches at most 100 notes per vault" do
       user = insert(:user)
       vault = insert(:vault, user: user)

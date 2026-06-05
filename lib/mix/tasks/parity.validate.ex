@@ -389,6 +389,7 @@ defmodule Mix.Tasks.Parity.Validate do
             where:
               is_nil(n.deleted_at) and
                 n.user_id == ^user.id and
+                n.kind == "note" and
                 (is_nil(n.embed_hash) or n.embed_hash != n.content_hash),
             select: n.id
           )

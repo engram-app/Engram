@@ -139,13 +139,19 @@ defmodule Engram.UsageMeters do
   @doc """
   Recomputes the live-note count from the notes table and upserts it. Repair
   primitive for reconciling drift; not on any hot path.
+
+  Counts only `kind="note"` rows — explicit folder markers (`kind="folder"`)
+  are structural metadata, not user-facing notes, and have a separate quota
+  path. See `Engram.Notes.create_folder_marker/3`.
   """
   @spec recount_notes!(integer()) :: non_neg_integer()
   def recount_notes!(user_id) when is_integer(user_id) do
     count =
       Repo.one(
         from(n in Engram.Notes.Note,
-          where: n.user_id == ^user_id and is_nil(n.deleted_at),
+          where:
+            n.user_id == ^user_id and is_nil(n.deleted_at) and
+              n.kind == "note",
           select: count(n.id)
         ),
         skip_tenant_check: true

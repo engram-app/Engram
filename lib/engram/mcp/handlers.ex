@@ -140,6 +140,26 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  def handle("create_folder", user, vault, %{"folder" => folder}) when is_binary(folder) do
+    case Notes.create_folder_marker(user, vault, folder) do
+      {:ok, marker} ->
+        {:ok, "Created folder: #{marker.folder}"}
+
+      {:error, :root_folder_not_marker} ->
+        {:error, "folder must be a non-empty path"}
+
+      {:error, atom} when is_atom(atom) ->
+        {:error, "Failed: #{atom}"}
+
+      {:error, _other} ->
+        {:error, "Failed to create folder."}
+    end
+  end
+
+  def handle("create_folder", _user, _vault, _args) do
+    {:error, "folder parameter is required"}
+  end
+
   def handle("suggest_folder", user, vault, args) do
     description = args["description"] || ""
     limit = max(1, min(args["limit"] || 5, 10))

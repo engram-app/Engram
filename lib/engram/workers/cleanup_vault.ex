@@ -103,7 +103,9 @@ defmodule Engram.Workers.CleanupVault do
       live_notes =
         Repo.one(
           from(n in Note,
-            where: n.vault_id == ^vault_id and is_nil(n.deleted_at),
+            where:
+              n.vault_id == ^vault_id and is_nil(n.deleted_at) and
+                n.kind == "note",
             select: count(n.id)
           ),
           skip_tenant_check: true

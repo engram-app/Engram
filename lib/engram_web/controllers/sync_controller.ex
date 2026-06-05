@@ -40,7 +40,9 @@ defmodule EngramWeb.SyncController do
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                n.kind == "note",
             select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.content_hash}
           )
         )
