@@ -152,6 +152,47 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Soft-deletes an explicit folder marker. Has no effect on real notes
+  living under the same folder path — those continue to derive the
+  folder in `list_folders_with_counts/2`.
+
+  Returns `{:ok, :deleted}` when a marker was found and removed, or
+  `{:ok, :not_found}` for idempotent no-op. The controller surfaces 204
+  in both cases.
+  """
+  @spec delete_folder_marker(map(), map(), String.t()) ::
+          {:ok, :deleted | :not_found} | {:error, term()}
+  def delete_folder_marker(user, vault, folder) when is_binary(folder) do
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+      # Unwrap once so the public contract is {:ok, :deleted | :not_found} | {:error, _}.
+      case Repo.with_tenant(user.id, fn ->
+             case find_folder_marker(user, vault, folder_hmac) do
+               {:ok, %Note{deleted_at: nil} = marker} ->
+                 marker
+                 |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+                 |> Repo.update()
+                 |> case do
+                   {:ok, _} -> {:ok, :deleted}
+                   {:error, _} = err -> err
+                 end
+
+               {:ok, _already_soft_deleted} ->
+                 {:ok, :not_found}
+
+               :not_found ->
+                 {:ok, :not_found}
+             end
+           end) do
+        {:ok, inner} -> inner
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
