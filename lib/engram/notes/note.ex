@@ -16,6 +16,7 @@ defmodule Engram.Notes.Note do
     field :content, :string, virtual: true
 
     field :version, :integer, default: 1
+    field :kind, :string, default: "note"
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     # Default 1 today; future rotation campaigns stamp the new version on
     # rewritten rows. Read path consumers key off this column once T3.5 /
@@ -73,28 +74,42 @@ defmodule Engram.Notes.Note do
         :mtime,
         :user_id,
         :vault_id,
-        :deleted_at
+        :deleted_at,
+        :kind
       ] ++ @encryption_fields,
       empty_values: []
     )
-    |> validate_required([
-      :user_id,
-      :vault_id,
-      :path_hmac,
-      :path_ciphertext,
-      :path_nonce,
-      :folder_hmac,
-      :folder_ciphertext,
-      :folder_nonce,
-      :content_ciphertext,
-      :content_nonce,
-      :title_ciphertext,
-      :title_nonce,
-      :tags_ciphertext,
-      :tags_nonce
-    ])
+    |> validate_inclusion(:kind, ["note", "folder"])
+    |> validate_required_for_kind()
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
-      name: :notes_user_id_vault_id_path_hmac_index
+      name: :notes_user_vault_path_v2
     )
+    |> unique_constraint([:user_id, :vault_id, :folder_hmac],
+      name: :notes_user_vault_folder_marker
+    )
+  end
+
+  defp validate_required_for_kind(changeset) do
+    required_note = [
+      :user_id, :vault_id,
+      :path_hmac, :path_ciphertext, :path_nonce,
+      :folder_hmac, :folder_ciphertext, :folder_nonce,
+      :content_ciphertext, :content_nonce,
+      :title_ciphertext, :title_nonce,
+      :tags_ciphertext, :tags_nonce
+    ]
+
+    required_folder = [
+      :user_id, :vault_id,
+      :folder_hmac, :folder_ciphertext, :folder_nonce
+    ]
+
+    required =
+      case get_field(changeset, :kind) || "note" do
+        "folder" -> required_folder
+        _ -> required_note
+      end
+
+    validate_required(changeset, required)
   end
 end
