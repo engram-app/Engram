@@ -50,9 +50,13 @@ permissions:
 env:
   DOCKER_BUILDKIT: "1"
   COMPOSE_DOCKER_CLI_BUILD: "1"
-  # LOCAL_REGISTRY is set by the runner environment after running .github/setup-runner.sh
-  # When set, docker-compose.ci.yml pulls images from the local FastRaid registry.
-  # When unset, falls back to Docker Hub.
+  # LOCAL_REGISTRY = FastRaid distribution/registry on the engram LAN.
+  # Hard-coded at workflow level so every job — including JIT/ephemeral
+  # isolated runners that never ran setup-runner.sh — gets the value.
+  # The fingerprint marker store (ci-pass / ci-e2e-pass tags) requires it;
+  # downstream callers (line ~929, ~2165) used to tolerate unset via shell
+  # fallback to Docker Hub — that fallback path is now dead.
+  LOCAL_REGISTRY: "10.0.20.214:5000"
 
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
@@ -204,21 +208,50 @@ jobs:
           echo "Backend fingerprint: $BACKEND_HASH"
           echo "E2E fingerprint:     $E2E_HASH (backend + plugin $PLUGIN_SHA)"
 
+      # Marker store = FastRaid local Docker registry (LOCAL_REGISTRY), NOT
+      # actions/cache. actions/cache scopes entries to the writing ref +
+      # default branch, so a PR run's marker (saved on `feat/foo`) was NEVER
+      # visible to the subsequent `main` push triggered by squash-merge —
+      # the merge re-ran full CI even though content was unchanged. The
+      # registry is ref-agnostic: a HEAD against /v2/ci-pass/manifests/<hash>
+      # returns 200 regardless of which branch pushed the tag.
+      #
+      # No auth — registry is insecure HTTP, intra-LAN only, already trusted
+      # by every runner's docker daemon (.github/setup-runner.sh).
       - name: Look up prior backend pass
         id: backend-lookup
-        uses: actions/cache/restore@v5
-        with:
-          path: .ci-fingerprint.marker
-          key: ci-pass-${{ steps.compute.outputs.backend-hash }}
-          lookup-only: true
+        env:
+          BACKEND_HASH: ${{ steps.compute.outputs.backend-hash }}
+        run: |
+          if [ -z "${LOCAL_REGISTRY:-}" ]; then
+            echo "::warning::LOCAL_REGISTRY unset — fingerprint short-circuit disabled"
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if curl -fsS -o /dev/null --max-time 5 -I \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "http://${LOCAL_REGISTRY}/v2/ci-pass/manifests/${BACKEND_HASH}"; then
+            echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Look up prior e2e pass
         id: e2e-lookup
-        uses: actions/cache/restore@v5
-        with:
-          path: .ci-e2e-fingerprint.marker
-          key: ci-e2e-pass-${{ steps.compute.outputs.e2e-hash }}
-          lookup-only: true
+        env:
+          E2E_HASH: ${{ steps.compute.outputs.e2e-hash }}
+        run: |
+          if [ -z "${LOCAL_REGISTRY:-}" ]; then
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if curl -fsS -o /dev/null --max-time 5 -I \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "http://${LOCAL_REGISTRY}/v2/ci-e2e-pass/manifests/${E2E_HASH}"; then
+            echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Report decision
         run: |
@@ -2320,23 +2353,53 @@ jobs:
     needs: [fingerprint, ci]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - name: Write backend fingerprint marker
+      # Markers live in LOCAL_REGISTRY (FastRaid 10.0.20.214:5000) as tiny
+      # `FROM scratch` images, NOT actions/cache — see fingerprint job for
+      # the ref-scoping bug that motivated the switch. A scratch image with
+      # a single file is ~few KB; the registry GCs orphan blobs but keeps
+      # tagged manifests indefinitely, so a stale marker only consumes the
+      # one referenced blob until a periodic prune job (out of scope).
+      - name: Save backend marker to registry
         if: github.event_name != 'repository_dispatch'
-        run: echo "passed at $(date -u +%FT%TZ) on ${GITHUB_SHA}" > .ci-fingerprint.marker
-      - name: Save backend marker to cache
-        if: github.event_name != 'repository_dispatch'
-        uses: actions/cache/save@v5
-        with:
-          path: .ci-fingerprint.marker
-          key: ci-pass-${{ needs.fingerprint.outputs.backend-hash }}
+        env:
+          BACKEND_HASH: ${{ needs.fingerprint.outputs.backend-hash }}
+        run: |
+          if [ -z "${LOCAL_REGISTRY:-}" ]; then
+            echo "::warning::LOCAL_REGISTRY unset — backend marker not saved"
+            exit 0
+          fi
+          TAG="${LOCAL_REGISTRY}/ci-pass:${BACKEND_HASH}"
+          WORKDIR=$(mktemp -d)
+          echo "passed at $(date -u +%FT%TZ) on ${GITHUB_SHA}" > "${WORKDIR}/marker.txt"
+          cat > "${WORKDIR}/Dockerfile" <<'EOF'
+          FROM scratch
+          COPY marker.txt /marker.txt
+          EOF
+          docker build -t "$TAG" "$WORKDIR" >/dev/null
+          docker push "$TAG"
+          rm -rf "$WORKDIR"
+          echo "::notice::Saved backend marker $TAG"
 
-      - name: Write e2e fingerprint marker
-        run: echo "passed at $(date -u +%FT%TZ) on ${GITHUB_SHA} (plugin ${{ needs.fingerprint.outputs.plugin-sha }})" > .ci-e2e-fingerprint.marker
-      - name: Save e2e marker to cache
-        uses: actions/cache/save@v5
-        with:
-          path: .ci-e2e-fingerprint.marker
-          key: ci-e2e-pass-${{ needs.fingerprint.outputs.e2e-hash }}
+      - name: Save e2e marker to registry
+        env:
+          E2E_HASH: ${{ needs.fingerprint.outputs.e2e-hash }}
+          PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
+        run: |
+          if [ -z "${LOCAL_REGISTRY:-}" ]; then
+            echo "::warning::LOCAL_REGISTRY unset — e2e marker not saved"
+            exit 0
+          fi
+          TAG="${LOCAL_REGISTRY}/ci-e2e-pass:${E2E_HASH}"
+          WORKDIR=$(mktemp -d)
+          echo "passed at $(date -u +%FT%TZ) on ${GITHUB_SHA} (plugin ${PLUGIN_SHA})" > "${WORKDIR}/marker.txt"
+          cat > "${WORKDIR}/Dockerfile" <<'EOF'
+          FROM scratch
+          COPY marker.txt /marker.txt
+          EOF
+          docker build -t "$TAG" "$WORKDIR" >/dev/null
+          docker push "$TAG"
+          rm -rf "$WORKDIR"
+          echo "::notice::Saved e2e marker $TAG"
 
   # When plugin dispatch arrives and the (backend, plugin) pair is already
   # cached green, e2e-clerk is skipped — its in-job "Report E2E status to
