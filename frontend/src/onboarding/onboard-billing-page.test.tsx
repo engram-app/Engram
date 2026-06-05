@@ -1,11 +1,22 @@
+import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import { ThemeProvider } from '../theme/theme-provider'
 
 // Capture the Paddle eventCallback so the test can drive it (or refuse to).
 let capturedEventCallback: ((event: { name: string; data?: unknown }) => void) | undefined
+
+// Counter for tools-page mounts. If onActivated fires twice (replace: true),
+// react-router would re-mount the tools route — counter goes to 2.
+let toolsPageMounts = 0
+function ToolsPageProbe() {
+  React.useEffect(() => {
+    toolsPageMounts += 1
+  }, [])
+  return <div data-testid="tools-page" />
+}
 
 vi.mock('@paddle/paddle-js', () => ({
   initializePaddle: vi.fn(async (opts: { eventCallback?: typeof capturedEventCallback }) => {
@@ -49,7 +60,7 @@ function renderOnboardBilling() {
         <MemoryRouter initialEntries={['/onboard/billing']}>
           <Routes>
             <Route path="/onboard/billing" element={<OnboardBillingPage />} />
-            <Route path="/onboard/tools" element={<div data-testid="tools-page" />} />
+            <Route path="/onboard/tools" element={<ToolsPageProbe />} />
             <Route path="/" element={<div data-testid="home-page" />} />
           </Routes>
         </MemoryRouter>
@@ -105,6 +116,7 @@ const BILLING_CONFIG = {
 describe('OnboardBillingPage — bug #440 repro', () => {
   beforeEach(() => {
     capturedEventCallback = undefined
+    toolsPageMounts = 0
     get.mockReset()
     post.mockReset()
     patch.mockReset()
@@ -158,5 +170,60 @@ describe('OnboardBillingPage — bug #440 repro', () => {
       () => expect(screen.getByTestId('tools-page')).toBeInTheDocument(),
       { timeout: 2000 },
     )
+  })
+
+  it('fires onActivated exactly once even with continued polling after activation', async () => {
+    // First /onboarding/status response: still billing. Second onward: tools.
+    let onboardingCalls = 0
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status') return BILLING_INACTIVE
+      if (url === '/billing/config') return BILLING_CONFIG
+      if (url === '/onboarding/status') {
+        onboardingCalls += 1
+        return onboardingCalls === 1 ? STATUS_BILLING : STATUS_TOOLS
+      }
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    renderOnboardBilling()
+
+    // Wait for the plan picker, then drive payment-initiated.
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0),
+    )
+    await waitFor(() => expect(capturedEventCallback).toBeDefined())
+    await act(async () => {
+      capturedEventCallback!({
+        name: 'checkout.payment.initiated',
+        data: { transaction_id: 'txn_guarantee_42' },
+      })
+    })
+
+    // Pump several accelerated ticks. The first poll already saw billing
+    // (mounted-state background tick) and consumed onboardingCalls=1; the
+    // second poll (accelerated, 1s) should see STATUS_TOOLS → activate. We
+    // pump extra cycles to be robust to ordering.
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+        await Promise.resolve()
+      })
+    }
+
+    await waitFor(() => expect(screen.getByTestId('tools-page')).toBeInTheDocument())
+    expect(toolsPageMounts).toBe(1)
+
+    // Advance well past several more poll cycles — the watcher should be in
+    // 'activated' (terminal). If anything is leaking schedules, it would
+    // re-fire onActivated and re-mount tools-page.
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(2_000)
+        await Promise.resolve()
+      }
+    })
+
+    expect(screen.getByTestId('tools-page')).toBeInTheDocument()
+    expect(toolsPageMounts).toBe(1)
   })
 })
