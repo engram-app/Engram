@@ -79,6 +79,13 @@ echo "✓ pre-push: mix.exs version differs from main (main=$main_version, branc
 # printed in declaration order so logs read deterministically even
 # though the work was interleaved.
 #
+# Fast path: if NO Elixir-affecting files (*.ex / *.exs / mix.lock /
+# .credo.exs / .sobelow-conf) changed vs origin/main, the existing
+# _build + the rules captured by main's last green CI run are
+# authoritative — skip compile/credo/sobelow entirely and just run
+# `mix format --check-formatted` to catch top-level formatting drift.
+# Pushes touching only YAML/docs/configs go from ~2min to a few seconds.
+#
 # Dialyzer is skipped from pre-push (too slow for the dev loop). CI runs it.
 #
 # Bypass any check with: git push --no-verify
@@ -109,6 +116,24 @@ report() {
 }
 
 FAILED=0
+
+# Fast path: skip compile/credo/sobelow if nothing Elixir-affecting changed.
+# `git diff --name-only origin/main...HEAD` lists files touched by commits on
+# this branch but not on main. Empty list (or no matches in the pattern) =>
+# main's CI already validated this exact code path. We still run format
+# because (a) it's fast (~5s) and (b) it catches formatter-rule drift
+# someone might have introduced in .formatter.exs without re-running.
+ELIXIR_AFFECTING_REGEX='\.(ex|exs)$|^mix\.lock$|^\.credo\.exs$|^\.sobelow-conf$'
+CHANGED_AFFECTING="$(git diff --name-only origin/main...HEAD 2>/dev/null | grep -E "$ELIXIR_AFFECTING_REGEX" || true)"
+
+if [ -z "$CHANGED_AFFECTING" ]; then
+  echo "▸ Fast path: no Elixir-affecting files changed vs origin/main — running format only"
+  run_bg format mix format --check-formatted
+  wait
+  report "mix format" format || FAILED=1
+  [ "$FAILED" = "0" ] || exit 1
+  exit 0
+fi
 
 echo "▸ Stage A (parallel): mix format, mix compile..."
 run_bg format  mix format --check-formatted
