@@ -123,8 +123,29 @@ FAILED=0
 # main's CI already validated this exact code path. We still run format
 # because (a) it's fast (~5s) and (b) it catches formatter-rule drift
 # someone might have introduced in .formatter.exs without re-running.
+#
+# Special case: mix.exs is `.exs` (matches the regex), but every PR must bump
+# its version line per the pre-push policy. A version-line-only change is
+# semantically a no-op for the compiler (mirrors how CI's fingerprint job
+# strips the version line before hashing). If mix.exs is the ONLY affecting
+# file AND the diff touches only the version line, drop it from the trigger
+# set so doc-only PRs (which still need a version bump) hit the fast path.
 ELIXIR_AFFECTING_REGEX='\.(ex|exs)$|^mix\.lock$|^\.credo\.exs$|^\.sobelow-conf$'
 CHANGED_AFFECTING="$(git diff --name-only origin/main...HEAD 2>/dev/null | grep -E "$ELIXIR_AFFECTING_REGEX" || true)"
+
+# Strip mix.exs from the trigger set if the only changed lines are the version line.
+# `git diff --unified=0` gives strict +/- lines; filter out diff headers (+++/---/@@),
+# then check if anything non-version-line remains.
+if [ "$(echo "$CHANGED_AFFECTING" | tr -d '\n ')" = "mix.exs" ]; then
+  NON_VERSION_DIFF="$(git diff --unified=0 origin/main...HEAD -- mix.exs 2>/dev/null \
+    | grep -E '^[+-]' \
+    | grep -vE '^(\+\+\+|---) ' \
+    | grep -vE '^[+-][[:space:]]*version: "[0-9]+\.[0-9]+\.[0-9]+",?[[:space:]]*$' \
+    || true)"
+  if [ -z "$NON_VERSION_DIFF" ]; then
+    CHANGED_AFFECTING=""
+  fi
+fi
 
 if [ -z "$CHANGED_AFFECTING" ]; then
   echo "▸ Fast path: no Elixir-affecting files changed vs origin/main — running format only"
