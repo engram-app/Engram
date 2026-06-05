@@ -17,6 +17,19 @@ defmodule Engram.Notes do
   require Logger
 
   @doc """
+  Composable query scope that restricts a `Note` query to kind='note' rows.
+  Every site that wants real notes (excluding folder markers) should
+  start from `notes_only/0` or include `WHERE kind = 'note'` explicitly.
+
+  The accompanying lint test (`notes_scope_lint_test.exs`) flags raw
+  `from(n in Note, ...)` queries that do not include the kind filter.
+  """
+  @spec notes_only() :: Ecto.Query.t()
+  def notes_only do
+    from(n in Note, where: n.kind == "note")
+  end
+
+  @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
   """
