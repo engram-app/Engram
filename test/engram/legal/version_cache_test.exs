@@ -4,8 +4,8 @@ defmodule Engram.Legal.VersionCacheTest do
   alias Engram.Legal.VersionCache
 
   setup do
-    on_exit(&VersionCache.invalidate_all/0)
-    VersionCache.invalidate_all()
+    on_exit(&reset_version_cache/0)
+    reset_version_cache()
     :ok
   end
 
@@ -17,7 +17,7 @@ defmodule Engram.Legal.VersionCacheTest do
     # still cached at the old value until invalidated
     assert VersionCache.required_floor("terms_of_service") == "2026-05-19"
 
-    VersionCache.invalidate_all()
+    reset_version_cache()
     assert VersionCache.required_floor("terms_of_service") == "2026-06-01"
   end
 
