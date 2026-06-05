@@ -46,6 +46,38 @@ defmodule Engram.AccountsAdminTest do
     assert {:error, :last_admin} = Accounts.soft_delete_user(admin)
   end
 
+  test "suspend/1 force-disconnects live sockets" do
+    _admin = insert(:user, role: "admin")
+    m = insert(:user, role: "member")
+    topic = "user_socket:#{m.id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    assert {:ok, _} = Accounts.suspend(m)
+
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+  end
+
+  test "suspend/1 does NOT broadcast disconnect when rolled back as last_admin" do
+    admin = insert(:user, role: "admin")
+    topic = "user_socket:#{admin.id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    assert {:error, :last_admin} = Accounts.suspend(admin)
+
+    refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}, 50
+  end
+
+  test "soft_delete_user/1 force-disconnects live sockets" do
+    _admin = insert(:user, role: "admin")
+    m = insert(:user, role: "member")
+    topic = "user_socket:#{m.id}"
+    EngramWeb.Endpoint.subscribe(topic)
+
+    assert {:ok, _} = Accounts.soft_delete_user(m)
+
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+  end
+
   # Spec §7 — admin DELETE on a user purges vault data, not just the user row.
   test "purge_user_vaults/1 enqueues a forced CleanupVault per owned vault" do
     user = insert(:user, role: "member")

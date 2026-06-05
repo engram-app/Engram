@@ -666,6 +666,94 @@ defmodule Engram.BillingTest do
       assert payload.status == "active"
       assert payload.subscription_id == "sub_upd_broadcast_1"
     end
+
+    test "subscription.canceled force-disconnects live sockets" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_kick_cancel",
+        status: "active",
+        tier: "pro"
+      )
+
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      event = %{
+        "event_type" => "subscription.canceled",
+        "data" => %{
+          "id" => "sub_kick_cancel",
+          "status" => "canceled",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, _} = Billing.upsert_from_paddle_event(event)
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "subscription tier downgrade force-disconnects live sockets" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_kick_downgrade",
+        status: "active",
+        tier: "pro"
+      )
+
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      event = %{
+        "event_type" => "subscription.updated",
+        "data" => %{
+          "id" => "sub_kick_downgrade",
+          "status" => "active",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, updated} = Billing.upsert_from_paddle_event(event)
+      assert updated.tier == "starter"
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "subscription update with identical tier+status does NOT broadcast disconnect" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_noop_update",
+        status: "active",
+        tier: "pro"
+      )
+
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      event = %{
+        "event_type" => "subscription.updated",
+        "data" => %{
+          "id" => "sub_noop_update",
+          "status" => "active",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-08-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, _} = Billing.upsert_from_paddle_event(event)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}, 50
+    end
   end
 
   describe "subscription memoization" do

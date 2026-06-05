@@ -90,6 +90,27 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
       assert json_response(conn2, 400)["error"] == "invalid_grant"
     end
 
+    test "force-disconnects live sockets for the token's owner", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn)
+      hash = :crypto.hash(:sha256, rt) |> Base.encode16(case: :lower)
+
+      user_id =
+        Repo.one!(
+          from(r in RefreshToken, where: r.token_hash == ^hash, select: r.user_id),
+          skip_tenant_check: true
+        )
+
+      topic = "user_socket:#{user_id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert post(build_conn(), "/oauth/revoke", %{
+               "token" => rt,
+               "client_id" => client.client_id
+             }).status == 200
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
     test "returns 200 for an unknown token (RFC 7009 §2.2)", %{conn: conn} do
       conn =
         post(conn, "/oauth/revoke", %{

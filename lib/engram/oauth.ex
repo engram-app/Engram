@@ -369,11 +369,16 @@ defmodule Engram.OAuth do
     case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash),
            skip_tenant_check: true
          ) do
-      %RefreshToken{client_id: ^client_id} = rt ->
+      %RefreshToken{client_id: ^client_id, user_id: user_id} = rt ->
         rt
         |> Ecto.Changeset.change(%{revoked_at: DateTime.utc_now(:second)})
         |> Repo.update!(skip_tenant_check: true)
 
+        # The matching access JWT lives outside our DB (Joken-signed, stateless)
+        # and remains technically valid until exp. Force-disconnect live sockets
+        # so any session still riding that access token loses its push channel
+        # immediately rather than at exp.
+        Engram.Auth.SessionInvalidator.disconnect_user(user_id)
         :ok
 
       _ ->

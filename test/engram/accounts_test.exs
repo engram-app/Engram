@@ -38,6 +38,25 @@ defmodule Engram.AccountsTest do
       assert :ok = Accounts.revoke_api_key(user, api_key.id)
       assert Accounts.list_api_keys(user) == []
     end
+
+    test "revoke_api_key force-disconnects live sockets for the user", %{user: user} do
+      {:ok, _raw, api_key} = Accounts.create_api_key(user, "to revoke + kick")
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert :ok = Accounts.revoke_api_key(user, api_key.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "revoke_api_key does NOT broadcast disconnect when key not found", %{user: user} do
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert {:error, :not_found} = Accounts.revoke_api_key(user, 999_999)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}, 50
+    end
   end
 
   describe "find_or_create_by_external_id/2" do
@@ -193,6 +212,27 @@ defmodule Engram.AccountsTest do
       # in place so `Connections.any_history?` can still see the lineage.
       assert {:error, :token_reused} = Accounts.consume_refresh_token(raw_token)
       assert {:error, :token_reused} = Accounts.consume_refresh_token(new_raw)
+    end
+
+    test "revoke_all_user_tokens force-disconnects live sockets", %{user: user} do
+      {:ok, _raw, _record} = Accounts.create_refresh_token(user)
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      Accounts.revoke_all_user_tokens(user)
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "revoke_token_family force-disconnects live sockets for affected users",
+         %{user: user} do
+      {:ok, _raw, record} = Accounts.create_refresh_token(user)
+      topic = "user_socket:#{user.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      Accounts.revoke_token_family(record.family_id)
+
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
     end
 
     test "revoke_all_user_tokens preserves row history for Connections lookups",
