@@ -277,7 +277,7 @@ jobs:
 
       - name: Find or update tracking issue
         if: steps.scan.outputs.drift == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           DRIFT_TABLE: ${{ steps.scan.outputs.table }}
         with:
