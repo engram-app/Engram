@@ -73,12 +73,12 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 16 tools", %{conn: conn} do
+    test "tools/list returns 17 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 16
+      assert length(tools) == 17
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
@@ -89,6 +89,7 @@ defmodule EngramWeb.McpControllerTest do
       assert "delete_note" in names
       assert "patch_note" in names
       assert "update_section" in names
+      assert "create_folder" in names
 
       # Each tool has required fields
       Enum.each(tools, fn t ->
@@ -208,6 +209,38 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "| Folder | Notes |"
       assert text =~ "| Health | 2 |"
       assert text =~ "| Work | 1 |"
+    end
+  end
+
+  describe "create_folder tool" do
+    test "creates an empty folder marker and returns success", %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{"folder" => "Projects"})
+      text = tool_text(conn)
+
+      assert text =~ "Projects"
+      assert text =~ "Created"
+    end
+
+    test "is idempotent — calling twice still succeeds", %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{"folder" => "Ideas"})
+      assert tool_text(conn) =~ "Ideas"
+
+      conn = call_tool(conn, "create_folder", %{"folder" => "Ideas"})
+      assert tool_text(conn) =~ "Ideas"
+    end
+
+    test "rejects empty folder string", %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{"folder" => ""})
+      text = tool_text(conn)
+
+      assert text =~ "folder"
+    end
+
+    test "rejects missing folder param", %{conn: conn} do
+      conn = call_tool(conn, "create_folder", %{})
+      text = tool_text(conn)
+
+      assert text =~ "folder"
     end
   end
 

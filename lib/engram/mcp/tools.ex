@@ -22,6 +22,7 @@ defmodule Engram.MCP.Tools do
       list_tags_def(),
       list_folders_def(),
       list_folder_def(),
+      create_folder_def(),
       suggest_folder_def(),
       get_note_def(),
       create_note_def(),
@@ -136,6 +137,27 @@ defmodule Engram.MCP.Tools do
         "required" => ["folder"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
+    }
+  end
+
+  defp create_folder_def do
+    %{
+      name: "create_folder",
+      description:
+        "Create an explicit empty folder in the personal knowledge base. " <>
+          "Use to scaffold folder structure before placing notes. Idempotent — " <>
+          "calling with an existing folder name succeeds without creating duplicates.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{
+            "type" => "string",
+            "description" => "Folder path, e.g. \"Projects/Active\""
+          }
+        },
+        "required" => ["folder"]
+      },
+      handler: &Handlers.handle("create_folder", &1, &2, &3)
     }
   end
 
