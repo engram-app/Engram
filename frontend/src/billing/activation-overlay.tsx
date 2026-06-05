@@ -1,11 +1,12 @@
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import type { WatcherState } from './use-activation-watcher'
+
+export type OverlayState = 'accelerated' | 'cooldown' | 'activated'
 
 type StepState = 'pending' | 'active' | 'done'
 
 interface Props {
-  state: WatcherState
+  state: OverlayState
   subscriptionOk: boolean
   nextStep: string
   transactionId: string | null

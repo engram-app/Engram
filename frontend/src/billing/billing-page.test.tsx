@@ -3,6 +3,7 @@ import { act, render, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { ThemeProvider } from '../theme/theme-provider'
+import { AuthContext, type AuthAdapter } from '../auth/auth-context'
 
 const initializePaddleMock = vi.fn()
 vi.mock('@paddle/paddle-js', () => ({
@@ -24,12 +25,47 @@ vi.mock('../api/client', () => ({
   setTokenGetter: vi.fn(),
 }))
 
+// Phoenix Socket mock — capture channel handlers. Hoisted so vi.mock factory
+// can reference them. Constructor function (not arrow) so `new Socket(...)`
+// works with vi.fn's Mock semantics.
+const { channelHandlers, socketCtor } = vi.hoisted(() => {
+  const channelHandlers: Record<string, (payload: unknown) => void> = {}
+  const channelMock = {
+    on: (event: string, cb: (payload: unknown) => void) => {
+      channelHandlers[event] = cb
+    },
+    join: () => ({ receive: () => ({}) }),
+  }
+  const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
+    Object.assign(this, {
+      connect: vi.fn(),
+      channel: vi.fn(() => channelMock),
+      disconnect: vi.fn(),
+    })
+  })
+  return { channelHandlers, socketCtor }
+})
+vi.mock('phoenix', () => ({ Socket: socketCtor }))
+
 import BillingPage from './billing-page'
+
+const authAdapter: AuthAdapter = {
+  isLoaded: true,
+  isSignedIn: true,
+  user: { email: 'u@example.com' },
+  getToken: async () => 'tok-test',
+  logout: async () => {},
+  hasBuiltInUI: false,
+}
+
+const ME = { id: 99, email: 'u@example.com', role: 'member' as const, display_name: null }
 
 describe('BillingPage — Paddle effect cleanup', () => {
   beforeEach(() => {
     get.mockReset()
     initializePaddleMock.mockReset()
+    socketCtor.mockClear()
+    for (const k of Object.keys(channelHandlers)) delete channelHandlers[k]
   })
 
   afterEach(() => {
@@ -38,8 +74,27 @@ describe('BillingPage — Paddle effect cleanup', () => {
 
   it('Paddle effect cleanup: post-unmount eventCallback invocations are inert', async () => {
     get.mockImplementation(async (url: string) => {
-      if (url === '/billing/status') return { tier: 'free', active: false, trial_days_remaining: 0, subscription: null, caps: {} }
-      if (url === '/billing/config') return { client_token: 'tok', environment: 'sandbox', price_ids: { starter: { monthly: 'p1', annual: 'p2' }, pro: { monthly: 'p3', annual: 'p4' } }, customer_email: 'u@example.com', custom_data: { user_id: '1' }, vaults_cap: null }
+      if (url === '/billing/status')
+        return {
+          tier: 'free',
+          active: false,
+          trial_days_remaining: 0,
+          subscription: null,
+          caps: {},
+        }
+      if (url === '/billing/config')
+        return {
+          client_token: 'tok',
+          environment: 'sandbox',
+          price_ids: {
+            starter: { monthly: 'p1', annual: 'p2' },
+            pro: { monthly: 'p3', annual: 'p4' },
+          },
+          customer_email: 'u@example.com',
+          custom_data: { user_id: '1' },
+          vaults_cap: null,
+        }
+      if (url === '/me') return { user: ME }
       throw new Error(`unexpected GET ${url}`)
     })
 
@@ -52,84 +107,95 @@ describe('BillingPage — Paddle effect cleanup', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const { unmount } = render(
       <QueryClientProvider client={qc}>
-        <ThemeProvider>
-          <MemoryRouter>
-            <BillingPage onActivated={() => {}} />
-          </MemoryRouter>
-        </ThemeProvider>
+        <AuthContext.Provider value={authAdapter}>
+          <ThemeProvider>
+            <MemoryRouter>
+              <BillingPage onActivated={() => {}} />
+            </MemoryRouter>
+          </ThemeProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>,
     )
 
-    // Wait for Paddle init — config query resolves async, then the useEffect
-    // runs initializePaddle, which is itself async.
     await waitFor(() => expect(captured).toBeDefined())
 
     unmount()
 
-    // A stale eventCallback firing after unmount must be a no-op (the
-    // cancelled flag inside the effect short-circuits the switch).
-    expect(() => captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'late' } })).not.toThrow()
+    expect(() =>
+      captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'late' } }),
+    ).not.toThrow()
   })
 
-  it('invalidates billing/status on activation for settings flow (no onActivated)', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    let onboardingCalls = 0
+  it('invalidates billing/status on subscription_activated channel event (settings flow)', async () => {
+    let billingActive = false
     get.mockImplementation(async (url: string) => {
       if (url === '/billing/status') {
-        return onboardingCalls === 0
-          ? { tier: 'free', active: false, trial_days_remaining: 0, subscription: null, caps: {} }
-          : { tier: 'starter', active: true, trial_days_remaining: 7, subscription: { status: 'trialing', tier: 'starter' }, caps: {} }
+        return billingActive
+          ? {
+              tier: 'starter',
+              active: true,
+              trial_days_remaining: 7,
+              subscription: { status: 'trialing', tier: 'starter' },
+              caps: {},
+            }
+          : {
+              tier: 'free',
+              active: false,
+              trial_days_remaining: 0,
+              subscription: null,
+              caps: {},
+            }
       }
-      if (url === '/billing/config') {
-        return { client_token: 'tok', environment: 'sandbox', price_ids: { starter: { monthly: 'p1', annual: 'p2' }, pro: { monthly: 'p3', annual: 'p4' } }, customer_email: 'u@example.com', custom_data: { user_id: '1' }, vaults_cap: null }
-      }
-      if (url === '/onboarding/status') {
-        onboardingCalls += 1
-        return onboardingCalls === 1
-          ? { enabled: true, next_step: 'billing', subscription_ok: false, terms_ok: true, steps: ['agreement', 'billing', 'tools', 'vault'], actions: [], vault_count: 0 }
-          : { enabled: true, next_step: 'done', subscription_ok: true, terms_ok: true, steps: ['agreement', 'billing', 'tools', 'vault'], actions: [], vault_count: 1 }
-      }
+      if (url === '/billing/config')
+        return {
+          client_token: 'tok',
+          environment: 'sandbox',
+          price_ids: {
+            starter: { monthly: 'p1', annual: 'p2' },
+            pro: { monthly: 'p3', annual: 'p4' },
+          },
+          customer_email: 'u@example.com',
+          custom_data: { user_id: '1' },
+          vaults_cap: null,
+        }
+      if (url === '/me') return { user: ME }
       throw new Error(`unexpected GET ${url}`)
     })
 
-    let captured: ((event: { name: string; data?: unknown }) => void) | undefined
-    initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-      captured = opts.eventCallback
-      return { Checkout: { open: vi.fn() } }
-    })
+    initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: vi.fn() } }))
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
     render(
       <QueryClientProvider client={qc}>
-        <ThemeProvider>
-          <MemoryRouter>
-            {/* No onActivated — settings flow */}
-            <BillingPage />
-          </MemoryRouter>
-        </ThemeProvider>
+        <AuthContext.Provider value={authAdapter}>
+          <ThemeProvider>
+            <MemoryRouter>
+              {/* No onActivated — settings flow */}
+              <BillingPage />
+            </MemoryRouter>
+          </ThemeProvider>
+        </AuthContext.Provider>
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(captured).toBeDefined())
+    await waitFor(() => expect(channelHandlers['subscription_activated']).toBeDefined())
 
-    // Settings users get the watcher accelerated by PAYMENT_INITIATED too.
+    billingActive = true
     await act(async () => {
-      captured!({ name: 'checkout.payment.initiated', data: { transaction_id: 'txn_s1' } })
+      channelHandlers['subscription_activated']!({
+        tier: 'starter',
+        status: 'trialing',
+        subscription_id: 'sub_settings',
+      })
+      await Promise.resolve()
     })
 
-    // Advance through accelerated poll cadence (1s); second poll returns
-    // activated state and the watcher should invalidate ['billing','status'].
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
-
     await waitFor(() => {
-      const billingStatusInvalidations = invalidateSpy.mock.calls.filter(
-        ([arg]) => {
-          const key = (arg as { queryKey?: unknown[] })?.queryKey
-          return Array.isArray(key) && key[0] === 'billing' && key[1] === 'status'
-        },
-      )
+      const billingStatusInvalidations = invalidateSpy.mock.calls.filter(([arg]) => {
+        const key = (arg as { queryKey?: unknown[] })?.queryKey
+        return Array.isArray(key) && key[0] === 'billing' && key[1] === 'status'
+      })
       expect(billingStatusInvalidations.length).toBeGreaterThan(0)
     })
   })

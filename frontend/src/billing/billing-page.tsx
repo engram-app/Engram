@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CheckoutEventNames, initializePaddle, type Paddle } from '@paddle/paddle-js'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import {
   useBillingConfig,
   useBillingSubscriptionDetail,
   useBillingHistory,
+  useMe,
   type BillingCadence,
   type BillingConfig,
   type OnboardingStatus,
@@ -19,8 +20,14 @@ import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
 import BillingHistoryTable from './billing-history-table'
 import PendingChangeBanner from './pending-change-banner'
-import { useActivationWatcher } from './use-activation-watcher'
 import { ActivationOverlay } from './activation-overlay'
+import { useSubscriptionActivatedEvents } from './use-subscription-activated-events'
+
+// Window after CHECKOUT_PAYMENT_INITIATED during which we still expect the
+// push to arrive promptly. Past this, the overlay shifts into "taking longer
+// than usual" copy with Refresh + Contact support affordances. The channel
+// listener stays connected — the broadcast may still land.
+const COOLDOWN_MS = 15_000
 
 async function openPortal(action?: string) {
   try {
@@ -49,6 +56,7 @@ interface BillingPageProps {
 export default function BillingPage({ hideHeading = false, onActivated }: BillingPageProps) {
   const { data: billing, isLoading } = useBillingStatus()
   const { data: config } = useBillingConfig()
+  const { data: me } = useMe()
   const hasSubscription = Boolean(billing?.subscription)
   const { data: detail } = useBillingSubscriptionDetail(hasSubscription)
   const { data: history } = useBillingHistory(hasSubscription)
@@ -57,12 +65,76 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [paddle, setPaddle] = useState<Paddle>()
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
 
-  const { state: watcherState, subscriptionOk, onCheckoutOpened, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
-    onActivated: onActivated ?? (() => {}),
-    enabled: true,
-  })
   const [overlayVisible, setOverlayVisible] = useState(false)
+  const [paymentInitiatedAt, setPaymentInitiatedAt] = useState<number | null>(null)
+  const [cooldownActive, setCooldownActive] = useState(false)
+  const [activated, setActivated] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
+
+  // Latch — onActivated must fire at most once even if the broadcast lands
+  // multiple times (e.g. subscription.created followed by subscription.activated
+  // on a trial→active flip).
+  const onActivatedFiredRef = useRef(false)
+  const onActivatedRef = useRef(onActivated)
+  onActivatedRef.current = onActivated
+
+  // Cooldown timer — shifts overlay copy to "taking longer than usual"
+  // after 15s without a push event. The channel listener stays connected.
+  useEffect(() => {
+    if (paymentInitiatedAt === null) return
+    const t = setTimeout(() => setCooldownActive(true), COOLDOWN_MS)
+    return () => clearTimeout(t)
+  }, [paymentInitiatedAt])
+
+  // Push handler — Paddle webhook flipped the subscription server-side and
+  // the user channel just told us. Refresh local query state and (in
+  // onboarding mode) fetch the fresh onboarding/status to decide where to
+  // route the user next.
+  const handleSubscriptionActivated = useCallback(async () => {
+    setActivated(true)
+    await qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+    await qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+    await qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+    await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
+
+    if (onActivatedRef.current && !onActivatedFiredRef.current) {
+      try {
+        const status = await qc.fetchQuery<OnboardingStatus>({
+          queryKey: ['onboarding', 'status'],
+          queryFn: () => api.get<OnboardingStatus>('/onboarding/status'),
+          staleTime: 0,
+        })
+        if (!onActivatedFiredRef.current) {
+          onActivatedFiredRef.current = true
+          onActivatedRef.current(status)
+        }
+      } catch (err) {
+        console.error('failed to refetch onboarding/status after activation', err)
+      }
+    }
+  }, [qc])
+
+  useSubscriptionActivatedEvents({
+    userId: me?.id ?? null,
+    enabled: true,
+    onActivated: handleSubscriptionActivated,
+  })
+
+  // Mount-time cache check: if the user lands on billing with a cached
+  // onboarding status already past 'billing' (paid in another tab, browser-
+  // back, refresh), fire onActivated synchronously instead of waiting on
+  // a push event. Only meaningful in onboarding mode.
+  useEffect(() => {
+    if (!onActivatedRef.current) return
+    const cached = qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])
+    if (cached && cached.next_step !== 'billing' && !onActivatedFiredRef.current) {
+      onActivatedFiredRef.current = true
+      setActivated(true)
+      onActivatedRef.current(cached)
+    }
+    // mount-only — qc identity is stable, onActivated read via ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!config) return
@@ -73,28 +145,20 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       eventCallback: (event) => {
         if (cancelled) return
         switch (event.name) {
-          case CheckoutEventNames.CHECKOUT_LOADED: {
-            // User opened the Paddle overlay — credible "user intends to
-            // check out" signal. Kick the watcher out of idle so it can
-            // catch a webhook-driven activation (we've seen Paddle drop
-            // CHECKOUT_COMPLETED on trial-signup redirects).
-            onCheckoutOpened()
-            break
-          }
           case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
             setOverlayVisible(true)
-            onPaymentInitiated()
+            setPaymentInitiatedAt((prev) => prev ?? Date.now())
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
           }
           case CheckoutEventNames.CHECKOUT_COMPLETED: {
-            // Belt-and-suspenders: if PAYMENT_INITIATED dropped, this still
-            // brings the watcher into accelerated mode.
+            // Belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
+            // redirects. Don't reset the cooldown timestamp if it's already set.
             setOverlayVisible(true)
-            onPaymentInitiated()
+            setPaymentInitiatedAt((prev) => prev ?? Date.now())
             qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
             qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
             break
@@ -103,7 +167,8 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
           case CheckoutEventNames.CHECKOUT_ERROR: {
             setOverlayVisible(false)
-            onPaymentFailed()
+            setPaymentInitiatedAt(null)
+            setCooldownActive(false)
             toast.error('Payment did not go through. Please try again.')
             break
           }
@@ -126,7 +191,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       cancelled = true
       setPaddle(undefined)
     }
-  }, [config, resolved, qc, onActivated, onCheckoutOpened, onPaymentInitiated, onPaymentFailed])
+  }, [config, resolved, qc])
 
   if (isLoading || !billing) {
     return <p className="text-muted-foreground">Loading billing info...</p>
@@ -202,10 +267,16 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               />
             </ul>
           </div>
-          {overlayVisible && (
+          {(overlayVisible || activated) && (
             <ActivationOverlay
-              state={watcherState}
-              subscriptionOk={subscriptionOk}
+              state={
+                activated
+                  ? 'activated'
+                  : cooldownActive
+                    ? 'cooldown'
+                    : 'accelerated'
+              }
+              subscriptionOk={activated}
               nextStep={qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])?.next_step ?? 'billing'}
               transactionId={transactionId}
               onRefresh={() => window.location.reload()}
