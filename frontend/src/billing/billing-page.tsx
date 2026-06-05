@@ -57,7 +57,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [paddle, setPaddle] = useState<Paddle>()
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
 
-  const { state: watcherState, subscriptionOkAt, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
+  const { state: watcherState, subscriptionOk, onPaymentInitiated, onPaymentFailed } = useActivationWatcher({
     onActivated: onActivated ?? (() => {}),
     enabled: true,
   })
@@ -197,7 +197,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           {overlayVisible && (
             <ActivationOverlay
               state={watcherState}
-              subscriptionOk={subscriptionOkAt !== null}
+              subscriptionOk={subscriptionOk}
               nextStep={qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])?.next_step ?? 'billing'}
               transactionId={transactionId}
               onRefresh={() => window.location.reload()}

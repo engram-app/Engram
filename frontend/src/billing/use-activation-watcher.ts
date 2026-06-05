@@ -17,8 +17,7 @@ interface Options {
 
 interface WatcherApi {
   state: WatcherState
-  paymentInitiatedAt: number | null
-  subscriptionOkAt: number | null
+  subscriptionOk: boolean
   onPaymentInitiated: () => void
   onPaymentFailed: () => void
 }
@@ -34,8 +33,7 @@ function cadenceFor(state: WatcherState): number | null {
 
 export function useActivationWatcher({ onActivated, enabled }: Options): WatcherApi {
   const [state, setState] = useState<WatcherState>('background')
-  const [paymentInitiatedAt, setPaymentInitiatedAt] = useState<number | null>(null)
-  const [subscriptionOkAt, setSubscriptionOkAt] = useState<number | null>(null)
+  const [subscriptionOk, setSubscriptionOk] = useState(false)
   const qc = useQueryClient()
 
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -43,11 +41,12 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
   const acceleratedStartRef = useRef<number | null>(null)
   const stateRef = useRef<WatcherState>('background')
   const onActivatedRef = useRef(onActivated)
-  const subscriptionOkAtRef = useRef<number | null>(null)
+  const subscriptionOkRef = useRef(false)
   const mountedRef = useRef(true)
 
   stateRef.current = state
   onActivatedRef.current = onActivated
+  subscriptionOkRef.current = subscriptionOk
 
   const scheduleRef = useRef<() => void>(() => {})
 
@@ -59,9 +58,9 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
       // Always refresh the live billing surface so settings-mode users see
       // CurrentPlanCard / plan-gate update the moment the webhook lands.
       qc.invalidateQueries({ queryKey: ['billing', 'status'] })
-      if (status.subscription_ok && subscriptionOkAtRef.current === null) {
-        subscriptionOkAtRef.current = Date.now()
-        setSubscriptionOkAt(subscriptionOkAtRef.current)
+      if (status.subscription_ok && !subscriptionOkRef.current) {
+        subscriptionOkRef.current = true
+        setSubscriptionOk(true)
       }
       if (status.next_step !== 'billing' && !activatedRef.current) {
         activatedRef.current = true
@@ -137,7 +136,6 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
     // CHECKOUT_COMPLETED must NOT reset the 15s budget. Keep the original
     // t=0 timestamp.
     if (acceleratedStartRef.current !== null) return
-    setPaymentInitiatedAt(Date.now())
     acceleratedStartRef.current = Date.now()
     setState('accelerated')
   }, [])
@@ -148,5 +146,5 @@ export function useActivationWatcher({ onActivated, enabled }: Options): Watcher
     setState('background')
   }, [])
 
-  return { state, paymentInitiatedAt, subscriptionOkAt, onPaymentInitiated, onPaymentFailed }
+  return { state, subscriptionOk, onPaymentInitiated, onPaymentFailed }
 }
