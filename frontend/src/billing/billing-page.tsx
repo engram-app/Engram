@@ -63,6 +63,9 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const { resolved } = useTheme()
   const qc = useQueryClient()
   const [paddle, setPaddle] = useState<Paddle>()
+  // Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
+  // call Checkout.close() on CHECKOUT_COMPLETED without re-initializing.
+  const paddleRef = useRef<Paddle | undefined>(undefined)
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
 
   const [overlayVisible, setOverlayVisible] = useState(false)
@@ -155,6 +158,10 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             break
           }
           case CheckoutEventNames.CHECKOUT_COMPLETED: {
+            // Paddle's own success screen would otherwise sit on top of our
+            // ActivationOverlay until the user clicks X — looks like the
+            // checkout hung. Dismiss it so the activation stepper is visible.
+            paddleRef.current?.Checkout.close()
             // Belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
             // redirects. Don't reset the cooldown timestamp if it's already set.
             setOverlayVisible(true)
@@ -185,10 +192,14 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       },
     }).then((instance) => {
       if (cancelled) return
-      if (instance) setPaddle(instance)
+      if (instance) {
+        paddleRef.current = instance
+        setPaddle(instance)
+      }
     })
     return () => {
       cancelled = true
+      paddleRef.current = undefined
       setPaddle(undefined)
     }
   }, [config, resolved, qc])
