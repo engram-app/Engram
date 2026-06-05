@@ -50,9 +50,13 @@ permissions:
 env:
   DOCKER_BUILDKIT: "1"
   COMPOSE_DOCKER_CLI_BUILD: "1"
-  # LOCAL_REGISTRY is set by the runner environment after running .github/setup-runner.sh
-  # When set, docker-compose.ci.yml pulls images from the local FastRaid registry.
-  # When unset, falls back to Docker Hub.
+  # LOCAL_REGISTRY = FastRaid distribution/registry on the engram LAN.
+  # Hard-coded at workflow level so every job — including JIT/ephemeral
+  # isolated runners that never ran setup-runner.sh — gets the value.
+  # The fingerprint marker store (ci-pass / ci-e2e-pass tags) requires it;
+  # downstream callers (line ~929, ~2165) used to tolerate unset via shell
+  # fallback to Docker Hub — that fallback path is now dead.
+  LOCAL_REGISTRY: "10.0.20.214:5000"
 
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
