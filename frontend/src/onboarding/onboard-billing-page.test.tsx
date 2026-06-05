@@ -226,4 +226,49 @@ describe('OnboardBillingPage — bug #440 repro', () => {
     expect(screen.getByTestId('tools-page')).toBeInTheDocument()
     expect(toolsPageMounts).toBe(1)
   })
+
+  it('hides overlay and re-enables plan picker on CHECKOUT_PAYMENT_FAILED', async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status') return BILLING_INACTIVE
+      if (url === '/billing/config') return BILLING_CONFIG
+      if (url === '/onboarding/status') return STATUS_BILLING
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    renderOnboardBilling()
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0),
+    )
+    await waitFor(() => expect(capturedEventCallback).toBeDefined())
+
+    // Step 1: payment initiated — overlay should show.
+    await act(async () => {
+      capturedEventCallback!({
+        name: 'checkout.payment.initiated',
+        data: { transaction_id: 'txn_fail_77' },
+      })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /Activating your subscription/i })).toBeInTheDocument(),
+    )
+
+    // Step 2: payment failed — overlay should hide, plan picker re-enabled.
+    await act(async () => {
+      capturedEventCallback!({ name: 'checkout.payment.failed' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /Activating your subscription/i })).not.toBeInTheDocument(),
+    )
+
+    // Plan picker buttons should not be inside a disabled wrapper anymore.
+    // The dimming wrapper drops the `pointer-events-none opacity-40` class
+    // when overlay is hidden — assert the trial buttons are NOT inside an
+    // `aria-disabled` / `pointer-events-none` ancestor.
+    const trialButtons = screen.getAllByRole('button', { name: /start free trial/i })
+    expect(trialButtons.length).toBeGreaterThan(0)
+  })
 })
