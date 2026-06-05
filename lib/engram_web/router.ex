@@ -273,6 +273,7 @@ defmodule EngramWeb.Router do
     post "/folders/rename", FoldersController, :rename
     post "/folders", FoldersController, :create
     get "/folders", FoldersController, :index
+    delete "/folders/*path", FoldersController, :delete
 
     # Search
     post "/search", SearchController, :search

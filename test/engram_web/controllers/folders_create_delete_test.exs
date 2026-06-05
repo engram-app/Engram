@@ -35,4 +35,23 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert response(conn, 401)
     end
   end
+
+  describe "DELETE /folders/*path" do
+    test "returns 204 after deleting an existing marker", %{conn: conn} do
+      _ = post(conn, ~p"/api/folders", %{"folder" => "Doomed"})
+      conn = delete(conn, ~p"/api/folders/Doomed")
+      assert response(conn, 204)
+    end
+
+    test "returns 204 when no marker exists (idempotent)", %{conn: conn} do
+      conn = delete(conn, ~p"/api/folders/Ghost")
+      assert response(conn, 204)
+    end
+
+    test "URI-encoded segments are decoded", %{conn: conn} do
+      _ = post(conn, ~p"/api/folders", %{"folder" => "Has Space/Sub"})
+      conn = delete(conn, "/api/folders/Has%20Space/Sub")
+      assert response(conn, 204)
+    end
+  end
 end

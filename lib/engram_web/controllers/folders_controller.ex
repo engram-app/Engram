@@ -51,6 +51,18 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
+  def delete(conn, %{"path" => path_segments}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+    folder = path_segments |> Enum.map(&URI.decode/1) |> Enum.join("/")
+
+    # Idempotent: treat :no_dek (user never encrypted anything) as "nothing to delete".
+    case Notes.delete_folder_marker(user, vault, folder) do
+      {:ok, _} -> send_resp(conn, 204, "")
+      {:error, :no_dek} -> send_resp(conn, 204, "")
+    end
+  end
+
   def rename(conn, %{"old_folder" => old_folder, "new_folder" => new_folder}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
