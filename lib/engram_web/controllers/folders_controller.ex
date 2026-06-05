@@ -25,6 +25,32 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(400) |> json(%{error: "folder parameter is required"})
   end
 
+  def create(conn, %{"folder" => folder}) when is_binary(folder) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case Notes.create_folder_marker(user, vault, folder) do
+      {:ok, marker} ->
+        conn
+        |> put_status(:created)
+        |> json(%{folder: %{name: marker.folder, count: 0}})
+
+      {:error, :root_folder_not_marker} ->
+        conn
+        |> put_status(422)
+        |> json(%{error: "folder must not be empty"})
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: inspect(reason)})
+    end
+  end
+
+  def create(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "folder parameter is required"})
+  end
+
   def rename(conn, %{"old_folder" => old_folder, "new_folder" => new_folder}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
