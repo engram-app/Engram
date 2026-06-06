@@ -324,12 +324,12 @@ html {
      12 seconds — frequent enough to catch the eye, rare enough not to
      annoy. */
   .animate-checklist-shimmer {
-    animation: checklist-shimmer 12s ease-in-out infinite;
+    animation: checklist-shimmer 18s ease-in-out infinite;
   }
 
   /* Infrequent ring pulse on the collapsed FAB. Fires ~once per 20s
      cycle (active ~3.5s, idle ~16.5s) so the FAB is mostly still. */
   .animate-fab-ring-pulse {
-    animation: fab-ring-pulse 20s ease-out infinite;
+    animation: fab-ring-pulse 28s ease-out infinite;
   }
 }

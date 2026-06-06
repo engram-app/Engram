@@ -158,7 +158,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
   return (
     <section
       aria-label="Onboarding checklist"
-      className="fixed bottom-4 right-4 z-40 w-96 rounded-xl border border-border bg-background shadow-xl ring-1 ring-primary/10"
+      className="fixed bottom-4 right-4 z-40 w-96 overflow-hidden rounded-xl border border-border bg-background shadow-xl ring-1 ring-primary/10"
     >
       <header
         className="relative flex flex-row items-center justify-between px-4 py-3 border-b border-border overflow-hidden"
