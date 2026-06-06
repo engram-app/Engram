@@ -16,7 +16,8 @@ const DEFAULT_GRADIENT = 'from-transparent via-primary/15 to-transparent'
  * Decorative shimmer overlay. Absolute-positioned, pointer-events:none.
  * Drop inside any `relative` + `overflow-hidden` container. Drives a
  * slow gradient sweep via the `animate-shimmer-sweep` keyframe
- * defined in `main.css`.
+ * defined in `main.css`. The `prefers-reduced-motion` media query in
+ * `main.css` short-circuits the animation for users who opted out.
  */
 export function Shimmer({ gradient = DEFAULT_GRADIENT, className }: Props) {
   return (
