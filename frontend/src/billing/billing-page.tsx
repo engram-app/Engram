@@ -297,11 +297,18 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           {billing.subscription && panel === null && (
             <div className="flex flex-wrap justify-end gap-3">
               <Button onClick={() => setPanel('change')}>Change plan</Button>
-              {billing.subscription.status !== 'canceled' && (
-                <Button variant="destructive" onClick={() => setPanel('cancel')}>
-                  Cancel subscription
-                </Button>
-              )}
+              {/* Hide Cancel when (a) the subscription is already canceled,
+                  OR (b) a scheduled cancel is in flight — Paddle keeps
+                  status='active' until the effective date, so without the
+                  scheduled_change check the button stays clickable and the
+                  second click 5xx's ('subscription already scheduled to
+                  cancel') with a vague 'Could not cancel' toast. */}
+              {billing.subscription.status !== 'canceled' &&
+                detail?.scheduled_change?.action !== 'cancel' && (
+                  <Button variant="destructive" onClick={() => setPanel('cancel')}>
+                    Cancel subscription
+                  </Button>
+                )}
             </div>
           )}
           {billing.subscription && panel === 'change' && (
@@ -318,6 +325,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
                   scheduled_change: null,
                 }
               }
+              tier={billing.tier}
               onClose={() => setPanel(null)}
             />
           )}

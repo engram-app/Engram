@@ -289,8 +289,17 @@ defmodule Engram.Paddle.Client.HTTP do
     end
   end
 
+  # Paddle PATCH /subscriptions/{id} treats `items` as REPLACE (not merge), so
+  # an empty list either 422s ('items must be non-empty') or wipes the
+  # subscription. Omit the key entirely when the caller passes [] — the only
+  # path that does is reverse_cancel/1, which only needs to clear
+  # scheduled_change without altering items.
   defp subscription_update_body(items, opts) do
-    base = %{items: items}
+    base =
+      case items do
+        [] -> %{}
+        list when is_list(list) -> %{items: list}
+      end
 
     base =
       case Keyword.get(opts, :proration_billing_mode) do

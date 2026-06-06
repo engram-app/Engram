@@ -1,14 +1,21 @@
 import { Button } from '@/components/ui/button'
-import { useCancelSubscription } from '../api/queries'
+import { useCancelSubscription, type BillingStatus } from '../api/queries'
 import type { SubscriptionDetail } from '../api/queries'
 import { toast } from 'sonner'
 
+const TIER_LABELS: Partial<Record<BillingStatus['tier'], string>> = {
+  starter: 'Starter',
+  pro: 'Pro',
+  trial: 'Trial',
+}
+
 interface CancelPanelProps {
   detail: SubscriptionDetail
+  tier: BillingStatus['tier']
   onClose: () => void
 }
 
-export default function CancelPanel({ detail, onClose }: CancelPanelProps) {
+export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps) {
   const cancel = useCancelSubscription()
 
   // next_billed_at is the natural cancel-effective date when canceling
@@ -17,6 +24,11 @@ export default function CancelPanel({ detail, onClose }: CancelPanelProps) {
   const effective = detail.next_billed_at
     ? new Date(detail.next_billed_at).toLocaleDateString()
     : null
+
+  // Use the user's actual tier label in copy instead of hardcoding 'Pro' —
+  // a Starter subscriber clicking cancel was reading 'You'll keep Pro
+  // access' which looks like a tier-mismatch bug.
+  const tierLabel = TIER_LABELS[tier] ?? 'paid'
 
   async function confirm() {
     try {
@@ -39,7 +51,7 @@ export default function CancelPanel({ detail, onClose }: CancelPanelProps) {
         <p className="mt-2 text-sm text-muted-foreground">
           {effective ? (
             <>
-              You'll keep Pro access until <strong>{effective}</strong>, then drop to Free.
+              You'll keep your {tierLabel} plan until <strong>{effective}</strong>, then drop to Free.
             </>
           ) : (
             <>You'll keep paid access through the end of your current billing period.</>

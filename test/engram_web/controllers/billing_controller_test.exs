@@ -334,7 +334,7 @@ defmodule EngramWeb.BillingControllerTest do
       expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn "sub_preview",
                                                                         items,
                                                                         _opts ->
-        assert [%{price_id: "pri_new", quantity: 1}] = items
+        assert [%{price_id: "pri_pro_monthly_test", quantity: 1}] = items
 
         {:ok,
          %{
@@ -347,7 +347,7 @@ defmodule EngramWeb.BillingControllerTest do
 
       body =
         conn
-        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_new"})
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_pro_monthly_test"})
         |> json_response(200)
 
       assert body["old_total"] == 1400
@@ -362,10 +362,25 @@ defmodule EngramWeb.BillingControllerTest do
     test "no active sub returns 422", %{conn: conn} do
       body =
         conn
-        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_new"})
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_pro_monthly_test"})
         |> json_response(422)
 
       assert body["error"] == "no_active_subscription"
+    end
+
+    test "off-catalog price_id returns 422 invalid_price_id without hitting Paddle", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_evil")
+
+      # No ClientMock expect — Paddle must NOT be called.
+      body =
+        conn
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_arbitrary_zero"})
+        |> json_response(422)
+
+      assert body["error"] == "invalid_price_id"
     end
   end
 
@@ -374,14 +389,14 @@ defmodule EngramWeb.BillingControllerTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_confirm")
 
       expect(Engram.Paddle.ClientMock, :update_subscription, fn "sub_confirm", items, opts ->
-        assert [%{price_id: "pri_new", quantity: 1}] = items
+        assert [%{price_id: "pri_pro_monthly_test", quantity: 1}] = items
         assert is_binary(Keyword.fetch!(opts, :idempotency_key))
         {:ok, %{"transaction_id" => "txn_xyz"}}
       end)
 
       body =
         conn
-        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_new"})
+        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_pro_monthly_test"})
         |> json_response(202)
 
       assert body["transaction_id"] == "txn_xyz"
@@ -396,7 +411,7 @@ defmodule EngramWeb.BillingControllerTest do
 
       body =
         conn
-        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_new"})
+        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_pro_monthly_test"})
         |> json_response(503)
 
       assert body["error"] == "paddle_unavailable"

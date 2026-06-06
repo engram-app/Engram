@@ -174,15 +174,19 @@ defmodule EngramWeb.BillingController do
   """
   def plan_change_preview(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
     with_billing(conn, fn ->
-      case Subscriptions.preview_plan_change(conn.assigns.current_user, price_id) do
-        {:ok, preview} ->
-          json(conn, preview)
+      if valid_catalog_price_id?(price_id) do
+        case Subscriptions.preview_plan_change(conn.assigns.current_user, price_id) do
+          {:ok, preview} ->
+            json(conn, preview)
 
-        {:error, :no_active_subscription} ->
-          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+          {:error, :no_active_subscription} ->
+            conn |> put_status(422) |> json(%{error: "no_active_subscription"})
 
-        {:error, :paddle_unavailable} ->
-          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+          {:error, :paddle_unavailable} ->
+            conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+        end
+      else
+        conn |> put_status(422) |> json(%{error: "invalid_price_id"})
       end
     end)
   end
@@ -194,21 +198,42 @@ defmodule EngramWeb.BillingController do
   @doc "Commit a plan change after the user confirmed the inline preview."
   def plan_change_confirm(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
     with_billing(conn, fn ->
-      case Subscriptions.confirm_plan_change(conn.assigns.current_user, price_id) do
-        {:ok, data} ->
-          conn |> put_status(202) |> json(data)
+      if valid_catalog_price_id?(price_id) do
+        case Subscriptions.confirm_plan_change(conn.assigns.current_user, price_id) do
+          {:ok, data} ->
+            conn |> put_status(202) |> json(data)
 
-        {:error, :no_active_subscription} ->
-          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+          {:error, :no_active_subscription} ->
+            conn |> put_status(422) |> json(%{error: "no_active_subscription"})
 
-        {:error, :paddle_unavailable} ->
-          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+          {:error, :paddle_unavailable} ->
+            conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+        end
+      else
+        conn |> put_status(422) |> json(%{error: "invalid_price_id"})
       end
     end)
   end
 
   def plan_change_confirm(conn, _params) do
     conn |> put_status(422) |> json(%{error: "target_price_id required"})
+  end
+
+  # Allow-list: only the 4 catalog price IDs surfaced by /billing/config are
+  # valid plan-change targets. Without this guard a caller could submit an
+  # arbitrary Paddle price (sibling product, archived $0, deprecated tier) and
+  # Paddle might accept the swap, letting users escape the catalog.
+  defp valid_catalog_price_id?(price_id) do
+    catalog =
+      [
+        Application.get_env(:engram, :paddle_starter_monthly_price_id),
+        Application.get_env(:engram, :paddle_starter_annual_price_id),
+        Application.get_env(:engram, :paddle_pro_monthly_price_id),
+        Application.get_env(:engram, :paddle_pro_annual_price_id)
+      ]
+      |> Enum.filter(&is_binary/1)
+
+    price_id in catalog
   end
 
   @doc "Mint a transaction id for the in-app Paddle.js payment-method overlay."

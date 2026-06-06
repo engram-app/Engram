@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -49,6 +49,18 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
   // they see reflects 'what would change' rather than always-Monthly.
   const [cadence, setCadence] = useState<BillingCadence>(currentCadence)
   const [selectedTier, setSelectedTier] = useState<PlanTier | null>(null)
+  // useState only captures currentCadence at mount. If the panel opens
+  // before /billing/subscription resolves (common: detail is fetched lazily
+  // when billing.subscription is truthy), currentCadence flips from the
+  // monthly default to the real value AFTER mount — and our cadence state
+  // would silently keep the stale default, mislabeling a Pro Annual user's
+  // panel as Pro Monthly. Sync once when detail resolves, BUT only if the
+  // user hasn't already touched the toggle themselves (don't clobber a
+  // deliberate cadence pick mid-interaction).
+  const userToggledRef = useRef(false)
+  useEffect(() => {
+    if (!userToggledRef.current) setCadence(currentCadence)
+  }, [currentCadence])
 
   const targetPriceId =
     selectedTier && config ? (config.price_ids[selectedTier][cadence] ?? null) : null
@@ -89,6 +101,7 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
       <CadenceToggle
         cadence={cadence}
         onChange={(next) => {
+          userToggledRef.current = true
           setCadence(next)
           setSelectedTier(null)
         }}

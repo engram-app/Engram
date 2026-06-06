@@ -50,14 +50,27 @@ defmodule Engram.Billing.Subscriptions do
   end
 
   defp do_cancel(user, sub_id, effective_from) do
-    idempotency_key = "cancel-#{user.id}-#{sub_id}-#{System.unique_integer([:positive])}"
-
     case Client.impl().cancel_subscription(sub_id, effective_from,
-           idempotency_key: idempotency_key
+           idempotency_key: idempotency_key(:cancel, user, sub_id, effective_from)
          ) do
       {:ok, data} -> {:ok, data}
       {:error, _reason} -> {:error, :paddle_unavailable}
     end
+  end
+
+  # Idempotency keys MUST be deterministic per logical request — Paddle's
+  # `Paddle-IK` header is the dedup signal for retries (network blip, React
+  # Query auto-retry, user double-click). A counter or timestamp produces a
+  # fresh key every call, defeating dedup; Paddle then accepts both calls as
+  # distinct requests and we double-cancel / double-charge.
+  #
+  # phash2 of (verb, user_id, sub_id, target_state) is stable across BEAM
+  # restarts and process boundaries while still varying per distinct logical
+  # action — switching cadence later mints a different key (target_state
+  # changes), so legitimate re-tries collapse but legitimate re-cancels don't.
+  defp idempotency_key(verb, user, sub_id, target_state) do
+    hash = :erlang.phash2({verb, user.id, sub_id, target_state})
+    "#{verb}-#{user.id}-#{sub_id}-#{hash}"
   end
 
   @doc """
@@ -93,13 +106,10 @@ defmodule Engram.Billing.Subscriptions do
           {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
   def confirm_plan_change(user, new_price_id) when is_binary(new_price_id) do
     with_active_sub(user, fn sub_id ->
-      idempotency_key =
-        "plan-change-#{user.id}-#{sub_id}-#{System.unique_integer([:positive])}"
-
       Client.impl().update_subscription(
         sub_id,
         [%{price_id: new_price_id, quantity: 1}],
-        idempotency_key: idempotency_key,
+        idempotency_key: idempotency_key(:plan_change, user, sub_id, new_price_id),
         proration_billing_mode: "prorated_immediately"
       )
     end)
@@ -115,13 +125,10 @@ defmodule Engram.Billing.Subscriptions do
           {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
   def reverse_cancel(user) do
     with_active_sub(user, fn sub_id ->
-      idempotency_key =
-        "reverse-cancel-#{user.id}-#{sub_id}-#{System.unique_integer([:positive])}"
-
       Client.impl().update_subscription(
         sub_id,
         [],
-        idempotency_key: idempotency_key,
+        idempotency_key: idempotency_key(:reverse_cancel, user, sub_id, :clear),
         scheduled_change: nil
       )
     end)

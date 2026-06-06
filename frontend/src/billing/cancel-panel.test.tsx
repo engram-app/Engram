@@ -39,17 +39,23 @@ function detail(overrides: Partial<SubscriptionDetail> = {}): SubscriptionDetail
 }
 
 describe('CancelPanel', () => {
-  it('renders the access-end date pulled from next_billed_at', () => {
-    render(<CancelPanel detail={detail()} onClose={vi.fn()} />, { wrapper: Wrapper })
-    expect(screen.getByText(/keep pro access/i)).toBeInTheDocument()
+  it('renders Pro tier copy for a pro subscriber', () => {
+    render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper })
+    expect(screen.getByText(/keep your pro plan/i)).toBeInTheDocument()
     expect(screen.getByText(/2026/)).toBeInTheDocument()
+  })
+
+  it('renders Starter tier copy for a starter subscriber (no Pro mislabel)', () => {
+    render(<CancelPanel detail={detail()} tier="starter" onClose={vi.fn()} />, { wrapper: Wrapper })
+    expect(screen.getByText(/keep your starter plan/i)).toBeInTheDocument()
+    expect(screen.queryByText(/keep your pro plan/i)).not.toBeInTheDocument()
   })
 
   it('confirm calls cancel mutation and onClose on success', async () => {
     post.mockResolvedValue({ scheduled_change: { effective_at: '2026-07-01T00:00:00Z' } })
     const onClose = vi.fn()
 
-    render(<CancelPanel detail={detail()} onClose={onClose} />, { wrapper: Wrapper })
+    render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /cancel at period end/i }))
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -58,7 +64,7 @@ describe('CancelPanel', () => {
 
   it('keep button calls onClose without firing the mutation', () => {
     const onClose = vi.fn()
-    render(<CancelPanel detail={detail()} onClose={onClose} />, { wrapper: Wrapper })
+    render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper })
 
     fireEvent.click(screen.getByRole('button', { name: /keep my subscription/i }))
 
@@ -67,9 +73,10 @@ describe('CancelPanel', () => {
   })
 
   it('falls back to generic copy when next_billed_at is null', () => {
-    render(<CancelPanel detail={detail({ next_billed_at: null })} onClose={vi.fn()} />, {
-      wrapper: Wrapper,
-    })
+    render(
+      <CancelPanel detail={detail({ next_billed_at: null })} tier="pro" onClose={vi.fn()} />,
+      { wrapper: Wrapper },
+    )
     expect(
       screen.getByText(/keep paid access through the end of your current billing period/i),
     ).toBeInTheDocument()
