@@ -1,4 +1,6 @@
-import type { SubscriptionDetail } from '../api/queries'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { useReverseCancel, type SubscriptionDetail } from '../api/queries'
 
 const ACTION_LABELS: Record<string, string> = {
   cancel: 'Your plan cancels',
@@ -11,16 +13,35 @@ export default function PendingChangeBanner({
 }: {
   scheduledChange: SubscriptionDetail['scheduled_change']
 }) {
+  const reverseCancel = useReverseCancel()
+
   if (!scheduledChange) return null
 
   const label = ACTION_LABELS[scheduledChange.action] ?? 'Your plan changes'
   const date = new Date(scheduledChange.effective_at).toLocaleDateString()
 
+  async function onReverse() {
+    try {
+      await reverseCancel.mutateAsync()
+      toast.success('Cancellation reversed. Your subscription will keep renewing.')
+    } catch {
+      toast.error('Could not reverse the cancellation. Please try again.')
+    }
+  }
+
   return (
-    <aside role="status" className="rounded-lg border border-border bg-secondary/50 p-4 text-sm">
+    <aside
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
+    >
       <p className="font-medium text-foreground">
         {label} on {date}
       </p>
+      {scheduledChange.action === 'cancel' && (
+        <Button size="sm" onClick={onReverse} disabled={reverseCancel.isPending}>
+          Keep my subscription
+        </Button>
+      )}
     </aside>
   )
 }

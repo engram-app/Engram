@@ -274,4 +274,147 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["url"] == "https://p/cancel"
     end
   end
+
+  describe "POST /api/billing/cancel-subscription" do
+    test "happy path returns 202 with Paddle payload", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_cancel")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_cancel",
+                                                                :next_billing_period,
+                                                                opts ->
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, %{"scheduled_change" => %{"effective_at" => "2026-07-01T00:00:00Z"}}}
+      end)
+
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(202)
+      assert body["scheduled_change"]["effective_at"] == "2026-07-01T00:00:00Z"
+    end
+
+    test "no active sub returns 422", %{conn: conn} do
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(422)
+      assert body["error"] == "no_active_subscription"
+    end
+
+    test "Paddle error returns 503", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_err")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, :http_500}
+      end)
+
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(503)
+      assert body["error"] == "paddle_unavailable"
+    end
+  end
+
+  describe "POST /api/billing/reverse-cancel" do
+    test "happy path returns 202", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn "sub_reverse", [], opts ->
+        assert Keyword.fetch!(opts, :scheduled_change) == nil
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      body = conn |> post("/api/billing/reverse-cancel") |> json_response(202)
+      assert body["scheduled_change"] == nil
+    end
+
+    test "no active sub returns 422", %{conn: conn} do
+      body = conn |> post("/api/billing/reverse-cancel") |> json_response(422)
+      assert body["error"] == "no_active_subscription"
+    end
+  end
+
+  describe "POST /api/billing/plan-change/preview" do
+    test "returns Paddle proration preview shape", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_preview")
+
+      expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn "sub_preview",
+                                                                        items,
+                                                                        _opts ->
+        assert [%{price_id: "pri_pro_monthly_test", quantity: 1}] = items
+
+        {:ok,
+         %{
+           "old_total" => 1400,
+           "new_total" => 700,
+           "immediate_charge_or_credit" => -700,
+           "next_billed_at" => "2026-07-01T00:00:00Z"
+         }}
+      end)
+
+      body =
+        conn
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_pro_monthly_test"})
+        |> json_response(200)
+
+      assert body["old_total"] == 1400
+      assert body["new_total"] == 700
+    end
+
+    test "missing target_price_id returns 422", %{conn: conn} do
+      body = conn |> post("/api/billing/plan-change/preview", %{}) |> json_response(422)
+      assert body["error"] == "target_price_id required"
+    end
+
+    test "no active sub returns 422", %{conn: conn} do
+      body =
+        conn
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_pro_monthly_test"})
+        |> json_response(422)
+
+      assert body["error"] == "no_active_subscription"
+    end
+
+    test "off-catalog price_id returns 422 invalid_price_id without hitting Paddle", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_evil")
+
+      # No ClientMock expect — Paddle must NOT be called.
+      body =
+        conn
+        |> post("/api/billing/plan-change/preview", %{"target_price_id" => "pri_arbitrary_zero"})
+        |> json_response(422)
+
+      assert body["error"] == "invalid_price_id"
+    end
+  end
+
+  describe "POST /api/billing/plan-change/confirm" do
+    test "happy path returns 202 with Paddle payload", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_confirm")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn "sub_confirm", items, opts ->
+        assert [%{price_id: "pri_pro_monthly_test", quantity: 1}] = items
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, %{"transaction_id" => "txn_xyz"}}
+      end)
+
+      body =
+        conn
+        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_pro_monthly_test"})
+        |> json_response(202)
+
+      assert body["transaction_id"] == "txn_xyz"
+    end
+
+    test "Paddle error returns 503", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_confirm_err")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+        {:error, :http_500}
+      end)
+
+      body =
+        conn
+        |> post("/api/billing/plan-change/confirm", %{"target_price_id" => "pri_pro_monthly_test"})
+        |> json_response(503)
+
+      assert body["error"] == "paddle_unavailable"
+    end
+  end
 end

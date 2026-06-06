@@ -115,6 +115,36 @@ defmodule Engram.Paddle.Client do
               opts :: keyword()
             ) :: {:ok, map()} | {:error, term()}
 
+  @doc """
+  Preview a subscription plan change without committing it.
+
+  Paddle endpoint: `PATCH /subscriptions/{id}/preview` with body
+  `{"items": [...], "proration_billing_mode": "..."}`. Returns the decoded
+  `data` map; surfaces `old_total`, `new_total`, `immediate_charge_or_credit`,
+  `next_billed_at` for the inline PlanChangePanel to render. Read-only on
+  Paddle's side — safe to call freely.
+  """
+  @callback preview_subscription_update(
+              subscription_id :: String.t(),
+              items :: [map()],
+              opts :: keyword()
+            ) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Apply a subscription update (plan change).
+
+  Paddle endpoint: `PATCH /subscriptions/{id}` with body
+  `{"items": [...], "proration_billing_mode": "..."}` (and optionally
+  `"scheduled_change": null` to reverse a scheduled cancel). Optional
+  `:idempotency_key` opt is forwarded as the `Paddle-IK` header. Webhook
+  mirror syncs the resulting state into our DB; callers don't write here.
+  """
+  @callback update_subscription(
+              subscription_id :: String.t(),
+              items :: [map()],
+              opts :: keyword()
+            ) :: {:ok, map()} | {:error, term()}
+
   @default_impl Engram.Paddle.Client.HTTP
 
   @doc "Returns the configured client implementation module."

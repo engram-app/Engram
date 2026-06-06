@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { BillingStatus } from '../api/queries'
 
 const TIER_LABELS: Record<BillingStatus['tier'], string> = {
@@ -8,7 +9,13 @@ const TIER_LABELS: Record<BillingStatus['tier'], string> = {
   pro: 'Pro',
 }
 
-export default function CurrentPlanCard({ billing }: { billing: BillingStatus }) {
+export default function CurrentPlanCard({
+  billing,
+  children,
+}: {
+  billing: BillingStatus
+  children?: ReactNode
+}) {
   const sub = billing.subscription
   const canceled = sub?.status === 'canceled'
   const trialing = sub?.status === 'trialing'
@@ -46,6 +53,8 @@ export default function CurrentPlanCard({ billing }: { billing: BillingStatus })
           )}
         </dl>
       )}
+
+      {children && <div className="border-t border-border pt-4">{children}</div>}
     </section>
   )
 }

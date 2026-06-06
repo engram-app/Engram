@@ -404,4 +404,92 @@ describe('BillingPage — Paddle effect cleanup', () => {
       expect(billingStatusInvalidations.length).toBeGreaterThan(0)
     })
   })
+
+  it('subscribed flow: Cancel button opens CancelPanel inline (no portal redirect)', async () => {
+    initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } })
+
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status')
+        return {
+          tier: 'pro',
+          active: true,
+          trial_days_remaining: 0,
+          subscription: { status: 'active', tier: 'pro', current_period_end: '2026-07-01T00:00:00Z' },
+          caps: {},
+        }
+      if (url === '/billing/config')
+        return {
+          client_token: 'tok',
+          environment: 'sandbox',
+          price_ids: {
+            starter: { monthly: 'p1', annual: 'p2' },
+            pro: { monthly: 'p3', annual: 'p4' },
+          },
+          customer_email: 'u@example.com',
+          custom_data: { user_id: '1' },
+          vaults_cap: null,
+        }
+      if (url === '/me') return { user: ME }
+      if (url === '/billing/subscription')
+        return { next_billed_at: '2026-07-01T00:00:00Z', scheduled_change: null }
+      if (url === '/billing/transactions') return { payment_method: null, transactions: [] }
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    renderBilling({ inline: false })
+
+    const cancelButton = await screen.findByRole('button', { name: /cancel subscription/i })
+    await act(async () => {
+      cancelButton.click()
+    })
+
+    // CancelPanel header is visible; button row collapses.
+    await screen.findByRole('region', { name: /cancel subscription/i })
+    expect(screen.getByRole('button', { name: /cancel at period end/i })).toBeInTheDocument()
+  })
+
+  it('subscribed flow: Change plan button opens PlanChangePanel inline', async () => {
+    initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } })
+
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status')
+        return {
+          tier: 'starter',
+          active: true,
+          trial_days_remaining: 0,
+          subscription: {
+            status: 'active',
+            tier: 'starter',
+            current_period_end: '2026-07-01T00:00:00Z',
+          },
+          caps: {},
+        }
+      if (url === '/billing/config')
+        return {
+          client_token: 'tok',
+          environment: 'sandbox',
+          price_ids: {
+            starter: { monthly: 'p1', annual: 'p2' },
+            pro: { monthly: 'p3', annual: 'p4' },
+          },
+          customer_email: 'u@example.com',
+          custom_data: { user_id: '1' },
+          vaults_cap: 5,
+        }
+      if (url === '/me') return { user: ME }
+      if (url === '/billing/subscription')
+        return { next_billed_at: '2026-07-01T00:00:00Z', scheduled_change: null }
+      if (url === '/billing/transactions') return { payment_method: null, transactions: [] }
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    renderBilling({ inline: false })
+
+    const changeButton = await screen.findByRole('button', { name: /change plan/i })
+    await act(async () => {
+      changeButton.click()
+    })
+
+    await screen.findByRole('region', { name: /change plan/i })
+  })
 })

@@ -13,12 +13,14 @@ import {
 } from '../api/queries'
 import { api } from '../api/client'
 import { useTheme } from '../theme/theme-provider'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { CadenceToggle, PLAN_CATALOG, PlanCard } from './plan-cards'
 import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
 import BillingHistoryTable from './billing-history-table'
 import PendingChangeBanner from './pending-change-banner'
+import CancelPanel from './cancel-panel'
+import PlanChangePanel from './plan-change-panel'
 import { useSubscriptionActivatedEvents } from './use-subscription-activated-events'
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
@@ -83,6 +85,9 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [completedAt, setCompletedAt] = useState<number | null>(null)
   const [slow, setSlow] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
+  // Inline panel state for the in-app cancel + plan-change flows (replaces
+  // the previous openPortal('cancel') / portal-redirect path).
+  const [panel, setPanel] = useState<'cancel' | 'change' | null>(null)
 
   // Latch — onActivated must fire at most once even if the broadcast lands
   // multiple times (subscription.created followed by subscription.activated
@@ -287,7 +292,45 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
         </header>
       )}
 
-      {!hideHeading && <CurrentPlanCard billing={billing} />}
+      {!hideHeading && (
+        <CurrentPlanCard billing={billing}>
+          {billing.subscription && panel === null && (
+            <div className="flex flex-wrap justify-end gap-3">
+              <Button onClick={() => setPanel('change')}>Change plan</Button>
+              {/* Hide Cancel when (a) the subscription is already canceled,
+                  OR (b) a scheduled cancel is in flight — Paddle keeps
+                  status='active' until the effective date, so without the
+                  scheduled_change check the button stays clickable and the
+                  second click 5xx's ('subscription already scheduled to
+                  cancel') with a vague 'Could not cancel' toast. */}
+              {billing.subscription.status !== 'canceled' &&
+                detail?.scheduled_change?.action !== 'cancel' && (
+                  <Button variant="destructive" onClick={() => setPanel('cancel')}>
+                    Cancel subscription
+                  </Button>
+                )}
+            </div>
+          )}
+          {billing.subscription && panel === 'change' && (
+            <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
+          )}
+          {billing.subscription && panel === 'cancel' && (
+            <CancelPanel
+              detail={
+                detail ?? {
+                  next_billed_at: billing.subscription.current_period_end,
+                  amount: null,
+                  currency: null,
+                  billing_cycle: null,
+                  scheduled_change: null,
+                }
+              }
+              tier={billing.tier}
+              onClose={() => setPanel(null)}
+            />
+          )}
+        </CurrentPlanCard>
+      )}
 
       {needsSubscription && (
         <section className="space-y-4">
@@ -322,23 +365,23 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               <CadenceToggle cadence={cadence} onChange={setCadence} />
               <ul className="grid items-stretch gap-4 sm:grid-cols-2">
                 <PlanCard
-                  name="Starter"
+                  name={PLAN_CATALOG.starter.name}
                   cadence={cadence}
-                  monthlyPrice={7}
-                  annualPrice={70}
-                  features={['5 vaults', 'Unlimited devices', '3 GB attachments', '500 AI queries/day']}
+                  monthlyPrice={PLAN_CATALOG.starter.monthlyPrice}
+                  annualPrice={PLAN_CATALOG.starter.annualPrice}
+                  features={PLAN_CATALOG.starter.features}
                   tier="starter"
-                  onStart={handleStartCheckout}
+                  onAction={handleStartCheckout}
                   disabled={!checkoutReady}
                 />
                 <PlanCard
-                  name="Pro"
+                  name={PLAN_CATALOG.pro.name}
                   cadence={cadence}
-                  monthlyPrice={14}
-                  annualPrice={140}
-                  features={['15 vaults', 'Unlimited devices', '15 GB attachments', 'Unlimited AI', 'Smart retrieval (coming)']}
+                  monthlyPrice={PLAN_CATALOG.pro.monthlyPrice}
+                  annualPrice={PLAN_CATALOG.pro.annualPrice}
+                  features={PLAN_CATALOG.pro.features}
                   tier="pro"
-                  onStart={handleStartCheckout}
+                  onAction={handleStartCheckout}
                   disabled={!checkoutReady}
                   recommended
                 />
@@ -359,16 +402,20 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             transactions={history?.transactions ?? []}
             onDownload={downloadInvoice}
           />
-          <section className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => openPortal()}>
-              Manage in Paddle
-            </Button>
-            {billing.subscription.status !== 'canceled' && (
-              <Button variant="ghost" onClick={() => openPortal('cancel')}>
-                Cancel subscription
-              </Button>
-            )}
-          </section>
+          {/* Escape hatch: if the inline panels above fail (Paddle UI bug,
+              network blip, an action we don't yet support inline) the user
+              can still self-serve through Paddle's hosted portal. Sits
+              outside the cards so it reads as a fallback option, not as
+              one of the primary plan actions. */}
+          <div className="flex justify-center pt-2">
+            <button
+              type="button"
+              onClick={() => openPortal()}
+              className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              Manage payment in Paddle, our payment processor
+            </button>
+          </div>
         </>
       )}
     </article>
@@ -416,112 +463,3 @@ function SlowActivationBanner({
   )
 }
 
-function CadenceToggle({
-  cadence,
-  onChange,
-}: {
-  cadence: BillingCadence
-  onChange: (next: BillingCadence) => void
-}) {
-  return (
-    <div role="radiogroup" aria-label="Billing cadence" className="flex justify-center">
-      <div className="inline-flex rounded-full border border-border bg-muted p-1 text-sm">
-        <button
-          role="radio"
-          aria-checked={cadence === 'monthly'}
-          onClick={() => onChange('monthly')}
-          className={cn(
-            'rounded-full px-4 py-1.5 font-medium transition',
-            cadence === 'monthly'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          Monthly
-        </button>
-        <button
-          role="radio"
-          aria-checked={cadence === 'annual'}
-          onClick={() => onChange('annual')}
-          className={cn(
-            'rounded-full px-4 py-1.5 font-medium transition',
-            cadence === 'annual'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          Annual <span className="ml-1 text-xs text-primary">save 17%</span>
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function PlanCard({
-  name,
-  cadence,
-  monthlyPrice,
-  annualPrice,
-  features,
-  tier,
-  onStart,
-  disabled,
-  recommended = false,
-}: {
-  name: string
-  cadence: BillingCadence
-  monthlyPrice: number
-  annualPrice: number
-  features: string[]
-  tier: 'starter' | 'pro'
-  onStart: (tier: 'starter' | 'pro') => void
-  disabled: boolean
-  recommended?: boolean
-}) {
-  const price =
-    cadence === 'monthly' ? `$${monthlyPrice}/mo` : `$${annualPrice}/yr`
-  const subPrice =
-    cadence === 'annual'
-      ? `$${(annualPrice / 12).toFixed(2)}/mo billed yearly`
-      : `$${monthlyPrice * 12}/yr billed monthly`
-
-  return (
-    <li
-      className={cn(
-        'relative flex flex-col gap-4 rounded-lg border bg-card p-6 transition duration-150 hover:-translate-y-0.5',
-        recommended
-          ? 'border-primary ring-1 ring-primary'
-          : 'border-border hover:border-primary/60',
-      )}
-    >
-      {recommended && (
-        <span className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground">
-          Most popular
-        </span>
-      )}
-      <h3 className="text-lg font-semibold">{name}</h3>
-      <p className="text-2xl font-bold">{price}</p>
-      <p className="-mt-3 text-xs text-muted-foreground">{subPrice}</p>
-      <ul className="flex-1 space-y-1 text-sm text-muted-foreground">
-        {features.map((f) => (
-          <li key={f} className="flex items-center gap-2">
-            <span className="text-primary" aria-hidden="true">&#10003;</span>
-            {f}
-          </li>
-        ))}
-      </ul>
-      <button
-        onClick={() => onStart(tier)}
-        disabled={disabled}
-        className={cn(
-          'w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-          recommended
-            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-            : 'border border-input bg-transparent text-foreground hover:bg-accent',
-        )}
-      >
-        Start free trial
-      </button>
-    </li>
-  )
-}
