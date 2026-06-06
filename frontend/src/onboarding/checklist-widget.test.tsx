@@ -279,13 +279,15 @@ describe('ChecklistWidget — hide when empty', () => {
 })
 
 describe('ChecklistWidget — chrome', () => {
-  it('shows the Waypoints FAB when collapsed', () => {
+  it('shows the Finish setup pill when collapsed', () => {
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
     render(wrap(<ChecklistWidget onStartTour={() => {}} />))
 
-    // Header × → collapse to FAB
+    // Header × → collapse to pill
     fireEvent.click(screen.getByLabelText(/dismiss checklist/i))
-    expect(screen.getByLabelText(/open onboarding checklist/i)).toBeInTheDocument()
+    const pill = screen.getByLabelText(/open setup checklist/i)
+    expect(pill).toBeInTheDocument()
+    expect(pill).toHaveTextContent(/finish setup/i)
   })
 
   it('renders a progress readout showing completed vs total', () => {

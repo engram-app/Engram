@@ -142,11 +142,16 @@ export function ChecklistWidget({ onStartTour }: Props) {
     return (
       <button
         type="button"
-        aria-label="Open onboarding checklist"
-        className="fixed bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg animate-fab-ring-pulse transition-transform hover:scale-105 hover:bg-primary/90"
+        aria-label="Open setup checklist"
+        className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-2 overflow-hidden rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg animate-fab-ring-pulse transition-transform hover:scale-105 hover:bg-primary/90"
         onClick={() => setCollapsed(false)}
       >
-        <Waypoints size={20} strokeWidth={2.25} aria-hidden />
+        <Waypoints size={16} strokeWidth={2.25} aria-hidden />
+        <span className="relative">Finish setup</span>
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 animate-checklist-shimmer bg-gradient-to-r from-transparent via-white/20 to-transparent [background-size:200%_100%]"
+        />
       </button>
     )
   }
@@ -167,7 +172,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
           aria-hidden
           className="pointer-events-none absolute inset-0 animate-checklist-shimmer bg-gradient-to-r from-transparent via-primary/15 to-transparent [background-size:200%_100%]"
         />
-        <h2 className="relative text-base font-semibold tracking-tight">Get started</h2>
+        <h2 className="relative text-base font-semibold tracking-tight">Finish setup</h2>
         <button
           type="button"
           aria-label="Dismiss checklist"
