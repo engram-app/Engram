@@ -146,7 +146,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
         type="button"
         size="lg"
         aria-label="Open setup checklist"
-        className="fixed bottom-4 right-4 z-40 h-12 gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 animate-fab-ring-pulse [&_svg:not([class*='size-'])]:size-5"
+        className="fixed bottom-4 right-4 z-40 h-12 gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 animate-surface-attention-pulse [&_svg:not([class*='size-'])]:size-5"
         onClick={() => setCollapsed(false)}
       >
         <Waypoints aria-hidden />

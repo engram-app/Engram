@@ -15,7 +15,7 @@ const DEFAULT_GRADIENT = 'from-transparent via-primary/15 to-transparent'
 /**
  * Decorative shimmer overlay. Absolute-positioned, pointer-events:none.
  * Drop inside any `relative` + `overflow-hidden` container. Drives a
- * slow gradient sweep via the `animate-checklist-shimmer` keyframe
+ * slow gradient sweep via the `animate-shimmer-sweep` keyframe
  * defined in `main.css`.
  */
 export function Shimmer({ gradient = DEFAULT_GRADIENT, className }: Props) {
@@ -23,7 +23,7 @@ export function Shimmer({ gradient = DEFAULT_GRADIENT, className }: Props) {
     <span
       aria-hidden
       className={cn(
-        'pointer-events-none absolute inset-0 animate-checklist-shimmer bg-gradient-to-r [background-size:200%_100%]',
+        'pointer-events-none absolute inset-0 animate-shimmer-sweep bg-gradient-to-r [background-size:200%_100%]',
         gradient,
         className,
       )}

@@ -300,13 +300,13 @@ html {
    The shadcn theme above declares --primary as OKLCH, so we use the
    `oklch(from ...)` relative-color syntax to derive low-alpha tints
    rather than the HSL approach which would silently fail to render. */
-@keyframes checklist-shimmer {
+@keyframes shimmer-sweep {
   0%   { background-position: -200% 0; }
   70%  { background-position: 200% 0; }
   100% { background-position: 200% 0; }
 }
 
-@keyframes fab-ring-pulse {
+@keyframes surface-attention-pulse {
   0%, 60%, 100% {
     box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0);
   }
@@ -322,21 +322,21 @@ html {
   /* Slow shimmer for the checklist header. The gradient is intentionally
      low-contrast to avoid reading as "loading skeleton". Cycle: ~7s sweep
      + ~3s idle = 10s total, so the eye-catch fires every ~10s. */
-  .animate-checklist-shimmer {
-    animation: checklist-shimmer 10s ease-in-out infinite;
+  .animate-shimmer-sweep {
+    animation: shimmer-sweep 10s ease-in-out infinite;
   }
 
   /* Ring pulse on the collapsed FAB. Cycle: ~3.6s active + ~10.4s idle =
      14s total. Frequent enough to catch the eye on a closed FAB, slow
      enough on the active sweep to not feel busy. */
-  .animate-fab-ring-pulse {
-    animation: fab-ring-pulse 14s ease-out infinite;
+  .animate-surface-attention-pulse {
+    animation: surface-attention-pulse 14s ease-out infinite;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-checklist-shimmer,
-  .animate-fab-ring-pulse {
+  .animate-shimmer-sweep,
+  .animate-surface-attention-pulse {
     animation: none;
   }
 }
