@@ -81,4 +81,12 @@ describe('ChecklistWidget — per-tool rows', () => {
     fireEvent.click(screen.getByRole('button', { name: /^start$/i }))
     expect(onStart).toHaveBeenCalled()
   })
+
+  it('does not render a row for the web_only slug', () => {
+    onboardingStatusValue.data.profile.tools = ['claude', 'web_only']
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.getByText(/connect claude/i)).toBeInTheDocument()
+    expect(screen.queryByText(/web.only/i)).toBeNull()
+  })
 })
