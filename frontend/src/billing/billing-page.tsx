@@ -19,6 +19,8 @@ import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
 import BillingHistoryTable from './billing-history-table'
 import PendingChangeBanner from './pending-change-banner'
+import CancelPanel from './cancel-panel'
+import PlanChangePanel from './plan-change-panel'
 import { useSubscriptionActivatedEvents } from './use-subscription-activated-events'
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
@@ -83,6 +85,9 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [completedAt, setCompletedAt] = useState<number | null>(null)
   const [slow, setSlow] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
+  // Inline panel state for the in-app cancel + plan-change flows (replaces
+  // the previous openPortal('cancel') / portal-redirect path).
+  const [panel, setPanel] = useState<'cancel' | 'change' | null>(null)
 
   // Latch — onActivated must fire at most once even if the broadcast lands
   // multiple times (subscription.created followed by subscription.activated
@@ -359,16 +364,22 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             transactions={history?.transactions ?? []}
             onDownload={downloadInvoice}
           />
-          <section className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => openPortal()}>
-              Manage in Paddle
-            </Button>
-            {billing.subscription.status !== 'canceled' && (
-              <Button variant="ghost" onClick={() => openPortal('cancel')}>
-                Cancel subscription
-              </Button>
-            )}
-          </section>
+          {panel === null && (
+            <section className="flex flex-wrap gap-3">
+              <Button onClick={() => setPanel('change')}>Change plan</Button>
+              {billing.subscription.status !== 'canceled' && (
+                <Button variant="ghost" onClick={() => setPanel('cancel')}>
+                  Cancel subscription
+                </Button>
+              )}
+            </section>
+          )}
+          {panel === 'change' && (
+            <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
+          )}
+          {panel === 'cancel' && detail && (
+            <CancelPanel detail={detail} onClose={() => setPanel(null)} />
+          )}
         </>
       )}
     </article>
