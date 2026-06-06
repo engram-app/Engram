@@ -232,6 +232,40 @@ jobs:
             --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
             "$WEBHOOK"
 
+      # Mark "release initiated" in Grafana so the operator sees a vertical
+      # line on every Engram-folder dashboard. The matching "applied"
+      # annotation lands ~3-5 min later when engram-infra's
+      # `terraform (prod)` apply rolls the ECS service onto the new task
+      # def. SAT is mirrored from SOPS to a repo secret here (see comment
+      # in engram-infra `main/envs/prod/grafana.tf`); rotation requires
+      # updating both. Best-effort: a failed annotation doesn't fail the
+      # deploy. Skipped silently if the secret isn't set (e.g. on a fork).
+      - name: Annotate release-initiated in Grafana
+        if: success() && steps.open-pr.outputs.pull-request-number != '' && env.GRAFANA_SAT != ''
+        env:
+          GRAFANA_SAT: ${{ secrets.GRAFANA_SAT_CLAUDE_CODE }}
+          RELEASE: ${{ steps.tags.outputs.release }}
+          IMAGE: ${{ steps.tags.outputs.image_tag }}
+          PR_URL: ${{ steps.open-pr.outputs.pull-request-url }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW_MS=$(( $(date +%s%N) / 1000000 ))
+          TEXT=$(printf 'release initiated: `%s` → `%s`\nengram-infra PR: %s\n[run](%s)' \
+            "$RELEASE" "$IMAGE" "$PR_URL" "$GH_RUN_URL")
+          BODY=$(jq -nc \
+            --arg time "$NOW_MS" \
+            --arg text "$TEXT" \
+            '{time:($time|tonumber), text:$text, tags:["deploy","initiated","engram","prod"]}')
+          curl -sS --fail-with-body --max-time 10 \
+            -X POST \
+            -H "Authorization: Bearer $GRAFANA_SAT" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            https://calmeucalyptus520.grafana.net/api/annotations \
+            | jq -r '"annotation id: \(.id)"' \
+            || echo "::warning::Grafana annotation failed — deploy unaffected"
+
       # Failure path — same webhook, different framing. `failure()`
       # fires when an earlier step exited non-zero.
       - name: Notify Discord (deploy failed)
