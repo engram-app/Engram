@@ -1,10 +1,10 @@
 defmodule Engram.Accounts.Export.SchemaTest do
   use Engram.DataCase, async: true
 
+  import Engram.Factory
+
   alias Engram.Accounts.Export.Schema
   alias Engram.Repo
-
-  import Engram.Factory
 
   test "insert + read happy path" do
     user = insert(:user)

@@ -128,12 +128,12 @@ defmodule Engram.Accounts.Export do
 
   defp rate_limit_check(%User{} = user) do
     cond do
-      lifetime_cap = cap_for(user,:account_exports_lifetime) ->
+      lifetime_cap = cap_for(user, :account_exports_lifetime) ->
         if Repo.aggregate(used_lifetime_q(user), :count) >= lifetime_cap,
           do: {:error, :lifetime_exceeded},
           else: :ok
 
-      per_24h_cap = cap_for(user,:account_export_rate_per_24h) ->
+      per_24h_cap = cap_for(user, :account_export_rate_per_24h) ->
         if Repo.aggregate(recent_24h_q(user), :count) >= per_24h_cap,
           do: {:error, :rate_exceeded},
           else: :ok
@@ -163,7 +163,7 @@ defmodule Engram.Accounts.Export do
   # ── Size estimation ──────────────────────────────────────────────
 
   defp size_estimate_check(%User{} = user) do
-    case cap_for(user,:account_export_max_bytes) do
+    case cap_for(user, :account_export_max_bytes) do
       nil ->
         :ok
 

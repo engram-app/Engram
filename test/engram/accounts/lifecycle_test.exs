@@ -186,8 +186,7 @@ defmodule Engram.Accounts.LifecycleTest do
       # Subscription FK cascade
       refute Repo.get(Engram.Billing.Subscription, sub.id, skip_tenant_check: true)
 
-      assert_receive {[:engram, :account, :deleted], ^ref, _,
-                      %{reason: :user, had_sub: true}}
+      assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :user, had_sub: true}}
     end
 
     test "Paddle cancel failure does not abort the cascade" do
@@ -270,8 +269,7 @@ defmodule Engram.Accounts.LifecycleTest do
 
       assert :ok = Lifecycle.hard_delete(user, :clerk)
 
-      assert_receive {[:engram, :account, :deleted], ^ref, _,
-                      %{reason: :clerk, had_sub: false}}
+      assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :clerk, had_sub: false}}
     end
 
     test "passes :inactivity reason through to telemetry" do

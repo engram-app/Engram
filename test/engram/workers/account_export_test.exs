@@ -16,13 +16,13 @@ defmodule Engram.Workers.AccountExportTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.Factory
+
   alias Engram.Accounts.Export
   alias Engram.Accounts.Export.Schema
   alias Engram.Repo
   alias Engram.Storage.InMemory
   alias Engram.Workers.AccountExport
-
-  import Engram.Factory
 
   defp as_pro(user) do
     insert(:subscription, user: user, tier: "pro", status: "active")
@@ -63,11 +63,11 @@ defmodule Engram.Workers.AccountExportTest do
 
       # expires_at is ~7 days from ready_at
       diff = DateTime.diff(reloaded.expires_at, reloaded.ready_at, :second)
-      assert diff in 6 * 86_400..8 * 86_400
+      assert diff in (6 * 86_400)..(8 * 86_400)
 
       # s3_keys are stored as plain maps with the documented shape
       assert is_list(reloaded.s3_keys)
-      assert length(reloaded.s3_keys) >= 1
+      assert reloaded.s3_keys != []
 
       Enum.each(reloaded.s3_keys, fn entry ->
         assert is_binary(entry["key"])

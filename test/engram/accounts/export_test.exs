@@ -2,13 +2,12 @@ defmodule Engram.Accounts.ExportTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.Factory
   import Mox
 
   alias Engram.Accounts.Export
   alias Engram.Accounts.Export.Schema
   alias Engram.Repo
-
-  import Engram.Factory
 
   setup :verify_on_exit!
 

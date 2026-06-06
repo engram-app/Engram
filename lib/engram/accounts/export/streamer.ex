@@ -129,9 +129,9 @@ defmodule Engram.Accounts.Export.Streamer do
     note_entries ++ attachment_entries
   end
 
-  # TODO(Task 13): decrypt via the user's DEK + emit the real markdown
-  # body. For now we ship the ciphertext so the multipart pipeline gets
-  # exercised end-to-end without a half-built decrypt path.
+  # Decryption via the user's DEK lands in Plan Task 13; until then we
+  # ship the ciphertext so the multipart pipeline gets exercised
+  # end-to-end without a half-built decrypt path.
   defp note_payload(%Note{content_ciphertext: nil}), do: ""
   defp note_payload(%Note{content_ciphertext: ct}) when is_binary(ct), do: ct
 
@@ -151,8 +151,7 @@ defmodule Engram.Accounts.Export.Streamer do
         if byte_size(buf) >= @min_part_bytes do
           {:ok, etag} = storage.upload_part(key, upload_id, part_no, buf)
 
-          {<<>>, part_no + 1,
-           acc_parts ++ [%{part_number: part_no, etag: etag}],
+          {<<>>, part_no + 1, acc_parts ++ [%{part_number: part_no, etag: etag}],
            total + byte_size(buf)}
         else
           {buf, part_no, acc_parts, total}
