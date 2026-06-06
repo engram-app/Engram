@@ -31,4 +31,52 @@ defmodule Engram.Onboarding.ActionTest do
     assert cs.errors[:user_id]
     assert cs.errors[:action]
   end
+
+  describe "dismissed:<slug> variant" do
+    test "accepts a well-formed dismissed:<slug> action" do
+      cs =
+        Engram.Onboarding.Action.changeset(
+          %Engram.Onboarding.Action{},
+          %{user_id: 1, action: "dismissed:claude"}
+        )
+
+      assert cs.valid?
+    end
+
+    test "accepts every slug shape used by the frontend catalog" do
+      slugs = ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot other_mcp install_obsidian_plugin)
+
+      for slug <- slugs do
+        cs =
+          Engram.Onboarding.Action.changeset(
+            %Engram.Onboarding.Action{},
+            %{user_id: 1, action: "dismissed:" <> slug}
+          )
+
+        assert cs.valid?, "expected dismissed:#{slug} to be valid"
+      end
+    end
+
+    test "rejects dismissed:<slug> with uppercase, leading number, dashes, or empty slug" do
+      for bad <- ["dismissed:Claude", "dismissed:1claude", "dismissed:claude-desktop", "dismissed:", "dismissed: claude"] do
+        cs =
+          Engram.Onboarding.Action.changeset(
+            %Engram.Onboarding.Action{},
+            %{user_id: 1, action: bad}
+          )
+
+        refute cs.valid?, "expected #{inspect(bad)} to be invalid"
+      end
+    end
+
+    test "still rejects unknown plain (non-dismissed) actions" do
+      cs =
+        Engram.Onboarding.Action.changeset(
+          %Engram.Onboarding.Action{},
+          %{user_id: 1, action: "not_a_real_action"}
+        )
+
+      refute cs.valid?
+    end
+  end
 end
