@@ -1,12 +1,10 @@
 import { Link, useSearchParams } from 'react-router'
 import {
   useFolderNotes,
-  useOnboardingStatus,
   useVaults,
   type NoteSummary,
 } from '../api/queries'
 import { EmptyVaultState } from '../layout/empty-vault-state'
-import { SetupCards } from '../onboarding/setup-cards'
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
@@ -75,52 +73,39 @@ export default function Dashboard() {
   const [searchParams] = useSearchParams()
   const folder = searchParams.get('folder') ?? ''
   const { data: vaults } = useVaults()
-  const { data: status } = useOnboardingStatus()
-  const cards = status?.profile ? <SetupCards profile={status.profile} /> : null
 
   // Deleting the last vault leaves zero active vaults. Show a create-a-vault
   // prompt instead of the (empty) note browser. Guard against the loading
   // state (vaults === undefined) so the empty state doesn't flash while the
   // vault list is still in flight.
   if (vaults && vaults.length === 0) {
-    return (
-      <>
-        {cards}
-        <EmptyVaultState />
-      </>
-    )
+    return <EmptyVaultState />
   }
 
   if (folder) {
     return (
-      <>
-        {cards}
-        <section data-tour="dashboard-root">
-          <header className="mb-4">
-            <h2 className="text-base font-semibold text-gray-800 dark:text-gray-200">{folder}</h2>
-          </header>
-          <FolderNotes folder={folder} />
-        </section>
-      </>
+      <section data-tour="dashboard-root">
+        <header className="mb-4">
+          <h2 className="text-base font-semibold text-gray-800 dark:text-gray-200">{folder}</h2>
+        </header>
+        <FolderNotes folder={folder} />
+      </section>
     )
   }
 
   return (
-    <>
-      {cards}
-      <section
-        aria-label="Welcome"
-        className="flex h-full flex-col items-center justify-center text-center"
-        data-tour="dashboard-root"
-      >
-        <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Welcome to Engram</h2>
-        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          Select a folder from the sidebar to browse your notes.
-        </p>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Use <Link to="/search" className="text-blue-600 hover:underline">Search</Link> to find notes by keyword or semantic query.
-        </p>
-      </section>
-    </>
+    <section
+      aria-label="Welcome"
+      className="flex h-full flex-col items-center justify-center text-center"
+      data-tour="dashboard-root"
+    >
+      <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Welcome to Engram</h2>
+      <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+        Select a folder from the sidebar to browse your notes.
+      </p>
+      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        Use <Link to="/search" className="text-blue-600 hover:underline">Search</Link> to find notes by keyword or semantic query.
+      </p>
+    </section>
   )
 }

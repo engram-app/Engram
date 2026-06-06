@@ -14,8 +14,6 @@ export function useOnboardingActions() {
     isLoading,
     vaultCount: data?.vault_count ?? 0,
     has: (a: OnboardingAction) => actions.has(a),
-    hasTourDecision:
-      actions.has('tour_offered_skipped') || actions.has('tour_completed'),
     record: mutate,
     recordAsync: mutateAsync,
   }

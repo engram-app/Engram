@@ -25,7 +25,6 @@ describe('useOnboardingActions', () => {
     const { result } = renderHook(() => useOnboardingActions(), { wrapper: wrap })
     expect(result.current.has('first_vault_created')).toBe(true)
     expect(result.current.has('plugin_connected')).toBe(false)
-    expect(result.current.hasTourDecision).toBe(false)
     expect(result.current.vaultCount).toBe(1)
   })
 })

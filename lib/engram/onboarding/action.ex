@@ -31,11 +31,31 @@ defmodule Engram.Onboarding.Action do
 
   def actions, do: @actions
 
+  # Parameterized dismiss actions: `dismissed:<slug>` where slug starts with
+  # a lowercase letter and contains only lowercase letters, digits, and
+  # underscores. Distinct from the static milestone catalog above so we can
+  # add new dismissable steps from the frontend without backend changes.
+  @dismissed_slug_pattern ~r/^dismissed:[a-z][a-z0-9_]{0,47}$/
+
   def changeset(struct, attrs) do
     struct
     |> cast(attrs, [:user_id, :action, :metadata])
     |> validate_required([:user_id, :action])
-    |> validate_inclusion(:action, @actions)
+    |> validate_action()
     |> unique_constraint([:user_id, :action], name: :onboarding_actions_user_id_action_index)
+  end
+
+  defp validate_action(changeset) do
+    case fetch_change(changeset, :action) do
+      {:ok, value} when is_binary(value) ->
+        cond do
+          value in @actions -> changeset
+          Regex.match?(@dismissed_slug_pattern, value) -> changeset
+          true -> add_error(changeset, :action, "is invalid")
+        end
+
+      _ ->
+        changeset
+    end
   end
 end

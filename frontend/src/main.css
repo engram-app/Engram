@@ -295,3 +295,48 @@
 html {
   scroll-padding-top: 4rem;
 }
+
+/* Keyframes live outside @layer so they always register in Tailwind v4.
+   The shadcn theme above declares --primary as OKLCH, so we use the
+   `oklch(from ...)` relative-color syntax to derive low-alpha tints
+   rather than the HSL approach which would silently fail to render. */
+@keyframes shimmer-sweep {
+  0%   { background-position: -200% 0; }
+  70%  { background-position: 200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes surface-attention-pulse {
+  0%, 60%, 100% {
+    box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0);
+  }
+  65% {
+    box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0.35);
+  }
+  86% {
+    box-shadow: 0 0 0 14px oklch(from var(--primary) l c h / 0);
+  }
+}
+
+@layer utilities {
+  /* Slow shimmer for the checklist header. The gradient is intentionally
+     low-contrast to avoid reading as "loading skeleton". Cycle: ~7s sweep
+     + ~3s idle = 10s total, so the eye-catch fires every ~10s. */
+  .animate-shimmer-sweep {
+    animation: shimmer-sweep 10s ease-in-out infinite;
+  }
+
+  /* Ring pulse on the collapsed FAB. Cycle: ~3.6s active + ~10.4s idle =
+     14s total. Frequent enough to catch the eye on a closed FAB, slow
+     enough on the active sweep to not feel busy. */
+  .animate-surface-attention-pulse {
+    animation: surface-attention-pulse 14s ease-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer-sweep,
+  .animate-surface-attention-pulse {
+    animation: none;
+  }
+}

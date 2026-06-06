@@ -31,4 +31,83 @@ defmodule Engram.Onboarding.ActionTest do
     assert cs.errors[:user_id]
     assert cs.errors[:action]
   end
+
+  describe "dismissed:<slug> variant" do
+    test "accepts a well-formed dismissed:<slug> action" do
+      cs =
+        Action.changeset(
+          %Action{},
+          %{user_id: 1, action: "dismissed:claude"}
+        )
+
+      assert cs.valid?
+    end
+
+    test "accepts every slug shape used by the frontend catalog" do
+      slugs =
+        ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot other_mcp install_obsidian_plugin)
+
+      for slug <- slugs do
+        cs =
+          Action.changeset(
+            %Action{},
+            %{user_id: 1, action: "dismissed:" <> slug}
+          )
+
+        assert cs.valid?, "expected dismissed:#{slug} to be valid"
+      end
+    end
+
+    test "rejects dismissed:<slug> with uppercase, leading number, dashes, or empty slug" do
+      for bad <- [
+            "dismissed:Claude",
+            "dismissed:1claude",
+            "dismissed:claude-desktop",
+            "dismissed:",
+            "dismissed: claude"
+          ] do
+        cs =
+          Action.changeset(
+            %Action{},
+            %{user_id: 1, action: bad}
+          )
+
+        refute cs.valid?, "expected #{inspect(bad)} to be invalid"
+      end
+    end
+
+    test "still rejects unknown plain (non-dismissed) actions" do
+      cs =
+        Action.changeset(
+          %Action{},
+          %{user_id: 1, action: "not_a_real_action"}
+        )
+
+      refute cs.valid?
+    end
+
+    test "rejects dismissed:<slug> longer than 48 characters" do
+      long_slug = String.duplicate("a", 49)
+
+      cs =
+        Action.changeset(
+          %Action{},
+          %{user_id: 1, action: "dismissed:" <> long_slug}
+        )
+
+      refute cs.valid?
+    end
+
+    test "accepts dismissed:<slug> exactly 48 characters" do
+      slug = String.duplicate("a", 48)
+
+      cs =
+        Action.changeset(
+          %Action{},
+          %{user_id: 1, action: "dismissed:" <> slug}
+        )
+
+      assert cs.valid?
+    end
+  end
 end

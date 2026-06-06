@@ -61,19 +61,18 @@ test.describe('FTUX happy path', () => {
       )
     }
 
-    // Tour-Offer modal. Idempotent: if the user already made a tour decision
-    // in a previous run, the modal won't show — skip ahead to the checklist
-    // assertion (the post-state we care about is "after the FTUX flow runs").
+    // TourOfferModal was removed — the tour now lives as a standing row
+    // inside the checklist widget instead of an auto-prompt modal. The
+    // tour-step interaction below stays behind the `tourVisible` check
+    // so the spec degrades gracefully if a future iteration restores
+    // some kind of pre-vault tour prompt; today the check is always
+    // false and the block is dead.
     const tourHeading = page.getByRole('heading', { name: /quick tour/i })
     const tourVisible = await tourHeading.isVisible().catch(() => false)
 
     if (tourVisible) {
       await page.getByRole('button', { name: /take the tour/i }).click()
-
-      // Demo fixture loads → note "Start here" is visible in the sidebar tree.
       await expect(page.getByText('Start here')).toBeVisible({ timeout: 10_000 })
-
-      // 6 steps: 5 next clicks then a Done that fires our `onCreateVault` exit.
       for (let i = 0; i < 5; i++) {
         await page.locator('.driver-popover-next-btn').click()
       }
@@ -90,23 +89,21 @@ test.describe('FTUX happy path', () => {
     }
 
     // Post-flow assertion: checklist widget mounted on the dashboard.
-    // (The "create vault" row gets ✅ once `first_vault_created` is recorded.)
-    await expect(page.getByRole('heading', { name: /get started/i })).toBeVisible({
-      timeout: 10_000,
-    })
+    // The widget defaults to its open state, exposing the "Finish setup"
+    // heading. If the user has dismissed every actionable row (so the
+    // widget unmounts entirely) the closed-state pill is shown instead
+    // — accept either as evidence the FTUX flow landed on the dashboard.
+    const openHeading = page.getByRole('heading', { name: /finish setup/i })
+    const closedPill = page.getByLabel(/open setup checklist/i)
+    await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 10_000 })
   })
 
-  test('skip tour still shows create-vault modal', async ({ page }) => {
+  test('checklist widget mounts on the dashboard after vault creation', async ({ page }) => {
     await clerkSignIn(page, state.email)
     await page.waitForURL((url) => !url.pathname.startsWith('/sign-in'), { timeout: 15_000 })
     if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/)) {
       test.skip(true, 'Onboarding wizard not pre-completed for test user.')
       return
-    }
-
-    const skipBtn = page.getByRole('button', { name: /^skip$/i })
-    if (await skipBtn.isVisible().catch(() => false)) {
-      await skipBtn.click()
     }
 
     // Vault modal shows (skip if vault already exists from a prior run).
@@ -116,8 +113,11 @@ test.describe('FTUX happy path', () => {
       await page.getByRole('button', { name: /create vault/i }).click()
     }
 
-    // Checklist should show "Take the tour" item still actionable.
-    await expect(page.getByRole('button', { name: /^start$/i })).toBeVisible()
+    // Same flexible post-flow assertion as the happy-path test: open
+    // checklist heading OR closed pill, depending on dismiss history.
+    const openHeading = page.getByRole('heading', { name: /finish setup/i })
+    const closedPill = page.getByLabel(/open setup checklist/i)
+    await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 10_000 })
   })
 
   test('vault modal cannot be dismissed by ESC, click-outside, or close button', async ({

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -20,7 +20,6 @@ vi.mock('./use-onboarding-actions', () => ({
     isLoading: false,
     vaultCount: 0,
     has: () => false,
-    hasTourDecision: false,
     record: mockRecord,
     recordAsync: mockRecord,
   }),
@@ -33,26 +32,35 @@ vi.mock('./tour/controller', () => ({
   TourController: () => null,
 }))
 
+// The checklist widget has its own dedicated suite — stub here so this test
+// stays focused on the shell's modal/orchestration behaviour.
+vi.mock('./checklist-widget', () => ({
+  ChecklistWidget: () => <div data-testid="checklist-widget" />,
+}))
+
 describe('OnboardingShell', () => {
   beforeEach(() => {
     mockRecord.mockClear()
   })
 
-  it('opens tour-offer modal, then vault modal after skip', async () => {
+  it('renders the vault modal when vault_count is zero', () => {
     renderShell(
       <OnboardingShell>
         <p>dashboard</p>
       </OnboardingShell>,
     )
     expect(
-      screen.getByRole('heading', { name: /quick tour/i }),
-    ).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: /skip/i }))
-    await act(async () => {})
-    expect(mockRecord).toHaveBeenCalledWith('tour_offered_skipped')
-    expect(
       screen.getByRole('heading', { name: /first vault/i }),
     ).toBeInTheDocument()
+  })
+
+  it('mounts the checklist widget alongside dashboard content', () => {
+    renderShell(
+      <OnboardingShell>
+        <p>dashboard</p>
+      </OnboardingShell>,
+    )
+    expect(screen.getByText('dashboard')).toBeInTheDocument()
+    expect(screen.getByTestId('checklist-widget')).toBeInTheDocument()
   })
 })
