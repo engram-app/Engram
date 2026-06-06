@@ -17,6 +17,11 @@ defmodule Engram.Crypto.HMAC do
   — set per environment. In tests + dev, a fixed throwaway key is fine; in
   prod it MUST be a high-entropy secret distinct from any encryption key.
   """
+  # `users.id` is `bigserial` (integer) in this repo — see the comment in
+  # `priv/repo/migrations/20260603000010_create_onboarding_actions.exs`. The
+  # integer-only guard is intentional: a binary input here would mean a caller
+  # passed something other than a user PK, and we want that to fail loudly
+  # rather than silently hash the wrong value.
   @spec hash_user_id(integer()) :: String.t()
   def hash_user_id(user_id) when is_integer(user_id) do
     key = Application.fetch_env!(:engram, :hmac_key_user_id)
