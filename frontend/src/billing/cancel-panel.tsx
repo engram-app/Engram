@@ -32,7 +32,7 @@ export default function CancelPanel({ detail, onClose }: CancelPanelProps) {
     <section
       role="region"
       aria-label="Cancel subscription"
-      className="space-y-4 rounded-lg border border-border bg-card p-6"
+      className="space-y-4 pt-2"
     >
       <header>
         <h2 className="text-base font-semibold text-foreground">Cancel subscription</h2>

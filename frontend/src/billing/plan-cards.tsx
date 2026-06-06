@@ -174,9 +174,16 @@ export function PlanCard({
           disabled={disabled || current}
           className={cn(
             'w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+            // recommended (onboarding's Pro) and selected (change-plan's
+            // chosen target) get the filled-primary CTA so the actionable
+            // card has visible weight against neighbors. current renders a
+            // muted outline since the button is inert. idle keeps a clean
+            // outline (onboarding's Starter, change-plan's other tier).
             state === 'recommended' || state === 'selected'
               ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-              : 'border border-input bg-transparent text-foreground hover:bg-accent',
+              : state === 'current'
+                ? 'border border-input bg-transparent text-muted-foreground'
+                : 'border border-input bg-transparent text-foreground hover:bg-accent',
           )}
         >
           {current ? 'Current plan' : ctaLabel}

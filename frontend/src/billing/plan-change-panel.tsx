@@ -3,10 +3,12 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   useBillingConfig,
+  useBillingSubscriptionDetail,
   useConfirmPlanChange,
   usePlanChangePreview,
   type BillingCadence,
   type BillingStatus,
+  type SubscriptionDetail,
 } from '../api/queries'
 import { CadenceToggle, PLAN_CATALOG, PlanCard, type PlanTier } from './plan-cards'
 
@@ -30,9 +32,22 @@ function deriveCurrentTier(billing: BillingStatus): PlanTier | null {
   return tier === 'starter' || tier === 'pro' ? tier : null
 }
 
+// Cadence comes from /billing/subscription's billing_cycle.interval; if the
+// detail hasn't loaded (or never resolves for sideloaded dev subs), default
+// to monthly so the panel still renders. The toggle is the user's lever to
+// override regardless.
+function deriveCurrentCadence(detail: SubscriptionDetail | undefined): BillingCadence {
+  return detail?.billing_cycle?.interval === 'year' ? 'annual' : 'monthly'
+}
+
 export default function PlanChangePanel({ billing, onClose }: PlanChangePanelProps) {
   const { data: config } = useBillingConfig()
-  const [cadence, setCadence] = useState<BillingCadence>('monthly')
+  const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription))
+  const currentTier = deriveCurrentTier(billing)
+  const currentCadence = deriveCurrentCadence(detail)
+  // Open the toggle on the user's existing cadence so the first card grid
+  // they see reflects 'what would change' rather than always-Monthly.
+  const [cadence, setCadence] = useState<BillingCadence>(currentCadence)
   const [selectedTier, setSelectedTier] = useState<PlanTier | null>(null)
 
   const targetPriceId =
@@ -43,17 +58,11 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
 
   if (!config) {
     return (
-      <section
-        role="region"
-        aria-label="Change plan"
-        className="rounded-lg border border-border bg-card p-6"
-      >
+      <section role="region" aria-label="Change plan" className="py-2">
         <p className="text-sm text-muted-foreground">Loading plan options…</p>
       </section>
     )
   }
-
-  const currentTier = deriveCurrentTier(billing)
 
   async function onConfirm() {
     if (!targetPriceId) return
@@ -67,11 +76,8 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
   }
 
   return (
-    <section
-      role="region"
-      aria-label="Change plan"
-      className="space-y-5 rounded-lg border border-border bg-card p-6"
-    >
+    <section role="region" aria-label="Change plan" className="space-y-5 pt-2">
+
       <header>
         <h2 className="text-base font-semibold text-foreground">Change your plan</h2>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -91,8 +97,18 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
       <ul className="grid items-stretch gap-4 sm:grid-cols-2">
         {(Object.keys(PLAN_CATALOG) as PlanTier[]).map((tier) => {
           const meta = PLAN_CATALOG[tier]
-          const isCurrent = tier === currentTier
+          // 'Current' only matches when the toggle is on the user's
+          // existing cadence — flipping to Annual surfaces Pro again as a
+          // selectable upgrade target so monthly→annual is a real path.
+          const isCurrent = tier === currentTier && cadence === currentCadence
           const isSelected = tier === selectedTier
+          // Visual focal-point hint: when the toggle puts both cards on
+          // non-current cadence, the page has TWO selectable cards and
+          // neither should auto-highlight. When toggle is on current
+          // cadence, exactly one alternative exists — highlight it.
+          const availableCount = Object.keys(PLAN_CATALOG).length - (cadence === currentCadence && currentTier ? 1 : 0)
+          const isDefaultTarget =
+            selectedTier === null && !isCurrent && availableCount === 1
           return (
             <PlanCard
               key={tier}
@@ -104,7 +120,7 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
               tier={tier}
               onAction={(t) => setSelectedTier(t)}
               current={isCurrent}
-              selected={isSelected}
+              selected={isSelected || isDefaultTarget}
               ctaLabel={isSelected ? 'Selected' : 'Select'}
               ctaSubLabel={
                 isSelected && preview.isFetching
