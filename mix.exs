@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.353",
+      version: "0.5.354",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -98,6 +98,7 @@ defmodule Engram.MixProject do
       # Telemetry & logging
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
+      {:prom_ex, "~> 1.11"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
 

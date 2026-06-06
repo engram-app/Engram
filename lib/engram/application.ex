@@ -22,6 +22,7 @@ defmodule Engram.Application do
     children =
       [
         EngramWeb.Telemetry,
+        Engram.PromEx,
         Engram.Repo,
         boot_canary_guard(),
         {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
