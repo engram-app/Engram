@@ -241,6 +241,69 @@ defmodule Engram.Paddle.Client.HTTP do
     end
   end
 
+  @impl true
+  def preview_subscription_update(subscription_id, items, opts \\ [])
+      when is_binary(subscription_id) and is_list(items) do
+    with {:ok, api_key} <- fetch_api_key() do
+      url = base_url() <> "/subscriptions/" <> subscription_id <> "/preview"
+      body = subscription_update_body(items, opts)
+
+      case Req.patch(url, headers: headers(api_key), json: body, receive_timeout: 10_000) do
+        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+          {:ok, data}
+
+        {:ok, %Req.Response{status: status, body: body}} ->
+          log_non_2xx("subscription-preview", status, body)
+          {:error, {:paddle_error, status}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @impl true
+  def update_subscription(subscription_id, items, opts \\ [])
+      when is_binary(subscription_id) and is_list(items) do
+    with {:ok, api_key} <- fetch_api_key() do
+      url = base_url() <> "/subscriptions/" <> subscription_id
+      body = subscription_update_body(items, opts)
+
+      req_headers =
+        case Keyword.get(opts, :idempotency_key) do
+          key when is_binary(key) -> headers(api_key) ++ [{"paddle-ik", key}]
+          _ -> headers(api_key)
+        end
+
+      case Req.patch(url, headers: req_headers, json: body, receive_timeout: 10_000) do
+        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+          {:ok, data}
+
+        {:ok, %Req.Response{status: status, body: body}} ->
+          log_non_2xx("subscription-update", status, body)
+          {:error, {:paddle_error, status}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp subscription_update_body(items, opts) do
+    base = %{items: items}
+
+    base =
+      case Keyword.get(opts, :proration_billing_mode) do
+        mode when is_binary(mode) -> Map.put(base, :proration_billing_mode, mode)
+        _ -> base
+      end
+
+    case Keyword.get(opts, :scheduled_change, :unset) do
+      :unset -> base
+      value -> Map.put(base, :scheduled_change, value)
+    end
+  end
+
   defp log_non_2xx(label, status, body) do
     Logger.warning("Paddle #{label} non-2xx", status: status, reason_label: inspect(body))
   end

@@ -59,4 +59,62 @@ defmodule Engram.Billing.Subscriptions do
       {:error, _reason} -> {:error, :paddle_unavailable}
     end
   end
+
+  @doc """
+  Preview a plan change without committing.
+
+  Paddle proration mode is `prorated_immediately` — the inline panel renders
+  `old_total`, `new_total`, `immediate_charge_or_credit`, `next_billed_at`
+  for the user to confirm. Read-only on Paddle's side.
+
+  Returns `{:ok, preview}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
+  """
+  @spec preview_plan_change(User.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+  def preview_plan_change(user, new_price_id) when is_binary(new_price_id) do
+    with_active_sub(user, fn sub_id ->
+      Client.impl().preview_subscription_update(
+        sub_id,
+        [%{price_id: new_price_id, quantity: 1}],
+        proration_billing_mode: "prorated_immediately"
+      )
+    end)
+  end
+
+  @doc """
+  Commit a plan change.
+
+  Idempotency key prevents double-apply on retry. Webhook mirror reflects
+  the new plan into our DB; callers don't write here.
+
+  Returns `{:ok, paddle_data}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
+  """
+  @spec confirm_plan_change(User.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+  def confirm_plan_change(user, new_price_id) when is_binary(new_price_id) do
+    with_active_sub(user, fn sub_id ->
+      idempotency_key =
+        "plan-change-#{user.id}-#{sub_id}-#{System.unique_integer([:positive])}"
+
+      Client.impl().update_subscription(
+        sub_id,
+        [%{price_id: new_price_id, quantity: 1}],
+        idempotency_key: idempotency_key,
+        proration_billing_mode: "prorated_immediately"
+      )
+    end)
+  end
+
+  defp with_active_sub(user, fun) do
+    case Billing.get_subscription(user) do
+      %Subscription{paddle_subscription_id: sub_id} when is_binary(sub_id) ->
+        case fun.(sub_id) do
+          {:ok, data} -> {:ok, data}
+          {:error, _reason} -> {:error, :paddle_unavailable}
+        end
+
+      _ ->
+        {:error, :no_active_subscription}
+    end
+  end
 end
