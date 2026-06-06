@@ -67,6 +67,16 @@ export function ChecklistWidget({ onStartTour }: Props) {
       label: 'Create your first vault',
       done: ob.has('first_vault_created'),
     },
+    ...(profile?.uses_obsidian
+      ? [
+          {
+            key: 'install_obsidian_plugin',
+            label: 'Install the Obsidian plugin',
+            done: false,
+            docUrl: DOC_URLS.install_obsidian_plugin,
+          } as Item,
+        ]
+      : []),
     ...(ob.has('tour_offered_skipped') && !ob.has('tour_completed')
       ? [
           {

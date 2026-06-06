@@ -107,3 +107,22 @@ describe('ChecklistWidget — per-tool rows', () => {
     expect(link).toHaveAttribute('rel', 'noreferrer')
   })
 })
+
+describe('ChecklistWidget — Obsidian plugin row', () => {
+  it('renders the Obsidian plugin row when uses_obsidian is true', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: true, tools: [] }
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.getByText(/install.*obsidian/i)).toBeInTheDocument()
+
+    const link = screen.getByRole('link', { name: /setup guide/i })
+    expect(link).toHaveAttribute('href', 'https://engram.page/docs/obsidian/install/')
+  })
+
+  it('omits the Obsidian plugin row when uses_obsidian is false', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: ['claude'] }
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
+  })
+})
