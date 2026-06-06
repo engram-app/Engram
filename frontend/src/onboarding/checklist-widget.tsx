@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useOnboardingActions } from './use-onboarding-actions'
+import { useOnboardingStatus } from '../api/queries'
 import { Button } from '../components/ui/button'
 
 interface Props {
@@ -10,16 +11,55 @@ interface Item {
   key: string
   label: string
   done: boolean
-  cta?: () => void
-  ctaLabel?: string
-  comingSoon?: boolean
+  docUrl?: string
+  startTour?: () => void
+}
+
+const DOC_URLS: Record<string, string> = {
+  install_obsidian_plugin: 'https://engram.page/docs/obsidian/install/',
+  claude:         'https://engram.page/docs/integrations/claude-desktop/',
+  cursor:         'https://engram.page/docs/integrations/cursor/',
+  claude_code:    'https://engram.page/docs/integrations/claude-code/',
+  chatgpt:        'https://engram.page/docs/integrations/chatgpt/',
+  grok:           'https://engram.page/docs/integrations/grok/',
+  mistral:        'https://engram.page/docs/integrations/mistral/',
+  open_webui:     'https://engram.page/docs/integrations/open-webui/',
+  lobechat:       'https://engram.page/docs/integrations/lobechat/',
+  windsurf:       'https://engram.page/docs/integrations/windsurf/',
+  cline:          'https://engram.page/docs/integrations/cline/',
+  continue:       'https://engram.page/docs/integrations/continue/',
+  opencode:       'https://engram.page/docs/integrations/opencode/',
+  github_copilot: 'https://engram.page/docs/integrations/github-copilot/',
+  other_mcp:      'https://engram.page/docs/mcp/manual-config/',
+}
+const DOC_FALLBACK = 'https://engram.page/docs/integrations/'
+
+const TOOL_LABELS: Record<string, string> = {
+  claude:         'Connect Claude Desktop',
+  cursor:         'Connect Cursor',
+  claude_code:    'Connect Claude Code',
+  chatgpt:        'Connect ChatGPT',
+  grok:           'Connect Grok',
+  mistral:        'Connect Mistral',
+  open_webui:     'Connect Open WebUI',
+  lobechat:       'Connect LobeChat',
+  windsurf:       'Connect Windsurf',
+  cline:          'Connect Cline',
+  continue:       'Connect Continue',
+  opencode:       'Connect OpenCode',
+  github_copilot: 'Connect GitHub Copilot',
+  other_mcp:      'Connect another MCP client',
 }
 
 export function ChecklistWidget({ onStartTour }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const ob = useOnboardingActions()
+  const status = useOnboardingStatus()
 
   if (ob.isLoading) return null
+
+  const profile = status.data?.profile
+  const tools = (profile?.tools ?? []).filter((t) => t !== 'web_only')
 
   const items: Item[] = [
     {
@@ -27,34 +67,25 @@ export function ChecklistWidget({ onStartTour }: Props) {
       label: 'Create your first vault',
       done: ob.has('first_vault_created'),
     },
-    {
-      key: 'plugin',
-      label: 'Install the Obsidian plugin',
-      done: ob.has('plugin_connected'),
-      ctaLabel: 'Get plugin',
-      cta: () => window.open('https://app.engram.page/device-link', '_self'),
-    },
     ...(ob.has('tour_offered_skipped') && !ob.has('tour_completed')
       ? [
           {
             key: 'tour',
             label: 'Take the tour',
             done: false,
-            ctaLabel: 'Start',
-            cta: onStartTour,
+            startTour: onStartTour,
           } as Item,
         ]
       : []),
-    {
-      key: 'ai',
-      label: 'Connect AI (coming soon)',
-      done: false,
-      comingSoon: true,
-    },
+    ...tools.map(
+      (slug): Item => ({
+        key: slug,
+        label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
+        done: false,
+        docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
+      }),
+    ),
   ]
-
-  const allDone = items.every((i) => i.done || i.comingSoon)
-  if (allDone) return null
 
   if (collapsed) {
     return (
@@ -91,17 +122,21 @@ export function ChecklistWidget({ onStartTour }: Props) {
             key={i.key}
             className="flex items-center justify-between gap-2 text-sm"
           >
-            <span
-              className={`flex items-center gap-2 ${i.comingSoon ? 'opacity-50' : ''}`}
-            >
+            <span className="flex items-center gap-2">
               <span aria-hidden>{i.done ? '✅' : '☐'}</span>
               {i.label}
             </span>
-            {i.cta && !i.done && (
-              <Button size="sm" variant="outline" onClick={i.cta}>
-                {i.ctaLabel}
+            {i.startTour ? (
+              <Button size="sm" variant="outline" onClick={i.startTour}>
+                Start
               </Button>
-            )}
+            ) : i.docUrl && !i.done ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={i.docUrl} target="_blank" rel="noreferrer">
+                  Setup guide ↗
+                </a>
+              </Button>
+            ) : null}
           </li>
         ))}
       </ul>
