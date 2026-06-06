@@ -149,4 +149,32 @@ defmodule Engram.Paddle.Client.HTTPTest do
       assert {:ok, []} = HTTP.list_subscriptions(@since)
     end
   end
+
+  describe "cancel_subscription/3" do
+    test "POSTs effective_from + forwards idempotency key", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/subscriptions/sub_abc/cancel", fn conn ->
+        assert {"paddle-ik", "hard-delete-42"} in conn.req_headers
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body) == %{"effective_from" => "immediately"}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"data" => %{"id" => "sub_abc"}}))
+      end)
+
+      assert {:ok, %{"id" => "sub_abc"}} =
+               HTTP.cancel_subscription("sub_abc", :immediately,
+                 idempotency_key: "hard-delete-42"
+               )
+    end
+
+    test "returns {:error, {:paddle_error, status}} on non-200", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/subscriptions/sub_x/cancel", fn conn ->
+        Plug.Conn.send_resp(conn, 400, ~s({"error":"bad"}))
+      end)
+
+      assert {:error, {:paddle_error, 400}} =
+               HTTP.cancel_subscription("sub_x", :next_billing_period, [])
+    end
+  end
 end

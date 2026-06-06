@@ -93,6 +93,28 @@ defmodule Engram.Paddle.Client do
               | {:partial, [map()], :max_pages_exceeded | :pagination_loop}
               | {:error, term()}
 
+  @doc """
+  Cancel a Paddle subscription.
+
+  Paddle endpoint: `POST /subscriptions/{id}/cancel` with body
+  `{"effective_from": "next_billing_period"|"immediately"}`. Optional
+  `:idempotency_key` opt is forwarded as the `Paddle-IK` header so retries
+  (Lifecycle.hard_delete, manual ops re-runs) don't double-cancel.
+
+  Used by:
+    * `Engram.Accounts.Lifecycle.hard_delete/2` — `effective_from: :immediately`
+    * `Engram.Subscriptions.cancel/2` — user-initiated cancel-at-period-end
+
+  Returns `{:ok, data}` (decoded Paddle subscription) on 200; `{:error, _}` on
+  transport/non-2xx. Caller decides whether the failure is fatal — hard-delete
+  swallows it as best-effort, user-initiated cancel surfaces 503.
+  """
+  @callback cancel_subscription(
+              subscription_id :: String.t(),
+              effective_from :: :immediately | :next_billing_period,
+              opts :: keyword()
+            ) :: {:ok, map()} | {:error, term()}
+
   @default_impl Engram.Paddle.Client.HTTP
 
   @doc "Returns the configured client implementation module."
