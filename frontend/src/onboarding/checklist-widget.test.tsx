@@ -89,4 +89,12 @@ describe('ChecklistWidget — per-tool rows', () => {
     expect(screen.getByText(/connect claude/i)).toBeInTheDocument()
     expect(screen.queryByText(/web.only/i)).toBeNull()
   })
+
+  it('falls back to /docs/integrations/ for an unmapped slug', () => {
+    onboardingStatusValue.data.profile.tools = ['some_brand_new_tool']
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    const link = screen.getByRole('link', { name: /setup guide/i })
+    expect(link).toHaveAttribute('href', 'https://engram.page/docs/integrations/')
+  })
 })
