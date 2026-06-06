@@ -27,6 +27,25 @@ defmodule Engram.Storage do
   @callback list_user_prefixes() ::
               {:ok, [non_neg_integer()]} | {:error, term()}
 
+  @doc """
+  Whether this adapter is a self-host backend that cannot mint pre-signed
+  download URLs (Postgres `bytea`; anything that requires the application
+  process to stream bytes itself). Used by `Engram.Accounts.Export` to
+  decide between handing the client a URL vs streaming via the controller.
+
+  The S3 adapter returns `false` even when fronted by self-host MinIO —
+  presigning works there. Only adapters that genuinely cannot presign
+  (`Database`, in-memory test stub) return `true`.
+  """
+  @callback selfhost?() :: boolean()
+
+  @doc """
+  Mint a short-lived signed download URL for `key`. Required `:ttl` option
+  (seconds) bounds the URL's lifetime. Only callable on adapters where
+  `selfhost?/0` returns `false`; selfhost adapters raise.
+  """
+  @callback sign_url(key :: String.t(), opts :: keyword()) :: String.t()
+
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 

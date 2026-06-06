@@ -2,11 +2,15 @@ defmodule Engram.Accounts.ExportTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Mox
+
   alias Engram.Accounts.Export
   alias Engram.Accounts.Export.Schema
   alias Engram.Repo
 
   import Engram.Factory
+
+  setup :verify_on_exit!
 
   defp as_pro(user) do
     insert(:subscription, user: user, tier: "pro", status: "active")
@@ -15,11 +19,13 @@ defmodule Engram.Accounts.ExportTest do
 
   defp insert_export!(user, status, opts \\ []) do
     inserted_at = Keyword.get(opts, :inserted_at, DateTime.utc_now())
+    s3_keys = Keyword.get(opts, :s3_keys, [])
 
     %Schema{
       user_id: user.id,
       status: status,
       reason: :user_request,
+      s3_keys: s3_keys,
       inserted_at: inserted_at,
       updated_at: inserted_at
     }
@@ -134,6 +140,114 @@ defmodule Engram.Accounts.ExportTest do
     test "returns {:error, :not_found} for unknown id" do
       user = insert(:user)
       assert {:error, :not_found} = Export.get(user, 999_999_999)
+    end
+  end
+
+  describe "mint_download_url/2" do
+    setup do
+      prev_storage = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+
+      on_exit(fn ->
+        if is_nil(prev_storage),
+          do: Application.delete_env(:engram, :storage),
+          else: Application.put_env(:engram, :storage, prev_storage)
+      end)
+
+      # Default-stub callbacks unused by individual tests so existing
+      # behaviour callbacks don't blow up if invoked indirectly.
+      stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    defp s3_key_entry(part, of, key \\ nil) do
+      %{
+        "key" => key || "exports/u/abc/v.part-#{part}of#{of}.zip",
+        "part" => part,
+        "of" => of,
+        "size_bytes" => 100,
+        "vault_id" => 1,
+        "vault_name" => "main"
+      }
+    end
+
+    test "saas → returns fresh 1h signed URL keyed by part" do
+      user = insert(:user) |> as_pro()
+
+      export =
+        insert_export!(user, :ready,
+          s3_keys: [s3_key_entry(1, 1, "exports/#{user.id}/abc/main.part-1of1.zip")]
+        )
+
+      expect(Engram.MockStorage, :selfhost?, fn -> false end)
+
+      expect(Engram.MockStorage, :sign_url, fn key, opts ->
+        assert key == "exports/#{user.id}/abc/main.part-1of1.zip"
+        assert Keyword.get(opts, :ttl) == 3600
+        "https://signed.example/" <> key <> "?sig=abc"
+      end)
+
+      assert {:ok, %{1 => url}} = Export.mint_download_url(export, 1)
+      assert is_binary(url)
+      assert url =~ "main.part-1of1.zip"
+      assert url =~ "sig=abc"
+    end
+
+    test "fresh URL minted per call (no caching)" do
+      user = insert(:user) |> as_pro()
+      export = insert_export!(user, :ready, s3_keys: [s3_key_entry(1, 1)])
+
+      expect(Engram.MockStorage, :selfhost?, 2, fn -> false end)
+
+      expect(Engram.MockStorage, :sign_url, 2, fn _key, _opts ->
+        # Each call returns a distinct URL → proves no caching at this layer.
+        "https://signed.example/x?sig=#{System.unique_integer([:positive])}"
+      end)
+
+      {:ok, %{1 => u1}} = Export.mint_download_url(export, 1)
+      {:ok, %{1 => u2}} = Export.mint_download_url(export, 1)
+      assert u1 != u2
+    end
+
+    test "selfhost → {:error, :selfhost_uses_stream}" do
+      user = insert(:user)
+      export = insert_export!(user, :ready, s3_keys: [s3_key_entry(1, 1)])
+
+      expect(Engram.MockStorage, :selfhost?, fn -> true end)
+
+      assert {:error, :selfhost_uses_stream} = Export.mint_download_url(export, 1)
+    end
+
+    test "{:error, :no_such_part} when part index out of range" do
+      user = insert(:user)
+      export = insert_export!(user, :ready, s3_keys: [s3_key_entry(1, 1)])
+
+      expect(Engram.MockStorage, :selfhost?, fn -> false end)
+
+      assert {:error, :no_such_part} = Export.mint_download_url(export, 5)
+    end
+
+    test "multi-part export: returns URL only for requested part" do
+      user = insert(:user) |> as_pro()
+
+      export =
+        insert_export!(user, :ready,
+          s3_keys: [
+            s3_key_entry(1, 3, "exports/#{user.id}/x/v.part-1of3.zip"),
+            s3_key_entry(2, 3, "exports/#{user.id}/x/v.part-2of3.zip"),
+            s3_key_entry(3, 3, "exports/#{user.id}/x/v.part-3of3.zip")
+          ]
+        )
+
+      expect(Engram.MockStorage, :selfhost?, fn -> false end)
+
+      expect(Engram.MockStorage, :sign_url, fn key, _opts ->
+        assert key =~ "part-2of3"
+        "https://signed.example/" <> key
+      end)
+
+      assert {:ok, %{2 => url}} = Export.mint_download_url(export, 2)
+      assert url =~ "part-2of3"
     end
   end
 end

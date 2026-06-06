@@ -89,6 +89,14 @@ defmodule Engram.Storage.Database do
   end
 
   @impl true
+  def selfhost?, do: true
+
+  @impl true
+  def sign_url(_key, _opts) do
+    raise "Engram.Storage.Database.sign_url/2 — selfhost storage cannot presign; stream via controller"
+  end
+
+  @impl true
   def list_user_prefixes do
     %{rows: rows} =
       Repo.query!("SELECT DISTINCT split_part(storage_key, '/', 1) FROM storage_objects", [])

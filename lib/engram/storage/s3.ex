@@ -81,6 +81,20 @@ defmodule Engram.Storage.S3 do
   end
 
   @impl true
+  def selfhost?, do: false
+
+  @impl true
+  def sign_url(key, opts) when is_binary(key) and is_list(opts) do
+    ttl = Keyword.fetch!(opts, :ttl)
+
+    {:ok, url} =
+      ExAws.Config.new(:s3)
+      |> ExAws.S3.presigned_url(:get, bucket(), key, expires_in: ttl)
+
+    url
+  end
+
+  @impl true
   def exists?(key) do
     case ExAws.S3.head_object(bucket(), key) |> ExAws.request() do
       {:ok, _} ->

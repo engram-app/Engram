@@ -73,6 +73,14 @@ defmodule Engram.Storage.InMemory do
   end
 
   @impl true
+  def selfhost?, do: true
+
+  @impl true
+  def sign_url(_key, _opts) do
+    raise "Engram.Storage.InMemory.sign_url/2 — test stub does not presign"
+  end
+
+  @impl true
   def list_user_prefixes do
     ensure_table()
 

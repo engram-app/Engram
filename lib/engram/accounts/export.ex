@@ -15,7 +15,12 @@ defmodule Engram.Accounts.Export do
   alias Engram.Accounts.User
   alias Engram.Billing
   alias Engram.Repo
+  alias Engram.Storage
   alias Engram.Workers.AccountExport
+
+  # Pre-signed download URL TTL. Re-minted on every call so the user always
+  # has a fresh hour; we never persist signed URLs on the row.
+  @download_url_ttl_seconds 3_600
 
   # Rough per-note overhead to size-estimate the zipped JSON manifest
   # without summing the actual encrypted ciphertext lengths. 4 KB/note is
@@ -42,6 +47,35 @@ defmodule Engram.Accounts.Export do
       %Schema{} = export -> {:ok, export}
     end
   end
+
+  @doc """
+  Mint a fresh pre-signed download URL for `part` of a ready export.
+
+  Always re-mints (no caching) so the URL window stays at
+  `#{@download_url_ttl_seconds}s` from the moment the user clicks. On
+  self-host adapters returns `{:error, :selfhost_uses_stream}` so the
+  controller knows to stream bytes through itself instead.
+  """
+  @spec mint_download_url(Schema.t(), pos_integer()) ::
+          {:ok, %{pos_integer() => String.t()}} | {:error, atom()}
+  def mint_download_url(%Schema{s3_keys: keys}, part) when is_integer(part) and part > 0 do
+    adapter = Storage.adapter()
+
+    cond do
+      adapter.selfhost?() ->
+        {:error, :selfhost_uses_stream}
+
+      entry = Enum.find(keys, &(part_of(&1) == part)) ->
+        url = adapter.sign_url(entry["key"], ttl: @download_url_ttl_seconds)
+        {:ok, %{part => url}}
+
+      true ->
+        {:error, :no_such_part}
+    end
+  end
+
+  defp part_of(%{"part" => p}) when is_integer(p), do: p
+  defp part_of(_), do: nil
 
   @spec request(User.t()) :: {:ok, Schema.t()} | {:error, atom()}
   def request(%User{} = user) do
