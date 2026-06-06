@@ -124,7 +124,7 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
               name={meta.name}
               description={meta.description}
               priceData={meta.prices[cadence]}
-              isCurrent={priceId === currentPriceId}
+              isCurrent={priceId !== null && priceId === currentPriceId}
               currentPlanLabel="Current plan"
             />
           )

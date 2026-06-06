@@ -377,8 +377,19 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           {panel === 'change' && (
             <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
           )}
-          {panel === 'cancel' && detail && (
-            <CancelPanel detail={detail} onClose={() => setPanel(null)} />
+          {panel === 'cancel' && (
+            <CancelPanel
+              detail={
+                detail ?? {
+                  next_billed_at: billing.subscription.current_period_end,
+                  amount: null,
+                  currency: null,
+                  billing_cycle: null,
+                  scheduled_change: null,
+                }
+              }
+              onClose={() => setPanel(null)}
+            />
           )}
         </>
       )}
