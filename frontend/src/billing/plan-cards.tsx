@@ -129,7 +129,7 @@ export function PlanCard({
         : 'idle'
 
   const badgeText =
-    state === 'current' ? 'Current plan' : state === 'recommended' ? 'Most popular' : null
+    state === 'current' ? 'Your plan' : state === 'recommended' ? 'Most popular' : null
 
   return (
     <li
@@ -140,17 +140,15 @@ export function PlanCard({
           'border-primary ring-1 ring-primary hover:-translate-y-0.5',
         state === 'selected' &&
           'border-primary ring-2 ring-primary shadow-sm',
-        state === 'current' && 'border-border bg-muted',
+        // 'current' reads as "you've got this" — primary accent ring, no
+        // muted bg. Diminished-grey treatment made the card feel locked
+        // out; this leans into the card visually instead.
+        state === 'current' && 'border-primary/60 ring-1 ring-primary/30 shadow-sm',
       )}
     >
       {badgeText && (
         <span
-          className={cn(
-            'absolute -top-3 left-6 rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide',
-            state === 'current'
-              ? 'bg-secondary text-secondary-foreground'
-              : 'bg-primary text-primary-foreground',
-          )}
+          className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground"
         >
           {badgeText}
         </span>
@@ -169,27 +167,39 @@ export function PlanCard({
         ))}
       </ul>
       <div className="flex flex-col gap-1">
-        <button
-          onClick={() => onAction(tier)}
-          disabled={disabled || current}
-          className={cn(
-            'w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-            // recommended (onboarding's Pro) and selected (change-plan's
-            // chosen target) get the filled-primary CTA so the actionable
-            // card has visible weight against neighbors. current renders a
-            // muted outline since the button is inert. idle keeps a clean
-            // outline (onboarding's Starter, change-plan's other tier).
-            state === 'recommended' || state === 'selected'
-              ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-              : state === 'current'
-                ? 'border border-input bg-transparent text-muted-foreground'
-                : 'border border-input bg-transparent text-foreground hover:bg-accent',
-          )}
-        >
-          {current ? 'Current plan' : ctaLabel}
-        </button>
-        {selected && ctaSubLabel && (
-          <p className="text-center text-xs text-muted-foreground">{ctaSubLabel}</p>
+        {current ? (
+          // Inert positive indicator instead of a disabled button: same
+          // height as the CTA so card layout stays consistent, but
+          // visually reads as confirmation, not as a denied action.
+          <div
+            role="status"
+            aria-label="Your current plan"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-medium text-primary"
+          >
+            <span aria-hidden="true">&#10003;</span>
+            <span>You're on this plan</span>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={() => onAction(tier)}
+              disabled={disabled}
+              className={cn(
+                'w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                // recommended (onboarding's Pro) and selected (change-plan's
+                // chosen target) get filled-primary CTA so the actionable
+                // card has weight. idle stays a clean outline.
+                state === 'recommended' || state === 'selected'
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'border border-input bg-transparent text-foreground hover:bg-accent',
+              )}
+            >
+              {ctaLabel}
+            </button>
+            {selected && ctaSubLabel && (
+              <p className="text-center text-xs text-muted-foreground">{ctaSubLabel}</p>
+            )}
+          </>
         )}
       </div>
     </li>

@@ -63,11 +63,11 @@ describe('PlanChangePanel', () => {
     expect(screen.getByText('$14/mo')).toBeInTheDocument()
   })
 
-  it('marks the user current tier and disables that cards Select button', () => {
+  it('marks the user current tier and shows the inert You are on this plan indicator', () => {
     render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
-    // Starter is current → "Current plan" badge + disabled button
-    const currentBadges = screen.getAllByText(/current plan/i)
-    expect(currentBadges.length).toBeGreaterThan(0)
+    // Starter is current → 'Your plan' badge + inert "You're on this plan" status
+    expect(screen.getAllByText(/your plan/i).length).toBeGreaterThan(0)
+    expect(screen.getByRole('status', { name: /your current plan/i })).toBeInTheDocument()
   })
 
   it('fetches preview when a target is selected and shows proration', async () => {
