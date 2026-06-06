@@ -41,11 +41,11 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
   })
   if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`)
   // Vault is created later by the spec (createVault helper). Just suppress
-  // TourOfferModal so the dashboard doesn't intercept editor clicks.
+  // the checklist tour row so the dashboard doesn't intercept editor clicks.
   const act = await fetch(`${baseURL}/api/onboarding/actions`, {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+    body: JSON.stringify({ action: 'dismissed:tour' }),
   })
   if (!act.ok) throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`)
 

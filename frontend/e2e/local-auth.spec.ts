@@ -14,8 +14,8 @@ async function registerUser(baseURL: string, email: string) {
 
   // Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
   // instead of being bounced to /onboard/vault by OnboardingGate; record a
-  // tour_offered_skipped action and seed a default vault so the dashboard's
-  // TourOfferModal + CreateFirstVaultModal don't intercept every click.
+  // dismissed:tour action and seed a default vault so the dashboard's
+  // checklist tour row + CreateFirstVaultModal don't intercept every click.
   const { access_token: token } = await res.json()
   const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
   const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
@@ -27,7 +27,7 @@ async function registerUser(baseURL: string, email: string) {
   const act = await fetch(`${baseURL}/api/onboarding/actions`, {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({ action: 'tour_offered_skipped' }),
+    body: JSON.stringify({ action: 'dismissed:tour' }),
   })
   if (!act.ok) throw new Error(`Onboarding action POST failed: ${act.status} ${await act.text()}`)
   const vault = await fetch(`${baseURL}/api/vaults`, {
