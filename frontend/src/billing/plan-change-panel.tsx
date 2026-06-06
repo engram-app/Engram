@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RadioGroup } from '@/components/ui/radio-group'
 import { Button } from '@/components/ui/button'
-import { PricingSelectCardGrid } from '@/components/pricing-select-card-grid'
-import { BillingIntervalToggle } from '@/components/billing-interval-toggle'
 import {
   useBillingConfig,
   useConfirmPlanChange,
@@ -11,54 +8,36 @@ import {
   type BillingCadence,
   type BillingStatus,
 } from '../api/queries'
+import { CadenceToggle, PLAN_CATALOG, PlanCard, type PlanTier } from './plan-cards'
 
 interface PlanChangePanelProps {
   billing: BillingStatus
   onClose: () => void
 }
 
-// Display catalog — mirrors the live-paddle prices in BillingConfig.price_ids.
-// Hardcoded display strings are fine here: PricingSelectCardGrid renders raw
-// pre-formatted strings (see paddle-types.ts PriceData), no PricePreview SDK
-// call needed. If prices ever change in Paddle, update here and in PlanCard
-// (billing-page.tsx) — both share the same source-of-truth catalog.
-const CATALOG = {
-  starter: {
-    name: 'Starter',
-    description: '5 vaults · 3 GB · 500 AI queries/day',
-    prices: {
-      monthly: { total: '$7', interval: 'month' },
-      annual: { total: '$70', interval: 'year' },
-    },
-  },
-  pro: {
-    name: 'Pro',
-    description: '15 vaults · 15 GB · Unlimited AI',
-    prices: {
-      monthly: { total: '$14', interval: 'month' },
-      annual: { total: '$140', interval: 'year' },
-    },
-  },
-} as const
-
-type Tier = keyof typeof CATALOG
-
 function formatCents(cents: number | null | undefined): string {
   if (cents === null || cents === undefined) return '—'
-  // Paddle returns totals in lowest-unit decimal strings or integers; we treat
-  // them as raw cents here. JPY/KRW/CLP zero-decimal currencies would need a
-  // separate code path — defer that until the proration UI supports non-USD.
+  // Paddle returns totals as raw cents (USD only for now). Zero-decimal
+  // currencies (JPY/KRW/CLP) would need a separate code path — defer until
+  // the proration UI supports non-USD.
   const sign = cents < 0 ? '-' : ''
   const abs = Math.abs(cents)
   return `${sign}$${(abs / 100).toFixed(2)}`
 }
 
+function deriveCurrentTier(billing: BillingStatus): PlanTier | null {
+  const tier = billing.subscription?.tier
+  return tier === 'starter' || tier === 'pro' ? tier : null
+}
+
 export default function PlanChangePanel({ billing, onClose }: PlanChangePanelProps) {
   const { data: config } = useBillingConfig()
-  const [cadence, setCadence] = useState<BillingCadence>(
-    billing.subscription?.tier === 'pro' || billing.subscription?.tier === 'starter' ? 'monthly' : 'monthly',
-  )
-  const [targetPriceId, setTargetPriceId] = useState<string | null>(null)
+  const [cadence, setCadence] = useState<BillingCadence>('monthly')
+  const [selectedTier, setSelectedTier] = useState<PlanTier | null>(null)
+
+  const targetPriceId =
+    selectedTier && config ? (config.price_ids[selectedTier][cadence] ?? null) : null
+
   const preview = usePlanChangePreview(targetPriceId)
   const confirm = useConfirmPlanChange()
 
@@ -74,7 +53,7 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
     )
   }
 
-  const currentPriceId = priceIdForCurrent(config.price_ids, billing.subscription?.tier, cadence)
+  const currentTier = deriveCurrentTier(billing)
 
   async function onConfirm() {
     if (!targetPriceId) return
@@ -96,58 +75,59 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
       <header>
         <h2 className="text-base font-semibold text-foreground">Change your plan</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          Proration applies immediately. You can preview the charge or credit before confirming.
+          Proration applies immediately. The selected card shows what'll be charged or credited
+          before you confirm.
         </p>
       </header>
 
-      <BillingIntervalToggle
-        intervals={['monthly', 'annual']}
-        value={cadence}
-        onValueChange={(v) => {
-          setCadence(v as BillingCadence)
-          setTargetPriceId(null)
+      <CadenceToggle
+        cadence={cadence}
+        onChange={(next) => {
+          setCadence(next)
+          setSelectedTier(null)
         }}
       />
 
-      <RadioGroup
-        value={targetPriceId ?? ''}
-        onValueChange={setTargetPriceId}
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2"
-      >
-        {(Object.keys(CATALOG) as Tier[]).map((tier) => {
-          const priceId = config.price_ids[tier][cadence]
-          const meta = CATALOG[tier]
+      <ul className="grid items-stretch gap-4 sm:grid-cols-2">
+        {(Object.keys(PLAN_CATALOG) as PlanTier[]).map((tier) => {
+          const meta = PLAN_CATALOG[tier]
+          const isCurrent = tier === currentTier
+          const isSelected = tier === selectedTier
           return (
-            <PricingSelectCardGrid
-              key={priceId}
-              priceId={priceId}
+            <PlanCard
+              key={tier}
               name={meta.name}
-              description={meta.description}
-              priceData={meta.prices[cadence]}
-              isCurrent={priceId !== null && priceId === currentPriceId}
-              currentPlanLabel="Current plan"
+              cadence={cadence}
+              monthlyPrice={meta.monthlyPrice}
+              annualPrice={meta.annualPrice}
+              features={meta.features}
+              tier={tier}
+              onAction={(t) => setSelectedTier(t)}
+              current={isCurrent}
+              selected={isSelected}
+              ctaLabel={isSelected ? 'Selected' : 'Select'}
+              ctaSubLabel={
+                isSelected && preview.isFetching
+                  ? 'Loading proration…'
+                  : isSelected && preview.data
+                    ? formatProration(preview.data)
+                    : undefined
+              }
             />
           )
         })}
-      </RadioGroup>
-
-      {targetPriceId && preview.isFetching && (
-        <div role="status" className="h-20 animate-pulse rounded-md bg-muted/50" />
-      )}
-
-      {targetPriceId && preview.data && !preview.isFetching && (
-        <PreviewLines
-          credit={preview.data.immediate_charge_or_credit < 0 ? -preview.data.immediate_charge_or_credit : 0}
-          charge={preview.data.immediate_charge_or_credit > 0 ? preview.data.immediate_charge_or_credit : 0}
-          newTotal={preview.data.new_total}
-          nextBilledAt={preview.data.next_billed_at}
-        />
-      )}
+      </ul>
 
       <div className="flex gap-2">
         <Button
           onClick={onConfirm}
-          disabled={!targetPriceId || preview.isFetching || confirm.isPending || !preview.data}
+          disabled={
+            !selectedTier ||
+            !targetPriceId ||
+            preview.isFetching ||
+            !preview.data ||
+            confirm.isPending
+          }
         >
           Confirm change
         </Button>
@@ -159,49 +139,13 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
   )
 }
 
-function PreviewLines({
-  credit,
-  charge,
-  newTotal,
-  nextBilledAt,
-}: {
-  credit: number
-  charge: number
-  newTotal: number
-  nextBilledAt: string
-}) {
-  const renewalDate = new Date(nextBilledAt).toLocaleDateString()
-  return (
-    <dl
-      role="status"
-      aria-label="Plan change preview"
-      className="grid gap-2 rounded-md border border-border bg-muted/30 p-4 text-sm"
-    >
-      {charge > 0 && (
-        <div className="flex justify-between">
-          <dt className="text-muted-foreground">Charged today</dt>
-          <dd className="font-medium text-foreground">{formatCents(charge)}</dd>
-        </div>
-      )}
-      {credit > 0 && (
-        <div className="flex justify-between">
-          <dt className="text-muted-foreground">Credited today</dt>
-          <dd className="font-medium text-foreground">{formatCents(credit)}</dd>
-        </div>
-      )}
-      <div className="flex justify-between">
-        <dt className="text-muted-foreground">Next bill on {renewalDate}</dt>
-        <dd className="font-medium text-foreground">{formatCents(newTotal)}</dd>
-      </div>
-    </dl>
-  )
-}
-
-function priceIdForCurrent(
-  priceIds: { starter: { monthly: string; annual: string }; pro: { monthly: string; annual: string } },
-  tier: string | undefined,
-  cadence: BillingCadence,
-): string | null {
-  if (tier === 'starter' || tier === 'pro') return priceIds[tier][cadence]
-  return null
+function formatProration(data: {
+  immediate_charge_or_credit: number
+  new_total: number
+  next_billed_at: string
+}): string {
+  const direction = data.immediate_charge_or_credit > 0 ? 'Charged' : 'Credited'
+  const amount = formatCents(Math.abs(data.immediate_charge_or_credit))
+  const renewal = new Date(data.next_billed_at).toLocaleDateString()
+  return `${direction} ${amount} today; next bill ${formatCents(data.new_total)} on ${renewal}`
 }

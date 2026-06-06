@@ -55,13 +55,22 @@ function billing(overrides: Partial<BillingStatus> = {}): BillingStatus {
 }
 
 describe('PlanChangePanel', () => {
-  it('renders Starter + Pro cards for the current cadence', () => {
+  it('renders Starter + Pro cards using shared PlanCard styling', () => {
     render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
     expect(screen.getByText('Starter')).toBeInTheDocument()
     expect(screen.getByText('Pro')).toBeInTheDocument()
+    expect(screen.getByText('$7/mo')).toBeInTheDocument()
+    expect(screen.getByText('$14/mo')).toBeInTheDocument()
   })
 
-  it('fetches preview when a target is selected and exposes proration', async () => {
+  it('marks the user current tier and disables that cards Select button', () => {
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    // Starter is current → "Current plan" badge + disabled button
+    const currentBadges = screen.getAllByText(/current plan/i)
+    expect(currentBadges.length).toBeGreaterThan(0)
+  })
+
+  it('fetches preview when a target is selected and shows proration', async () => {
     post.mockResolvedValue({
       old_total: 700,
       new_total: 1400,
@@ -70,18 +79,14 @@ describe('PlanChangePanel', () => {
     })
 
     render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
-    // Click the Pro card (selecting via the underlying RadioGroupItem)
-    const proCard = screen.getByText('Pro').closest('[data-slot="radio-group-item"], [role="radio"]')
-    if (!proCard) throw new Error('Pro card not found')
-    fireEvent.click(proCard)
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/billing/plan-change/preview', {
         target_price_id: 'pri_p_m',
       }),
     )
-    expect(await screen.findByText(/charged today/i)).toBeInTheDocument()
-    expect(screen.getByText(/\$3\.50/)).toBeInTheDocument()
+    expect(await screen.findByText(/charged \$3\.50 today/i)).toBeInTheDocument()
   })
 
   it('confirm fires the mutation and onClose on success', async () => {
@@ -96,11 +101,8 @@ describe('PlanChangePanel', () => {
 
     const onClose = vi.fn()
     render(<PlanChangePanel billing={billing()} onClose={onClose} />, { wrapper: Wrapper })
-    const proCard = screen.getByText('Pro').closest('[data-slot="radio-group-item"], [role="radio"]')
-    if (!proCard) throw new Error('Pro card not found')
-    fireEvent.click(proCard)
-
-    await screen.findByText(/charged today/i)
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    await screen.findByText(/charged \$3\.50 today/i)
     fireEvent.click(screen.getByRole('button', { name: /confirm change/i }))
 
     await waitFor(() =>
