@@ -102,13 +102,6 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
           // selectable upgrade target so monthly→annual is a real path.
           const isCurrent = tier === currentTier && cadence === currentCadence
           const isSelected = tier === selectedTier
-          // Visual focal-point hint: when the toggle puts both cards on
-          // non-current cadence, the page has TWO selectable cards and
-          // neither should auto-highlight. When toggle is on current
-          // cadence, exactly one alternative exists — highlight it.
-          const availableCount = Object.keys(PLAN_CATALOG).length - (cadence === currentCadence && currentTier ? 1 : 0)
-          const isDefaultTarget =
-            selectedTier === null && !isCurrent && availableCount === 1
           return (
             <PlanCard
               key={tier}
@@ -120,7 +113,7 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
               tier={tier}
               onAction={(t) => setSelectedTier(t)}
               current={isCurrent}
-              selected={isSelected || isDefaultTarget}
+              selected={isSelected}
               ctaLabel={isSelected ? 'Selected' : 'Select'}
               ctaSubLabel={
                 isSelected && preview.isFetching

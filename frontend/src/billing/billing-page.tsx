@@ -292,7 +292,47 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
         </header>
       )}
 
-      {!hideHeading && <CurrentPlanCard billing={billing} />}
+      {!hideHeading && (
+        <CurrentPlanCard billing={billing}>
+          {billing.subscription && panel === null && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-3">
+                <Button onClick={() => setPanel('change')}>Change plan</Button>
+                {billing.subscription.status !== 'canceled' && (
+                  <Button variant="ghost" onClick={() => setPanel('cancel')}>
+                    Cancel subscription
+                  </Button>
+                )}
+              </div>
+              {/* Escape hatch: if the inline panels fail (Paddle UI bug,
+                  network blip, an action we don't yet support inline) the
+                  user can still self-serve through Paddle's hosted portal.
+                  Worded so the relationship is obvious — Paddle, not us,
+                  is the payment processor. */}
+              <Button variant="outline" onClick={() => openPortal()}>
+                Manage payment in Paddle (our payment processor)
+              </Button>
+            </div>
+          )}
+          {billing.subscription && panel === 'change' && (
+            <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
+          )}
+          {billing.subscription && panel === 'cancel' && (
+            <CancelPanel
+              detail={
+                detail ?? {
+                  next_billed_at: billing.subscription.current_period_end,
+                  amount: null,
+                  currency: null,
+                  billing_cycle: null,
+                  scheduled_change: null,
+                }
+              }
+              onClose={() => setPanel(null)}
+            />
+          )}
+        </CurrentPlanCard>
+      )}
 
       {needsSubscription && (
         <section className="space-y-4">
@@ -364,43 +404,6 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             transactions={history?.transactions ?? []}
             onDownload={downloadInvoice}
           />
-          {panel === null && (
-            <section className="space-y-3">
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={() => setPanel('change')}>Change plan</Button>
-                {billing.subscription.status !== 'canceled' && (
-                  <Button variant="ghost" onClick={() => setPanel('cancel')}>
-                    Cancel subscription
-                  </Button>
-                )}
-              </div>
-              {/* Escape hatch: if the inline panels fail (Paddle UI bug,
-                  network blip, an action we don't yet support inline) the
-                  user can still self-serve through Paddle's hosted portal.
-                  Worded so the relationship is obvious — Paddle, not us,
-                  is the payment processor. */}
-              <Button variant="outline" onClick={() => openPortal()}>
-                Manage payment in Paddle (our payment processor)
-              </Button>
-            </section>
-          )}
-          {panel === 'change' && (
-            <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
-          )}
-          {panel === 'cancel' && (
-            <CancelPanel
-              detail={
-                detail ?? {
-                  next_billed_at: billing.subscription.current_period_end,
-                  amount: null,
-                  currency: null,
-                  billing_cycle: null,
-                  scheduled_change: null,
-                }
-              }
-              onClose={() => setPanel(null)}
-            />
-          )}
         </>
       )}
     </article>
