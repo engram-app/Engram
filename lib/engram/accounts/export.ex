@@ -210,10 +210,18 @@ defmodule Engram.Accounts.Export do
   # disabled (selfhost) and the catalog default itself can be `nil` for
   # "no cap on this tier"; normalize both to `nil` so the cond/case
   # arms above can treat "no cap" uniformly.
-  defp cap_for(user,key) do
-    case Billing.effective_limit(user, key) do
-      :unlimited -> nil
-      v -> v
-    end
-  end
+  #
+  # Inlined per-key (not a dynamic-key helper) so the limit-keys lint can
+  # statically prove every catalog access uses a hardcoded atom.
+  defp cap_for(user, :account_exports_lifetime),
+    do: normalize_cap(Billing.effective_limit(user, :account_exports_lifetime))
+
+  defp cap_for(user, :account_export_rate_per_24h),
+    do: normalize_cap(Billing.effective_limit(user, :account_export_rate_per_24h))
+
+  defp cap_for(user, :account_export_max_bytes),
+    do: normalize_cap(Billing.effective_limit(user, :account_export_max_bytes))
+
+  defp normalize_cap(:unlimited), do: nil
+  defp normalize_cap(v), do: v
 end
