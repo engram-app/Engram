@@ -412,6 +412,7 @@ export type OnboardingAction =
   | 'first_vault_created'
   | 'plugin_connected'
   | 'ai_connected'
+  | `dismissed:${string}`
 
 export interface OnboardingStatus {
   enabled: boolean
