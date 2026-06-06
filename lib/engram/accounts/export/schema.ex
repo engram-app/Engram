@@ -43,6 +43,7 @@ defmodule Engram.Accounts.Export.Schema do
       :reason
     ])
     |> validate_required([:user_id, :status, :reason])
+    |> unique_constraint(:user_id, name: :account_exports_one_active_per_user)
   end
 
   def statuses, do: @statuses

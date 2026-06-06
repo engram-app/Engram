@@ -27,11 +27,18 @@ defmodule Engram.Accounts.Export.SchemaTest do
     |> Schema.changeset(%{user_id: user.id, status: :pending, reason: :user_request})
     |> Repo.insert!(skip_tenant_check: true)
 
-    assert_raise Ecto.ConstraintError, fn ->
+    # The changeset declares `unique_constraint(:user_id,
+    # name: :account_exports_one_active_per_user)`, so the second insert
+    # surfaces as a changeset error (caught + translated to
+    # `{:error, :already_running}` by Export.request/1) rather than a raw
+    # DB-level Ecto.ConstraintError.
+    {:error, %Ecto.Changeset{errors: errors, valid?: false}} =
       %Schema{}
       |> Schema.changeset(%{user_id: user.id, status: :running, reason: :user_request})
-      |> Repo.insert!(skip_tenant_check: true)
-    end
+      |> Repo.insert(skip_tenant_check: true)
+
+    assert {_, opts} = errors[:user_id]
+    assert Keyword.get(opts, :constraint) == :unique
   end
 
   test "cascade deletes when user is deleted" do
