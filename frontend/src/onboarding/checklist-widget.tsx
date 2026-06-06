@@ -13,6 +13,7 @@ interface Item {
   done: boolean
   docUrl?: string
   startTour?: () => void
+  dismissible?: boolean
 }
 
 const DOC_URLS: Record<string, string> = {
@@ -34,6 +35,25 @@ const DOC_URLS: Record<string, string> = {
 }
 const DOC_FALLBACK = 'https://engram.page/docs/integrations/'
 
+const DISMISSED_LS_KEY = 'engram:checklist-dismissed:v1'
+
+function loadDismissed(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_LS_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return new Set(Array.isArray(arr) ? arr : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function persistDismissed(set: Set<string>) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...set]))
+}
+
 const TOOL_LABELS: Record<string, string> = {
   claude:         'Connect Claude Desktop',
   cursor:         'Connect Cursor',
@@ -53,14 +73,26 @@ const TOOL_LABELS: Record<string, string> = {
 
 export function ChecklistWidget({ onStartTour }: Props) {
   const [collapsed, setCollapsed] = useState(false)
+  const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed())
   const ob = useOnboardingActions()
   const status = useOnboardingStatus()
   const connections = useConnections()
 
   if (ob.isLoading) return null
 
+  function dismiss(key: string) {
+    setDismissed((prev) => {
+      const next = new Set(prev)
+      next.add(key)
+      persistDismissed(next)
+      return next
+    })
+  }
+
   const profile = status.data?.profile
   const tools = (profile?.tools ?? []).filter((t) => t !== 'web_only')
+  const isDismissed = (key: string) => dismissed.has(key)
+  const hasObsidianConnection = (connections.data ?? []).some((c) => c.kind === 'obsidian')
 
   const items: Item[] = [
     {
@@ -73,8 +105,9 @@ export function ChecklistWidget({ onStartTour }: Props) {
           {
             key: 'install_obsidian_plugin',
             label: 'Install the Obsidian plugin',
-            done: (connections.data ?? []).some((c) => c.kind === 'obsidian'),
+            done: hasObsidianConnection || isDismissed('install_obsidian_plugin'),
             docUrl: DOC_URLS.install_obsidian_plugin,
+            dismissible: true,
           } as Item,
         ]
       : []),
@@ -92,11 +125,14 @@ export function ChecklistWidget({ onStartTour }: Props) {
       (slug): Item => ({
         key: slug,
         label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
-        done: false,
+        done: isDismissed(slug),
         docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
+        dismissible: true,
       }),
     ),
   ]
+
+  const visible = items.filter((i) => !i.done)
 
   if (collapsed) {
     return (
@@ -128,26 +164,38 @@ export function ChecklistWidget({ onStartTour }: Props) {
         </button>
       </header>
       <ul className="flex flex-col gap-2 p-4">
-        {items.map((i) => (
+        {visible.map((i) => (
           <li
             key={i.key}
             className="flex items-center justify-between gap-2 text-sm"
           >
             <span className="flex items-center gap-2">
-              <span aria-hidden>{i.done ? '✅' : '☐'}</span>
+              <span aria-hidden>☐</span>
               {i.label}
             </span>
-            {i.startTour ? (
-              <Button size="sm" variant="outline" onClick={i.startTour}>
-                Start
-              </Button>
-            ) : i.docUrl && !i.done ? (
-              <Button asChild size="sm" variant="outline">
-                <a href={i.docUrl} target="_blank" rel="noreferrer">
-                  Setup guide ↗
-                </a>
-              </Button>
-            ) : null}
+            <span className="flex items-center gap-1">
+              {i.startTour ? (
+                <Button size="sm" variant="outline" onClick={i.startTour}>
+                  Start
+                </Button>
+              ) : i.docUrl ? (
+                <Button asChild size="sm" variant="outline">
+                  <a href={i.docUrl} target="_blank" rel="noreferrer">
+                    Setup guide ↗
+                  </a>
+                </Button>
+              ) : null}
+              {i.dismissible && (
+                <button
+                  type="button"
+                  aria-label={`Dismiss ${i.label}`}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => dismiss(i.key)}
+                >
+                  ×
+                </button>
+              )}
+            </span>
           </li>
         ))}
       </ul>

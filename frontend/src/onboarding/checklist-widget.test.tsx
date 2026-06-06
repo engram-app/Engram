@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { ChecklistWidget } from './checklist-widget'
 
 let onboardingActionsValue = {
@@ -126,7 +126,7 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
     expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
   })
 
-  it('marks the Obsidian row done when an obsidian connection exists', () => {
+  it('hides the Obsidian row when an obsidian connection exists', () => {
     onboardingStatusValue.data.profile = { uses_obsidian: true, tools: [] }
     connectionsValue = {
       data: [
@@ -145,9 +145,41 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
     }
     render(<ChecklistWidget onStartTour={() => {}} />)
 
-    const row = screen.getByText(/install.*obsidian/i).closest('li')!
-    expect(row.textContent).toMatch(/✅/)
-    // No setup-guide link rendered for the Obsidian row when done.
-    expect(within(row).queryByRole('link', { name: /setup guide/i })).toBeNull()
+    expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
+  })
+})
+
+describe('ChecklistWidget — dismiss + persistence', () => {
+  it('dismisses a per-tool row and persists it across renders', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: ['claude'] }
+    const { unmount } = render(<ChecklistWidget onStartTour={() => {}} />)
+
+    fireEvent.click(screen.getByLabelText(/dismiss connect claude/i))
+    expect(screen.queryByText(/connect claude/i)).toBeNull()
+
+    const stored = JSON.parse(window.localStorage.getItem('engram:checklist-dismissed:v1') ?? '[]')
+    expect(stored).toContain('claude')
+
+    unmount()
+    render(<ChecklistWidget onStartTour={() => {}} />)
+    expect(screen.queryByText(/connect claude/i)).toBeNull()
+  })
+
+  it('dismisses the Obsidian row when no connection exists yet', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: true, tools: [] }
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    fireEvent.click(screen.getByLabelText(/dismiss install the obsidian plugin/i))
+    expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
+
+    const stored = JSON.parse(window.localStorage.getItem('engram:checklist-dismissed:v1') ?? '[]')
+    expect(stored).toContain('install_obsidian_plugin')
+  })
+
+  it('does not render a dismiss button on the vault row', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: [] }
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.queryByLabelText(/dismiss create your first vault/i)).toBeNull()
   })
 })
