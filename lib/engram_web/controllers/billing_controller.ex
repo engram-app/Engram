@@ -2,6 +2,7 @@ defmodule EngramWeb.BillingController do
   use EngramWeb, :controller
 
   alias Engram.Billing
+  alias Engram.Billing.Subscriptions
 
   require Logger
 
@@ -125,6 +126,73 @@ defmodule EngramWeb.BillingController do
         {:error, reason} -> paddle_error(conn, reason)
       end
     end)
+  end
+
+  @doc """
+  Cancel the user's subscription at the end of the current billing period.
+
+  Maps the `Subscriptions.cancel/2` result to:
+    * 202 — Paddle accepted, scheduled-change is in flight; webhook will
+      mirror it back into our DB
+    * 422 `no_active_subscription` — user has no Paddle subscription id
+    * 503 `paddle_unavailable` — Paddle non-2xx / transport error
+  """
+  def cancel_subscription(conn, _params) do
+    with_billing(conn, fn ->
+      case Subscriptions.cancel(conn.assigns.current_user) do
+        {:ok, data} ->
+          conn |> put_status(202) |> json(data)
+
+        {:error, :no_active_subscription} ->
+          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+
+        {:error, :paddle_unavailable} ->
+          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+      end
+    end)
+  end
+
+  @doc """
+  Preview the proration shape of a plan change. Read-only; safe to call as
+  the user picks a target plan.
+  """
+  def plan_change_preview(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
+    with_billing(conn, fn ->
+      case Subscriptions.preview_plan_change(conn.assigns.current_user, price_id) do
+        {:ok, preview} ->
+          json(conn, preview)
+
+        {:error, :no_active_subscription} ->
+          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+
+        {:error, :paddle_unavailable} ->
+          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+      end
+    end)
+  end
+
+  def plan_change_preview(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "target_price_id required"})
+  end
+
+  @doc "Commit a plan change after the user confirmed the inline preview."
+  def plan_change_confirm(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
+    with_billing(conn, fn ->
+      case Subscriptions.confirm_plan_change(conn.assigns.current_user, price_id) do
+        {:ok, data} ->
+          conn |> put_status(202) |> json(data)
+
+        {:error, :no_active_subscription} ->
+          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+
+        {:error, :paddle_unavailable} ->
+          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+      end
+    end)
+  end
+
+  def plan_change_confirm(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "target_price_id required"})
   end
 
   @doc "Mint a transaction id for the in-app Paddle.js payment-method overlay."

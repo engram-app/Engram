@@ -214,6 +214,9 @@ defmodule EngramWeb.Router do
     get "/billing/transactions", BillingController, :transactions
     get "/billing/transactions/:id/invoice", BillingController, :transaction_invoice
     get "/billing/payment-update-transaction", BillingController, :payment_update_transaction
+    post "/billing/cancel-subscription", BillingController, :cancel_subscription
+    post "/billing/plan-change/preview", BillingController, :plan_change_preview
+    post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
 
     # Onboarding wizard — status + TOS acceptance. Exempt from
     # RequireOnboarding (the plug is only on the vault-scoped pipeline)
