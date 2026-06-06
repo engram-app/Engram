@@ -91,15 +91,21 @@ defmodule Engram.Storage.Database do
   @impl true
   def selfhost?, do: true
 
+  # Multipart upload + presigned URLs are S3-only. Selfhost streams the
+  # archive through the controller (see Task 22) and never reaches these
+  # callbacks. They raise loudly so a misrouted call surfaces during
+  # development instead of silently writing nothing.
+  @dialyzer {:nowarn_function,
+             sign_url: 2,
+             start_multipart: 1,
+             upload_part: 4,
+             complete_multipart_upload: 3,
+             abort_multipart_upload: 2}
+
   @impl true
   def sign_url(_key, _opts) do
     raise "Engram.Storage.Database.sign_url/2 — selfhost storage cannot presign; stream via controller"
   end
-
-  # Multipart upload is an S3-only optimization used by
-  # `Engram.Accounts.Export.Streamer` for SaaS exports. Selfhost streams
-  # the archive through the controller directly (see Task 22) and never
-  # reaches these callbacks.
 
   @impl true
   def start_multipart(_key) do

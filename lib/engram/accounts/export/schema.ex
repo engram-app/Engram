@@ -12,6 +12,22 @@ defmodule Engram.Accounts.Export.Schema do
   @statuses ~w[pending running ready failed expired]a
   @reasons ~w[user_request pre_delete inactivity]a
 
+  @type t :: %__MODULE__{
+          id: integer() | nil,
+          user_id: integer() | nil,
+          status: atom() | nil,
+          s3_keys: [map()],
+          s3_upload_ids: [map()],
+          size_bytes: integer() | nil,
+          error_reason: String.t() | nil,
+          ready_at: DateTime.t() | nil,
+          expires_at: DateTime.t() | nil,
+          downloaded_at: DateTime.t() | nil,
+          reason: atom() | nil,
+          inserted_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
+
   schema "account_exports" do
     field :status, Ecto.Enum, values: @statuses
     field :s3_keys, {:array, :map}, default: []
