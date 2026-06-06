@@ -77,7 +77,11 @@ class ClerkClient:
         network hiccup) failed mid-setup, causing pytest-rerunfailures
         to re-invoke provision_user with the same email.
         """
-        username = email.split("@")[0]
+        # Strip the `+clerk_test` plus-tag (or any plus-tag) before deriving
+        # the username — Clerk rejects `+` in usernames with 422
+        # form_username_invalid, which would otherwise surface as a
+        # confusing "create_user failed" error.
+        username = email.split("@")[0].split("+")[0]
         resp = self.session.post(
             f"{self.base_url}/users",
             json={
