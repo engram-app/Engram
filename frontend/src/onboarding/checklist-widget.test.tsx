@@ -14,7 +14,6 @@ let onboardingActionsValue: ReturnType<typeof useOnboardingActions> = {
   isLoading: false,
   vaultCount: 1,
   has: (a: OnboardingAction) => actionsList.includes(a),
-  hasTourDecision: true,
   record: vi.fn(),
   recordAsync: recordAsyncMock,
 }
@@ -74,7 +73,6 @@ beforeEach(() => {
     isLoading: false,
     vaultCount: 1,
     has: (a: OnboardingAction) => actionsList.includes(a),
-    hasTourDecision: true,
     record: vi.fn(),
     recordAsync: recordAsyncMock,
   }

@@ -20,7 +20,6 @@ vi.mock('./use-onboarding-actions', () => ({
     isLoading: false,
     vaultCount: 0,
     has: () => false,
-    hasTourDecision: false,
     record: mockRecord,
     recordAsync: mockRecord,
   }),
