@@ -1,5 +1,7 @@
 defmodule EngramWeb.UsersControllerTest do
-  use EngramWeb.ConnCase, async: true
+  use EngramWeb.ConnCase, async: false
+
+  import Mox
 
   alias Engram.Accounts
 
@@ -55,12 +57,22 @@ defmodule EngramWeb.UsersControllerTest do
   end
 
   describe "DELETE /api/me" do
-    test "200 with correct password, soft-deletes", %{user: user} do
+    setup :set_mox_from_context
+    setup :verify_on_exit!
+
+    setup do
+      # `create_user_with_password` assigns a Clerk-style external_id, so the
+      # `Lifecycle.hard_delete` cascade calls `Clerk.ApiMock.delete_user/1`.
+      # Stub it so it returns :ok without per-test expectations.
+      stub(Engram.Auth.Clerk.ApiMock, :delete_user, fn _ -> :ok end)
+      :ok
+    end
+
+    test "200 with correct password, hard-deletes the user row", %{user: user} do
       conn = auth_conn(user) |> delete("/api/me?password=password123")
       assert %{"ok" => true} = json_response(conn, 200)
 
-      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
-      refute is_nil(reloaded.deleted_at)
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
     end
 
     test "403 on wrong password", %{user: user} do

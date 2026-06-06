@@ -211,36 +211,22 @@ defmodule Engram.Accounts do
   Self-delete flow for local-auth users:
     1. verify password
     2. block if this is the last active admin
-    3. set deleted_at, revoke all refresh tokens, hard-delete api keys
+    3. drive the shared `Engram.Accounts.Lifecycle` cascade —
+       `soft_delete/2` stamps `deleted_at` + revokes tokens + emails,
+       then `hard_delete/2` purges every store (Paddle, Qdrant, S3,
+       Postgres cascade, Clerk).
 
-  The existing login chokepoint in `verify_password/2` blocks re-auth as
-  soon as `deleted_at` is set, so no token cleanup is required beyond
-  revoke_all_user_tokens/1.
+  Previously this set `deleted_at` and waited 30 days for the inactivity
+  sweep to purge. The account-lifecycle work removes that wait — user-
+  initiated delete is now immediate-cascade. Audit/reason atom flows
+  through to `[:engram, :account, :deleted]` telemetry as `:user`.
   """
   def delete_self(%User{} = user, password) when is_binary(password) do
     with {:ok, _} <- verify_password(user.email, password),
          :ok <- guard_last_admin(user) do
-      Repo.transaction(
-        fn ->
-          now = DateTime.utc_now()
-
-          user
-          |> Ecto.Changeset.change(%{deleted_at: now})
-          |> Repo.update!(skip_tenant_check: true)
-
-          revoke_all_user_tokens(user)
-
-          from(k in Engram.Accounts.ApiKey, where: k.user_id == ^user.id)
-          |> Repo.delete_all(skip_tenant_check: true)
-
-          :ok
-        end,
-        skip_tenant_check: true
-      )
-      |> case do
-        {:ok, :ok} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      Engram.Accounts.Lifecycle.soft_delete(user, :user)
+      Engram.Accounts.Lifecycle.hard_delete(user, :user)
+      :ok
     else
       {:error, :invalid_credentials} -> {:error, :invalid_password}
       {:error, :last_admin} -> {:error, :last_admin}

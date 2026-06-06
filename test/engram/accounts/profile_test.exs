@@ -1,5 +1,7 @@
 defmodule Engram.Accounts.ProfileTest do
-  use Engram.DataCase, async: true
+  use Engram.DataCase, async: false
+
+  import Mox
 
   alias Engram.Accounts
 
@@ -76,8 +78,20 @@ defmodule Engram.Accounts.ProfileTest do
     end
   end
 
-  describe "delete_self/2" do
-    test "soft-deletes member, revokes refresh tokens, deletes api keys" do
+  describe "delete_self/2 — immediate cascade" do
+    setup :set_mox_from_context
+    setup :verify_on_exit!
+
+    setup do
+      # `create_user_with_password` assigns a Clerk-style external_id, so
+      # `Lifecycle.hard_delete` calls `Clerk.ApiMock.delete_user/1` on the
+      # cascade. Stub it so any number of calls return :ok without per-test
+      # expectations. Paddle is only invoked if a subscription row exists.
+      stub(Engram.Auth.Clerk.ApiMock, :delete_user, fn _ -> :ok end)
+      :ok
+    end
+
+    test "now hard-deletes the user (no 30-day wait)" do
       {:ok, _admin} = Accounts.create_user_with_password("keep-admin@example.com", "password123")
       {:ok, user} = Accounts.create_user_with_password("victim@example.com", "password123")
 
@@ -86,22 +100,7 @@ defmodule Engram.Accounts.ProfileTest do
 
       assert :ok = Accounts.delete_self(user, "password123")
 
-      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
-      refute is_nil(reloaded.deleted_at)
-
-      import Ecto.Query
-
-      tokens =
-        Engram.Repo.all(
-          from(rt in Engram.Auth.RefreshToken,
-            where: rt.user_id == ^user.id and is_nil(rt.revoked_at)
-          ),
-          skip_tenant_check: true
-        )
-
-      assert tokens == []
-
-      assert Accounts.list_api_keys(reloaded) == []
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
     end
 
     test "force-disconnects live sockets" do
@@ -116,21 +115,23 @@ defmodule Engram.Accounts.ProfileTest do
       assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
     end
 
-    test "returns :invalid_password when password is wrong" do
+    test "still enforces password gate" do
       {:ok, _admin} = Accounts.create_user_with_password("admin3@example.com", "password123")
       {:ok, user} = Accounts.create_user_with_password("wrong@example.com", "password123")
 
       assert {:error, :invalid_password} = Accounts.delete_self(user, "nope")
 
+      # Password-gate failure must NOT touch the user row.
       reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
       assert is_nil(reloaded.deleted_at)
     end
 
-    test "returns :last_admin when admin is the only active admin" do
+    test "still enforces last-admin guard" do
       {:ok, admin} = Accounts.create_user_with_password("solo-admin@example.com", "password123")
 
       assert {:error, :last_admin} = Accounts.delete_self(admin, "password123")
 
+      # Guard rejection must NOT touch the user row.
       reloaded = Engram.Repo.get!(Engram.Accounts.User, admin.id, skip_tenant_check: true)
       assert is_nil(reloaded.deleted_at)
     end
@@ -148,8 +149,7 @@ defmodule Engram.Accounts.ProfileTest do
 
       assert :ok = Accounts.delete_self(admin_a, "password123")
 
-      reloaded = Engram.Repo.get!(Engram.Accounts.User, admin_a.id, skip_tenant_check: true)
-      refute is_nil(reloaded.deleted_at)
+      refute Engram.Repo.get(Engram.Accounts.User, admin_a.id, skip_tenant_check: true)
       _ = admin_b
     end
   end
