@@ -279,7 +279,8 @@ defmodule EngramWeb.BillingControllerTest do
     test "happy path returns 202 with Paddle payload", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_cancel")
 
-      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_cancel", :next_billing_period,
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_cancel",
+                                                                :next_billing_period,
                                                                 opts ->
         assert is_binary(Keyword.fetch!(opts, :idempotency_key))
         {:ok, %{"scheduled_change" => %{"effective_at" => "2026-07-01T00:00:00Z"}}}

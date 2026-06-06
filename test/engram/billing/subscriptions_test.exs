@@ -70,7 +70,9 @@ defmodule Engram.Billing.SubscriptionsTest do
 
     test "no active subscription returns {:error, :no_active_subscription}" do
       user = insert(:user)
-      assert {:error, :no_active_subscription} = Subscriptions.preview_plan_change(user, "pri_new")
+
+      assert {:error, :no_active_subscription} =
+               Subscriptions.preview_plan_change(user, "pri_new")
     end
 
     test "Paddle error returns {:error, :paddle_unavailable}" do
@@ -137,7 +139,9 @@ defmodule Engram.Billing.SubscriptionsTest do
 
     test "no active subscription returns {:error, :no_active_subscription}" do
       user = insert(:user)
-      assert {:error, :no_active_subscription} = Subscriptions.confirm_plan_change(user, "pri_new")
+
+      assert {:error, :no_active_subscription} =
+               Subscriptions.confirm_plan_change(user, "pri_new")
     end
 
     test "Paddle error returns {:error, :paddle_unavailable}" do
