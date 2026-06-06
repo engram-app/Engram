@@ -64,6 +64,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 
   if (ob.isLoading) return null
 
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
   const actions = status.data?.actions ?? []
   const dismissed = new Set(
     actions
@@ -113,7 +114,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
           } as Item,
         ]
       : []),
-    ...(!ob.has('tour_completed') && !isDismissed('tour')
+    ...(!isMobile && !ob.has('tour_completed') && !isDismissed('tour')
       ? [
           {
             key: 'tour',

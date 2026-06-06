@@ -262,6 +262,15 @@ describe('ChecklistWidget — dismiss', () => {
 
     expect(screen.queryByText(/take the tour/i)).toBeNull()
   })
+
+  it('omits the tour row on small viewports', () => {
+    const orig = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 })
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+    expect(screen.queryByText(/take the tour/i)).toBeNull()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: orig })
+  })
 })
 
 describe('ChecklistWidget — hide when empty', () => {
