@@ -111,13 +111,14 @@ export function ChecklistWidget({ onStartTour }: Props) {
           } as Item,
         ]
       : []),
-    ...(ob.has('tour_offered_skipped') && !ob.has('tour_completed')
+    ...(!ob.has('tour_completed') && !isDismissed('tour')
       ? [
           {
             key: 'tour',
             label: 'Take the tour',
             done: false,
             startTour: onStartTour,
+            dismissible: true,
           } as Item,
         ]
       : []),

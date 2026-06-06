@@ -113,8 +113,8 @@ describe('ChecklistWidget — per-tool rows', () => {
     expect(link).toHaveAttribute('href', 'https://engram.page/docs/integrations/claude-desktop/')
   })
 
-  it('renders the tour row when the user skipped the offer and has not completed it', () => {
-    actionsList.push('first_vault_created', 'tour_offered_skipped')
+  it('renders the tour row whenever the user has not completed the tour', () => {
+    // No tour_offered_skipped required anymore — the row is standing.
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] }
     const onStart = vi.fn()
     render(wrap(<ChecklistWidget onStartTour={onStart} />))
@@ -235,11 +235,42 @@ describe('ChecklistWidget — dismiss', () => {
 
     expect(screen.queryByLabelText(/dismiss create your first vault/i)).toBeNull()
   })
+
+  it('dismissing the tour row records dismissed:tour', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    fireEvent.click(screen.getByLabelText(/dismiss take the tour/i))
+
+    expect(recordAsyncMock).toHaveBeenCalledWith('dismissed:tour')
+  })
+
+  it('hides the tour row when actions contain dismissed:tour', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] }
+    actionsList.push('dismissed:tour')
+
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    expect(screen.queryByText(/take the tour/i)).toBeNull()
+  })
+
+  it('hides the tour row when actions contain tour_completed', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] }
+    actionsList.push('tour_completed')
+
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    expect(screen.queryByText(/take the tour/i)).toBeNull()
+  })
 })
 
 describe('ChecklistWidget — hide when empty', () => {
   it('renders nothing when every row is done or dismissed', () => {
-    actionsList.push('first_vault_created', 'dismissed:claude')
+    actionsList.push(
+      'first_vault_created',
+      'dismissed:claude',
+      'dismissed:tour',
+    )
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
 
     const { container } = render(wrap(<ChecklistWidget onStartTour={() => {}} />))
