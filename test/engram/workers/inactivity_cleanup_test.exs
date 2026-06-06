@@ -250,4 +250,56 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert %DateTime{} = reloaded.deleted_at
     end
   end
+
+  describe "after Lifecycle refactor" do
+    test "sweep_soft_delete fires :account telemetry with :inactivity reason" do
+      user = insert(:user)
+      set_last_active(user.id, 95)
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :account, :soft_deleted]
+        ])
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert_receive {[:engram, :account, :soft_deleted], ^ref, _, %{reason: :inactivity}}
+    end
+
+    test "sweep_hard_delete fires :account telemetry with :inactivity reason" do
+      user = insert(:user)
+      thirty_one_days_ago = DateTime.utc_now() |> DateTime.add(-31 * 86_400, :second)
+
+      user
+      |> Ecto.Changeset.change(%{deleted_at: thirty_one_days_ago})
+      |> Repo.update!(skip_tenant_check: true)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :account, :deleted]
+        ])
+
+      InactivityCleanup.__sweep_hard__()
+
+      assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :inactivity}}
+    end
+
+    test "legacy :abuse telemetry still fires alongside" do
+      user = insert(:user)
+      set_last_active(user.id, 95)
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_soft_delete]
+        ])
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert_receive {[:engram, :abuse, :inactivity_soft_delete], ^ref, _, _}
+    end
+  end
 end
