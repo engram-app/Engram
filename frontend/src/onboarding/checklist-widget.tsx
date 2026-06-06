@@ -4,6 +4,7 @@ import { Waypoints } from 'lucide-react'
 import { useOnboardingActions } from './use-onboarding-actions'
 import { useConnections, useOnboardingStatus, type OnboardingStatus } from '../api/queries'
 import { Button } from '../components/ui/button'
+import { Shimmer } from '../components/ui/shimmer'
 
 interface Props {
   onStartTour: () => void
@@ -140,19 +141,17 @@ export function ChecklistWidget({ onStartTour }: Props) {
 
   if (collapsed) {
     return (
-      <button
+      <Button
         type="button"
+        size="lg"
         aria-label="Open setup checklist"
-        className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-2 overflow-hidden rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg animate-fab-ring-pulse transition-transform hover:scale-105 hover:bg-primary/90"
+        className="fixed bottom-4 right-4 z-40 gap-2 overflow-hidden rounded-full px-4 shadow-lg animate-fab-ring-pulse"
         onClick={() => setCollapsed(false)}
       >
-        <Waypoints size={16} strokeWidth={2.25} aria-hidden />
+        <Waypoints aria-hidden />
         <span className="relative">Finish setup</span>
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 animate-checklist-shimmer bg-gradient-to-r from-transparent via-white/20 to-transparent [background-size:200%_100%]"
-        />
-      </button>
+        <Shimmer gradient="from-transparent via-white/40 to-transparent" />
+      </Button>
     )
   }
 
@@ -168,10 +167,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
       <header
         className="relative flex flex-row items-center justify-between px-4 py-3 border-b border-border overflow-hidden"
       >
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 animate-checklist-shimmer bg-gradient-to-r from-transparent via-primary/15 to-transparent [background-size:200%_100%]"
-        />
+        <Shimmer />
         <h2 className="relative text-base font-semibold tracking-tight">Finish setup</h2>
         <button
           type="button"
