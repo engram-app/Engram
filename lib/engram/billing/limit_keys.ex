@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 63 tuples (21 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 72 tuples (24 keys × 3 tiers)
   """
 
   @catalog %{
@@ -53,7 +53,17 @@ defmodule Engram.Billing.LimitKeys do
     vault_scoped_keys: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
     # Connections caps — free tier capped at 1; paid tiers unlimited
     obsidian_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
-    mcp_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}}
+    mcp_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    # Account export caps — free gets 1 lifetime, paid tiers get 1/24h with 200 GB size cap
+    account_exports_lifetime: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    account_export_rate_per_24h: %{
+      type: :integer,
+      defaults: %{free: nil, starter: 1, pro: 1}
+    },
+    account_export_max_bytes: %{
+      type: :integer,
+      defaults: %{free: 1_000_000_000, starter: 200_000_000_000, pro: 200_000_000_000}
+    }
   }
 
   @keys Map.keys(@catalog)

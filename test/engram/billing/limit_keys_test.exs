@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 21 catalog keys" do
+    test "returns the 24 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 21
+      assert length(keys) == 24
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -101,9 +101,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 63 tuples (21 keys × 3 tiers)" do
+    test "emits 72 tuples (24 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 63
+      assert length(tuples) == 72
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
