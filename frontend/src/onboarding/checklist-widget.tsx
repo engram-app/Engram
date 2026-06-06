@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useOnboardingActions } from './use-onboarding-actions'
-import { useOnboardingStatus } from '../api/queries'
+import { useConnections, useOnboardingStatus } from '../api/queries'
 import { Button } from '../components/ui/button'
 
 interface Props {
@@ -55,6 +55,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const ob = useOnboardingActions()
   const status = useOnboardingStatus()
+  const connections = useConnections()
 
   if (ob.isLoading) return null
 
@@ -72,7 +73,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
           {
             key: 'install_obsidian_plugin',
             label: 'Install the Obsidian plugin',
-            done: false,
+            done: (connections.data ?? []).some((c) => c.kind === 'obsidian'),
             docUrl: DOC_URLS.install_obsidian_plugin,
           } as Item,
         ]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { ChecklistWidget } from './checklist-widget'
 
 let onboardingActionsValue = {
@@ -124,5 +124,30 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
     render(<ChecklistWidget onStartTour={() => {}} />)
 
     expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
+  })
+
+  it('marks the Obsidian row done when an obsidian connection exists', () => {
+    onboardingStatusValue.data.profile = { uses_obsidian: true, tools: [] }
+    connectionsValue = {
+      data: [
+        {
+          kind: 'obsidian', client_id: 'obs_1', key_id: null,
+          name: 'Engram Vault Sync',
+          software_id: null, software_version: null,
+          verified: true, logo: null,
+          vault_id: null, vault_name: null,
+          scope: null, last_used_at: null, connected_at: null,
+          first_user_agent: null, first_ip: null,
+          redirect_uris: [],
+        },
+      ],
+      isLoading: false,
+    }
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    const row = screen.getByText(/install.*obsidian/i).closest('li')!
+    expect(row.textContent).toMatch(/✅/)
+    // No setup-guide link rendered for the Obsidian row when done.
+    expect(within(row).queryByRole('link', { name: /setup guide/i })).toBeNull()
   })
 })
