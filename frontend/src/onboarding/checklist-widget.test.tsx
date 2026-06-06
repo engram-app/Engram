@@ -183,3 +183,38 @@ describe('ChecklistWidget — dismiss + persistence', () => {
     expect(screen.queryByLabelText(/dismiss create your first vault/i)).toBeNull()
   })
 })
+
+describe('ChecklistWidget — legacy dismiss-key migration', () => {
+  it('merges engram:setup-cards-dismissed:v1 on first mount and removes the old key', () => {
+    window.localStorage.setItem(
+      'engram:setup-cards-dismissed:v1',
+      JSON.stringify(['claude', 'cursor']),
+    )
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: ['claude', 'cursor', 'cline'] }
+
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.queryByText(/connect claude/i)).toBeNull()
+    expect(screen.queryByText(/connect cursor/i)).toBeNull()
+    expect(screen.getByText(/connect cline/i)).toBeInTheDocument()
+
+    const migrated = JSON.parse(
+      window.localStorage.getItem('engram:checklist-dismissed:v1') ?? '[]',
+    )
+    expect(migrated.sort()).toEqual(['claude', 'cursor'])
+    expect(window.localStorage.getItem('engram:setup-cards-dismissed:v1')).toBeNull()
+  })
+
+  it('is idempotent (re-mount with old key already removed is a no-op)', () => {
+    window.localStorage.setItem(
+      'engram:checklist-dismissed:v1',
+      JSON.stringify(['claude']),
+    )
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: ['claude'] }
+
+    render(<ChecklistWidget onStartTour={() => {}} />)
+
+    expect(screen.queryByText(/connect claude/i)).toBeNull()
+    expect(window.localStorage.getItem('engram:setup-cards-dismissed:v1')).toBeNull()
+  })
+})

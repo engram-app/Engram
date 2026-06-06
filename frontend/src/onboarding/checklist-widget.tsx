@@ -36,17 +36,32 @@ const DOC_URLS: Record<string, string> = {
 const DOC_FALLBACK = 'https://engram.page/docs/integrations/'
 
 const DISMISSED_LS_KEY = 'engram:checklist-dismissed:v1'
+const LEGACY_DISMISSED_LS_KEY = 'engram:setup-cards-dismissed:v1'
 
 function loadDismissed(): Set<string> {
   if (typeof window === 'undefined') return new Set()
+  const merged = new Set<string>()
   try {
     const raw = window.localStorage.getItem(DISMISSED_LS_KEY)
-    if (!raw) return new Set()
-    const arr = JSON.parse(raw)
-    return new Set(Array.isArray(arr) ? arr : [])
+    if (raw) {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr)) arr.forEach((s) => merged.add(String(s)))
+    }
   } catch {
-    return new Set()
+    /* ignore */
   }
+  try {
+    const legacy = window.localStorage.getItem(LEGACY_DISMISSED_LS_KEY)
+    if (legacy) {
+      const arr = JSON.parse(legacy)
+      if (Array.isArray(arr)) arr.forEach((s) => merged.add(String(s)))
+      window.localStorage.removeItem(LEGACY_DISMISSED_LS_KEY)
+      window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...merged]))
+    }
+  } catch {
+    /* ignore */
+  }
+  return merged
 }
 
 function persistDismissed(set: Set<string>) {
