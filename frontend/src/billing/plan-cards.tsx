@@ -140,7 +140,7 @@ export function PlanCard({
           'border-primary ring-1 ring-primary hover:-translate-y-0.5',
         state === 'selected' &&
           'border-primary ring-2 ring-primary shadow-sm',
-        state === 'current' && 'border-muted-foreground/30 bg-muted/30',
+        state === 'current' && 'border-border bg-muted',
       )}
     >
       {badgeText && (
@@ -148,7 +148,7 @@ export function PlanCard({
           className={cn(
             'absolute -top-3 left-6 rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide',
             state === 'current'
-              ? 'bg-muted-foreground/20 text-foreground'
+              ? 'bg-secondary text-secondary-foreground'
               : 'bg-primary text-primary-foreground',
           )}
         >
