@@ -129,8 +129,8 @@ export function mapPreviewToPlanChangeData(
 
   const nextBillDate = nextTransaction?.billingPeriod?.startsAt ?? undefined
 
-  const currentItem = subscription.items[0]
-  const newItem = preview.items[0]
+  const currentItem = subscription.items[0]!
+  const newItem = preview.items[0]!
 
   // description is required by PlanChangePreviewData.discount — only set when full entity provided
   const discountOutput: PlanChangePreviewData["discount"] = discount

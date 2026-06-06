@@ -1,4 +1,3 @@
-import * as React from "react"
 import { mapPreviewToPlanChangeData } from "@/lib/plan-change-preview-utils"
 import { PlanChangePreview, type PlanChangePreviewProps } from "./plan-change-preview"
 

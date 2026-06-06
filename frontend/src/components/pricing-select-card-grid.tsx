@@ -1,4 +1,3 @@
-import * as React from "react"
 import { RadioGroup as RadioGroupPrimitive } from "radix-ui"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"

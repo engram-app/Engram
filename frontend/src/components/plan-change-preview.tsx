@@ -1,6 +1,5 @@
 "use client"
 
-import * as React from "react"
 import { ArrowRight, AlertCircle } from "lucide-react"
 import {
   Card,

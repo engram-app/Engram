@@ -1,4 +1,3 @@
-import * as React from "react"
 import { mapSubscriptionToStatusData } from "@/lib/subscription-status-card-utils"
 import {
   SubscriptionStatusCard,

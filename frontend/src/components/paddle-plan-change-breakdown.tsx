@@ -1,4 +1,3 @@
-import * as React from "react"
 import { mapPreviewToBreakdownData } from "@/lib/plan-change-breakdown-utils"
 import { PlanChangeBreakdown, type PlanChangeBreakdownProps } from "./plan-change-breakdown"
 

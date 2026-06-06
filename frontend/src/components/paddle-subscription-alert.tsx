@@ -1,6 +1,5 @@
 "use client"
 
-import * as React from "react"
 import { mapSubscriptionToAlertData } from "@/lib/subscription-alert-utils"
 import { SubscriptionAlert, type SubscriptionAlertProps } from "./subscription-alert"
 

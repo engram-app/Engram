@@ -1,6 +1,5 @@
 "use client"
 
-import * as React from "react"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { formatIntervalLabel } from "@/lib/paddle-format"
