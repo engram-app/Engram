@@ -218,3 +218,17 @@ describe('ChecklistWidget — legacy dismiss-key migration', () => {
     expect(window.localStorage.getItem('engram:setup-cards-dismissed:v1')).toBeNull()
   })
 })
+
+describe('ChecklistWidget — hide when empty', () => {
+  it('renders nothing when every row is done or dismissed', () => {
+    onboardingActionsValue.has = () => true // vault done
+    onboardingStatusValue.data.profile = { uses_obsidian: false, tools: ['claude'] }
+    window.localStorage.setItem(
+      'engram:checklist-dismissed:v1',
+      JSON.stringify(['claude']),
+    )
+
+    const { container } = render(<ChecklistWidget onStartTour={() => {}} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})

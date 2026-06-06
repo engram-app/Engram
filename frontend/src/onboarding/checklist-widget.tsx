@@ -149,6 +149,8 @@ export function ChecklistWidget({ onStartTour }: Props) {
 
   const visible = items.filter((i) => !i.done)
 
+  if (visible.length === 0) return null
+
   if (collapsed) {
     return (
       <button
