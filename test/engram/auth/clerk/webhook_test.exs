@@ -92,5 +92,35 @@ defmodule Engram.Auth.Clerk.WebhookTest do
     test "no-op when payload missing id" do
       assert :ok = Webhook.handle(%{"type" => "user.deleted", "data" => %{}})
     end
+
+    test "last-admin protection: returns :ok, logs telemetry, leaves user soft-deleted" do
+      admin =
+        insert(:user, role: "admin", external_id: "clerk_user_last_admin")
+
+      admin_id = admin.id
+
+      # soft_delete still runs (email goes out).
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+
+      # hard_delete returns {:error, :last_admin} before Clerk.delete_user
+      # is hit; Mox verifies it's NOT called.
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :auth, :clerk_user_deleted_last_admin_protected]
+        ])
+
+      assert :ok =
+               Webhook.handle(%{
+                 "type" => "user.deleted",
+                 "data" => %{"id" => admin.external_id}
+               })
+
+      # User row is still present (soft-deleted but not purged).
+      assert reloaded = Repo.get(User, admin_id, skip_tenant_check: true)
+      assert %DateTime{} = reloaded.deleted_at
+
+      assert_receive {[:engram, :auth, :clerk_user_deleted_last_admin_protected], ^ref, _, _}
+    end
   end
 end

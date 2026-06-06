@@ -181,18 +181,35 @@ defmodule Engram.Workers.InactivityCleanup do
   end
 
   defp hard_delete(user) do
-    :ok = Lifecycle.hard_delete(user, :inactivity)
+    case Lifecycle.hard_delete(user, :inactivity) do
+      :ok ->
+        :telemetry.execute(
+          [:engram, :abuse, :inactivity_hard_delete],
+          %{count: 1},
+          %{user_id: user.id}
+        )
 
-    :telemetry.execute(
-      [:engram, :abuse, :inactivity_hard_delete],
-      %{count: 1},
-      %{user_id: user.id}
-    )
+        Logger.warning("Inactivity hard-delete fired",
+          user_id: user.id,
+          reason_label: :inactivity_120d
+        )
 
-    Logger.warning("Inactivity hard-delete fired",
-      user_id: user.id,
-      reason_label: :inactivity_120d
-    )
+      {:error, :last_admin} ->
+        # Don't crash the sweep — log and move on. The sweep runs daily,
+        # but a stranded last-admin will keep recurring until ops promotes
+        # another admin and the next pass purges them.
+        Logger.warning("Inactivity hard-delete skipped — last admin protected",
+          user_id: user.id,
+          reason_label: :inactivity_120d
+        )
+
+      {:error, other} ->
+        Logger.error("Inactivity hard-delete failed",
+          user_id: user.id,
+          reason_label: :inactivity_120d,
+          reason: inspect(other)
+        )
+    end
   end
 
   defp warn_enabled?(user) do

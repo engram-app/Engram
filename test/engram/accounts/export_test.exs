@@ -226,6 +226,18 @@ defmodule Engram.Accounts.ExportTest do
       assert {:error, :no_such_part} = Export.mint_download_url(export, 5)
     end
 
+    test "non-:ready status → {:error, :not_ready}" do
+      # Fresh user per iteration — `account_exports_one_active_per_user`
+      # partial unique index forbids two pending/running per user.
+      for status <- [:pending, :running, :failed, :expired] do
+        user = insert(:user)
+        export = insert_export!(user, status, s3_keys: [s3_key_entry(1, 1)])
+        # No Storage expectations — status guard fires before any adapter call.
+        assert {:error, :not_ready} = Export.mint_download_url(export, 1),
+               "expected :not_ready for status #{inspect(status)}"
+      end
+    end
+
     test "multi-part export: returns URL only for requested part" do
       user = insert(:user) |> as_pro()
 

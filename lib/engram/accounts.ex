@@ -5,7 +5,7 @@ defmodule Engram.Accounts do
 
   import Ecto.Query
   alias Bcrypt
-  alias Engram.Accounts.{ApiKey, User}
+  alias Engram.Accounts.{ApiKey, Lifecycle, User}
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
   alias Engram.Auth.SessionInvalidator
@@ -221,12 +221,29 @@ defmodule Engram.Accounts do
   initiated delete is now immediate-cascade. Audit/reason atom flows
   through to `[:engram, :account, :deleted]` telemetry as `:user`.
   """
+  def delete_self(%User{deleted_at: %DateTime{}} = user, _password) do
+    # Half-state recovery. The user already passed the password gate +
+    # admin guard on attempt 1; soft_delete stamped `deleted_at` but
+    # something between then and `hard_delete` failed (network glitch,
+    # PG txn rollback, process crash). `verify_password` now rejects
+    # them with `{:error, :deleted}`, so without this clause they'd be
+    # permanently stuck. Both `soft_delete` and `hard_delete` are
+    # idempotent — re-run the cascade and let the next failure surface.
+    case Lifecycle.hard_delete(user, :user) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def delete_self(%User{} = user, password) when is_binary(password) do
     with {:ok, _} <- verify_password(user.email, password),
          :ok <- guard_last_admin(user) do
-      Engram.Accounts.Lifecycle.soft_delete(user, :user)
-      Engram.Accounts.Lifecycle.hard_delete(user, :user)
-      :ok
+      Lifecycle.soft_delete(user, :user)
+
+      case Lifecycle.hard_delete(user, :user) do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     else
       {:error, :invalid_credentials} -> {:error, :invalid_password}
       {:error, :last_admin} -> {:error, :last_admin}

@@ -9,7 +9,7 @@ defmodule Engram.Mailer do
   - `send_welcome/1`
   - `send_inactivity_warning_60/1`
   - `send_inactivity_warning_80/1`
-  - `send_account_deleted_notice/1`
+  - `send_account_deleted_notice/2`
   - `send_vault_deletion_notice/4`
   """
 
@@ -76,9 +76,22 @@ defmodule Engram.Mailer do
     )
   end
 
-  def send_account_deleted_notice(%User{email: email}) do
-    deliver(
-      email,
+  @doc """
+  Sends the account-deleted notice. Copy branches on `reason` so the wording
+  matches what actually happened:
+
+    * `:inactivity` — 90-day auto-sweep wording
+    * `:user`       — user-initiated delete
+    * `:clerk`      — Clerk-side delete (auth provider)
+  """
+  def send_account_deleted_notice(%User{email: email}, reason)
+      when reason in [:inactivity, :user, :clerk] do
+    {subject, body} = account_deleted_copy(reason)
+    deliver(email, subject, body, [])
+  end
+
+  defp account_deleted_copy(:inactivity) do
+    {
       "Engram: your vault was auto-deleted",
       """
       <p>Hi,</p>
@@ -86,9 +99,31 @@ defmodule Engram.Mailer do
       Your Clerk login is still active — you can sign back in and start
       fresh whenever you want.</p>
       <p>— Engram</p>
-      """,
-      []
-    )
+      """
+    }
+  end
+
+  defp account_deleted_copy(:user) do
+    {
+      "Your Engram account has been deleted",
+      """
+      <p>Hi,</p>
+      <p>You requested account deletion. Your data is being removed.</p>
+      <p>— Engram</p>
+      """
+    }
+  end
+
+  defp account_deleted_copy(:clerk) do
+    {
+      "Your Engram account has been deleted",
+      """
+      <p>Hi,</p>
+      <p>Your account was deleted via your authentication provider.
+      Your data is being removed.</p>
+      <p>— Engram</p>
+      """
+    }
   end
 
   @doc """

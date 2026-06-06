@@ -36,7 +36,14 @@ defmodule Engram.Accounts.Lifecycle do
   the hard-delete sweep wipes it later either way.
   """
   @spec soft_delete(User.t(), reason()) :: :ok
-  def soft_delete(%User{deleted_at: %DateTime{}}, _reason), do: :ok
+  def soft_delete(%User{deleted_at: %DateTime{}} = user, _reason) do
+    # Idempotent retry path: tokens may have been re-issued between attempts
+    # (e.g. delete_self crashed after soft_delete, user retried). Revoke
+    # again — `revoke_all_user_tokens` is idempotent. Skip Qdrant drop,
+    # email, and telemetry; those already fired on the first call.
+    Accounts.revoke_all_user_tokens(user)
+    :ok
+  end
 
   def soft_delete(%User{} = user, reason) do
     _ = drop_qdrant_for_user(user)
@@ -46,7 +53,7 @@ defmodule Engram.Accounts.Lifecycle do
     |> Repo.update!(skip_tenant_check: true)
 
     Accounts.revoke_all_user_tokens(user)
-    _ = Mailer.send_account_deleted_notice(user)
+    _ = Mailer.send_account_deleted_notice(user, reason)
 
     :telemetry.execute(
       [:engram, :account, :soft_deleted],
@@ -75,14 +82,52 @@ defmodule Engram.Accounts.Lifecycle do
   Caller passes a `reason` that flows through to telemetry; the same atom
   surfaces in `[:engram, :account, :deleted]` so dashboards split
   user-initiated / Clerk-driven / inactivity sweeps without inferring.
+
+  Returns:
+    * `:ok` — purge completed (or short-circuited on missing user).
+    * `{:error, :last_admin}` — refuses to purge the last active admin.
+      Caller decides what to do (user-flow: surface to UI; Clerk webhook:
+      log + leave soft-deleted; inactivity sweep: log + skip).
+    * `{:error, :pg_failed}` — Postgres commit point rolled back.
+      State is recoverable: re-running `hard_delete` retries the cascade.
   """
-  @spec hard_delete(User.t(), reason()) :: :ok
+  @spec hard_delete(User.t(), reason()) :: :ok | {:error, :last_admin | :pg_failed}
   def hard_delete(%User{} = user, reason) do
     case Repo.get(User, user.id, skip_tenant_check: true) do
-      nil -> :ok
-      live_user -> do_hard_delete(live_user, reason)
+      nil ->
+        :ok
+
+      live_user ->
+        case guard_last_admin(live_user) do
+          :ok -> do_hard_delete(live_user, reason)
+          {:error, :last_admin} = err -> err
+        end
     end
   end
+
+  # Last-admin guard at the hard-delete commit point. Mirrors the
+  # `Engram.Accounts.guard_last_admin/1` pattern, but excludes the
+  # candidate from the active-admin count: `Accounts.active_admin_count/0`
+  # already filters `is_nil(deleted_at)`, so a user that was soft-deleted
+  # by `soft_delete/2` immediately before this call is correctly skipped.
+  # The guard then asks the right question — "would purging this user
+  # leave zero active admins?" — without needing to inspect the
+  # candidate's own state.
+  #
+  # Without this, hard_delete (now the commit point for Clerk + delete_self
+  # + inactivity) could purge the last admin and leave the instance
+  # unrecoverable.
+  defp guard_last_admin(%User{role: "admin", deleted_at: nil}) do
+    # Live admin: count includes self → needs ≥ 2 to be safe.
+    if Accounts.active_admin_count() <= 1, do: {:error, :last_admin}, else: :ok
+  end
+
+  defp guard_last_admin(%User{role: "admin"}) do
+    # Already soft-deleted: count excludes self → needs ≥ 1 to be safe.
+    if Accounts.active_admin_count() < 1, do: {:error, :last_admin}, else: :ok
+  end
+
+  defp guard_last_admin(_user), do: :ok
 
   defp do_hard_delete(%User{} = user, reason) do
     sub = Repo.one(from(s in Subscription, where: s.user_id == ^user.id), skip_tenant_check: true)
@@ -102,9 +147,11 @@ defmodule Engram.Accounts.Lifecycle do
     _ = wipe_storage_prefix(user, "#{user.id}/")
     _ = wipe_storage_prefix(user, "exports/#{user.id}/")
 
-    # Step 4: COMMIT POINT — Postgres cascade. Re-raise on failure; the
-    # cascade is the only state-anchored signal that the user is gone, so a
-    # silent swallow would hide a half-state.
+    # Step 4: COMMIT POINT — Postgres cascade, wrapped in a transaction so
+    # the two writes (vault delete + user delete) either both land or both
+    # roll back. Without the txn, a failure between them would leave the
+    # user row with detached vault remnants — exactly the half-state the
+    # cascade is meant to anchor.
     #
     # Vaults must be deleted before the user row because `notes.user_id`,
     # `attachments.user_id`, and `chunks.user_id` reference users WITHOUT
@@ -113,24 +160,39 @@ defmodule Engram.Accounts.Lifecycle do
     # the path for the final `Repo.delete!(user)`. Everything else hanging
     # off `users` (api_keys, subscriptions, refresh_tokens, usage_meters,
     # …) does cascade directly.
-    Repo.delete_all(
-      from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id),
-      skip_tenant_check: true
-    )
+    case Repo.transaction(
+           fn ->
+             Repo.delete_all(
+               from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id),
+               skip_tenant_check: true
+             )
 
-    Repo.delete!(user, skip_tenant_check: true)
+             Repo.delete!(user, skip_tenant_check: true)
+           end,
+           skip_tenant_check: true
+         ) do
+      {:ok, _} ->
+        :telemetry.execute(
+          [:engram, :account, :deleted],
+          %{count: 1},
+          %{user_id_hmac: HMAC.hash_user_id(user.id), reason: reason, had_sub: had_sub}
+        )
 
-    :telemetry.execute(
-      [:engram, :account, :deleted],
-      %{count: 1},
-      %{user_id_hmac: HMAC.hash_user_id(user.id), reason: reason, had_sub: had_sub}
-    )
+        # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
+        # outlive ours. Future Clerk webhooks find_by_external_id →
+        # :user_not_found → :ok.
+        _ = delete_clerk_identity(user)
 
-    # Step 5: Clerk delete (saas only). Best-effort; Clerk row may outlive
-    # ours. Future Clerk webhooks find_by_external_id → :user_not_found → :ok.
-    _ = delete_clerk_identity(user)
+        :ok
 
-    :ok
+      {:error, txn_reason} ->
+        Logger.error("Hard-delete PG cascade failed — half-state recoverable on retry",
+          user_id: user.id,
+          reason: inspect(txn_reason)
+        )
+
+        {:error, :pg_failed}
+    end
   end
 
   defp cancel_paddle_subscription(_user, nil), do: :ok

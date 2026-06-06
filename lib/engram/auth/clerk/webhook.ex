@@ -38,15 +38,42 @@ defmodule Engram.Auth.Clerk.Webhook do
   # `hard_delete` kicks live sockets, so the JWT cached in
   # `socket.assigns.current_user` cannot keep streaming data.
   #
-  # No last-admin guard here — Clerk is authoritative on identity. If Clerk
-  # has deleted the user, holding our row open would leave a ghost account
-  # that can no longer authenticate anyway.
+  # Clerk is authoritative on identity, but `Lifecycle.hard_delete` carries
+  # a last-admin guard (so user-flow, inactivity sweeps, and this webhook
+  # can never strand the instance admin-less). If the deleted user IS the
+  # last admin, we can't reject the webhook — Clerk has already torn down
+  # the upstream identity, and a non-2xx response would just be retried
+  # forever. Log + emit telemetry + leave them soft-deleted; ops promotes
+  # another admin and re-runs the purge manually.
   defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, user} ->
         :ok = Engram.Accounts.Lifecycle.soft_delete(user, :clerk)
-        :ok = Engram.Accounts.Lifecycle.hard_delete(user, :clerk)
-        :ok
+
+        case Engram.Accounts.Lifecycle.hard_delete(user, :clerk) do
+          :ok ->
+            :ok
+
+          {:error, :last_admin} ->
+            :telemetry.execute(
+              [:engram, :auth, :clerk_user_deleted_last_admin_protected],
+              %{count: 1},
+              %{user_id: user.id}
+            )
+
+            Logger.warning(
+              "Clerk user.deleted blocked by last-admin guard; user stays soft-deleted",
+              user_id: user.id,
+              clerk_user_id: clerk_id
+            )
+
+            :ok
+
+          {:error, _other} ->
+            # PG cascade failed; soft_delete already fired, retry will be
+            # driven by the next inactivity sweep or an operator.
+            :ok
+        end
 
       {:error, :user_not_found} ->
         :ok

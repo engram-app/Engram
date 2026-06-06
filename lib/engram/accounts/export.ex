@@ -55,9 +55,17 @@ defmodule Engram.Accounts.Export do
   `#{@download_url_ttl_seconds}s` from the moment the user clicks. On
   self-host adapters returns `{:error, :selfhost_uses_stream}` so the
   controller knows to stream bytes through itself instead.
+
+  Returns `{:error, :not_ready}` if the export is in any status other
+  than `:ready` — non-:ready exports either have no `s3_keys` yet
+  (`:pending` / `:running`) or have had them swept (`:expired` /
+  `:failed`), and minting a URL would either 404 or expose a stale key.
   """
   @spec mint_download_url(Schema.t(), pos_integer()) ::
           {:ok, %{pos_integer() => String.t()}} | {:error, atom()}
+  def mint_download_url(%Schema{status: status}, _part) when status != :ready,
+    do: {:error, :not_ready}
+
   def mint_download_url(%Schema{s3_keys: keys}, part) when is_integer(part) and part > 0 do
     adapter = Storage.adapter()
 

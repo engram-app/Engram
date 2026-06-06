@@ -136,6 +136,25 @@ defmodule Engram.Accounts.ProfileTest do
       assert is_nil(reloaded.deleted_at)
     end
 
+    test "half-state recovery: already soft-deleted user can retry without password" do
+      {:ok, _admin} =
+        Accounts.create_user_with_password("keep-admin-hsr@example.com", "password123")
+
+      {:ok, user} = Accounts.create_user_with_password("stuck@example.com", "password123")
+
+      # Simulate the crash-after-soft_delete window — `verify_password` now
+      # returns {:error, :deleted}, blocking retry via the password path.
+      user
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+      |> Engram.Repo.update!(skip_tenant_check: true)
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      # Password is ignored on the recovery branch.
+      assert :ok = Accounts.delete_self(reloaded, "doesnt-matter")
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
     test "allows admin delete when another admin remains" do
       {:ok, admin_a} = Accounts.create_user_with_password("admin-a@example.com", "password123")
 

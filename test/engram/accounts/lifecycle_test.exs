@@ -75,7 +75,8 @@ defmodule Engram.Accounts.LifecycleTest do
 
       expect(Engram.Email.ProviderMock, :send, fn to, subject, _html, _opts ->
         assert to == user.email
-        assert subject =~ "auto-deleted"
+        # :user reason → user-requested subject (NOT the inactivity copy)
+        assert subject == "Your Engram account has been deleted"
         :ok
       end)
 
@@ -111,11 +112,26 @@ defmodule Engram.Accounts.LifecycleTest do
       assert_receive {[:engram, :account, :soft_deleted], ^ref, _, %{reason: :clerk}}
     end
 
-    test "no-op on already soft-deleted user" do
+    test "no email/qdrant/telemetry on already-soft-deleted retry — but tokens still revoked" do
       user = insert(:user) |> soft_delete!()
 
-      # No `expect` — Mox verifies in setup that send/4 is NOT called.
+      # Tokens may have been re-issued between attempt 1 and the retry —
+      # revoke again. Other side effects already fired on attempt 1.
+      attach_refresh_token!(user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :account, :soft_deleted]
+        ])
+
+      # No `expect` — Mox verifies provider.send/4 is NOT called.
       assert :ok = Lifecycle.soft_delete(user, :user)
+
+      # Token from between-attempt issuance is now revoked.
+      assert revoked_token_count(user) > 0
+
+      # No telemetry on retry (already fired on attempt 1).
+      refute_received {[:engram, :account, :soft_deleted], ^ref, _, _}
     end
   end
 
@@ -270,6 +286,27 @@ defmodule Engram.Accounts.LifecycleTest do
       assert :ok = Lifecycle.hard_delete(user, :clerk)
 
       assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :clerk, had_sub: false}}
+    end
+
+    test "refuses to purge last active admin → {:error, :last_admin}" do
+      admin = insert(:user, role: "admin", external_id: nil)
+      admin_id = admin.id
+
+      # No Paddle/Clerk/Storage expectations — guard short-circuits before
+      # any cascade work. Mox verifies none are called.
+      assert {:error, :last_admin} = Lifecycle.hard_delete(admin, :user)
+
+      # User row still present — guard kicked in before Repo.delete.
+      assert Repo.get(User, admin_id, skip_tenant_check: true)
+    end
+
+    test "allows admin purge when another admin remains" do
+      _keep = insert(:user, role: "admin", external_id: nil)
+      victim = insert(:user, role: "admin", external_id: nil)
+      victim_id = victim.id
+
+      assert :ok = Lifecycle.hard_delete(victim, :user)
+      refute Repo.get(User, victim_id, skip_tenant_check: true)
     end
 
     test "passes :inactivity reason through to telemetry" do
