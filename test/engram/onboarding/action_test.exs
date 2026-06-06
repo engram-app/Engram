@@ -35,8 +35,8 @@ defmodule Engram.Onboarding.ActionTest do
   describe "dismissed:<slug> variant" do
     test "accepts a well-formed dismissed:<slug> action" do
       cs =
-        Engram.Onboarding.Action.changeset(
-          %Engram.Onboarding.Action{},
+        Action.changeset(
+          %Action{},
           %{user_id: 1, action: "dismissed:claude"}
         )
 
@@ -44,12 +44,13 @@ defmodule Engram.Onboarding.ActionTest do
     end
 
     test "accepts every slug shape used by the frontend catalog" do
-      slugs = ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot other_mcp install_obsidian_plugin)
+      slugs =
+        ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot other_mcp install_obsidian_plugin)
 
       for slug <- slugs do
         cs =
-          Engram.Onboarding.Action.changeset(
-            %Engram.Onboarding.Action{},
+          Action.changeset(
+            %Action{},
             %{user_id: 1, action: "dismissed:" <> slug}
           )
 
@@ -58,10 +59,16 @@ defmodule Engram.Onboarding.ActionTest do
     end
 
     test "rejects dismissed:<slug> with uppercase, leading number, dashes, or empty slug" do
-      for bad <- ["dismissed:Claude", "dismissed:1claude", "dismissed:claude-desktop", "dismissed:", "dismissed: claude"] do
+      for bad <- [
+            "dismissed:Claude",
+            "dismissed:1claude",
+            "dismissed:claude-desktop",
+            "dismissed:",
+            "dismissed: claude"
+          ] do
         cs =
-          Engram.Onboarding.Action.changeset(
-            %Engram.Onboarding.Action{},
+          Action.changeset(
+            %Action{},
             %{user_id: 1, action: bad}
           )
 
@@ -71,8 +78,8 @@ defmodule Engram.Onboarding.ActionTest do
 
     test "still rejects unknown plain (non-dismissed) actions" do
       cs =
-        Engram.Onboarding.Action.changeset(
-          %Engram.Onboarding.Action{},
+        Action.changeset(
+          %Action{},
           %{user_id: 1, action: "not_a_real_action"}
         )
 
@@ -81,21 +88,25 @@ defmodule Engram.Onboarding.ActionTest do
 
     test "rejects dismissed:<slug> longer than 48 characters" do
       long_slug = String.duplicate("a", 49)
+
       cs =
-        Engram.Onboarding.Action.changeset(
-          %Engram.Onboarding.Action{},
+        Action.changeset(
+          %Action{},
           %{user_id: 1, action: "dismissed:" <> long_slug}
         )
+
       refute cs.valid?
     end
 
     test "accepts dismissed:<slug> exactly 48 characters" do
       slug = String.duplicate("a", 48)
+
       cs =
-        Engram.Onboarding.Action.changeset(
-          %Engram.Onboarding.Action{},
+        Action.changeset(
+          %Action{},
           %{user_id: 1, action: "dismissed:" <> slug}
         )
+
       assert cs.valid?
     end
   end
