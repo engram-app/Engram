@@ -53,8 +53,7 @@ defmodule Engram.Accounts.Export.Streamer do
   per vault. Returns the s3_keys list (one map per part) and the total
   byte size across all parts.
   """
-  @spec run(Schema.t(), keyword()) ::
-          {:ok, [part_map()], non_neg_integer()} | {:error, term()}
+  @spec run(Schema.t(), keyword()) :: {:ok, [part_map()], non_neg_integer()}
   def run(%Schema{user_id: user_id} = export, _opts) do
     vaults =
       Repo.all(
