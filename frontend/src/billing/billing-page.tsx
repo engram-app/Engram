@@ -295,7 +295,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       {!hideHeading && (
         <CurrentPlanCard billing={billing}>
           {billing.subscription && panel === null && (
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap justify-end gap-3">
               <Button onClick={() => setPanel('change')}>Change plan</Button>
               {billing.subscription.status !== 'canceled' && (
                 <Button variant="destructive" onClick={() => setPanel('cancel')}>
