@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useOnboardingActions } from './use-onboarding-actions'
-import { useConnections, useOnboardingStatus } from '../api/queries'
+import { useConnections, useOnboardingStatus, type OnboardingStatus } from '../api/queries'
 import { Button } from '../components/ui/button'
 
 interface Props {
@@ -35,48 +36,6 @@ const DOC_URLS: Record<string, string> = {
 }
 const DOC_FALLBACK = 'https://engram.page/docs/integrations/'
 
-const DISMISSED_LS_KEY = 'engram:checklist-dismissed:v1'
-const LEGACY_DISMISSED_LS_KEY = 'engram:setup-cards-dismissed:v1'
-
-function loadDismissed(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
-  const merged = new Set<string>()
-  try {
-    const raw = window.localStorage.getItem(DISMISSED_LS_KEY)
-    if (raw) {
-      const arr = JSON.parse(raw)
-      if (Array.isArray(arr)) arr.forEach((s) => merged.add(String(s)))
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    const legacy = window.localStorage.getItem(LEGACY_DISMISSED_LS_KEY)
-    if (legacy) {
-      const arr = JSON.parse(legacy)
-      if (Array.isArray(arr)) arr.forEach((s) => merged.add(String(s)))
-      try {
-        window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...merged]))
-        window.localStorage.removeItem(LEGACY_DISMISSED_LS_KEY)
-      } catch {
-        /* setItem failed — preserve legacy key for next attempt */
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return merged
-}
-
-function persistDismissed(set: Set<string>) {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...set]))
-  } catch {
-    /* localStorage may be unavailable (Safari private mode, quota) — best-effort persist */
-  }
-}
-
 const TOOL_LABELS: Record<string, string> = {
   claude:         'Connect Claude Desktop',
   cursor:         'Connect Cursor',
@@ -96,19 +55,37 @@ const TOOL_LABELS: Record<string, string> = {
 
 export function ChecklistWidget({ onStartTour }: Props) {
   const [collapsed, setCollapsed] = useState(false)
-  const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed())
   const ob = useOnboardingActions()
   const status = useOnboardingStatus()
   const connections = useConnections()
+  const qc = useQueryClient()
 
   if (ob.isLoading) return null
 
+  const actions = status.data?.actions ?? []
+  const dismissed = new Set(
+    actions
+      .filter((a): a is `dismissed:${string}` => a.startsWith('dismissed:'))
+      .map((a) => a.slice('dismissed:'.length)),
+  )
+
   function dismiss(key: string) {
-    setDismissed((prev) => {
-      const next = new Set(prev)
-      next.add(key)
-      persistDismissed(next)
-      return next
+    const action = `dismissed:${key}` as const
+
+    // Optimistic cache update so the row vanishes immediately without
+    // waiting for the mutation to round-trip. The mutation's onSuccess
+    // invalidates this query, so the cache will be normalized from server.
+    qc.setQueryData<OnboardingStatus>(['onboarding', 'status'], (prev) => {
+      if (!prev) return prev
+      if (prev.actions.includes(action)) return prev
+      return { ...prev, actions: [...prev.actions, action] }
+    })
+
+    void ob.recordAsync(action).catch(() => {
+      // The mutation hook already retries 3× — reaching here means the
+      // server rejected. Roll back by invalidating so the next refetch
+      // restores the real cache state.
+      qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     })
   }
 
