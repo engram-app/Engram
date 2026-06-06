@@ -216,6 +216,12 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
 }
 
 :root {
@@ -254,6 +260,12 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --warning: oklch(0.769 0.163 70);
+  --warning-foreground: oklch(0.286 0.066 53);
+  --info: oklch(0.623 0.163 255);
+  --info-foreground: oklch(0.235 0.063 258);
+  --success: oklch(0.723 0.157 150);
+  --success-foreground: oklch(0.266 0.065 152);
 }
 
 .dark {
@@ -291,6 +303,12 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --warning: oklch(0.437 0.096 54);
+  --warning-foreground: oklch(0.94 0.034 82);
+  --info: oklch(0.423 0.095 258);
+  --info-foreground: oklch(0.92 0.042 252);
+  --success: oklch(0.423 0.095 152);
+  --success-foreground: oklch(0.92 0.042 154);
 }
 html {
   scroll-padding-top: 4rem;
