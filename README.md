@@ -97,13 +97,10 @@ Most operators should follow the **public docs** — they're more complete than 
 
 ### Quickstart (Docker Compose)
 
-Three preset stacks ship in the repo. Pick the one that matches what you want:
-
-| You want | Copy | Run |
-|---|---|---|
-| Default — Ollama embeds + MinIO attachments (no API keys) | `cp .env.example .env` | `docker compose up --build` |
-| Smaller — Ollama embeds + Postgres-bytea attachments (drops MinIO, #297) | `cp .env.lite.example .env` | `docker compose -f docker-compose.lite.yml up --build` |
-| Better embeds — Voyage API + MinIO attachments (needs a Voyage key) | `cp .env.voyage.example .env` | `docker compose -f docker-compose.voyage.yml up --build` |
+```bash
+cp .env.example .env       # fill in the three secrets at the top
+docker compose up --build
+```
 
 After copying, open `.env` and fill in the three generated secrets:
 
