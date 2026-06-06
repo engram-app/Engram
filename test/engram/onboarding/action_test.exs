@@ -78,5 +78,25 @@ defmodule Engram.Onboarding.ActionTest do
 
       refute cs.valid?
     end
+
+    test "rejects dismissed:<slug> longer than 48 characters" do
+      long_slug = String.duplicate("a", 49)
+      cs =
+        Engram.Onboarding.Action.changeset(
+          %Engram.Onboarding.Action{},
+          %{user_id: 1, action: "dismissed:" <> long_slug}
+        )
+      refute cs.valid?
+    end
+
+    test "accepts dismissed:<slug> exactly 48 characters" do
+      slug = String.duplicate("a", 48)
+      cs =
+        Engram.Onboarding.Action.changeset(
+          %Engram.Onboarding.Action{},
+          %{user_id: 1, action: "dismissed:" <> slug}
+        )
+      assert cs.valid?
+    end
   end
 end

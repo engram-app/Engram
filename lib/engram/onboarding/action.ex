@@ -35,7 +35,7 @@ defmodule Engram.Onboarding.Action do
   # a lowercase letter and contains only lowercase letters, digits, and
   # underscores. Distinct from the static milestone catalog above so we can
   # add new dismissable steps from the frontend without backend changes.
-  @dismissed_slug_pattern ~r/^dismissed:[a-z][a-z0-9_]*$/
+  @dismissed_slug_pattern ~r/^dismissed:[a-z][a-z0-9_]{0,47}$/
 
   def changeset(struct, attrs) do
     struct
