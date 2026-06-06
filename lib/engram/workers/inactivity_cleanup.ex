@@ -20,11 +20,11 @@ defmodule Engram.Workers.InactivityCleanup do
 
   import Ecto.Query
 
+  alias Engram.Accounts.Lifecycle
   alias Engram.Accounts.User
   alias Engram.Billing
   alias Engram.Mailer
   alias Engram.Repo
-  alias Engram.Storage
   alias Engram.UsageMeters
 
   require Logger
@@ -154,14 +154,7 @@ defmodule Engram.Workers.InactivityCleanup do
     do: DateTime.compare(DateTime.from_naive!(a, "Etc/UTC"), b) == :lt
 
   defp soft_delete(user) do
-    # Drop Qdrant points — vault rows survive so the audit trail stays.
-    _ = drop_qdrant_for_user(user)
-
-    user
-    |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
-    |> Repo.update!(skip_tenant_check: true)
-
-    _ = Mailer.send_account_deleted_notice(user)
+    :ok = Lifecycle.soft_delete(user, :inactivity)
 
     :telemetry.execute(
       [:engram, :abuse, :inactivity_soft_delete],
@@ -188,59 +181,35 @@ defmodule Engram.Workers.InactivityCleanup do
   end
 
   defp hard_delete(user) do
-    # Wipe attachments first so the FK cascade doesn't strand S3 objects.
-    case Storage.adapter().delete_prefix("#{user.id}/") do
-      {:ok, count} ->
+    case Lifecycle.hard_delete(user, :inactivity) do
+      :ok ->
         :telemetry.execute(
-          [:engram, :abuse, :inactivity_hard_delete_objects],
-          %{count: count},
+          [:engram, :abuse, :inactivity_hard_delete],
+          %{count: 1},
           %{user_id: user.id}
         )
 
-      {:error, reason} ->
-        Logger.error("S3 prefix delete failed during hard-delete",
+        Logger.warning("Inactivity hard-delete fired",
           user_id: user.id,
-          reason: inspect(reason)
-        )
-    end
-
-    Repo.delete!(user, skip_tenant_check: true)
-
-    :telemetry.execute(
-      [:engram, :abuse, :inactivity_hard_delete],
-      %{count: 1},
-      %{user_id: user.id}
-    )
-
-    Logger.warning("Inactivity hard-delete fired",
-      user_id: user.id,
-      reason_label: :inactivity_120d
-    )
-  end
-
-  defp drop_qdrant_for_user(user) do
-    # Best-effort: if Qdrant errors, log + continue. The soft-deleted user
-    # can't query anyway; Qdrant leftovers self-resolve on hard-delete.
-    case Engram.Vector.Qdrant.delete_by_user(user.id) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error("Qdrant clear failed during soft-delete",
-          user_id: user.id,
-          reason: inspect(reason)
+          reason_label: :inactivity_120d
         )
 
-        :error
-    end
-  rescue
-    e ->
-      Logger.error("Qdrant clear raised during soft-delete",
-        user_id: user.id,
-        exception: inspect(e)
-      )
+      {:error, :last_admin} ->
+        # Don't crash the sweep — log and move on. The sweep runs daily,
+        # but a stranded last-admin will keep recurring until ops promotes
+        # another admin and the next pass purges them.
+        Logger.warning("Inactivity hard-delete skipped — last admin protected",
+          user_id: user.id,
+          reason_label: :inactivity_120d
+        )
 
-      :error
+      {:error, other} ->
+        Logger.error("Inactivity hard-delete failed",
+          user_id: user.id,
+          reason_label: :inactivity_120d,
+          reason: inspect(other)
+        )
+    end
   end
 
   defp warn_enabled?(user) do

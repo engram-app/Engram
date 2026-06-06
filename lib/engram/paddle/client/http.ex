@@ -213,6 +213,34 @@ defmodule Engram.Paddle.Client.HTTP do
     end
   end
 
+  @impl true
+  def cancel_subscription(subscription_id, effective_from, opts \\ [])
+      when is_binary(subscription_id) and effective_from in [:immediately, :next_billing_period] do
+    with {:ok, api_key} <- fetch_api_key() do
+      url = base_url() <> "/subscriptions/" <> subscription_id <> "/cancel"
+
+      body = %{effective_from: Atom.to_string(effective_from)}
+
+      req_headers =
+        case Keyword.get(opts, :idempotency_key) do
+          key when is_binary(key) -> headers(api_key) ++ [{"paddle-ik", key}]
+          _ -> headers(api_key)
+        end
+
+      case Req.post(url, headers: req_headers, json: body, receive_timeout: 10_000) do
+        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+          {:ok, data}
+
+        {:ok, %Req.Response{status: status, body: body}} ->
+          log_non_2xx("subscription-cancel", status, body)
+          {:error, {:paddle_error, status}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   defp log_non_2xx(label, status, body) do
     Logger.warning("Paddle #{label} non-2xx", status: status, reason_label: inspect(body))
   end

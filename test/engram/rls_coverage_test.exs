@@ -12,6 +12,7 @@ defmodule Engram.RlsCoverageTest do
   # filtering rather than a database RLS policy. Adding an entry here is a
   # conscious decision — prefer enabling RLS for anything holding tenant data.
   @no_rls_allowlist ~w(
+    account_exports
     client_logs
     client_origin_stats
     device_authorizations

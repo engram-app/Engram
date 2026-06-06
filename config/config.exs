@@ -47,7 +47,7 @@ config :engram, :storage, Engram.Storage.S3
 config :engram, Oban,
   engine: Oban.Engines.Basic,
   repo: Engram.Repo,
-  queues: [embed: 5, reindex: 1, maintenance: 2, crypto_backfill: 1],
+  queues: [embed: 5, reindex: 1, maintenance: 2, crypto_backfill: 1, export: 1],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
     Oban.Plugins.Lifeline,
@@ -89,6 +89,7 @@ config :logger, :default_formatter,
     :exception,
     :exception_struct,
     :field,
+    :first_reason,
     :job_id,
     :kind,
     :max_attempts,
@@ -100,6 +101,7 @@ config :logger, :default_formatter,
     :paddle_subscription_id,
     :payload_keys,
     :phase,
+    :prefix,
     :price_id,
     :qdrant_id,
     :queue,
@@ -109,6 +111,7 @@ config :logger, :default_formatter,
     :request_path,
     :request_query,
     :result,
+    :retry_reason,
     :row_id,
     :status,
     :storage_key,
@@ -133,6 +136,12 @@ config :engram, :boot_canary_enabled, true
 # Rate limiter backend. Default ETS (per-node, single-node correct, no deps).
 # SaaS prod flips to :redis in runtime.exs when REDIS_URL is set (cluster-shared).
 config :engram, EngramWeb.RateLimiter, backend: :ets
+
+# Telemetry/log HMAC key for hashing user ids (Engram.Crypto.HMAC).
+# Throwaway default for dev/test; prod overrides via runtime.exs from a
+# high-entropy secret. NOT an encryption key — used only to obscure user
+# identifiers in metric labels and log lines.
+config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 
 # Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
 # including the no-DSN dev/test case if a future test exercises a Sentry stub.

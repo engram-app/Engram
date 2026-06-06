@@ -5,7 +5,7 @@ defmodule Engram.Accounts do
 
   import Ecto.Query
   alias Bcrypt
-  alias Engram.Accounts.{ApiKey, User}
+  alias Engram.Accounts.{ApiKey, Lifecycle, User}
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
   alias Engram.Auth.SessionInvalidator
@@ -211,34 +211,37 @@ defmodule Engram.Accounts do
   Self-delete flow for local-auth users:
     1. verify password
     2. block if this is the last active admin
-    3. set deleted_at, revoke all refresh tokens, hard-delete api keys
+    3. drive the shared `Engram.Accounts.Lifecycle` cascade —
+       `soft_delete/2` stamps `deleted_at` + revokes tokens + emails,
+       then `hard_delete/2` purges every store (Paddle, Qdrant, S3,
+       Postgres cascade, Clerk).
 
-  The existing login chokepoint in `verify_password/2` blocks re-auth as
-  soon as `deleted_at` is set, so no token cleanup is required beyond
-  revoke_all_user_tokens/1.
+  Previously this set `deleted_at` and waited 30 days for the inactivity
+  sweep to purge. The account-lifecycle work removes that wait — user-
+  initiated delete is now immediate-cascade. Audit/reason atom flows
+  through to `[:engram, :account, :deleted]` telemetry as `:user`.
   """
+  def delete_self(%User{deleted_at: %DateTime{}} = user, _password) do
+    # Half-state recovery. The user already passed the password gate +
+    # admin guard on attempt 1; soft_delete stamped `deleted_at` but
+    # something between then and `hard_delete` failed (network glitch,
+    # PG txn rollback, process crash). `verify_password` now rejects
+    # them with `{:error, :deleted}`, so without this clause they'd be
+    # permanently stuck. Both `soft_delete` and `hard_delete` are
+    # idempotent — re-run the cascade and let the next failure surface.
+    case Lifecycle.hard_delete(user, :user) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def delete_self(%User{} = user, password) when is_binary(password) do
     with {:ok, _} <- verify_password(user.email, password),
          :ok <- guard_last_admin(user) do
-      Repo.transaction(
-        fn ->
-          now = DateTime.utc_now()
+      Lifecycle.soft_delete(user, :user)
 
-          user
-          |> Ecto.Changeset.change(%{deleted_at: now})
-          |> Repo.update!(skip_tenant_check: true)
-
-          revoke_all_user_tokens(user)
-
-          from(k in Engram.Accounts.ApiKey, where: k.user_id == ^user.id)
-          |> Repo.delete_all(skip_tenant_check: true)
-
-          :ok
-        end,
-        skip_tenant_check: true
-      )
-      |> case do
-        {:ok, :ok} -> :ok
+      case Lifecycle.hard_delete(user, :user) do
+        :ok -> :ok
         {:error, reason} -> {:error, reason}
       end
     else

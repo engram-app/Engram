@@ -469,6 +469,27 @@ if config_env() == :prod do
   # See Engram.SpaIntegrity and docs/context/docker-build-cache-pitfalls.md.
   config :engram, :spa_integrity_check_enabled, true
 
+  # Telemetry/log HMAC key for hashing user ids in metric labels + logs.
+  # Distinct from any encryption key. SaaS prod + staging set this via SOPS so
+  # `user_id_hmac` correlates across restarts and deployments. CI test images
+  # and self-host releases that haven't wired the env var get a per-boot random
+  # — telemetry hashes still don't leak plaintext ids, they just don't
+  # correlate across reboots. The warning is intentional so operators notice.
+  case System.get_env("TELEMETRY_HMAC_KEY_USER_ID") do
+    nil ->
+      require Logger
+
+      Logger.warning(
+        "TELEMETRY_HMAC_KEY_USER_ID not set; using per-boot random key " <>
+          "(user_id_hmac will not correlate across restarts)"
+      )
+
+      config :engram, :hmac_key_user_id, Base.encode64(:crypto.strong_rand_bytes(32))
+
+    key ->
+      config :engram, :hmac_key_user_id, key
+  end
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

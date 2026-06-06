@@ -116,6 +116,47 @@ defmodule Engram.MailerTest do
     end
   end
 
+  describe "send_account_deleted_notice/2" do
+    test ":inactivity → auto-deleted subject + 90-day copy" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
+        assert to == "u@example.com"
+        assert subject == "Engram: your vault was auto-deleted"
+        assert html =~ "90 days of inactivity"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_account_deleted_notice(user, :inactivity)
+    end
+
+    test ":user → user-requested copy, not inactivity copy" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == "Your Engram account has been deleted"
+        assert html =~ "You requested account deletion"
+        refute html =~ "inactivity"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_account_deleted_notice(user, :user)
+    end
+
+    test ":clerk → auth-provider copy" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == "Your Engram account has been deleted"
+        assert html =~ "authentication provider"
+        refute html =~ "inactivity"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_account_deleted_notice(user, :clerk)
+    end
+  end
+
   describe "send_vault_deletion_notice/4" do
     test "returns :ok and includes the manage link, vault name, and purge date" do
       user = insert(:user, email: "u@example.com")

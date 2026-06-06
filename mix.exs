@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.355",
+      version: "0.5.361",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -111,6 +111,11 @@ defmodule Engram.MixProject do
       {:ex_aws_s3, "~> 2.5"},
       {:ex_aws_kms, "~> 2.4"},
       {:sweet_xml, "~> 0.7"},
+
+      # Streaming zip writer — used by Engram.Accounts.Export.Streamer to
+      # build account-export archives on the fly without buffering vault
+      # contents in memory.
+      {:zstream, "~> 0.6"},
 
       # Test
       {:ex_machina, "~> 2.8", only: :test},

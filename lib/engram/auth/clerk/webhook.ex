@@ -32,15 +32,48 @@ defmodule Engram.Auth.Clerk.Webhook do
   # Clerk fires `user.deleted` when an admin deletes a user from the Clerk
   # dashboard, when Clerk itself revokes a user (e.g. the duplicate-signup
   # branch in `apply_user_created/3`), or when a user self-deletes via the
-  # Clerk account portal. Mirror the deletion locally so the user can no
-  # longer auth — and force-disconnect any live sockets, since the JWT
-  # cached in `socket.assigns.current_user` would otherwise keep streaming
-  # data until the connection drops.
+  # Clerk account portal. In every case the upstream identity is already
+  # gone, so the local row must follow — drive the full
+  # `soft_delete` + `hard_delete` cascade immediately. Step 0 of
+  # `hard_delete` kicks live sockets, so the JWT cached in
+  # `socket.assigns.current_user` cannot keep streaming data.
+  #
+  # Clerk is authoritative on identity, but `Lifecycle.hard_delete` carries
+  # a last-admin guard (so user-flow, inactivity sweeps, and this webhook
+  # can never strand the instance admin-less). If the deleted user IS the
+  # last admin, we can't reject the webhook — Clerk has already torn down
+  # the upstream identity, and a non-2xx response would just be retried
+  # forever. Log + emit telemetry + leave them soft-deleted; ops promotes
+  # another admin and re-runs the purge manually.
   defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, user} ->
-        _ = Accounts.soft_delete_user(user)
-        :ok
+        :ok = Engram.Accounts.Lifecycle.soft_delete(user, :clerk)
+
+        case Engram.Accounts.Lifecycle.hard_delete(user, :clerk) do
+          :ok ->
+            :ok
+
+          {:error, :last_admin} ->
+            :telemetry.execute(
+              [:engram, :auth, :clerk_user_deleted_last_admin_protected],
+              %{count: 1},
+              %{user_id: user.id}
+            )
+
+            Logger.warning(
+              "Clerk user.deleted blocked by last-admin guard; user stays soft-deleted",
+              user_id: user.id,
+              clerk_user_id: clerk_id
+            )
+
+            :ok
+
+          {:error, _other} ->
+            # PG cascade failed; soft_delete already fired, retry will be
+            # driven by the next inactivity sweep or an operator.
+            :ok
+        end
 
       {:error, :user_not_found} ->
         :ok

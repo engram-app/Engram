@@ -73,6 +73,101 @@ defmodule Engram.Storage.InMemory do
   end
 
   @impl true
+  def selfhost?, do: true
+
+  @impl true
+  def sign_url(_key, _opts) do
+    raise "Engram.Storage.InMemory.sign_url/2 — test stub does not presign"
+  end
+
+  # ── Multipart upload (test impl) ────────────────────────────────────
+  #
+  # Buffers chunks under a separate ETS row keyed by
+  # `{:multipart, key, upload_id}`. `complete_multipart_upload/3`
+  # concatenates the parts (in part_number order) into the final value
+  # under `key` exactly like a real S3 backend would. Tests can introspect
+  # the final blob via `get/1`.
+
+  @multipart_table :engram_test_storage_in_memory_multipart
+
+  defp ensure_multipart_table do
+    case :ets.whereis(@multipart_table) do
+      :undefined ->
+        try do
+          :ets.new(@multipart_table, [:public, :named_table, :set])
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  @impl true
+  def start_multipart(key) when is_binary(key) do
+    ensure_multipart_table()
+    upload_id = "in-memory-upload-" <> Base.encode16(:crypto.strong_rand_bytes(8))
+    :ets.insert(@multipart_table, {{:multipart, key, upload_id}, %{}})
+    {:ok, upload_id}
+  end
+
+  @impl true
+  def upload_part(key, upload_id, part_number, chunk)
+      when is_binary(key) and is_binary(upload_id) and is_integer(part_number) and
+             part_number > 0 and is_binary(chunk) do
+    ensure_multipart_table()
+    handle = {:multipart, key, upload_id}
+
+    case :ets.lookup(@multipart_table, handle) do
+      [{^handle, parts}] ->
+        :ets.insert(@multipart_table, {handle, Map.put(parts, part_number, chunk)})
+
+        etag =
+          chunk
+          |> then(&:crypto.hash(:md5, &1))
+          |> Base.encode16(case: :lower)
+
+        {:ok, "\"" <> etag <> "\""}
+
+      [] ->
+        {:error, :no_such_upload}
+    end
+  end
+
+  @impl true
+  def complete_multipart_upload(key, upload_id, parts)
+      when is_binary(key) and is_binary(upload_id) and is_list(parts) do
+    ensure_multipart_table()
+    handle = {:multipart, key, upload_id}
+
+    case :ets.lookup(@multipart_table, handle) do
+      [{^handle, stored}] ->
+        binary =
+          parts
+          |> Enum.map(fn %{part_number: n} -> n end)
+          |> Enum.sort()
+          |> Enum.map(&Map.fetch!(stored, &1))
+          |> IO.iodata_to_binary()
+
+        put(key, binary)
+        :ets.delete(@multipart_table, handle)
+        :ok
+
+      [] ->
+        {:error, :no_such_upload}
+    end
+  end
+
+  @impl true
+  def abort_multipart_upload(key, upload_id) when is_binary(key) and is_binary(upload_id) do
+    ensure_multipart_table()
+    :ets.delete(@multipart_table, {:multipart, key, upload_id})
+    :ok
+  end
+
+  @impl true
   def list_user_prefixes do
     ensure_table()
 

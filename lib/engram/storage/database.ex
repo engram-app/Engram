@@ -89,6 +89,45 @@ defmodule Engram.Storage.Database do
   end
 
   @impl true
+  def selfhost?, do: true
+
+  # Multipart upload + presigned URLs are S3-only. Selfhost streams the
+  # archive through the controller (see Task 22) and never reaches these
+  # callbacks. They raise loudly so a misrouted call surfaces during
+  # development instead of silently writing nothing.
+  @dialyzer {:nowarn_function,
+             sign_url: 2,
+             start_multipart: 1,
+             upload_part: 4,
+             complete_multipart_upload: 3,
+             abort_multipart_upload: 2}
+
+  @impl true
+  def sign_url(_key, _opts) do
+    raise "Engram.Storage.Database.sign_url/2 — selfhost storage cannot presign; stream via controller"
+  end
+
+  @impl true
+  def start_multipart(_key) do
+    raise "Engram.Storage.Database.start_multipart/1 — selfhost storage does not support multipart upload; stream via controller"
+  end
+
+  @impl true
+  def upload_part(_key, _upload_id, _part_number, _chunk) do
+    raise "Engram.Storage.Database.upload_part/4 — selfhost storage does not support multipart upload"
+  end
+
+  @impl true
+  def complete_multipart_upload(_key, _upload_id, _parts) do
+    raise "Engram.Storage.Database.complete_multipart_upload/3 — selfhost storage does not support multipart upload"
+  end
+
+  @impl true
+  def abort_multipart_upload(_key, _upload_id) do
+    raise "Engram.Storage.Database.abort_multipart_upload/2 — selfhost storage does not support multipart upload"
+  end
+
+  @impl true
   def list_user_prefixes do
     %{rows: rows} =
       Repo.query!("SELECT DISTINCT split_part(storage_key, '/', 1) FROM storage_objects", [])
