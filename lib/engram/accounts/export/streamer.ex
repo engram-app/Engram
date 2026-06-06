@@ -6,9 +6,22 @@ defmodule Engram.Accounts.Export.Streamer do
   ## MVP scope (Task 12)
 
   Happy path only — one part per vault (`part: 1, of: 1`). The 10 GB part
-  split, decryption of note/attachment bodies, and `.obsidian/`
-  filtering are all stubbed pending Task 13/14. See the per-helper notes
-  below for TODOs.
+  split and decryption of note bodies are stubbed pending Task 13/14.
+  See the per-helper notes below for TODOs.
+
+  Attachments are **not** written to the zip. The `Attachment.content`
+  field is virtual (it's fetched from S3 lazily by
+  `Engram.Crypto.maybe_decrypt_attachment_fields/2`), so a plain
+  `Repo.all` here would emit zero-byte entries. Task 13 will wire the
+  real S3-fetch-and-decrypt path; until then attachments are deferred
+  entirely — no zip entries are written for them.
+
+  Empty vaults (no notes, no attachments) skip the multipart upload
+  altogether: AWS S3 would accept a sole 0-byte part, but MinIO and
+  Garage reject `CompleteMultipartUpload` on a zero-byte sole part. A
+  user with only empty vaults therefore ends with `s3_keys: []` —
+  `mark_ready` still flips the status to `:ready`, and any subsequent
+  `mint_download_url` call returns `{:error, :no_such_part}`.
 
   Filenames inside the zip use `vault.slug` rather than the decrypted
   `vault.name` because note paths are encrypted (Phase B.3) and we don't
@@ -20,7 +33,6 @@ defmodule Engram.Accounts.Export.Streamer do
   import Ecto.Query
 
   alias Engram.Accounts.Export.Schema
-  alias Engram.Attachments.Attachment
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
@@ -53,47 +65,70 @@ defmodule Engram.Accounts.Export.Streamer do
         skip_tenant_check: true
       )
 
-    {parts, total} =
+    {acc_parts, total} =
       Enum.reduce(vaults, {[], 0}, fn vault, {acc_parts, acc_bytes} ->
         {vault_parts, vault_bytes} = zip_vault(export, vault)
-        {acc_parts ++ vault_parts, acc_bytes + vault_bytes}
+        {[vault_parts | acc_parts], acc_bytes + vault_bytes}
       end)
+
+    parts =
+      acc_parts
+      |> Enum.reverse()
+      |> List.flatten()
 
     {:ok, parts, total}
   end
 
   # MVP: one part per vault. Task 14 will split at @part_max_bytes (10 GB).
+  #
+  # Short-circuits before opening the multipart upload when the vault
+  # has no entries to emit. This is the MinIO/Garage gate — those
+  # backends reject `CompleteMultipartUpload` on a zero-byte sole part.
   defp zip_vault(export, vault) do
-    storage = Storage.adapter()
-    key = part_key(export, vault, 1, 1)
+    case zip_entries(vault) do
+      [] ->
+        {[], 0}
 
-    {:ok, upload_id} = storage.start_multipart(key)
+      entries ->
+        storage = Storage.adapter()
+        key = part_key(export, vault, 1, 1)
 
-    {total_bytes, finished_parts} =
-      vault
-      |> zip_entries()
-      |> Zstream.zip()
-      |> stream_to_multipart(storage, key, upload_id)
+        {:ok, upload_id} = storage.start_multipart(key)
 
-    :ok = storage.complete_multipart_upload(key, upload_id, finished_parts)
+        {total_bytes, finished_parts} =
+          entries
+          |> Zstream.zip()
+          |> stream_to_multipart(storage, key, upload_id)
 
-    part_map = %{
-      "key" => key,
-      "size_bytes" => total_bytes,
-      "part" => 1,
-      "of" => 1,
-      "vault_id" => vault.id,
-      "vault_name" => vault.slug
-    }
+        if total_bytes == 0 do
+          # Zstream emitted only EOCD framing (no actual entries). Abort
+          # rather than complete the upload — same MinIO/Garage rationale
+          # as the empty-entries short-circuit above.
+          :ok = storage.abort_multipart_upload(key, upload_id)
+          {[], 0}
+        else
+          :ok = storage.complete_multipart_upload(key, upload_id, finished_parts)
 
-    {[part_map], total_bytes}
+          part_map = %{
+            "key" => key,
+            "size_bytes" => total_bytes,
+            "part" => 1,
+            "of" => 1,
+            "vault_id" => vault.id,
+            "vault_name" => vault.slug
+          }
+
+          {[part_map], total_bytes}
+        end
+    end
   end
 
-  # Build the zstream entry list for a vault. MVP: notes + attachments
-  # are emitted as opaque ciphertext blobs because we don't have a DEK
-  # in scope (Task 13 wires decryption). Filenames use the row id so the
-  # zip remains deterministic and `.obsidian/`-filtering work in Task 14
-  # has clean paths to match against once we decrypt.
+  # Build the zstream entry list for a vault. MVP: notes are emitted as
+  # opaque ciphertext blobs because we don't have a DEK in scope (Task
+  # 13 wires decryption). Attachments are NOT emitted — see the
+  # moduledoc for why. Filenames use the row id so the zip remains
+  # deterministic and `.obsidian/`-filtering work in Task 14 has clean
+  # paths to match against once we decrypt.
   defp zip_entries(%Vault{id: vault_id}) do
     notes =
       Repo.all(
@@ -107,26 +142,9 @@ defmodule Engram.Accounts.Export.Streamer do
         skip_tenant_check: true
       )
 
-    attachments =
-      Repo.all(
-        from(a in Attachment,
-          where: a.vault_id == ^vault_id,
-          order_by: [asc: a.id]
-        ),
-        skip_tenant_check: true
-      )
-
-    note_entries =
-      Enum.map(notes, fn note ->
-        Zstream.entry("notes/note-#{note.id}.md", [note_payload(note)])
-      end)
-
-    attachment_entries =
-      Enum.map(attachments, fn att ->
-        Zstream.entry("attachments/attachment-#{att.id}.bin", [attachment_payload(att)])
-      end)
-
-    note_entries ++ attachment_entries
+    Enum.map(notes, fn note ->
+      Zstream.entry("notes/note-#{note.id}.md", [note_payload(note)])
+    end)
   end
 
   # Decryption via the user's DEK lands in Plan Task 13; until then we
@@ -135,13 +153,11 @@ defmodule Engram.Accounts.Export.Streamer do
   defp note_payload(%Note{content_ciphertext: nil}), do: ""
   defp note_payload(%Note{content_ciphertext: ct}) when is_binary(ct), do: ct
 
-  defp attachment_payload(%Attachment{content: bin}) when is_binary(bin), do: bin
-  defp attachment_payload(_), do: ""
-
   # Consumes the zstream chunk stream, flushing S3 parts every
   # @min_part_bytes. Returns {total_bytes_uploaded, parts_list}, where
   # parts_list is the `[%{part_number: integer, etag: binary}]` shape
-  # the Storage.complete_multipart_upload/3 callback expects.
+  # the Storage.complete_multipart_upload/3 callback expects, in
+  # ascending part_number order.
   defp stream_to_multipart(stream, storage, key, upload_id) do
     {buf, part_no, acc_parts, total} =
       Enum.reduce(stream, {<<>>, 1, [], 0}, fn chunk, {buf, part_no, acc_parts, total} ->
@@ -151,7 +167,7 @@ defmodule Engram.Accounts.Export.Streamer do
         if byte_size(buf) >= @min_part_bytes do
           {:ok, etag} = storage.upload_part(key, upload_id, part_no, buf)
 
-          {<<>>, part_no + 1, acc_parts ++ [%{part_number: part_no, etag: etag}],
+          {<<>>, part_no + 1, [%{part_number: part_no, etag: etag} | acc_parts],
            total + byte_size(buf)}
         else
           {buf, part_no, acc_parts, total}
@@ -161,21 +177,30 @@ defmodule Engram.Accounts.Export.Streamer do
     finalize_buffer(buf, part_no, acc_parts, total, storage, key, upload_id)
   end
 
-  # S3 multipart upload requires ≥ 1 part. If the zstream produced
-  # nothing buffered (empty vault), flush an empty final part so the
-  # uploadId can be completed; AWS accepts a zero-byte final part.
-  defp finalize_buffer(<<>>, _part_no, [], total, storage, key, upload_id) do
-    {:ok, etag} = storage.upload_part(key, upload_id, 1, <<>>)
-    {total, [%{part_number: 1, etag: etag}]}
+  # Returns parts in ascending part_number order. Both branches that
+  # emit parts prepend onto `acc_parts` (kept in descending order during
+  # the reduce in `stream_to_multipart/4`) and then reverse once here.
+
+  # No buffered bytes and no parts flushed — total is 0 (truly empty
+  # zip stream). Caller (`zip_vault/2`) handles the abort.
+  defp finalize_buffer(<<>>, _part_no, [], 0 = total, _storage, _key, _upload_id) do
+    {total, []}
   end
 
-  defp finalize_buffer(<<>>, _part_no, parts, total, _storage, _key, _upload_id) do
-    {total, parts}
+  # Stream finished cleanly on a part boundary; nothing left to flush.
+  defp finalize_buffer(<<>>, _part_no, acc_parts, total, _storage, _key, _upload_id) do
+    {total, Enum.reverse(acc_parts)}
   end
 
-  defp finalize_buffer(buf, part_no, parts, total, storage, key, upload_id) do
+  # Flush the trailing buffer as the final part.
+  defp finalize_buffer(buf, part_no, acc_parts, total, storage, key, upload_id) do
     {:ok, etag} = storage.upload_part(key, upload_id, part_no, buf)
-    {total + byte_size(buf), parts ++ [%{part_number: part_no, etag: etag}]}
+
+    parts =
+      [%{part_number: part_no, etag: etag} | acc_parts]
+      |> Enum.reverse()
+
+    {total + byte_size(buf), parts}
   end
 
   defp part_key(export, vault, idx, of) do
