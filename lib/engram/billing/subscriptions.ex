@@ -105,6 +105,28 @@ defmodule Engram.Billing.Subscriptions do
     end)
   end
 
+  @doc """
+  Reverse a scheduled cancel by clearing Paddle's `scheduled_change`.
+
+  Patches the subscription with `scheduled_change: nil` and no item changes.
+  Returns `{:ok, paddle_data}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
+  """
+  @spec reverse_cancel(User.t()) ::
+          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+  def reverse_cancel(user) do
+    with_active_sub(user, fn sub_id ->
+      idempotency_key =
+        "reverse-cancel-#{user.id}-#{sub_id}-#{System.unique_integer([:positive])}"
+
+      Client.impl().update_subscription(
+        sub_id,
+        [],
+        idempotency_key: idempotency_key,
+        scheduled_change: nil
+      )
+    end)
+  end
+
   defp with_active_sub(user, fun) do
     case Billing.get_subscription(user) do
       %Subscription{paddle_subscription_id: sub_id} when is_binary(sub_id) ->

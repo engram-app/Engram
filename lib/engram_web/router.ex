@@ -215,6 +215,7 @@ defmodule EngramWeb.Router do
     get "/billing/transactions/:id/invoice", BillingController, :transaction_invoice
     get "/billing/payment-update-transaction", BillingController, :payment_update_transaction
     post "/billing/cancel-subscription", BillingController, :cancel_subscription
+    post "/billing/reverse-cancel", BillingController, :reverse_cancel
     post "/billing/plan-change/preview", BillingController, :plan_change_preview
     post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
 

@@ -152,6 +152,22 @@ defmodule EngramWeb.BillingController do
     end)
   end
 
+  @doc "Reverse a scheduled cancel before its effective date."
+  def reverse_cancel(conn, _params) do
+    with_billing(conn, fn ->
+      case Subscriptions.reverse_cancel(conn.assigns.current_user) do
+        {:ok, data} ->
+          conn |> put_status(202) |> json(data)
+
+        {:error, :no_active_subscription} ->
+          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+
+        {:error, :paddle_unavailable} ->
+          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
+      end
+    end)
+  end
+
   @doc """
   Preview the proration shape of a plan change. Read-only; safe to call as
   the user picks a target plan.

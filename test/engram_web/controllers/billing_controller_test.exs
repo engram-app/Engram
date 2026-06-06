@@ -306,6 +306,26 @@ defmodule EngramWeb.BillingControllerTest do
     end
   end
 
+  describe "POST /api/billing/reverse-cancel" do
+    test "happy path returns 202", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn "sub_reverse", [], opts ->
+        assert Keyword.fetch!(opts, :scheduled_change) == nil
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      body = conn |> post("/api/billing/reverse-cancel") |> json_response(202)
+      assert body["scheduled_change"] == nil
+    end
+
+    test "no active sub returns 422", %{conn: conn} do
+      body = conn |> post("/api/billing/reverse-cancel") |> json_response(422)
+      assert body["error"] == "no_active_subscription"
+    end
+  end
+
   describe "POST /api/billing/plan-change/preview" do
     test "returns Paddle proration preview shape", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_preview")

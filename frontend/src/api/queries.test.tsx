@@ -9,7 +9,13 @@ vi.mock('./client', () => ({
   setTokenGetter: vi.fn(),
 }))
 
-import { useAcceptTerms } from './queries'
+import {
+  useAcceptTerms,
+  useCancelSubscription,
+  useConfirmPlanChange,
+  usePlanChangePreview,
+  useReverseCancel,
+} from './queries'
 
 let qc: QueryClient
 
@@ -54,5 +60,56 @@ describe('useAcceptTerms', () => {
     // If onSuccess fires-and-forgets, this would still be false when mutateAsync resolves
     // and the user would be navigated with a stale cache (bug: double-accept).
     expect(invalidateResolved).toBe(true)
+  })
+})
+
+describe('inline billing mutations', () => {
+  it('useCancelSubscription POSTs and invalidates billing caches', async () => {
+    post.mockResolvedValue({ scheduled_change: { effective_at: '2026-07-01T00:00:00Z' } })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useCancelSubscription(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync()
+    })
+
+    expect(post).toHaveBeenCalledWith('/billing/cancel-subscription')
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['billing', 'status'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['billing', 'subscription'] })
+  })
+
+  it('useReverseCancel POSTs and invalidates billing caches', async () => {
+    post.mockResolvedValue({ scheduled_change: null })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useReverseCancel(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync()
+    })
+
+    expect(post).toHaveBeenCalledWith('/billing/reverse-cancel')
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['billing', 'status'] })
+  })
+
+  it('useConfirmPlanChange forwards target_price_id and invalidates caches', async () => {
+    post.mockResolvedValue({ transaction_id: 'txn_xyz' })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useConfirmPlanChange(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync('pri_new')
+    })
+
+    expect(post).toHaveBeenCalledWith('/billing/plan-change/confirm', {
+      target_price_id: 'pri_new',
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['billing', 'subscription'] })
+  })
+
+  it('usePlanChangePreview stays disabled until a target is selected', () => {
+    const { result } = renderHook(() => usePlanChangePreview(null), { wrapper })
+    // No fetch happens for null target — query is disabled.
+    expect(post).not.toHaveBeenCalled()
+    expect(result.current.fetchStatus).toBe('idle')
   })
 })

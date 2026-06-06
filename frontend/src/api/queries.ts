@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api, ApiError } from './client'
@@ -775,5 +775,59 @@ export function useCreateVault() {
       // refresh /status so the onboarding checklist ticks immediately.
       qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
     },
+  })
+}
+
+// Inline billing mutations replacing the portal redirect — each invalidates
+// /billing/status + /billing/subscription so the StatusCard reflects the
+// new scheduled change immediately, before webhook sync catches up.
+
+function invalidateBilling(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+  qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+}
+
+export function useCancelSubscription() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<Record<string, unknown>>('/billing/cancel-subscription'),
+    onSuccess: () => invalidateBilling(qc),
+  })
+}
+
+export function useReverseCancel() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<Record<string, unknown>>('/billing/reverse-cancel'),
+    onSuccess: () => invalidateBilling(qc),
+  })
+}
+
+export interface PlanChangePreview {
+  old_total: number
+  new_total: number
+  immediate_charge_or_credit: number
+  next_billed_at: string
+}
+
+export function usePlanChangePreview(targetPriceId: string | null) {
+  return useQuery({
+    queryKey: ['billing', 'plan-change', 'preview', targetPriceId],
+    enabled: targetPriceId !== null,
+    queryFn: () =>
+      api.post<PlanChangePreview>('/billing/plan-change/preview', {
+        target_price_id: targetPriceId,
+      }),
+  })
+}
+
+export function useConfirmPlanChange() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (targetPriceId: string) =>
+      api.post<Record<string, unknown>>('/billing/plan-change/confirm', {
+        target_price_id: targetPriceId,
+      }),
+    onSuccess: () => invalidateBilling(qc),
   })
 }

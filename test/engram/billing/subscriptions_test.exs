@@ -86,6 +86,39 @@ defmodule Engram.Billing.SubscriptionsTest do
     end
   end
 
+  describe "reverse_cancel/1" do
+    test "calls Paddle update with scheduled_change: nil + idempotency key" do
+      user = insert(:user)
+      sub = insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_ok")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn sub_id, items, opts ->
+        assert sub_id == sub.paddle_subscription_id
+        assert items == []
+        assert Keyword.fetch!(opts, :scheduled_change) == nil
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, %{scheduled_change: nil}}
+      end)
+
+      assert {:ok, %{scheduled_change: nil}} = Subscriptions.reverse_cancel(user)
+    end
+
+    test "no active subscription returns {:error, :no_active_subscription}" do
+      user = insert(:user)
+      assert {:error, :no_active_subscription} = Subscriptions.reverse_cancel(user)
+    end
+
+    test "Paddle error returns {:error, :paddle_unavailable}" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_err")
+
+      expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+        {:error, :http_500}
+      end)
+
+      assert {:error, :paddle_unavailable} = Subscriptions.reverse_cancel(user)
+    end
+  end
+
   describe "confirm_plan_change/2" do
     test "calls Paddle update with idempotency key + items" do
       user = insert(:user)
