@@ -161,7 +161,7 @@ def sync_user(ts, auth_provider):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-sync-{ts}@example.com"
+    email = f"e2e-sync-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     # Lift pricing v2 §G Free-tier defaults (api_rps_cap=0, api_write_enabled=false)
@@ -177,7 +177,7 @@ def isolation_user(ts, auth_provider):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-iso-{ts}@example.com"
+    email = f"e2e-iso-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)
@@ -489,10 +489,12 @@ def session_cleanup(request, auth_provider):
         auth_provider.cleanup_user(uid)
     # DB cleanup: scoped to THIS worker's users via the w{N} ts suffix
     # so a worker finishing early doesn't delete another worker's users
-    # mid-run. Emails look like e2e-sync-20260416...w{N}@example.com, so
-    # `%w{N}@example.com` matches only this worker's rows.
+    # mid-run. Emails look like e2e-sync-20260416...w{N}+clerk_test@example.com
+    # (the `+clerk_test` plus-tag tells Clerk dev to skip outbound email
+    # delivery — see docs/context/clerk-instance-swap-gaps.md), so
+    # `%w{N}+clerk_test@example.com` matches only this worker's rows.
     for domain in ("example.com", "test.local", "test.com"):
-        pattern = f"e2e-%w{_WORKER}@{domain}"
+        pattern = f"e2e-%w{_WORKER}+clerk_test@{domain}"
         try:
             cleanup_test_data(pattern)
         except Exception as e:

@@ -43,7 +43,7 @@ _P = "app.plugins.plugins['engram-vault-sync']"
 @pytest.fixture
 def test_email():
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"e2e-clerk-{ts}@example.com"
+    return f"e2e-clerk-{ts}+clerk_test@example.com"
 
 
 @pytest.fixture

@@ -34,7 +34,7 @@ async def provision_oauth_tokens(
     The label is used in the email prefix for log traceability.
     """
     ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    email = f"e2e-oauth-{label}-{ts}@example.com"
+    email = f"e2e-oauth-{label}-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
 
     clerk_user_id = clerk_client.create_user(email, password)

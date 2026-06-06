@@ -65,7 +65,7 @@ def _register_test_user(ts: int):
     in Engram via the real auth pipeline (Clerk JWT → find_or_create).
     """
     clerk_client = ClerkClient(CLERK_SECRET)
-    email = f"e2e-vault-iso-{ts}@example.com"
+    email = f"e2e-vault-iso-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
 
     clerk_user_id, clerk_auth, api_key = provision_clerk_user(

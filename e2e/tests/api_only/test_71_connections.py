@@ -167,7 +167,7 @@ def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
     `grant_test_plan(email)` themselves.
     """
     ts = _ts()
-    email = f"e2e-conn-{ts}@example.com"
+    email = f"e2e-conn-{ts}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
 
     clerk_user_id = clerk_client.create_user(email, password)
