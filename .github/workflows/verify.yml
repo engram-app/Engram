@@ -220,11 +220,18 @@ jobs:
       # default branch, so a PR run's marker (saved on `feat/foo`) was NEVER
       # visible to the subsequent `main` push triggered by squash-merge —
       # the merge re-ran full CI even though content was unchanged. The
-      # registry is ref-agnostic: a HEAD against /v2/ci-pass/manifests/<hash>
-      # returns 200 regardless of which branch pushed the tag.
+      # registry is ref-agnostic: a GET against /v2/ci-pass/manifests/<hash>
+      # returns the manifest regardless of which branch pushed the tag.
       #
       # No auth — registry is insecure HTTP, intra-LAN only, already trusted
       # by every runner's docker daemon (.github/setup-runner.sh).
+      #
+      # PROBE: GET the manifest body (not HEAD) and validate it parses as
+      # a Docker manifest (top-level `schemaVersion` key present). The
+      # FastRaid registry was previously found to return HTTP 200 for
+      # every path under /v2/ci-pass/manifests/, so a HEAD-only probe
+      # produced a universal false-positive cache hit. See engram-app/
+      # Engram#470 for the diagnostic that proved it.
       - name: Look up prior backend pass
         id: backend-lookup
         env:
@@ -235,9 +242,10 @@ jobs:
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if curl -fsS -o /dev/null --max-time 5 -I \
+          BODY=$(curl -s --max-time 5 \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "http://${LOCAL_REGISTRY}/v2/ci-pass/manifests/${BACKEND_HASH}"; then
+            "http://${LOCAL_REGISTRY}/v2/ci-pass/manifests/${BACKEND_HASH}" || true)
+          if printf '%s' "$BODY" | jq -e 'type=="object" and has("schemaVersion")' >/dev/null 2>&1; then
             echo "cache-hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -252,31 +260,14 @@ jobs:
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if curl -fsS -o /dev/null --max-time 5 -I \
+          BODY=$(curl -s --max-time 5 \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "http://${LOCAL_REGISTRY}/v2/ci-e2e-pass/manifests/${E2E_HASH}"; then
+            "http://${LOCAL_REGISTRY}/v2/ci-e2e-pass/manifests/${E2E_HASH}" || true)
+          if printf '%s' "$BODY" | jq -e 'type=="object" and has("schemaVersion")' >/dev/null 2>&1; then
             echo "cache-hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
           fi
-
-      # DIAGNOSTIC (PR #470): probe the registry with a deliberately-fake
-      # hash. If it returns 2xx, the cache lookup is broken (returns "hit"
-      # for any tag), explaining why our novel feature-branch hashes are
-      # mysteriously cached green. Remove this step once the registry
-      # behavior is confirmed.
-      - name: DIAGNOSTIC — probe fake hash
-        if: ${{ env.LOCAL_REGISTRY != '' }}
-        run: |
-          FAKE="0000000000000000000000000000000000000000000000000000000000000000"
-          REAL="${{ steps.compute.outputs.backend-hash }}"
-          for h in "$REAL" "$FAKE" "deadbeef" ""; do
-            label="${h:-EMPTY}"
-            code=$(curl -s -o /dev/null --max-time 5 -w "%{http_code}" -I \
-              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-              "http://${LOCAL_REGISTRY}/v2/ci-pass/manifests/${h}" || echo "curl-err")
-            echo "ci-pass/${label}: HTTP ${code}"
-          done
 
       - name: Report decision
         run: |
