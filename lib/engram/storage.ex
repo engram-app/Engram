@@ -46,6 +46,36 @@ defmodule Engram.Storage do
   """
   @callback sign_url(key :: String.t(), opts :: keyword()) :: String.t()
 
+  # ── Multipart upload ────────────────────────────────────────────────
+  #
+  # Used by `Engram.Accounts.Export.Streamer` to stream account-export
+  # archives into S3 without ever buffering a whole part in memory. The
+  # part list returned by `complete_multipart_upload/3` is a list of
+  # `%{part_number: integer, etag: binary}` maps in ascending part order.
+  #
+  # Selfhost adapters (`Database`) raise on the multipart calls —
+  # account export on selfhost streams bytes through the controller
+  # directly (see Task 22) and never goes through this code path.
+
+  @callback start_multipart(key :: String.t()) ::
+              {:ok, upload_id :: String.t()} | {:error, term()}
+
+  @callback upload_part(
+              key :: String.t(),
+              upload_id :: String.t(),
+              part_number :: pos_integer(),
+              chunk :: binary()
+            ) :: {:ok, etag :: String.t()} | {:error, term()}
+
+  @callback complete_multipart_upload(
+              key :: String.t(),
+              upload_id :: String.t(),
+              parts :: [map()]
+            ) :: :ok | {:error, term()}
+
+  @callback abort_multipart_upload(key :: String.t(), upload_id :: String.t()) ::
+              :ok | {:error, term()}
+
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 

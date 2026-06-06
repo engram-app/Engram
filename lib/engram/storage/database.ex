@@ -96,6 +96,31 @@ defmodule Engram.Storage.Database do
     raise "Engram.Storage.Database.sign_url/2 — selfhost storage cannot presign; stream via controller"
   end
 
+  # Multipart upload is an S3-only optimization used by
+  # `Engram.Accounts.Export.Streamer` for SaaS exports. Selfhost streams
+  # the archive through the controller directly (see Task 22) and never
+  # reaches these callbacks.
+
+  @impl true
+  def start_multipart(_key) do
+    raise "Engram.Storage.Database.start_multipart/1 — selfhost storage does not support multipart upload; stream via controller"
+  end
+
+  @impl true
+  def upload_part(_key, _upload_id, _part_number, _chunk) do
+    raise "Engram.Storage.Database.upload_part/4 — selfhost storage does not support multipart upload"
+  end
+
+  @impl true
+  def complete_multipart_upload(_key, _upload_id, _parts) do
+    raise "Engram.Storage.Database.complete_multipart_upload/3 — selfhost storage does not support multipart upload"
+  end
+
+  @impl true
+  def abort_multipart_upload(_key, _upload_id) do
+    raise "Engram.Storage.Database.abort_multipart_upload/2 — selfhost storage does not support multipart upload"
+  end
+
   @impl true
   def list_user_prefixes do
     %{rows: rows} =

@@ -112,6 +112,11 @@ defmodule Engram.MixProject do
       {:ex_aws_kms, "~> 2.4"},
       {:sweet_xml, "~> 0.7"},
 
+      # Streaming zip writer — used by Engram.Accounts.Export.Streamer to
+      # build account-export archives on the fly without buffering vault
+      # contents in memory.
+      {:zstream, "~> 0.6"},
+
       # Test
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},
