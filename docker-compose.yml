@@ -1,22 +1,24 @@
 # Engram self-host stack — canonical quickstart.
 #
-#   cp .env.example .env      # then fill in the three generated secrets
-#   docker compose up --build # first build compiles the release (~few min)
+#   cp .env.example .env       # fill in the three generated secrets at top
+#   docker compose up -d       # first build compiles the release (~few min)
 #
-# Only `engram` publishes a port to the host (4000). Postgres, Qdrant,
-# Ollama, and MinIO stay on the private `engram` network. The app runs
-# database migrations on boot (see entrypoint.sh) before serving.
+# Default = Ollama embeddings + Postgres bytea attachments. Only port 4000
+# is host-exposed; Postgres, Qdrant, and Ollama stay on the private network.
+# The app runs DB migrations on boot (see entrypoint.sh) before serving.
+#
+# For large vaults (videos, big PDFs, > ~10 GB attachments) switch to MinIO
+# for S3-style object storage:
+#
+#   1) In .env, set STORAGE_BACKEND=s3 and uncomment the STORAGE_* lines.
+#   2) Bring the stack up WITH the s3 profile so the MinIO container runs:
+#
+#        docker compose --profile s3 up -d
 #
 # Service-to-service addressing (DATABASE_URL, *_URL, STORAGE_HOST) is fixed
 # in `environment:` below because it must match the service names on this
 # network — do not move it to .env. Everything a self-hoster actually tunes
 # (secrets, embedding backend, storage creds) lives in .env.
-#
-# Minified stack (no MinIO): set STORAGE_BACKEND=database in .env to store
-# attachments in Postgres bytea, then delete/comment out the `minio` and
-# `minio-init` services below, the `minio_data` volume, the `minio-init`
-# entry under engram's `depends_on:`, and engram's STORAGE_SCHEME/HOST/PORT
-# environment lines. (Suited to modest vaults — see #297.)
 
 services:
   engram:
@@ -27,6 +29,7 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       QDRANT_URL: http://qdrant:6333
       OLLAMA_URL: http://ollama:11434
+      # S3 addressing — inert when STORAGE_BACKEND=database, correct when =s3.
       STORAGE_SCHEME: "http://"
       STORAGE_HOST: minio
       STORAGE_PORT: "9000"
@@ -39,8 +42,6 @@ services:
         condition: service_started
       ollama:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
       ollama-init:
         condition: service_completed_successfully
     healthcheck:
@@ -99,7 +100,9 @@ services:
     command: ["ollama pull nomic-embed-text"]
     restart: "no"
 
+  # MinIO — opt-in via `--profile s3`. Off by default.
   minio:
+    profiles: [s3]
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
@@ -115,8 +118,9 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # One-shot: create the attachments bucket, then exit.
+  # One-shot: create the attachments bucket, then exit. Opt-in with MinIO.
   minio-init:
+    profiles: [s3]
     image: minio/mc:latest
     depends_on:
       minio:

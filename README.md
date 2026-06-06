@@ -9,337 +9,65 @@
 
 Your notes are your AI's memory.
 
-The AI memory layer where your notes are the storage — markdown you and your AI assistants both read and write to via [MCP](https://modelcontextprotocol.io). Built with Elixir/Phoenix. Notes are stored in PostgreSQL with per-user AES-GCM encryption at rest, embedded into vectors via Voyage AI, and searched with semantic similarity through Qdrant.
+The AI memory layer where your notes are the storage — markdown you and your AI
+assistants both read and write to via [MCP](https://modelcontextprotocol.io).
+Built with Elixir/Phoenix. Pairs with the
+[Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin
+for real-time bidirectional sync.
 
-Pairs with the [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin for real-time bidirectional sync between Obsidian and the server via Phoenix Channels (WebSocket).
-
-## How It Works
-
-```
-                         +-----------------+
-                         |    Obsidian     |
-                         | (plugin: sync)  |
-                         +--------+--------+
-                                  |
-                    REST API (notes, attachments)
-                    WebSocket (Phoenix Channels)
-                                  |
-                         +--------v--------+
-                         |     Engram      |
-                         | (Elixir/Phoenix)|
-                         +--+---------+--+-+
-                            |         |  |
-                  +---------+    +----+  +--------+
-                  |              |                 |
-          +-------v------+ +----v-----+   +-------v-------+
-          |  PostgreSQL  | |  Qdrant  |   |   Voyage AI   |
-          |  (+ Oban)    | | (vectors)|   |  (embeddings) |
-          | notes, auth  | +----------+   +---------------+
-          | RLS isolation|
-          +--------------+
-```
-
-### Data Flow
-
-**Indexing** — when a note arrives:
-
-```
-POST /notes (or Channel push_note)
-    → store in PostgreSQL (immediate)
-    → broadcast to connected devices via PubSub
-    → queue Oban embedding job (5s debounce, dedup)
-        → parse markdown (Earmark AST, heading-aware chunking)
-        → contextualize (prepend folder/heading path)
-        → embed via Voyage AI (voyage-4-large, 1024d)
-        → upsert into Qdrant
-```
-
-**Search** — semantic similarity:
-
-```
-query → Voyage AI embed → Qdrant similarity search → top N results
-```
-
-### MCP Integration
-
-Any AI assistant that speaks MCP can query your vault:
-
-| Tool | Description |
-|------|-------------|
-| `search_notes(query, limit, tags)` | Semantic search across your vault |
-| `get_note(source_path)` | Fetch full note content |
-| `list_tags()` | All tags with document counts |
-| `list_folders()` | Folder tree with note counts |
-| `write_note(path, content)` | Update or create a note |
-| `create_note(title, content, suggested_folder)` | Auto-places in the best folder |
-| `suggest_folder(title, content)` | Suggests folder placement based on similar notes |
-
-## Architecture
-
-- **Elixir/Phoenix OTP app** — search, indexing, MCP, sync, and auth all in one supervised application
-- **Multi-tenant with RLS** — PostgreSQL Row-Level Security enforces tenant isolation at the database level
-- **Phoenix Channels** — bidirectional real-time sync over WebSocket with Presence for device tracking
-- **Async indexing via Oban** — embedding jobs are durable, deduplicated, and retried automatically
-- **Behaviour-based adapters** — swap embedding backends (Voyage AI / Ollama) without touching search logic
-- **No Redis required** — PubSub via Erlang distribution, caching via ETS
-
-## Self-Host
-
-Most operators should follow the **public docs** — they're more complete than this README and stay up-to-date with each release:
-
-- **[Quickstart](https://engram.page/docs/self-host/quickstart/)** — Docker Compose install, fewest steps to a running instance
-- **[Environment Variables](https://engram.page/docs/self-host/environment-variables/)** — full env reference
-- **[Encryption Setup](https://engram.page/docs/self-host/encryption/)** — master-key management, rotation, recovery
-- **[Backup & Restore](https://engram.page/docs/self-host/backup-restore/)** — what to back up, how to restore
-- **[Upgrade Path](https://engram.page/docs/self-host/upgrade/)** — moving between Engram versions safely
-- **[Troubleshooting](https://engram.page/docs/self-host/troubleshooting/)** — Qdrant unreachable, encryption-key errors, port conflicts, MinIO password
-- **[Why Self-Host](https://engram.page/docs/self-host/why-self-host/)** — when self-hosting makes sense
-
-### Quickstart (Docker Compose)
-
-Three preset stacks ship in the repo. Pick the one that matches what you want:
-
-| You want | Copy | Run |
-|---|---|---|
-| Default — Ollama embeds + MinIO attachments (no API keys) | `cp .env.example .env` | `docker compose up --build` |
-| Smaller — Ollama embeds + Postgres-bytea attachments (drops MinIO, #297) | `cp .env.lite.example .env` | `docker compose -f docker-compose.lite.yml up --build` |
-| Better embeds — Voyage API + MinIO attachments (needs a Voyage key) | `cp .env.voyage.example .env` | `docker compose -f docker-compose.voyage.yml up --build` |
-
-After copying, open `.env` and fill in the three generated secrets:
+## Self-Host (Docker Compose)
 
 ```bash
-openssl rand -base64 48   # SECRET_KEY_BASE
-openssl rand -base64 48   # JWT_SECRET
-openssl rand -base64 32   # ENCRYPTION_MASTER_KEY  (back this up!)
+git clone https://github.com/engram-app/Engram.git
+cd Engram
+cp .env.example .env       # then fill in the three secrets at the top
+docker compose up -d
 ```
 
-The app comes up on `http://localhost:4000`. Only port 4000 is host-exposed; Postgres, Qdrant, Ollama (if present), and MinIO (if present) stay on the private Docker network. Migrations run automatically on boot.
+App at <http://localhost:4000>. Migrations run on boot. Only port 4000 is
+host-exposed; everything else stays on the private Docker network.
 
-**License:** Engram self-host is **PolyForm Small Business 1.0.0** — free for organizations with ≤ $1M/year in revenue/funding. Larger orgs need a commercial license (`support@engram.page`). See [`LICENSE`](./LICENSE) for the full terms + manual CLA flow for external contributors.
+**Large vaults?** Enable MinIO for S3-style attachments:
+`docker compose --profile s3 up -d` — see
+[storage docs](https://engram.page/docs/self-host/environment-variables/#storage).
 
-**Security:** see [`SECURITY.md`](./SECURITY.md) for vuln disclosure. Self-host LAN deployments are out of scope of our published SLA — security depends on the operator's network and infra.
+**Better embeddings?** Switch to Voyage AI in `.env` — see
+[embeddings docs](https://engram.page/docs/self-host/environment-variables/#embeddings).
 
-The **Development Quick Start** below is for people *contributing to Engram itself* — not for running a production self-host instance.
+### Full self-host documentation
 
-## Development Quick Start
+| Topic | Link |
+|---|---|
+| Quickstart           | <https://engram.page/docs/self-host/quickstart/> |
+| Environment vars     | <https://engram.page/docs/self-host/environment-variables/> |
+| Encryption & keys    | <https://engram.page/docs/self-host/encryption/> |
+| Backup & restore     | <https://engram.page/docs/self-host/backup-restore/> |
+| Upgrades             | <https://engram.page/docs/self-host/upgrade/> |
+| Troubleshooting      | <https://engram.page/docs/self-host/troubleshooting/> |
+| Architecture         | <https://engram.page/docs/self-host/architecture/> |
+| MCP setup            | <https://engram.page/docs/mcp/> |
+| HTTP API             | <https://engram.page/docs/api/> |
 
-### Prerequisites
+## Contributing
 
-- Elixir 1.17+ and Erlang/OTP 27+
-- PostgreSQL 16+
-- [Qdrant](https://qdrant.tech) running locally or Qdrant Cloud
-
-### 1. Setup
-
-```bash
-mix deps.get
-mix ecto.setup            # Create DB + run migrations + seeds
-bash scripts/install-hooks.sh  # One-time: enables pre-push version-bump check
-```
-
-### 2. Configure
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` — key variables:
-
-```bash
-DATABASE_URL=postgresql://engram:engram@localhost:5432/engram
-EMBED_BACKEND=ollama              # or "voyage" for SaaS
-EMBED_MODEL=nomic-embed-text      # or "voyage-4-large"
-EMBED_DIMS=768                    # or 1024 for Voyage
-QDRANT_URL=http://localhost:6333
-JWT_SECRET=some-random-string-at-least-32-chars
-```
-
-See `docs/context/environment-variables.md` for the full list.
-
-### 3. Start
-
-```bash
-mix phx.server    # http://localhost:4000
-```
-
-Or with Docker:
-
-```bash
-docker compose -f docker-compose.elixir.yml up --build
-```
-
-### 4. Register & Create API Key
-
-```bash
-# Register
-curl -X POST http://localhost:4000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com", "password": "your-password"}'
-
-# Login
-TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com", "password": "your-password"}' \
-  | jq -r '.token')
-
-# Create API key
-curl -X POST http://localhost:4000/api/api-keys \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-key"}'
-```
-
-Save the returned API key — it starts with `engram_` and is only shown once.
-
-### 5. Push a Note
-
-```bash
-curl -X POST http://localhost:4000/api/notes \
-  -H "Authorization: Bearer engram_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "path": "Notes/Hello World.md",
-    "content": "# Hello World\n\nThis is my first note.",
-    "mtime": 1709234567.0
-  }'
-```
-
-### 6. Search
-
-```bash
-curl -X POST http://localhost:4000/api/search \
-  -H "Authorization: Bearer engram_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "hello", "limit": 5}'
-```
-
-### 7. Connect the Obsidian Plugin
-
-Install [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) via BRAT, then configure:
-
-- **Server URL**: `http://your-server:4000`
-- **API Key**: your `engram_` key
-
-The plugin handles full vault sync, live WebSocket updates, offline queueing, and conflict resolution.
-
-## MCP Configuration
-
-### Claude Code
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "sse",
-      "url": "http://your-server:4000/api/mcp",
-      "headers": {
-        "Authorization": "Bearer engram_your_key_here"
-      }
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "url": "http://your-server:4000/api/mcp",
-      "transport": "sse",
-      "headers": {
-        "Authorization": "Bearer engram_your_key_here"
-      }
-    }
-  }
-}
-```
-
-## API Reference
-
-### Notes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/notes` | Upsert a note (creates or updates, triggers async indexing) |
-| `GET` | `/api/notes/{path}` | Get full note by path |
-| `DELETE` | `/api/notes/{path}` | Soft-delete a note |
-| `GET` | `/api/notes/changes?since=<timestamp>` | Notes changed since timestamp (for sync) |
-
-### Search
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/search` | Semantic search with optional tag/folder filtering |
-| `GET` | `/api/tags` | All tags with document counts |
-| `GET` | `/api/folders` | Folder tree with note counts |
-
-### Attachments
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/attachments` | Upsert binary file (base64-encoded) |
-| `GET` | `/api/attachments/{path}` | Get attachment |
-| `DELETE` | `/api/attachments/{path}` | Soft-delete attachment |
-| `GET` | `/api/attachments/changes?since=<timestamp>` | Attachment changes (for sync) |
-| `GET` | `/api/user/storage` | Storage usage stats |
-
-### Auth
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/auth/register` | Register a new user (when `AUTH_PROVIDER=local`) |
-| `POST` | `/api/auth/login` | Login, returns JWT |
-| `POST` | `/api/api-keys` | Create an API key (JWT auth) |
-| `DELETE` | `/api/api-keys/{id}` | Revoke an API key |
-| `GET` | `/api/api-keys` | List API keys |
-
-### Real-time Sync
-
-| Protocol | Endpoint | Description |
-|----------|----------|-------------|
-| WebSocket | `/socket/websocket` | Phoenix Channel — join `sync:{user_id}` for bidirectional sync |
-
-### System
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/health` | Liveness check |
-| `GET` | `/api/health/deep` | Checks PostgreSQL, Qdrant, embedding backend |
-
-All endpoints except `/api/health`, `/api/auth/register`, and `/api/auth/login` require `Authorization: Bearer <api_key>` header.
-
-## Testing
-
-```bash
-# Unit tests
-mix test
-
-# E2E sync tests (requires Docker Compose stack + Obsidian)
-python3 -m pytest e2e/tests/ -v
-```
-
-See `docs/context/testing-strategy.md` for the full testing strategy.
-
-## Production Deployment
-
-SaaS production (`app.engram.page`) is operator-internal — infrastructure-as-code, secrets, and deploy pipeline live in a private repo. For self-hosting, see the **Self-Host** section above and the [public docs](https://engram.page/docs/self-host/).
+Local dev setup, tests, and PR rules: see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-Engram is **dual-licensed**.
-
-- For individuals and organizations that satisfy the Small Business clause
-  (fewer than 100 total employees + contractors, and less than $1M USD
-  inflation-adjusted revenue in the prior tax year), the source code is
-  available under the [PolyForm Small Business License 1.0.0](LICENSE).
-- For all other organizations, a separate commercial license is required.
-  See [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md) or email
+Dual-licensed:
+- **[PolyForm Small Business 1.0.0](./LICENSE)** — free for organizations
+  under $1M USD prior-year revenue and < 100 employees + contractors.
+- **Commercial License** — required for larger orgs. See
+  [LICENSE-COMMERCIAL.md](./LICENSE-COMMERCIAL.md) or email
   `support@engram.page`.
 
-Contributions are accepted under the
-[Engram Contributor License Agreement](.github/CLA.md). See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+External contributions sign the [Engram CLA](./.github/CLA.md). See
+[CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for vulnerability disclosure. Self-host LAN
+deployments are out of scope of our published SLA — security depends on the
+operator's network and infra.
 
 Copyright (c) 2026 Rasbandit Software Solutions LLC d/b/a Engram.

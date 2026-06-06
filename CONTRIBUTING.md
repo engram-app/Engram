@@ -49,10 +49,91 @@ A maintainer will record your signature and proceed with review.
 > 2023. Choosing tooling against a moving landscape was deferred until a
 > real signal exists.
 
-## Development setup
+## Local development
 
-See [README.md](README.md) "Quick Start" for local environment setup, and
-[CLAUDE.md](CLAUDE.md) for architecture and workflow details.
+For running Engram against a local stack (Postgres + Qdrant + Ollama)
+without Docker — i.e. you're hacking on the app itself.
+
+### Prerequisites
+
+- Elixir 1.17+ and Erlang/OTP 27+
+- PostgreSQL 16+
+- [Qdrant](https://qdrant.tech) running locally or Qdrant Cloud
+- [Ollama](https://ollama.com) (optional — only if running embeddings locally;
+  the alternative is `EMBED_BACKEND=voyage` with a Voyage API key)
+
+### Setup
+
+```bash
+mix deps.get
+mix ecto.setup                  # create DB + migrations + seeds
+bash scripts/install-hooks.sh   # one-time: enables pre-push version check
+```
+
+### Configure
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`. Minimum for local dev:
+
+```bash
+DATABASE_URL=postgresql://engram:engram@localhost:5432/engram
+EMBED_BACKEND=ollama
+EMBED_MODEL=nomic-embed-text
+EMBED_DIMS=768
+QDRANT_URL=http://localhost:6333
+JWT_SECRET=some-random-string-at-least-32-chars
+SECRET_KEY_BASE=$(openssl rand -base64 48)
+ENCRYPTION_MASTER_KEY=$(openssl rand -base64 32)
+PHX_HOST=localhost
+PHX_SCHEME=http
+PHX_PORT=4000
+```
+
+Full env reference: <https://engram.page/docs/self-host/environment-variables/>.
+
+### Start
+
+```bash
+mix phx.server   # http://localhost:4000
+```
+
+### Smoke-test the dev server
+
+Register, log in, create an API key, push a note, search:
+
+```bash
+# Register
+curl -X POST http://localhost:4000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "your-password"}'
+
+# Login → JWT
+TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "your-password"}' \
+  | jq -r '.token')
+
+# Create API key
+curl -X POST http://localhost:4000/api/api-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "dev-key"}'
+```
+
+Save the `engram_…` API key — only shown once.
+
+### Tests
+
+```bash
+mix test                                    # unit tests
+python3 -m pytest e2e/tests/ -v             # E2E (needs CI stack + Obsidian)
+```
+
+See `docs/context/testing-strategy.md` for the full testing strategy and
+`CLAUDE.md` for architecture and workflow details.
 
 ## Pull request expectations
 
