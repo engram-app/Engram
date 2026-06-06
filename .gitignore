@@ -1,6 +1,5 @@
-# Environment (keep .env.elixir.example as canonical template)
+# Environment (keep .env.example as canonical template)
 .env*
-!.env.elixir.example
 
 # Python (benchmarks, e2e)
 __pycache__/
@@ -42,8 +41,6 @@ priv/static/app/
 
 .env*
 !.env.example
-!.env.lite.example
-!.env.voyage.example
 frontend/.vite/
 .worktrees/
 
