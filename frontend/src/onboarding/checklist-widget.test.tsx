@@ -277,3 +277,22 @@ describe('ChecklistWidget — hide when empty', () => {
     expect(container).toBeEmptyDOMElement()
   })
 })
+
+describe('ChecklistWidget — chrome', () => {
+  it('shows the Waypoints FAB when collapsed', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    // Header × → collapse to FAB
+    fireEvent.click(screen.getByLabelText(/dismiss checklist/i))
+    expect(screen.getByLabelText(/open onboarding checklist/i)).toBeInTheDocument()
+  })
+
+  it('renders a progress readout showing completed vs total', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude', 'cursor'] }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    // vault + tour + claude + cursor = 4 items, none done.
+    expect(screen.getByText(/0 of 4 done/i)).toBeInTheDocument()
+  })
+})
