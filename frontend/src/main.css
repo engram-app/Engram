@@ -302,34 +302,34 @@ html {
    rather than the HSL approach which would silently fail to render. */
 @keyframes checklist-shimmer {
   0%   { background-position: -200% 0; }
-  35%  { background-position: 200% 0; }
+  70%  { background-position: 200% 0; }
   100% { background-position: 200% 0; }
 }
 
 @keyframes fab-ring-pulse {
-  0%, 75%, 100% {
+  0%, 60%, 100% {
     box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0);
   }
-  78% {
+  65% {
     box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0.35);
   }
-  90% {
+  86% {
     box-shadow: 0 0 0 14px oklch(from var(--primary) l c h / 0);
   }
 }
 
 @layer utilities {
   /* Slow shimmer for the checklist header. The gradient is intentionally
-     low-contrast to avoid reading as "loading skeleton". One pass per
-     12 seconds — frequent enough to catch the eye, rare enough not to
-     annoy. */
+     low-contrast to avoid reading as "loading skeleton". Cycle: ~7s sweep
+     + ~3s idle = 10s total, so the eye-catch fires every ~10s. */
   .animate-checklist-shimmer {
-    animation: checklist-shimmer 18s ease-in-out infinite;
+    animation: checklist-shimmer 10s ease-in-out infinite;
   }
 
-  /* Infrequent ring pulse on the collapsed FAB. Fires ~once per 20s
-     cycle (active ~3.5s, idle ~16.5s) so the FAB is mostly still. */
+  /* Ring pulse on the collapsed FAB. Cycle: ~3.6s active + ~10.4s idle =
+     14s total. Frequent enough to catch the eye on a closed FAB, slow
+     enough on the active sweep to not feel busy. */
   .animate-fab-ring-pulse {
-    animation: fab-ring-pulse 28s ease-out infinite;
+    animation: fab-ring-pulse 14s ease-out infinite;
   }
 }
