@@ -333,3 +333,10 @@ html {
     animation: fab-ring-pulse 14s ease-out infinite;
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-checklist-shimmer,
+  .animate-fab-ring-pulse {
+    animation: none;
+  }
+}
