@@ -81,4 +81,59 @@ defmodule Engram.Accounts.ExportTest do
       assert {:error, :already_running} = Export.request(user)
     end
   end
+
+  describe "list/2" do
+    test "returns most-recent first within limit" do
+      user = insert(:user)
+      older_ts = DateTime.utc_now() |> DateTime.add(-7200, :second)
+      newer_ts = DateTime.utc_now() |> DateTime.add(-600, :second)
+
+      older = insert_export!(user, :ready, inserted_at: older_ts)
+      newer = insert_export!(user, :ready, inserted_at: newer_ts)
+
+      [first, second] = Export.list(user, 10)
+      assert first.id == newer.id
+      assert second.id == older.id
+    end
+
+    test "respects limit" do
+      user = insert(:user)
+
+      for i <- 1..15 do
+        insert_export!(user, :ready,
+          inserted_at: DateTime.add(DateTime.utc_now(), -i * 60, :second)
+        )
+      end
+
+      assert length(Export.list(user, 5)) == 5
+    end
+
+    test "scoped to caller — cross-user isolation" do
+      a = insert(:user)
+      b = insert(:user)
+      _b_export = insert_export!(b, :ready)
+      assert Export.list(a) == []
+    end
+  end
+
+  describe "get/2" do
+    test "returns {:ok, export} for owner" do
+      user = insert(:user)
+      e = insert_export!(user, :ready)
+      assert {:ok, %Schema{id: id}} = Export.get(user, e.id)
+      assert id == e.id
+    end
+
+    test "returns {:error, :not_found} for non-owner" do
+      a = insert(:user)
+      b = insert(:user)
+      export = insert_export!(b, :ready)
+      assert {:error, :not_found} = Export.get(a, export.id)
+    end
+
+    test "returns {:error, :not_found} for unknown id" do
+      user = insert(:user)
+      assert {:error, :not_found} = Export.get(user, 999_999_999)
+    end
+  end
 end

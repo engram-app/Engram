@@ -23,6 +23,26 @@ defmodule Engram.Accounts.Export do
   # streaming worker re-checks the real size against the cap as it writes.
   @note_overhead_bytes 4_096
 
+  @spec list(User.t(), pos_integer()) :: [Schema.t()]
+  def list(%User{} = user, limit \\ 10) do
+    Repo.all(
+      from(e in Schema,
+        where: e.user_id == ^user.id,
+        order_by: [desc: e.inserted_at],
+        limit: ^limit
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  @spec get(User.t(), integer()) :: {:ok, Schema.t()} | {:error, :not_found}
+  def get(%User{} = user, export_id) do
+    case Repo.get_by(Schema, [id: export_id, user_id: user.id], skip_tenant_check: true) do
+      nil -> {:error, :not_found}
+      %Schema{} = export -> {:ok, export}
+    end
+  end
+
   @spec request(User.t()) :: {:ok, Schema.t()} | {:error, atom()}
   def request(%User{} = user) do
     with :ok <- rate_limit_check(user),
