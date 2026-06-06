@@ -374,18 +374,14 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
                   </Button>
                 )}
               </div>
-              {/* Tertiary escape hatch: if the inline panels fail for any
-                  reason (Paddle UI bug, network blip, an action we don't
-                  yet support inline) the user can still self-serve through
-                  Paddle's hosted portal. Worded so the relationship is
-                  obvious — Paddle, not us, is the payment processor. */}
-              <button
-                type="button"
-                onClick={() => openPortal()}
-                className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              >
-                Or manage payment directly in Paddle, our payment processor
-              </button>
+              {/* Escape hatch: if the inline panels fail (Paddle UI bug,
+                  network blip, an action we don't yet support inline) the
+                  user can still self-serve through Paddle's hosted portal.
+                  Worded so the relationship is obvious — Paddle, not us,
+                  is the payment processor. */}
+              <Button variant="outline" onClick={() => openPortal()}>
+                Manage payment in Paddle (our payment processor)
+              </Button>
             </section>
           )}
           {panel === 'change' && (
