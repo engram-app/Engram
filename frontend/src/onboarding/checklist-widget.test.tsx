@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ChecklistWidget } from './checklist-widget'
+import type { useOnboardingActions } from './use-onboarding-actions'
+import type { OnboardingAction } from '../api/queries'
 
-let onboardingActionsValue = {
+let onboardingActionsValue: ReturnType<typeof useOnboardingActions> = {
   isLoading: false,
   vaultCount: 1,
-  has: (a: string) => a === 'first_vault_created',
+  has: (a: OnboardingAction) => a === 'first_vault_created',
   hasTourDecision: true,
   record: vi.fn(),
   recordAsync: vi.fn(),
