@@ -25,9 +25,14 @@ services:
     build:
       context: .
       args:
-        NODE_IMAGE: ${LOCAL_REGISTRY:-docker.io}/node:20-slim
-        BUILDER_IMAGE: ${LOCAL_REGISTRY:-docker.io}/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
-        RUNNER_IMAGE: ${LOCAL_REGISTRY:-docker.io}/debian:bookworm-20241202-slim
+        # Bare image refs; the runner's HTTPS_PROXY config caches via FastRaid
+        # (rpardini docker-registry-proxy at 10.0.20.214:5000) transparently —
+        # see docs/context/runner-vm-setup.md Gotcha #6. Prefixing with
+        # ${LOCAL_REGISTRY} treats the proxy as a registry mirror, which it is
+        # not, and BuildKit fails with "unexpected media type / not found".
+        NODE_IMAGE: node:20-slim
+        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
+        RUNNER_IMAGE: debian:bookworm-20241202-slim
     ports:
       - "${CI_ENGRAM_PORT:-8100}:4000"
     environment:
@@ -94,7 +99,7 @@ services:
     restart: "no"
 
   postgres:
-    image: ${LOCAL_REGISTRY:-docker.io}/postgres:16-alpine
+    image: postgres:16-alpine
     ports:
       - "${CI_PG_PORT:-5433}:5432"
     environment:
@@ -109,7 +114,7 @@ services:
     restart: "no"
 
   minio:
-    image: ${LOCAL_REGISTRY:-docker.io}/minio/minio:latest
+    image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -122,7 +127,7 @@ services:
     restart: "no"
 
   minio-init:
-    image: ${LOCAL_REGISTRY:-docker.io}/minio/mc:latest
+    image: minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy

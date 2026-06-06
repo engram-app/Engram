@@ -1,5 +1,7 @@
 # Engram
 
+![Engram — your notes are your AI's memory, synced everywhere and read by your AI](assets/vault-banner.gif)
+
 [![Verify](https://github.com/engram-app/Engram/actions/workflows/verify.yml/badge.svg)](https://github.com/engram-app/Engram/actions/workflows/verify.yml)
 [![Last commit](https://img.shields.io/github/last-commit/engram-app/Engram)](https://github.com/engram-app/Engram/commits/main)
 [![Stars](https://img.shields.io/github/stars/engram-app/Engram?style=flat)](https://github.com/engram-app/Engram/stargazers)
@@ -16,6 +18,13 @@ Built with Elixir/Phoenix. Pairs with the
 for real-time bidirectional sync.
 
 ## Self-Host (Docker Compose)
+
+**Don't want to run the commands yourself?** Open the
+[Quickstart docs](https://engram.page/docs/self-host/quickstart/), select
+the whole page, and paste it into your AI assistant — it's written
+top-to-bottom as imperatives the AI can execute in order.
+
+Otherwise:
 
 ```bash
 git clone https://github.com/engram-app/Engram.git
