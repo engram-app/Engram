@@ -77,7 +77,7 @@ defmodule Engram.Accounts.Lifecycle do
   user-initiated / Clerk-driven / inactivity sweeps without inferring.
   """
   @spec hard_delete(User.t(), reason()) :: :ok
-  def hard_delete(%User{} = user, reason \\ :user) do
+  def hard_delete(%User{} = user, reason) do
     case Repo.get(User, user.id, skip_tenant_check: true) do
       nil -> :ok
       live_user -> do_hard_delete(live_user, reason)

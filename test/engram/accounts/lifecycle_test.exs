@@ -217,45 +217,39 @@ defmodule Engram.Accounts.LifecycleTest do
 
     test "S3 prefix delete retries once on first failure, continues on second" do
       user = insert(:user, external_id: nil)
-
-      # Stash the user_id before swapping adapter
       user_id = user.id
-      test_pid = self()
 
-      defmodule FlakyStorage do
-        @behaviour Engram.Storage
+      # Swap default InMemory for MockStorage so we can assert call counts
+      # without leaking a module into the global VM namespace.
+      Application.put_env(:engram, :storage, Engram.MockStorage)
 
-        def put(_, _, _), do: :ok
-        def get(_), do: {:error, :not_found}
-        def delete(_), do: :ok
-        def exists?(_), do: false
-        def list_user_prefixes, do: {:ok, []}
+      # Two prefixes ("#{user_id}/" + "exports/#{user_id}/") × 2 calls each
+      # (initial + retry) = 4 total delete_prefix invocations, all failing.
+      expect(Engram.MockStorage, :delete_prefix, 4, fn _prefix ->
+        {:error, :s3_down}
+      end)
 
-        def delete_prefix(prefix) do
-          n = :ets.update_counter(:flaky_storage_calls, prefix, {2, 1}, {prefix, 0})
-          send(:flaky_storage_listener, {:flaky_call, prefix, n})
-          {:error, :s3_down}
-        end
-      end
+      assert :ok = Lifecycle.hard_delete(user, :user)
+      refute Repo.get(User, user_id, skip_tenant_check: true)
+    end
 
-      :ets.new(:flaky_storage_calls, [:public, :named_table, :set])
-      Process.register(test_pid, :flaky_storage_listener)
+    test "S3 prefix delete succeeds on retry after first failure" do
+      user = insert(:user, external_id: nil)
+      user_id = user.id
 
-      try do
-        Application.put_env(:engram, :storage, FlakyStorage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
 
-        assert :ok = Lifecycle.hard_delete(user, :user)
-        refute Repo.get(User, user_id, skip_tenant_check: true)
+      # First call fails, retry succeeds — per prefix. Two prefixes = 4 calls,
+      # alternating fail/ok.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
 
-        # Each of the two prefixes ("#{user_id}/" and "exports/#{user_id}/")
-        # should be called exactly twice (one initial + one retry).
-        assert_received {:flaky_call, _, 1}
-        assert_received {:flaky_call, _, 2}
-      after
-        Application.put_env(:engram, :storage, InMemory)
-        Process.unregister(:flaky_storage_listener)
-        :ets.delete(:flaky_storage_calls)
-      end
+      expect(Engram.MockStorage, :delete_prefix, 4, fn _prefix ->
+        n = Agent.get_and_update(counter, fn s -> {s + 1, s + 1} end)
+        if rem(n, 2) == 1, do: {:error, :s3_down}, else: {:ok, 0}
+      end)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+      refute Repo.get(User, user_id, skip_tenant_check: true)
     end
 
     test "idempotent: second call after Repo.delete is :ok and no-op" do
