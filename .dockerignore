@@ -18,3 +18,4 @@ docs
 # plaintext DEKs / master key from process heap at the moment of crash.
 erl_crash.dump
 **/erl_crash.dump
+# marker-smoke 2026-06-06
