@@ -27,6 +27,16 @@ config :engram, EngramWeb.Endpoint,
 # Phoenix can't validate. Channel auth (JWT) is the real security boundary.
 config :engram, :websocket_check_origin, false
 
+# PromEx — collects BEAM / Phoenix / Ecto / Oban metrics for the Prom-format
+# /metrics endpoint scraped by the Grafana Agent sidecar in prod. We disable
+# the bundled metrics_server (we mount via the router with bearer auth) and
+# Grafana dashboard uploads (managed via Terraform-as-code, not runtime).
+config :engram, Engram.PromEx,
+  manual_metrics_start_delay: :no_delay,
+  drop_metrics_groups: [],
+  grafana: :disabled,
+  metrics_server: :disabled
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 

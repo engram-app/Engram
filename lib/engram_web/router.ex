@@ -18,6 +18,15 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireAdmin
   end
 
+  # Internal scrape pipeline for the PromEx /metrics endpoint. Fails closed
+  # via shared bearer token (see EngramWeb.Plugs.MetricsAuth) so the route
+  # is safe even though the path is publicly reachable through the ALB —
+  # the Grafana Agent sidecar is the only legitimate caller.
+  pipeline :metrics_internal do
+    plug :accepts, ["text"]
+    plug EngramWeb.Plugs.MetricsAuth
+  end
+
   pipeline :oauth_api do
     plug :accepts, ["json"]
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
@@ -50,6 +59,14 @@ defmodule EngramWeb.Router do
 
   defp put_csp_header(conn, _opts) do
     Plug.Conn.put_resp_header(conn, "content-security-policy", EngramWeb.CSP.header())
+  end
+
+  # PromEx Prometheus scrape endpoint. Bearer-auth guarded; the
+  # Grafana Agent sidecar in the prod ECS task is the only legitimate
+  # caller. Token is set via :metrics_auth_token in runtime.exs.
+  scope "/" do
+    pipe_through :metrics_internal
+    forward "/metrics", PromEx.Plug, prom_ex_module: Engram.PromEx
   end
 
   # Paddle webhooks — no auth, raw body for signature verification

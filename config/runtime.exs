@@ -597,6 +597,15 @@ if config_env() == :prod do
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
 
+# Bearer token guarding the PromEx /metrics scrape endpoint. The Grafana
+# Agent sidecar (engram-infra observability.tf) injects the same token
+# from SOPS-encrypted prod secrets (`metrics_auth_token`). The plug
+# (EngramWeb.Plugs.MetricsAuth) fails closed when this is unset, so dev
+# and self-host implicitly disable the endpoint without code changes.
+if token = System.get_env("METRICS_AUTH_TOKEN") do
+  config :engram, :metrics_auth_token, token
+end
+
 # Sentry error reporting. No-op when SENTRY_DSN is unset (dev/test
 # and self-host), so the only thing needed to opt in is setting the
 # env var. SaaS prod injects it via ECS SSM SecureString sourced from
