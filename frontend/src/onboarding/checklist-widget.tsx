@@ -59,7 +59,8 @@ export function ChecklistWidget({ onStartTour }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const ob = useOnboardingActions()
   const status = useOnboardingStatus()
-  const connections = useConnections()
+  const profile = status.data?.profile
+  const connections = useConnections({ enabled: !!profile?.uses_obsidian })
   const qc = useQueryClient()
 
   if (ob.isLoading) return null
@@ -92,7 +93,6 @@ export function ChecklistWidget({ onStartTour }: Props) {
     })
   }
 
-  const profile = status.data?.profile
   const tools = (profile?.tools ?? []).filter((t) => t !== 'web_only')
   const isDismissed = (key: string) => dismissed.has(key)
   const hasObsidianConnection = (connections.data ?? []).some((c) => c.kind === 'obsidian')

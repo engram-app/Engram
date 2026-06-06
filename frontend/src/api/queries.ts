@@ -593,10 +593,11 @@ export interface PatDisabledErrorBody {
   upgrade_url: string
 }
 
-export function useConnections() {
+export function useConnections(opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['connections'],
     queryFn: () => api.get<Connection[]>('/connections'),
+    enabled: opts?.enabled ?? true,
   })
 }
 
