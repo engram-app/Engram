@@ -1,5 +1,12 @@
 # Engram
 
+[![Verify](https://github.com/engram-app/Engram/actions/workflows/verify.yml/badge.svg)](https://github.com/engram-app/Engram/actions/workflows/verify.yml)
+[![Last commit](https://img.shields.io/github/last-commit/engram-app/Engram)](https://github.com/engram-app/Engram/commits/main)
+[![Stars](https://img.shields.io/github/stars/engram-app/Engram?style=flat)](https://github.com/engram-app/Engram/stargazers)
+[![License](https://img.shields.io/badge/license-PolyForm_SB_1.0-blue)](LICENSE)
+[![Sponsor](https://img.shields.io/github/sponsors/engram-app?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/engram-app)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/engrams_sync)
+
 Your notes are your AI's memory.
 
 The AI memory layer where your notes are the storage — markdown you and your AI assistants both read and write to via [MCP](https://modelcontextprotocol.io). Built with Elixir/Phoenix. Notes are stored in PostgreSQL with per-user AES-GCM encryption at rest, embedded into vectors via Voyage AI, and searched with semantic similarity through Qdrant.
