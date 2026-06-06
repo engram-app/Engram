@@ -469,6 +469,13 @@ if config_env() == :prod do
   # See Engram.SpaIntegrity and docs/context/docker-build-cache-pitfalls.md.
   config :engram, :spa_integrity_check_enabled, true
 
+  # Telemetry/log HMAC key for hashing user ids in metric labels + logs.
+  # Distinct from any encryption key; required in prod so user identifiers
+  # never leak in plaintext through observability surfaces.
+  config :engram,
+         :hmac_key_user_id,
+         System.fetch_env!("TELEMETRY_HMAC_KEY_USER_ID")
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

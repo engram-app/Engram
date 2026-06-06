@@ -134,6 +134,12 @@ config :engram, :boot_canary_enabled, true
 # SaaS prod flips to :redis in runtime.exs when REDIS_URL is set (cluster-shared).
 config :engram, EngramWeb.RateLimiter, backend: :ets
 
+# Telemetry/log HMAC key for hashing user ids (Engram.Crypto.HMAC).
+# Throwaway default for dev/test; prod overrides via runtime.exs from a
+# high-entropy secret. NOT an encryption key — used only to obscure user
+# identifiers in metric labels and log lines.
+config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
+
 # Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
 # including the no-DSN dev/test case if a future test exercises a Sentry stub.
 # DSN, release tag, environment_name, and source-context flags live in
