@@ -55,8 +55,12 @@ function loadDismissed(): Set<string> {
     if (legacy) {
       const arr = JSON.parse(legacy)
       if (Array.isArray(arr)) arr.forEach((s) => merged.add(String(s)))
-      window.localStorage.removeItem(LEGACY_DISMISSED_LS_KEY)
-      window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...merged]))
+      try {
+        window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...merged]))
+        window.localStorage.removeItem(LEGACY_DISMISSED_LS_KEY)
+      } catch {
+        /* setItem failed — preserve legacy key for next attempt */
+      }
     }
   } catch {
     /* ignore */
@@ -66,7 +70,11 @@ function loadDismissed(): Set<string> {
 
 function persistDismissed(set: Set<string>) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...set]))
+  try {
+    window.localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify([...set]))
+  } catch {
+    /* localStorage may be unavailable (Safari private mode, quota) — best-effort persist */
+  }
 }
 
 const TOOL_LABELS: Record<string, string> = {
