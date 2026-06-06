@@ -260,6 +260,24 @@ jobs:
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # DIAGNOSTIC (PR #470): probe the registry with a deliberately-fake
+      # hash. If it returns 2xx, the cache lookup is broken (returns "hit"
+      # for any tag), explaining why our novel feature-branch hashes are
+      # mysteriously cached green. Remove this step once the registry
+      # behavior is confirmed.
+      - name: DIAGNOSTIC — probe fake hash
+        if: ${{ env.LOCAL_REGISTRY != '' }}
+        run: |
+          FAKE="0000000000000000000000000000000000000000000000000000000000000000"
+          REAL="${{ steps.compute.outputs.backend-hash }}"
+          for h in "$REAL" "$FAKE" "deadbeef" ""; do
+            label="${h:-EMPTY}"
+            code=$(curl -s -o /dev/null --max-time 5 -w "%{http_code}" -I \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "http://${LOCAL_REGISTRY}/v2/ci-pass/manifests/${h}" || echo "curl-err")
+            echo "ci-pass/${label}: HTTP ${code}"
+          done
+
       - name: Report decision
         run: |
           echo "Backend cache-hit: ${{ steps.backend-lookup.outputs.cache-hit }} (hash ${{ steps.compute.outputs.backend-hash }})"
