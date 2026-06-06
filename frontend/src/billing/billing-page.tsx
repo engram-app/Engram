@@ -295,23 +295,13 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       {!hideHeading && (
         <CurrentPlanCard billing={billing}>
           {billing.subscription && panel === null && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={() => setPanel('change')}>Change plan</Button>
-                {billing.subscription.status !== 'canceled' && (
-                  <Button variant="ghost" onClick={() => setPanel('cancel')}>
-                    Cancel subscription
-                  </Button>
-                )}
-              </div>
-              {/* Escape hatch: if the inline panels fail (Paddle UI bug,
-                  network blip, an action we don't yet support inline) the
-                  user can still self-serve through Paddle's hosted portal.
-                  Worded so the relationship is obvious — Paddle, not us,
-                  is the payment processor. */}
-              <Button variant="outline" onClick={() => openPortal()}>
-                Manage payment in Paddle (our payment processor)
-              </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={() => setPanel('change')}>Change plan</Button>
+              {billing.subscription.status !== 'canceled' && (
+                <Button variant="destructive" onClick={() => setPanel('cancel')}>
+                  Cancel subscription
+                </Button>
+              )}
             </div>
           )}
           {billing.subscription && panel === 'change' && (
@@ -404,6 +394,20 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             transactions={history?.transactions ?? []}
             onDownload={downloadInvoice}
           />
+          {/* Escape hatch: if the inline panels above fail (Paddle UI bug,
+              network blip, an action we don't yet support inline) the user
+              can still self-serve through Paddle's hosted portal. Sits
+              outside the cards so it reads as a fallback option, not as
+              one of the primary plan actions. */}
+          <div className="flex justify-center pt-2">
+            <button
+              type="button"
+              onClick={() => openPortal()}
+              className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              Manage payment in Paddle, our payment processor
+            </button>
+          </div>
         </>
       )}
     </article>
