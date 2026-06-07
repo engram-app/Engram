@@ -1,6 +1,6 @@
-import { Menu } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink, Outlet } from 'react-router'
+import { NavLink, Outlet, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -56,6 +56,8 @@ export default function SettingsLayout() {
   const sections = buildSettingsSections(config.authProvider, config.billingEnabled, isAdmin)
   const [navOpen, setNavOpen] = useState(false)
   const isDesktop = useMediaQuery('(min-width: 768px)')
+  const navigate = useNavigate()
+  const closeSettings = () => navigate('/')
 
   return (
     <RailViewProvider>
@@ -64,8 +66,28 @@ export default function SettingsLayout() {
         <section className="relative min-h-0 flex-1 overflow-hidden">
           {/* Brand grid texture behind the settings panel (matches onboarding). */}
           <AuthBackdrop />
-          <div className="relative z-10 h-full sm:p-6">
-            <div className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden bg-card sm:rounded-xl sm:border sm:border-border sm:shadow-sm md:flex-row">
+          <div
+            onClick={closeSettings}
+            onKeyDown={(e) => { if (e.key === 'Escape') closeSettings() }}
+            role="button"
+            tabIndex={-1}
+            aria-label="Close settings"
+            className="relative z-10 h-full sm:p-6"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="relative mx-auto flex h-full max-w-5xl flex-col overflow-hidden bg-card sm:rounded-xl sm:border sm:border-border sm:shadow-sm md:flex-row"
+            >
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close settings"
+                title="Close settings"
+                onClick={closeSettings}
+                className="absolute right-2 top-2 z-30 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </Button>
               {/* Mobile: section switcher in a drawer. */}
               <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 md:hidden">
                 <Sheet open={navOpen} onOpenChange={setNavOpen}>

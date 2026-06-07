@@ -42,10 +42,10 @@ export default function UserMenu() {
           <img
             src={user.imageUrl}
             alt=""
-            className="h-7 w-7 rounded-full object-cover"
+            className="h-9 w-9 rounded-full object-cover"
           />
         ) : (
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
             {initial}
           </span>
         )}
