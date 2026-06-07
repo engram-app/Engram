@@ -179,4 +179,65 @@ defmodule EngramWeb.TelemetryTest do
              "Daily reconciliation outcome must be counted so silent truncation is alertable without log parsing"
     end
   end
+
+  describe "metrics/0 — WebSocket gauges (observability-coverage)" do
+    # Same pinning rationale as the crypto / embed blocks above. Without
+    # these Telemetry.Metrics declarations, the two gauges emitted by
+    # `Engram.Telemetry.WebSocketPoller` are dropped on the floor — no
+    # PromEx scrape, no Grafana panel. This block locks the registration
+    # so a future refactor can't silently regress us back to "we have no
+    # idea how many sockets are connected."
+
+    setup do
+      names =
+        EngramWeb.Telemetry.metrics()
+        |> Enum.map(fn metric ->
+          metric.name |> Enum.map_join(".", &Atom.to_string/1)
+        end)
+        |> MapSet.new()
+
+      {:ok, names: names}
+    end
+
+    test "registers engram.websocket.count last_value", %{names: names} do
+      assert "engram.websocket.count" in names,
+             "Live WebSocket count must be polled so a soft-leak/runaway-growth is observable"
+    end
+
+    test "registers engram.websocket.socket_bytes distribution", %{names: names} do
+      assert "engram.websocket.socket_bytes" in names,
+             "Per-socket RAM histogram must be polled — captures users holding open huge subscriptions"
+    end
+
+    test "engram.websocket.count is tagged on topic_prefix and only topic_prefix" do
+      metric =
+        Enum.find(
+          EngramWeb.Telemetry.metrics(),
+          &(&1.name == [:engram, :websocket, :count])
+        )
+
+      assert metric, "expected an engram.websocket.count metric"
+
+      assert metric.tags == [:topic_prefix],
+             "engram.websocket.count must NOT add per-user/per-vault labels (cardinality guard)"
+    end
+
+    test "engram.websocket.socket_bytes is tagged on topic_prefix and only topic_prefix" do
+      metric =
+        Enum.find(
+          EngramWeb.Telemetry.metrics(),
+          &(&1.name == [:engram, :websocket, :socket_bytes])
+        )
+
+      assert metric, "expected an engram.websocket.socket_bytes metric"
+
+      assert metric.tags == [:topic_prefix],
+             "engram.websocket.socket_bytes must NOT add per-user/per-vault labels (cardinality guard)"
+    end
+
+    test "websocket_poll_period/0 is exactly 30s (cadence contract)" do
+      assert EngramWeb.Telemetry.websocket_poll_period() == :timer.seconds(30),
+             "WS gauge cadence is a contract — 30s balances spike-visibility against per-tick cost"
+    end
+  end
 end

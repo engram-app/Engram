@@ -11,7 +11,21 @@ defmodule EngramWeb.Telemetry do
     children = [
       # Telemetry poller will execute the given period measurements
       # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
+      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000},
+
+      # Dedicated poller for WebSocket gauges. Runs at a slower 30s cadence
+      # — every call is O(n) over Process.list/0 and the distribution
+      # collector emits one event per channel pid, so a 10s cadence on a
+      # many-socket app would be needlessly noisy. See
+      # `Engram.Telemetry.WebSocketPoller` for the gauge definitions and
+      # `metrics/0` below for their Prometheus mapping.
+      Supervisor.child_spec(
+        {:telemetry_poller,
+         measurements: websocket_measurements(),
+         period: websocket_poll_period(),
+         name: :engram_websocket_poller},
+        id: :engram_websocket_poller
+      )
       # Add reporters as children of your supervision tree.
       # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
     ]
@@ -252,9 +266,55 @@ defmodule EngramWeb.Telemetry do
         tags: [:outcome],
         description:
           "Daily reconciliation runs by outcome. `outcome` is :ok | :billing_disabled | :fetch_failed | :max_pages_exceeded | :pagination_loop. Non-:ok counts = silent-truncation rate; page if sustained."
+      ),
+
+      # WebSocket gauges — emitted by Engram.Telemetry.WebSocketPoller every
+      # 30s. Captures the two failure modes the observability-coverage
+      # milestone calls out: silent socket-count growth and per-socket
+      # process bloat ("users holding open huge subscriptions").
+      #
+      # `topic_prefix` is bounded — one of "sync" / "user" / "presence" /
+      # "total" (plus "unknown" for label drift). No per-user / per-vault
+      # tags ever escape; that's enforced by web_socket_poller_test.exs.
+      last_value("engram.websocket.count",
+        event_name: [:engram, :websocket, :count],
+        measurement: :count,
+        tags: [:topic_prefix],
+        description:
+          "Live count of Phoenix Channel processes, split by topic prefix (sync/user/presence/total). Polled every 30s."
+      ),
+      distribution("engram.websocket.socket_bytes",
+        event_name: [:engram, :websocket, :socket_bytes],
+        measurement: :bytes,
+        tags: [:topic_prefix],
+        unit: :byte,
+        reporter_options: [
+          # Log-scaled buckets from 1 KiB to ~100 MiB. Covers the "idle
+          # 30 KB channel" case through the "user pinned a 50 MB
+          # subscription buffer" case the scope flags as the failure mode.
+          buckets: [
+            1_024,
+            4_096,
+            16_384,
+            65_536,
+            262_144,
+            1_048_576,
+            4_194_304,
+            16_777_216,
+            67_108_864,
+            268_435_456
+          ]
+        ],
+        description:
+          "Per-process RAM footprint of each Phoenix Channel server. Bucket spike = a tenant pinning a fat subscription."
       )
     ]
   end
+
+  # Poll cadence: 30s. Faster gets noisy on a many-socket app
+  # (each poll is O(n) over Process.list/0 and emits one event per
+  # channel pid for the distribution histogram); slower misses spikes.
+  @websocket_poll_period :timer.seconds(30)
 
   defp periodic_measurements do
     [
@@ -263,4 +323,13 @@ defmodule EngramWeb.Telemetry do
       # {EngramWeb, :count_users, []}
     ]
   end
+
+  defp websocket_measurements do
+    [
+      {Engram.Telemetry.WebSocketPoller, :measure, []}
+    ]
+  end
+
+  @doc false
+  def websocket_poll_period, do: @websocket_poll_period
 end
