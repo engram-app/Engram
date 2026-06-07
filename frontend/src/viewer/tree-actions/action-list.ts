@@ -6,7 +6,7 @@ export interface Action {
   destructive?: boolean
 }
 
-const FILE_ACTIONS: Action[] = [
+const FILE_ACTIONS: readonly Action[] = [
   { id: 'rename', label: 'Rename' },
   { id: 'move', label: 'Move to…' },
   { id: 'duplicate', label: 'Duplicate' },
@@ -14,12 +14,12 @@ const FILE_ACTIONS: Action[] = [
   { id: 'delete', label: 'Delete', destructive: true },
 ]
 
-const FOLDER_ACTIONS: Action[] = [
+const FOLDER_ACTIONS: readonly Action[] = [
   { id: 'rename', label: 'Rename' },
   { id: 'move', label: 'Move to…' },
   { id: 'delete', label: 'Delete', destructive: true },
 ]
 
-export function actionsFor({ kind }: { kind: 'file' | 'folder' }): Action[] {
+export function actionsFor({ kind }: { kind: 'file' | 'folder' }): readonly Action[] {
   return kind === 'file' ? FILE_ACTIONS : FOLDER_ACTIONS
 }
