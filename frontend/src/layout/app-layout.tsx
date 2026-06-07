@@ -67,7 +67,7 @@ function DesktopLayout() {
         <ResizableHandle withHandle />
         <ResizablePanel id="main" defaultSize="60%" minSize="30%">
           <main
-            className="relative h-full overflow-hidden bg-muted/40 p-6 text-foreground"
+            className="relative flex h-full flex-col overflow-hidden bg-muted/40 text-foreground"
             data-tour="note-viewer"
           >
             <TrialBanner />
@@ -83,7 +83,9 @@ function DesktopLayout() {
                 <PanelRightOpen />
               </Button>
             )}
-            <Outlet />
+            <div className="flex-1 overflow-hidden p-6">
+              <Outlet />
+            </div>
           </main>
         </ResizablePanel>
         <ResizableHandle withHandle />
@@ -124,7 +126,7 @@ function TrialBanner() {
   if (billing?.subscription?.status !== 'trialing' || days <= 0 || days > 3) return null
   return (
     <aside
-      className="-mx-6 -mt-6 mb-4 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+      className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
       role="alert"
     >
       {days} days left in your trial.
