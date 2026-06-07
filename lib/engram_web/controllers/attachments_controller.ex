@@ -2,10 +2,32 @@ defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
 
   alias Engram.Attachments
+  alias Engram.Billing
   alias Engram.Storage.MimeWhitelist
 
+  # Free-tier launch §4.5 — attachments are a paid-tier feature. Gate at the
+  # top of the upload action so Free users 402 BEFORE any S3 work, file
+  # parsing, or DB allocation. `attachments_enabled` resolves through the
+  # same plan/override pipeline as every other limit key.
   def upload(conn, params) do
     user = conn.assigns.current_user
+
+    case Billing.check_feature(user, :attachments_enabled) do
+      :ok ->
+        do_upload_gated(conn, user, params)
+
+      {:error, :feature_not_available} ->
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "attachments_disabled",
+          :attachments_enabled,
+          false,
+          nil
+        )
+    end
+  end
+
+  defp do_upload_gated(conn, user, params) do
     vault = conn.assigns.current_vault
     path = params["path"] || params[:path]
     explicit_mime = params["mime_type"] || params[:mime_type]
@@ -39,14 +61,24 @@ defmodule EngramWeb.AttachmentsController do
         conn |> put_status(422) |> json(%{error: "content_base64 is required"})
 
       {:error, {:too_large, limit}} ->
-        conn
-        |> put_status(413)
-        |> json(%{error: "attachment exceeds size limit", limit: limit})
+        # Free-tier launch §4.5 — single file over per-plan max_file_bytes.
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "file_too_large",
+          :max_file_bytes,
+          limit,
+          nil
+        )
 
       {:error, {:storage_cap_reached, used, limit}} ->
-        conn
-        |> put_status(402)
-        |> json(%{error: "storage_cap_reached", used: used, limit: limit})
+        # Free-tier launch §4.5 — paid user over lifetime attachment quota.
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "attachments_quota_exceeded",
+          :attachment_bytes_cap,
+          limit,
+          used
+        )
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})

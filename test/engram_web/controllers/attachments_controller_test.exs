@@ -13,6 +13,10 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
+    # Free-tier launch §4.5 — attachments_enabled defaults to false for Free.
+    # Existing happy-path coverage represents a paid user, so seed an active
+    # Pro subscription before any upload runs through the controller gate.
+    insert(:subscription, user: user, tier: "pro", status: "active")
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
@@ -193,10 +197,13 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 2.0
         })
 
+      # Free-tier launch §4.5 — standardized LimitResponse shape.
       body = json_response(conn2, 402)
-      assert body["error"] == "storage_cap_reached"
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "attachments_quota_exceeded"
+      assert body["limit_key"] == "attachment_bytes_cap"
       assert body["limit"] == 2 * 1_048_576
-      assert body["used"] == 1_500_000
+      assert body["current"] == 1_500_000
     end
 
     test "upsert subtracts existing path's size from the lifetime total (§G)",
@@ -244,10 +251,42 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 1_000.0
         })
 
-      assert conn.status == 413
-      body = json_response(conn, 413)
-      assert body["error"] == "attachment exceeds size limit"
+      # Free-tier launch §4.5 — single-file too-large now flows through
+      # LimitResponse as 402 file_too_large rather than 413.
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "file_too_large"
+      assert body["limit_key"] == "max_file_bytes"
       assert body["limit"] == 1_048_576
+    end
+
+    test "Free user gets 402 attachments_disabled before any S3 work", %{conn: conn, user: user} do
+      # Demote the setup-Pro user back to Free by deleting the subscription.
+      # `tier/1` resolves to :free with no subscription row, and
+      # `attachments_enabled` defaults to false for Free per LimitKeys.
+      sub =
+        Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
+          skip_tenant_check: true
+        )
+
+      Engram.Repo.delete!(sub, skip_tenant_check: true)
+
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "blocked.png",
+          content_base64: @sample_base64,
+          mtime: 1.0
+        })
+
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "attachments_disabled"
+      assert body["limit_key"] == "attachments_enabled"
+      assert body["tier"] == "free"
+      assert body["limit"] == false
+      # `upgrade_url` is set from config — surface presence, not exact value
+      # (config may be nil in test env, which is still a valid response shape).
+      assert Map.has_key?(body, "upgrade_url")
     end
 
     test "returns 401 without auth", %{conn: conn} do
