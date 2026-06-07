@@ -148,6 +148,18 @@ defmodule Engram.Factory do
     }
   end
 
+  @doc """
+  Attach a built (not persisted) subscription to a built user so
+  `Billing.tier/1` and `Billing.active?/1` see the assoc without a DB
+  round-trip. Use for unit tests asserting tier resolution; for tests
+  that touch the DB, insert the subscription explicitly with
+  `insert(:subscription, user: user, ...)`.
+  """
+  def with_subscription(%Engram.Accounts.User{} = user, attrs) do
+    sub = build(:subscription, Keyword.put(attrs, :user, user))
+    %{user | subscription: sub}
+  end
+
   def device_authorization_factory do
     %Engram.Auth.DeviceAuthorization{
       device_code:
