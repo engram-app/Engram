@@ -50,6 +50,7 @@ defmodule EngramWeb.CSPTest do
       header = CSP.header()
 
       assert script_src(header) =~ "https://*.paddle.com"
+      assert style_src(header) =~ "https://*.paddle.com"
       assert connect_src(header) =~ "https://*.paddle.com"
       assert frame_src(header) =~ "https://*.paddle.com"
     end
@@ -70,17 +71,23 @@ defmodule EngramWeb.CSPTest do
       assert connect_src(header) =~ "https://static.cloudflareinsights.com"
     end
 
-    test "always whitelists Sentry ingest hosts on connect-src" do
+    test "always whitelists Sentry ingest hosts including regional shards on connect-src" do
       # Sentry browser SDK is bundled (no script-src host needed) but
-      # captured events POST to `*.ingest.sentry.io`. Without this
-      # entry the SDK silently fails — the network POST returns blocked
-      # by CSP, no error reaches `Sentry.captureException`'s caller,
-      # and prod errors evaporate at the CSP gate.
+      # captured events POST to `<orgId>.ingest.<region>.sentry.io`. CSP
+      # wildcards match exactly ONE label, so `*.ingest.sentry.io` does
+      # NOT cover regional shards (us / eu / etc.). Listing both the
+      # bare wildcard AND the regional wildcards covers projects on any
+      # ingest topology Sentry has shipped. Without these the SDK
+      # silently fails on us-region projects — the network POST returns
+      # blocked by CSP and prod errors evaporate at the gate. This
+      # exact failure surfaced on staging 2026-06-06.
       Application.put_env(:engram, :clerk_issuer, nil)
 
       header = CSP.header()
 
       assert connect_src(header) =~ "https://*.ingest.sentry.io"
+      assert connect_src(header) =~ "https://*.ingest.us.sentry.io"
+      assert connect_src(header) =~ "https://*.ingest.de.sentry.io"
     end
 
     test "always whitelists PostHog ingest hosts on connect-src" do
@@ -206,6 +213,7 @@ defmodule EngramWeb.CSPTest do
   # ── Helpers ────────────────────────────────────────────────────────
 
   defp script_src(header), do: directive(header, "script-src")
+  defp style_src(header), do: directive(header, "style-src")
   defp connect_src(header), do: directive(header, "connect-src")
   defp frame_src(header), do: directive(header, "frame-src")
 

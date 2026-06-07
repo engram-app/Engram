@@ -33,16 +33,23 @@ defmodule Engram.Billing.Subscriptions do
       anything here.
     * `{:error, :no_active_subscription}` — no `paddle_subscription_id` on
       file. Self-host users + users who have never paid land here.
-    * `{:error, {:paddle_error, status}}` — Paddle returned a non-2xx
-      response. Status preserved so the controller can map 4xx (user-
-      caused, e.g. swapping to the current price) to 422 and 5xx (Paddle
-      outage) to 502 distinctly.
+    * `{:error, {:paddle_error, status, body}}` — Paddle returned a
+      non-2xx response. Status preserved so the controller can map 4xx
+      (user-caused, e.g. swapping to the current price) to 422 and 5xx
+      (Paddle outage) to 502 distinctly. `body` is Paddle's decoded
+      error envelope (`%{"error" => %{"code" => ..., "detail" => ...}}`);
+      preserved so the controller can surface Paddle's own error code in
+      the API response — without it, "422 paddle_rejected" gave no clue
+      what was actually wrong.
     * `{:error, :paddle_unavailable}` — transport failure (Req error,
       timeout, DNS, etc. — no HTTP response). Surface as 503.
   """
   @spec cancel(User.t(), :immediately | :next_billing_period) ::
           {:ok, map()}
-          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
+          | {:error,
+             :no_active_subscription
+             | :paddle_unavailable
+             | {:paddle_error, integer(), map()}}
   def cancel(user, effective_from \\ :next_billing_period)
       when effective_from in [:immediately, :next_billing_period] do
     case Billing.get_subscription(user) do
@@ -61,14 +68,22 @@ defmodule Engram.Billing.Subscriptions do
     |> normalize_paddle_result()
   end
 
-  # Paddle HTTP layer returns `{:error, {:paddle_error, status}}` for non-2xx
-  # responses and `{:error, transport_reason}` for connection failures.
-  # Preserve the status for the controller; collapse transport errors to a
-  # single `:paddle_unavailable` since callers can't act on transport detail.
+  # Paddle HTTP layer returns `{:error, {:paddle_error, status, body}}`
+  # for non-2xx responses and `{:error, transport_reason}` for connection
+  # failures. Preserve status + body for the controller; collapse
+  # transport errors to a single `:paddle_unavailable` since callers
+  # can't act on transport detail.
+  #
+  # The 2-tuple `{:paddle_error, status}` clause is back-compat for older
+  # test mocks (BillingTest predates the body bubble-up); maps to
+  # 3-tuple with empty body so downstream code only matches one shape.
   defp normalize_paddle_result({:ok, data}), do: {:ok, data}
 
+  defp normalize_paddle_result({:error, {:paddle_error, status, body}}),
+    do: {:error, {:paddle_error, status, body}}
+
   defp normalize_paddle_result({:error, {:paddle_error, status}}),
-    do: {:error, {:paddle_error, status}}
+    do: {:error, {:paddle_error, status, %{}}}
 
   defp normalize_paddle_result({:error, _transport_reason}),
     do: {:error, :paddle_unavailable}
@@ -99,7 +114,10 @@ defmodule Engram.Billing.Subscriptions do
   """
   @spec preview_plan_change(User.t(), String.t()) ::
           {:ok, map()}
-          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
+          | {:error,
+             :no_active_subscription
+             | :paddle_unavailable
+             | {:paddle_error, integer(), map()}}
   def preview_plan_change(user, new_price_id) when is_binary(new_price_id) do
     with_active_sub(user, fn sub_id ->
       Client.impl().preview_subscription_update(
@@ -120,7 +138,10 @@ defmodule Engram.Billing.Subscriptions do
   """
   @spec confirm_plan_change(User.t(), String.t()) ::
           {:ok, map()}
-          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
+          | {:error,
+             :no_active_subscription
+             | :paddle_unavailable
+             | {:paddle_error, integer(), map()}}
   def confirm_plan_change(user, new_price_id) when is_binary(new_price_id) do
     with_active_sub(user, fn sub_id ->
       Client.impl().update_subscription(
@@ -140,7 +161,10 @@ defmodule Engram.Billing.Subscriptions do
   """
   @spec reverse_cancel(User.t()) ::
           {:ok, map()}
-          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
+          | {:error,
+             :no_active_subscription
+             | :paddle_unavailable
+             | {:paddle_error, integer(), map()}}
   def reverse_cancel(user) do
     with_active_sub(user, fn sub_id ->
       Client.impl().update_subscription(
