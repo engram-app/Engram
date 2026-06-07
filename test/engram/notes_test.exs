@@ -1055,6 +1055,79 @@ defmodule Engram.NotesTest do
       assert {:ok, _} = Notes.get_note(other_user, other_vault, "Shared/Note.md")
     end
 
+    test "returns {:error, :conflict} when target folder has notes",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "dst/b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
+
+      # Source unchanged
+      assert {:ok, %{path: "src/a.md"}} = Notes.get_note(user, vault, "src/a.md")
+      assert {:ok, %{path: "dst/b.md"}} = Notes.get_note(user, vault, "dst/b.md")
+    end
+
+    test "returns {:error, :conflict} when target folder marker exists",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} = Notes.create_folder_marker(user, vault, "dst")
+
+      assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
+    end
+
+    test "cascades to all children including nested subfolders",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/sub/b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, 2} = Notes.rename_folder(user, vault, "src", "dst")
+      assert {:ok, %{path: "dst/a.md"}} = Notes.get_note(user, vault, "dst/a.md")
+      assert {:ok, %{path: "dst/sub/b.md"}} = Notes.get_note(user, vault, "dst/sub/b.md")
+      assert {:error, :not_found} = Notes.get_note(user, vault, "src/a.md")
+      assert {:error, :not_found} = Notes.get_note(user, vault, "src/sub/b.md")
+    end
+
+    test "same-folder rename is a no-op (returns {:ok, _})",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "same/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "same", "same")
+      assert {:ok, %{path: "same/a.md"}} = Notes.get_note(user, vault, "same/a.md")
+    end
+
     test "recomputes path_hmac and folder_hmac for the new path/folder",
          %{user: user, vault: vault} do
       {:ok, before} =

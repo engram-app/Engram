@@ -877,13 +877,59 @@ defmodule Engram.Notes do
   Returns {:ok, count} with the number of notes affected.
   """
   @spec rename_folder(map(), map(), String.t(), String.t()) ::
-          {:ok, integer()} | {:error, term()}
+          {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+      cond do
+        # No-op rename: same folder. Skip the target conflict check so the
+        # call is idempotent rather than colliding with itself.
+        old_folder == new_folder ->
+          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+
+        folder_target_exists?(user, vault, new_folder) ->
+          # Pre-check the unique (user, vault, path_hmac) constraint so
+          # the caller gets {:error, :conflict} instead of a Postgrex
+          # unique_violation crash deeper in the cascade. Matches by
+          # folder_hmac (exact match on the immediate folder) — covers
+          # the common case of renaming onto a populated folder or an
+          # existing folder marker.
+          {:error, :conflict}
+
+        true ->
+          do_rename_folder(user, vault, old_folder, old_prefix, new_folder)
+      end
+    end
+  end
+
+  # Phase B.3: plaintext `folder` is gone — match by folder_hmac. Returns
+  # true if any non-deleted row (note or folder marker) lives directly in
+  # `folder`. Used as the pre-check for rename_folder/4's conflict gate.
+  defp folder_target_exists?(user, vault, folder) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        target_hmac = Crypto.hmac_field(filter_key, folder)
+
+        # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+        # Unwrap once so the caller can branch on a plain boolean.
+        {:ok, exists?} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.exists?(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at) and n.folder_hmac == ^target_hmac
+              )
+            )
+          end)
+
+        exists?
+
+      {:error, :no_dek} ->
+        # No DEK = no encrypted rows possible = nothing in target folder.
+        false
     end
   end
 

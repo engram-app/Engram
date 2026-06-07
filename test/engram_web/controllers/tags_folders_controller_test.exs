@@ -142,5 +142,18 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       conn = post(conn, "/api/folders/rename", %{old_folder: "Ghost", new_folder: "New"})
       assert json_response(conn, 404)
     end
+
+    test "returns 409 when target folder has notes", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "src/a.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "dst/b.md", content: "# B", mtime: 1_000.0})
+
+      conn2 = post(conn, "/api/folders/rename", %{old_folder: "src", new_folder: "dst"})
+      assert json_response(conn2, 409) == %{"error" => "conflict"}
+
+      # Source folder still intact
+      conn3 = get(conn, "/api/folders/list", %{folder: "src"})
+      paths = Enum.map(json_response(conn3, 200)["notes"], & &1["path"])
+      assert "src/a.md" in paths
+    end
   end
 end
