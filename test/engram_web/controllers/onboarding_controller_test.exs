@@ -367,4 +367,31 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert [] = Engram.Onboarding.list_actions(other_user.id)
     end
   end
+
+  describe "POST /api/onboarding/accept_free_tier" do
+    test "sets free_tier_accepted_at and returns next step", %{conn: conn, user: user} do
+      assert is_nil(user.free_tier_accepted_at)
+
+      conn = post(conn, ~p"/api/onboarding/accept_free_tier")
+      body = json_response(conn, 200)
+      assert Map.has_key?(body, "next_step")
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.free_tier_accepted_at != nil
+    end
+
+    test "is idempotent", %{conn: conn} do
+      post(conn, ~p"/api/onboarding/accept_free_tier")
+      conn2 = post(conn, ~p"/api/onboarding/accept_free_tier")
+      assert json_response(conn2, 200)
+    end
+
+    test "401 when unauthenticated" do
+      conn = Phoenix.ConnTest.build_conn()
+
+      assert conn
+             |> post(~p"/api/onboarding/accept_free_tier")
+             |> response(401)
+    end
+  end
 end
