@@ -506,9 +506,15 @@ if config_env() == :prod do
   # validation — the RDS root CA isn't bundled into the Alpine image
   # and traffic is already inside the prod VPC, so peer auth adds no
   # meaningful confidentiality beyond what TLS-on-the-wire provides.
+  #
+  # Postgrex 0.20+ accepts the SSL opt list directly under `:ssl` (a
+  # keyword list both enables TLS and supplies the opts); the older
+  # `:ssl_opts` companion key was deprecated and emits one
+  # `:ssl_opts is deprecated, pass opts to :ssl instead` warning per
+  # connection start.
   database_ssl_opts =
     if System.get_env("DATABASE_SSL") in ~w(true 1) do
-      [ssl: true, ssl_opts: [verify: :verify_none]]
+      [ssl: [verify: :verify_none]]
     else
       []
     end
