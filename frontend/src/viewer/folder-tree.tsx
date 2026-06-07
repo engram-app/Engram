@@ -18,7 +18,7 @@ import { MoveDialog } from './tree-actions/move-dialog'
 import { RenameInput } from './tree-actions/rename-input'
 import { nextCopyName } from './tree-actions/duplicate'
 import { useLongPress } from './tree-actions/use-long-press'
-import { useTreeRowActions } from './tree-actions/use-tree-row-actions'
+import { useTreeDrop, useTreeRowActions } from './tree-actions/use-tree-row-actions'
 
 interface TreeNode {
   name: string
@@ -73,6 +73,7 @@ export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
   const { sort } = useFolderTreeState()
   const location = useLocation()
+  const rootDrop = useTreeDrop()
   // Note routes: /note/<path>. Read from pathname directly because
   // useParams() in the parent layout doesn't expose the child route's
   // splat. The pathname segments are %-encoded, decode each before
@@ -95,7 +96,12 @@ export default function FolderTree() {
   const hasRootFiles = folders.some((f) => f.name === '')
 
   return (
-    <nav aria-label="Files" className="py-2 text-base" data-testid="folder-tree-root">
+    <nav
+      aria-label="Files"
+      className="py-2 text-base"
+      data-testid="folder-tree-root"
+      {...rootDrop.dropTargetProps('')}
+    >
       <ul role="list" className="space-y-1">
         {hasRootFiles && (
           <RootFiles selectedNotePath={selectedNotePath} folders={folders} />

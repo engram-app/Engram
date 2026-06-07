@@ -246,6 +246,39 @@ describe('FolderTree tree actions', () => {
     })
   })
 
+  it('drag note onto tree root fires renameNote moving file to root', async () => {
+    renderTree()
+    // Expand `docs` so the nested note is rendered as a drag source.
+    const folderBtn = screen.getByRole('button', { name: /docs/i, expanded: false })
+    fireEvent.click(folderBtn)
+    const noteLink = await screen.findByRole('link', { name: /spec/i })
+    const root = screen.getByTestId('folder-tree-root')
+
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      setData: (k: string, v: string) => data.set(k, v),
+      getData: (k: string) => data.get(k) ?? '',
+      types: [] as string[],
+      effectAllowed: 'move',
+      dropEffect: 'move',
+    }
+    Object.defineProperty(dataTransfer, 'types', {
+      get: () => Array.from(data.keys()),
+    })
+
+    fireEvent.dragStart(noteLink, { dataTransfer })
+    fireEvent.dragOver(root, { dataTransfer })
+    fireEvent.drop(root, { dataTransfer })
+
+    await waitFor(() => {
+      expect(renameNoteMutate).toHaveBeenCalled()
+    })
+    expect(renameNoteMutate.mock.calls[0]?.[0]).toEqual({
+      old_path: 'docs/spec.md',
+      new_path: 'spec.md',
+    })
+  })
+
   it('409 from rename keeps row in edit mode with error visible', async () => {
     setRenameNoteError(new ApiError(409, 'conflict'))
     renderTree()

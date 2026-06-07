@@ -248,3 +248,53 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
 }
 
 export { DRAG_MIME }
+
+/**
+ * Standalone drop-target hook for use at the FolderTree root level (drop on
+ * empty tree area → move to root). Avoids the per-row state baggage of
+ * `useTreeRowActions` since the tree root has no row identity, no rename/move
+ * state, etc. — just needs `onDragOver` + `onDrop`.
+ */
+export function useTreeDrop() {
+  const renameNote = useRenameNote()
+  const renameFolder = useRenameFolder()
+
+  const dropTargetProps = (targetFolder: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DRAG_MIME)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault()
+      const raw = e.dataTransfer.getData(DRAG_MIME)
+      if (!raw) return
+      let src: DragNode
+      try {
+        src = JSON.parse(raw) as DragNode
+      } catch {
+        return
+      }
+      if (!isValidDropTarget(src, targetFolder)) return
+      const newPath = newPathAfterMove(src.path, targetFolder)
+      const mutation = src.kind === 'file' ? renameNote : renameFolder
+      mutation.mutate(
+        { old_path: src.path, new_path: newPath },
+        {
+          onSuccess: () => {
+            toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
+          },
+          onError: (err) => {
+            if (err instanceof ApiError && err.status === 409) {
+              toast.error('Target already has an item with that name.')
+            } else {
+              toast.error('Move failed.')
+            }
+          },
+        },
+      )
+    },
+  })
+
+  return { dropTargetProps }
+}
