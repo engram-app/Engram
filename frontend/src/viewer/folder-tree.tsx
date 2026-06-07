@@ -505,7 +505,9 @@ function handlePickAction(
 }
 
 function noteLabel(note: NoteSummary): string {
-  if (note.title) return note.title
+  // Filename-first (Obsidian-style). Title comes from the first `# heading`
+  // in content, which rename doesn't touch — if we showed title here, the
+  // tree would look unchanged after a rename. Filename is canonical.
   const last = note.path.split('/').pop() ?? note.path
   // Only strip recognized extensions, otherwise "archive.tar.gz" loses ".gz"
   // and the row reads "archive.tar" + "GZ" chip — confusing.
