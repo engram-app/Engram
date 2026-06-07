@@ -126,14 +126,16 @@ defmodule Engram.Paddle.Client.HTTPTest do
       assert length(results) >= 50
     end
 
-    test "returns {:error, {:paddle_error, status}} on non-200", %{bypass: bypass} do
+    test "returns {:error, {:paddle_error, status, body}} on non-200", %{bypass: bypass} do
       # Req's default retry policy retries 5xx up to 4 attempts. Use a
       # 400 (non-retried) so the test doesn't spend 7s in backoff.
       Bypass.expect_once(bypass, "GET", "/subscriptions", fn conn ->
         Plug.Conn.send_resp(conn, 400, ~s({"error": "bad request"}))
       end)
 
-      assert {:error, {:paddle_error, 400}} = HTTP.list_subscriptions(@since)
+      # body is opaque here — Req may decode JSON if content-type is set,
+      # otherwise pass through raw string. Match on status only.
+      assert {:error, {:paddle_error, 400, _body}} = HTTP.list_subscriptions(@since)
     end
 
     test "sends updated_at[GTE] filter and per_page=200 on first request", %{bypass: bypass} do
@@ -168,12 +170,12 @@ defmodule Engram.Paddle.Client.HTTPTest do
                )
     end
 
-    test "returns {:error, {:paddle_error, status}} on non-200", %{bypass: bypass} do
+    test "returns {:error, {:paddle_error, status, body}} on non-200", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/subscriptions/sub_x/cancel", fn conn ->
         Plug.Conn.send_resp(conn, 400, ~s({"error":"bad"}))
       end)
 
-      assert {:error, {:paddle_error, 400}} =
+      assert {:error, {:paddle_error, 400, _body}} =
                HTTP.cancel_subscription("sub_x", :next_billing_period, [])
     end
   end
