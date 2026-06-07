@@ -151,7 +151,10 @@ defmodule EngramWeb.McpController do
         {result, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
-        result = {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+        result =
+          {:ok,
+           %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+
         {result, :error, byte_size_safe(msg)}
     end
   catch

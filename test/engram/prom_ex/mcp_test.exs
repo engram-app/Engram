@@ -21,14 +21,23 @@ defmodule Engram.PromEx.McpTest do
     end
 
     test "declares distribution + counter on [:engram, :mcp, :tool, :stop]" do
-      metrics = McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       target = [:engram, :mcp, :tool, :stop]
-      assert Enum.any?(metrics, fn m -> match?(%Telemetry.Metrics.Distribution{}, m) and m.event_name == target end)
-      assert Enum.any?(metrics, fn m -> match?(%Telemetry.Metrics.Counter{}, m) and m.event_name == target end)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.Distribution{}, m) and m.event_name == target
+             end)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.Counter{}, m) and m.event_name == target
+             end)
     end
 
     test "declares a result_bytes distribution" do
-      metrics = McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Distribution{}, m) and m.measurement == :result_bytes
@@ -36,7 +45,9 @@ defmodule Engram.PromEx.McpTest do
     end
 
     test "no per-tenant tags" do
-      metrics = McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       banned = [:user_id, :vault_id, :args, :tenant_id]
 
       for m <- metrics, tag <- m.tags do

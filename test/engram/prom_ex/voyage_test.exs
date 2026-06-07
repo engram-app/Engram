@@ -31,7 +31,8 @@ defmodule Engram.PromEx.VoyageTest do
     end
 
     test "declares a latency distribution for embed requests" do
-      metrics = VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Distribution{}, m) and
@@ -41,7 +42,8 @@ defmodule Engram.PromEx.VoyageTest do
     end
 
     test "declares a counter for embed errors" do
-      metrics = VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Counter{}, m) and
@@ -51,7 +53,9 @@ defmodule Engram.PromEx.VoyageTest do
     end
 
     test "never includes high-cardinality tags (user_id, vault_id)" do
-      metrics = VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       banned = [:user_id, :vault_id, :tenant_id, :path, :path_hmac]
 
       for m <- metrics, tag <- m.tags do

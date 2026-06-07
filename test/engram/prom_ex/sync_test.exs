@@ -24,7 +24,9 @@ defmodule Engram.PromEx.SyncTest do
     end
 
     test "declares distribution + counter on [:engram, :sync, :event, :stop]" do
-      metrics = SyncPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        SyncPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       target = [:engram, :sync, :event, :stop]
 
       assert Enum.any?(metrics, fn m ->
@@ -37,7 +39,9 @@ defmodule Engram.PromEx.SyncTest do
     end
 
     test "tags must be [:op, :status] — no per-tenant labels" do
-      metrics = SyncPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        SyncPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       banned = [:user_id, :vault_id, :device_id, :path, :tenant_id]
 
       for m <- metrics, tag <- m.tags do

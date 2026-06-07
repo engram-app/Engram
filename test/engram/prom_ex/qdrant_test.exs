@@ -21,7 +21,9 @@ defmodule Engram.PromEx.QdrantTest do
     end
 
     test "declares a latency distribution + counter on [:engram, :qdrant, :request, :stop]" do
-      metrics = QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       target = [:engram, :qdrant, :request, :stop]
 
       assert Enum.any?(metrics, fn m ->
@@ -34,7 +36,9 @@ defmodule Engram.PromEx.QdrantTest do
     end
 
     test "no high-cardinality tags" do
-      metrics = QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      metrics =
+        QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
       banned = [:user_id, :vault_id, :tenant_id, :collection, :point_id, :path]
 
       for m <- metrics, tag <- m.tags do

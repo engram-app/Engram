@@ -57,7 +57,10 @@ defmodule Engram.Embedders.Voyage do
 
   defp status_label({:ok, _}), do: :ok
   defp status_label({:error, {429, %{"detail" => "client_rate_limited"}}}), do: :throttled
-  defp status_label({:error, {status, _}}) when is_integer(status) and status >= 500, do: :server_error
+
+  defp status_label({:error, {status, _}}) when is_integer(status) and status >= 500,
+    do: :server_error
+
   defp status_label({:error, {status, _}}) when is_integer(status), do: :client_error
   defp status_label({:error, _}), do: :error
 
