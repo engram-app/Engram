@@ -414,7 +414,7 @@ defmodule Engram.Notes do
   Returns {:ok, updated_note} or {:error, :not_found}.
   """
   @spec rename_note(map(), map(), String.t(), String.t()) ::
-          {:ok, Note.t()} | {:error, :not_found}
+          {:ok, Note.t()} | {:error, :not_found | :conflict}
   def rename_note(user, vault, old_path, new_path) do
     new_path = PathSanitizer.sanitize(new_path)
     new_folder = Helpers.extract_folder(new_path)
@@ -427,65 +427,30 @@ defmodule Engram.Notes do
 
   defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
     {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
+    {:ok, target_query} = note_by_path_query(user, vault, new_path)
 
     result =
       Repo.with_tenant(user.id, fn ->
-        case Repo.one(lookup_query) do
-          nil ->
-            :not_found
+        cond do
+          # No-op rename: same path. Skip target conflict check so the
+          # request becomes idempotent rather than reporting a conflict
+          # against itself.
+          old_path == new_path ->
+            case Repo.one(lookup_query) do
+              nil -> :not_found
+              note -> {:no_change, note}
+            end
 
-          note ->
-            decrypted_note = decrypt_or_raise!(note, user)
-            new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
+          Repo.one(target_query) ->
+            # Pre-check the unique (user, vault, path_hmac) constraint so
+            # the caller gets {:error, :conflict} instead of a Postgrex
+            # unique_violation crash deeper in the encrypt/update path.
+            :conflict
 
-            # T3.6 — rename converges the row to AAD-bound. We have content
-            # and tags decrypted in memory already; re-encrypt them with the
-            # row-id-bound AAD so all five ciphertext columns share a
-            # consistent dek_version=2 stamp. Skipping content/tags would
-            # leave the row mixed (path/folder/title bound, content/tags
-            # legacy) and the read-side AAD dispatch keys off a single
-            # row.dek_version — a mixed row breaks decrypt for whichever
-            # group disagrees with the stamped version.
-            full_kw =
-              full_aad_bound_kw(
-                user,
-                note.id,
-                decrypted_note.content || "",
-                new_title,
-                new_path,
-                new_folder,
-                decrypted_note.tags || []
-              )
-
-            {count, _} =
-              from(n in Note, where: n.id == ^note.id)
-              |> Repo.update_all(
-                set:
-                  [
-                    embed_hash: nil,
-                    updated_at: now
-                  ] ++ full_kw
-              )
-
-            if count == 1 do
-              # Splice the freshly-encrypted ciphertext + dek_version=2
-              # into the in-memory struct so callers (broadcast, MCP,
-              # controllers) read the new plaintext without re-decrypting
-              # through maybe_decrypt_note_fields.
-              {:ok,
-               note
-               |> struct!(full_kw)
-               |> struct!(
-                 content: decrypted_note.content,
-                 tags: decrypted_note.tags || [],
-                 path: new_path,
-                 folder: new_folder,
-                 title: new_title,
-                 embed_hash: nil,
-                 updated_at: now
-               )}
-            else
-              :not_found
+          true ->
+            case Repo.one(lookup_query) do
+              nil -> :not_found
+              note -> do_rename_note_inner(note, user, new_path, new_folder, now)
             end
         end
       end)
@@ -504,11 +469,72 @@ defmodule Engram.Notes do
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
         {:ok, decrypted}
 
+      {:ok, {:no_change, note}} ->
+        {:ok, decrypt_or_raise!(note, user)}
+
+      {:ok, :conflict} ->
+        {:error, :conflict}
+
       {:ok, :not_found} ->
         {:error, :not_found}
 
       _ ->
         {:error, :not_found}
+    end
+  end
+
+  defp do_rename_note_inner(note, user, new_path, new_folder, now) do
+    decrypted_note = decrypt_or_raise!(note, user)
+    new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
+
+    # T3.6 — rename converges the row to AAD-bound. We have content
+    # and tags decrypted in memory already; re-encrypt them with the
+    # row-id-bound AAD so all five ciphertext columns share a
+    # consistent dek_version=2 stamp. Skipping content/tags would
+    # leave the row mixed (path/folder/title bound, content/tags
+    # legacy) and the read-side AAD dispatch keys off a single
+    # row.dek_version — a mixed row breaks decrypt for whichever
+    # group disagrees with the stamped version.
+    full_kw =
+      full_aad_bound_kw(
+        user,
+        note.id,
+        decrypted_note.content || "",
+        new_title,
+        new_path,
+        new_folder,
+        decrypted_note.tags || []
+      )
+
+    {count, _} =
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        set:
+          [
+            embed_hash: nil,
+            updated_at: now
+          ] ++ full_kw
+      )
+
+    if count == 1 do
+      # Splice the freshly-encrypted ciphertext + dek_version=2
+      # into the in-memory struct so callers (broadcast, MCP,
+      # controllers) read the new plaintext without re-decrypting
+      # through maybe_decrypt_note_fields.
+      {:ok,
+       note
+       |> struct!(full_kw)
+       |> struct!(
+         content: decrypted_note.content,
+         tags: decrypted_note.tags || [],
+         path: new_path,
+         folder: new_folder,
+         title: new_title,
+         embed_hash: nil,
+         updated_at: now
+       )}
+    else
+      :not_found
     end
   end
 

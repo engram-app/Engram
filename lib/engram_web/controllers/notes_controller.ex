@@ -115,6 +115,9 @@ defmodule EngramWeb.NotesController do
       {:ok, note} ->
         json(conn, %{renamed: true, old_path: old_path, new_path: new_path, note: note_json(note)})
 
+      {:error, :conflict} ->
+        conn |> put_status(409) |> json(%{error: "conflict"})
+
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "not found"})
     end

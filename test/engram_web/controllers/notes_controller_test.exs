@@ -284,4 +284,27 @@ defmodule EngramWeb.NotesControllerTest do
       assert %{"note" => _} = json_response(conn2, 200)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # POST /notes/rename
+  # ---------------------------------------------------------------------------
+
+  describe "POST /notes/rename" do
+    test "returns 409 when target path exists", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "a.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "b.md", content: "# B", mtime: 1_000.0})
+
+      conn2 = post(conn, "/api/notes/rename", %{old_path: "a.md", new_path: "b.md"})
+      assert json_response(conn2, 409) == %{"error" => "conflict"}
+
+      # Original still readable
+      conn3 = get(conn, "/api/notes/a.md")
+      assert %{"path" => "a.md"} = json_response(conn3, 200)
+    end
+
+    test "returns 404 when source path does not exist", %{conn: conn} do
+      conn2 = post(conn, "/api/notes/rename", %{old_path: "missing.md", new_path: "new.md"})
+      assert json_response(conn2, 404) == %{"error" => "not found"}
+    end
+  end
 end

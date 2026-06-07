@@ -589,6 +589,27 @@ defmodule Engram.NotesTest do
       assert {:error, :not_found} =
                Notes.rename_note(other_user, other_vault, "Test/Mine.md", "Test/Stolen.md")
     end
+
+    test "returns {:error, :conflict} when target path exists", %{user: user, vault: vault} do
+      {:ok, _a} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _b} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :conflict} = Notes.rename_note(user, vault, "a.md", "b.md")
+
+      # Original still present, untouched
+      assert {:ok, %{path: "a.md"}} = Notes.get_note(user, vault, "a.md")
+    end
   end
 
   # ---------------------------------------------------------------------------
