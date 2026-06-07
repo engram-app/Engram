@@ -99,6 +99,7 @@ function renderOnboardBilling() {
             <Routes>
               <Route path="/onboard/billing" element={<OnboardBillingPage />} />
               <Route path="/onboard/tools" element={<ToolsPageProbe />} />
+              <Route path="/onboard/vault" element={<div data-testid="vault-page" />} />
               <Route path="/" element={<div data-testid="home-page" />} />
             </Routes>
           </MemoryRouter>
@@ -350,5 +351,59 @@ describe('OnboardBillingPage — push activation', () => {
 
     await waitFor(() => expect(container.querySelector('.paddle-checkout')).toBeNull())
     expect(screen.getAllByRole('button', { name: /start free trial/i }).length).toBeGreaterThan(0)
+  })
+})
+
+describe('OnboardBillingPage — Free tier CTA', () => {
+  beforeEach(() => {
+    capturedEventCallback = undefined
+    toolsPageMounts = 0
+    get.mockReset()
+    post.mockReset()
+    patch.mockReset()
+    del.mockReset()
+    socketCtor.mockClear()
+    socketChannel.mockClear()
+    socketConnect.mockClear()
+    socketDisconnect.mockClear()
+    for (const k of Object.keys(channelHandlers)) delete channelHandlers[k]
+
+    get.mockImplementation(async (url: string) => {
+      if (url === '/billing/status') return BILLING_INACTIVE
+      if (url === '/billing/config') return BILLING_CONFIG
+      if (url === '/me') return { user: ME }
+      if (url === '/onboarding/status') return STATUS_BILLING
+      throw new Error(`unexpected GET ${url}`)
+    })
+  })
+
+  it("renders 'Continue with Free' button with subtitle", async () => {
+    renderOnboardBilling()
+
+    const btn = await screen.findByRole('button', { name: /continue with free/i })
+    expect(btn).toBeInTheDocument()
+    expect(screen.getByText(/10k notes · 1 vault · markdown only/i)).toBeInTheDocument()
+  })
+
+  it('calls POST /api/onboarding/accept_free_tier and navigates to /onboard/vault', async () => {
+    post.mockImplementation(async (url: string) => {
+      if (url === '/onboarding/accept_free_tier') {
+        return { ok: true, next_step: 'vault' }
+      }
+      throw new Error(`unexpected POST ${url}`)
+    })
+
+    renderOnboardBilling()
+
+    const btn = await screen.findByRole('button', { name: /continue with free/i })
+    await act(async () => {
+      btn.click()
+      await Promise.resolve()
+    })
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/onboarding/accept_free_tier'),
+    )
+    await waitFor(() => expect(screen.getByTestId('vault-page')).toBeInTheDocument())
   })
 })
