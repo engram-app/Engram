@@ -312,6 +312,101 @@ defmodule EngramWeb.WebhookControllerTest do
                        %{event_id: "ntf_err_result", result: :error}}
     end
 
+    test "subscription.canceled flips user to Free tier and emits :tier_downgraded telemetry",
+         %{conn: conn} do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_xyz",
+        status: "active",
+        tier: "pro"
+      )
+
+      pro_price_id = Application.fetch_env!(:engram, :paddle_pro_monthly_price_id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:engram, :tier_downgraded]]
+        )
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.canceled",
+          "event_id" => "ntf_cancel_free_tier",
+          "data" => %{
+            "id" => "sub_xyz",
+            "status" => "canceled",
+            "customer_id" => "ctm_x",
+            "items" => [%{"price" => %{"id" => pro_price_id}}],
+            "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+          }
+        })
+
+      timestamp = System.system_time(:second)
+      signature = sign(timestamp, payload)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("paddle-signature", "ts=#{timestamp};h1=#{signature}")
+        |> post("/webhooks/paddle", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+
+      reloaded_user = Engram.Repo.reload(user)
+      assert reloaded_user.free_tier_accepted_at != nil
+
+      sub = Engram.Billing.get_subscription(reloaded_user)
+      assert sub.status == "canceled"
+
+      assert_received {[:engram, :tier_downgraded], ^ref, _meas,
+                       %{from: :pro, to: :free, user_id: _}}
+    end
+
+    test "subscription.canceled preserves free_tier_accepted_at when already set",
+         %{conn: conn} do
+      original_ts = DateTime.add(DateTime.utc_now(), -86_400, :second)
+      user = insert(:user, free_tier_accepted_at: original_ts)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_preserve",
+        status: "active",
+        tier: "pro"
+      )
+
+      pro_price_id = Application.fetch_env!(:engram, :paddle_pro_monthly_price_id)
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.canceled",
+          "event_id" => "ntf_cancel_preserve",
+          "data" => %{
+            "id" => "sub_preserve",
+            "status" => "canceled",
+            "customer_id" => "ctm_x",
+            "items" => [%{"price" => %{"id" => pro_price_id}}],
+            "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+          }
+        })
+
+      timestamp = System.system_time(:second)
+      signature = sign(timestamp, payload)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("paddle-signature", "ts=#{timestamp};h1=#{signature}")
+        |> post("/webhooks/paddle", payload)
+
+      assert json_response(conn, 200)["status"] == "ok"
+
+      reloaded_user = Engram.Repo.reload(user)
+      assert DateTime.compare(reloaded_user.free_tier_accepted_at, original_ts) == :eq
+    end
+
     test "subscription.created with missing custom_data.user_id returns 200 and creates no row",
          %{conn: conn} do
       payload =
