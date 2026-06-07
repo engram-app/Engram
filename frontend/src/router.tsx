@@ -18,7 +18,6 @@ import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import { ROUTES } from './routes'
 import Dashboard from './viewer/dashboard'
 import NotePage from './viewer/note-page'
-import SearchPage from './viewer/search-page'
 import OnboardingGate from './onboarding/onboarding-gate'
 import OnboardLayout from './onboarding/onboard-layout'
 import OnboardRedirect from './onboarding/onboard-redirect'
@@ -88,41 +87,37 @@ export const router = createBrowserRouter(
                   children: [
                     { path: ROUTES.HOME, element: <Dashboard /> },
                     { path: '/note/*', element: <NotePage /> },
-                    { path: '/search', element: <SearchPage /> },
+                    {
+                      path: 'settings',
+                      element: <SettingsLayout />,
+                      children: [
+                        {
+                          index: true,
+                          element: <Navigate to="account" replace />,
+                        },
+                        {
+                          path: 'account',
+                          element: (
+                            <Suspense
+                              fallback={<p className="text-muted-foreground">Loading…</p>}
+                            >
+                              <AccountPage />
+                            </Suspense>
+                          ),
+                        },
+                        { path: 'vaults', element: <VaultsPage /> },
+                        { path: 'connections', element: <ConnectionsPage /> },
+                        { path: 'api-keys', element: <Navigate to="/settings/connections" replace /> },
+                        ...(config.billingEnabled
+                          ? [{ path: 'billing', element: <BillingPage /> }]
+                          : []),
+                        ...(config.authProvider === 'local'
+                          ? [{ path: 'admin', element: <AdminPanel /> }]
+                          : []),
+                      ],
+                    },
                   ],
                 },
-              ],
-            },
-            {
-              path: '/settings',
-              element: <SettingsLayout />,
-              children: [
-                {
-                  index: true,
-                  element: (
-                    <Navigate to="account" replace />
-                  ),
-                },
-                {
-                  path: 'account',
-                  element: (
-                    <Suspense
-                      fallback={<p className="text-muted-foreground">Loading…</p>}
-                    >
-                      <AccountPage />
-                    </Suspense>
-                  ),
-                },
-                { path: 'vaults', element: <VaultsPage /> },
-                { path: 'connections', element: <ConnectionsPage /> },
-                { path: 'api-keys', element: <Navigate to="/settings/connections" replace /> },
-                ...(config.billingEnabled
-                  ? [{ path: 'billing', element: <BillingPage /> }]
-                  : []),
-                // Self-host only — AdminPanel runs its own role gate too.
-                ...(config.authProvider === 'local'
-                  ? [{ path: 'admin', element: <AdminPanel /> }]
-                  : []),
               ],
             },
             { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },

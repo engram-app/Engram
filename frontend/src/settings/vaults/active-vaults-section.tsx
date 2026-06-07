@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Pencil, Star, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { VaultCreateForm } from '@/components/vault-create-form'
 import { SettingsSectionCard } from '@/settings/account/section-card'
 import { useVaults, useUpdateVault, type Vault } from '@/api/queries'
 import { DeleteVaultDialog } from './delete-vault-dialog'
@@ -12,9 +13,28 @@ const inputClass =
 export function ActiveVaultsSection() {
   const { data: vaults, isLoading } = useVaults()
   const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
 
   return (
-    <SettingsSectionCard title="Vaults" description="Rename, set a default, or delete your vaults.">
+    <SettingsSectionCard
+      title="Vaults"
+      description="Rename, set a default, or delete your vaults."
+      headerAction={
+        <Button onClick={() => setCreateOpen((o) => !o)}>
+          {createOpen ? 'Cancel' : 'New vault'}
+        </Button>
+      }
+    >
+      {createOpen && (
+        <section className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
+          <VaultCreateForm
+            autoFocus
+            showCancel
+            onCancel={() => setCreateOpen(false)}
+            onCreated={() => setCreateOpen(false)}
+          />
+        </section>
+      )}
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       <table className="w-full text-sm">
         <thead>
