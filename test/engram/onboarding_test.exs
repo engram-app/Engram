@@ -182,13 +182,16 @@ defmodule Engram.OnboardingTest do
       :ok
     end
 
-    test "next_step=agreement when user has no agreement and no subscription" do
+    test "next_step=agreement when user has no agreement (subscription_ok defaults true via Free)" do
+      # Under the Free-as-default model (Phase 1 + Task 2.2), users without a
+      # paid subscription resolve to `tier=:free` and pass `subscription_ok`.
+      # The agreement gate still blocks because terms haven't been accepted.
       user = insert(:user, onboarding_profile: %{})
 
       assert %{
                enabled: true,
                terms_ok: false,
-               subscription_ok: false,
+               subscription_ok: true,
                current_tos_version: "2026-05-15",
                next_step: :agreement
              } = Onboarding.status(user)
@@ -207,11 +210,14 @@ defmodule Engram.OnboardingTest do
       assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
     end
 
-    test "next_step=billing when terms accepted but no subscription" do
+    test "next_step advances past :billing when terms accepted (Free is implicit default)" do
+      # Under Free-as-default, a user without a paid subscription resolves
+      # to `tier=:free`, so `subscription_ok` is true and the wizard advances
+      # to :tools without requiring an explicit billing choice.
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
 
-      assert %{terms_ok: true, subscription_ok: false, next_step: :billing} =
+      assert %{terms_ok: true, subscription_ok: true, next_step: :tools} =
                Onboarding.status(user)
     end
 
@@ -714,11 +720,13 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step :billing still wins over :tools when subscription missing" do
+    test "next_step :tools when terms accepted and subscription missing (Free is implicit default)" do
+      # Under Free-as-default (Task 2.2), missing subscription resolves to
+      # `tier=:free`, so :billing no longer wins — the wizard advances to :tools.
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
 
-      assert %{next_step: :billing, profile_complete: false} = Onboarding.status(user)
+      assert %{next_step: :tools, profile_complete: false} = Onboarding.status(user)
     end
 
     test "next_step :agreement still wins when terms not accepted" do
@@ -773,6 +781,66 @@ defmodule Engram.OnboardingTest do
       {:ok, second} = Onboarding.accept_free_tier(first)
       assert DateTime.compare(first.free_tier_accepted_at, second.free_tier_accepted_at) == :eq
     end
+  end
+
+  describe "next_step — Free tier" do
+    setup do
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        content_hash: "canonical",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-15",
+        content_hash: "p",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.reset_version_cache()
+      on_exit(&LegalFixtures.reset_version_cache/0)
+
+      on_exit(fn ->
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+      end)
+
+      :ok
+    end
+
+    test "user with free_tier_accepted_at and other steps done → :done" do
+      user = insert(:user, free_tier_accepted_at: DateTime.utc_now(), onboarding_profile: %{})
+      seed_onboarding_complete_except_billing(user)
+      assert %{next_step: :done} = Onboarding.status(user)
+    end
+
+    test "user without free_tier or paid subscription still passes subscription_ok (Free is implicit default)" do
+      # Under the Free-as-default model, `Billing.tier/1` returns `:free` for
+      # un-onboarded users with no subscription, so `subscription_ok` passes
+      # without requiring an explicit billing choice. The carryover Phase 1
+      # failures (11 tests) closed because of this exact behavior.
+      user = insert(:user, free_tier_accepted_at: nil, onboarding_profile: %{})
+      seed_onboarding_complete_except_billing(user)
+      assert %{subscription_ok: true, next_step: :done} = Onboarding.status(user)
+    end
+  end
+
+  # Bring user to "all gates pass except billing/free-tier": accept current
+  # ToS, set profile (tools + uses_obsidian), and create a vault. Mirrors the
+  # setup used by the "next_step=done" tests in `status/1 when billing is
+  # enabled`. Caller controls billing state (subscription row or
+  # `free_tier_accepted_at`).
+  defp seed_onboarding_complete_except_billing(user) do
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+    insert(:vault, user: user)
+    :ok
   end
 
   defp with_agreement_query_count(fun) do

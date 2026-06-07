@@ -160,7 +160,12 @@ defmodule Engram.Onboarding do
     {terms_ok, current_tos, current_privacy, terms_notice} =
       terms_state(user, billing_active)
 
-    subscription_ok = if billing_active, do: Billing.active?(user), else: true
+    # Under the Free-tier model: any tier in [:free, :starter, :pro] satisfies
+    # the billing gate. `Billing.tier/1` always returns one of those three atoms;
+    # the `in [...]` guard is defensive in case the spec ever widens. Self-host
+    # (`billing_enabled=false`) auto-passes without consulting the resolver.
+    subscription_ok =
+      not billing_active or Billing.tier(user) in [:free, :starter, :pro]
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
