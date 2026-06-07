@@ -1,0 +1,41 @@
+import { describe, it, expect, vi } from "vitest"
+import { render, screen, fireEvent } from "@testing-library/react"
+import { MemoryRouter, Routes, Route } from "react-router"
+import { UpgradeRequiredDialog } from "./upgrade-required-dialog"
+
+function renderWithRouter(ui: React.ReactNode) {
+  return render(
+    <MemoryRouter initialEntries={["/start"]}>
+      <Routes>
+        <Route path="/start" element={ui} />
+        <Route path="/settings/billing" element={<div data-testid="billing-page">billing</div>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+describe("UpgradeRequiredDialog", () => {
+  it("renders title + body from copyFor(reason)", () => {
+    renderWithRouter(
+      <UpgradeRequiredDialog reason="attachments_disabled" open={true} onOpenChange={() => {}} />,
+    )
+    expect(screen.getByText(/pro feature/i)).toBeInTheDocument()
+  })
+
+  it("Upgrade button navigates to /settings/billing", async () => {
+    renderWithRouter(
+      <UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={() => {}} />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: /upgrade/i }))
+    expect(await screen.findByTestId("billing-page")).toBeInTheDocument()
+  })
+
+  it("Dismiss button closes the dialog", () => {
+    const onOpenChange = vi.fn()
+    renderWithRouter(
+      <UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={onOpenChange} />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+})
