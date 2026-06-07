@@ -45,43 +45,46 @@ async function signIn(page: import('@playwright/test').Page, email: string) {
 }
 
 test.describe('Dark mode', () => {
-  test('header toggle opens menu and picks each theme', async ({ page, baseURL }) => {
+  test('account menu hosts the theme picker — Light / Dark / System', async ({ page, baseURL }) => {
     const email = testEmail('menu')
     await registerUser(baseURL!, email)
     await signIn(page, email)
 
-    const toggle = page.getByRole('button', { name: /^theme:/i })
+    // ThemeToggle now lives inside the rail's account popover (UserMenu).
+    // Trigger = avatar button labelled "User menu". The three theme options
+    // are radio rows (role=menuitemradio) inside the dropdown.
+    const userMenu = page.getByRole('button', { name: 'User menu' })
     await expect(page.locator('html')).not.toHaveClass(/dark/)
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
 
     // Open menu → pick Dark
-    await toggle.click()
-    const menu = page.getByRole('menu', { name: 'Theme' })
-    await expect(menu).toBeVisible()
-    await menu.getByRole('menuitem', { name: 'Dark' }).click()
-    await expect(menu).toBeHidden()
+    await userMenu.click()
+    const darkRow = page.getByRole('menuitemradio', { name: 'Dark' })
+    await expect(darkRow).toBeVisible()
+    await darkRow.click()
     await expect(page.locator('html')).toHaveClass(/dark/)
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'dark')
 
-    // Open menu → pick Light
-    await toggle.click()
-    await page.getByRole('menuitem', { name: 'Light' }).click()
+    // Reopen → Dark row is now aria-checked
+    await userMenu.click()
+    await expect(page.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    // Pick Light → html class drops
+    await page.getByRole('menuitemradio', { name: 'Light' }).click()
     await expect(page.locator('html')).not.toHaveClass(/dark/)
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'light')
 
-    // Open menu → pick System; localStorage persists
-    await toggle.click()
-    await page.getByRole('menuitem', { name: 'System' }).click()
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
+    // Pick System; localStorage persists the choice
+    await userMenu.click()
+    await page.getByRole('menuitemradio', { name: 'System' }).click()
     const stored = await page.evaluate(() => window.localStorage.getItem('engram:theme'))
     expect(stored).toBe('system')
 
-    // Esc closes the menu without changing theme
-    await toggle.click()
-    await expect(page.getByRole('menu', { name: 'Theme' })).toBeVisible()
+    // Esc closes the menu without changing theme (System still active)
+    await userMenu.click()
+    await expect(page.getByRole('menuitemradio', { name: 'System' })).toBeVisible()
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('menu', { name: 'Theme' })).toBeHidden()
-    await expect(toggle).toHaveAttribute('data-theme-choice', 'system')
+    await expect(page.getByRole('menuitemradio', { name: 'System' })).toBeHidden()
   })
 
   test('System mode tracks prefers-color-scheme', async ({ browser, baseURL }) => {
