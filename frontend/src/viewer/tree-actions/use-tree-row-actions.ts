@@ -1,6 +1,5 @@
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
-import { ApiError } from '../../api/client'
 import {
   useDeleteFolder,
   useDeleteNote,
@@ -28,14 +27,10 @@ interface Row {
 // window; a Context would be heavier with no real benefit.
 let activeDrag: DragNode | null = null
 
-function moveErrorToast(err: unknown) {
-  if (err instanceof ApiError && err.status === 409) {
-    toast.error('Target already has an item with that name.')
-  } else {
-    toast.error('Move failed.')
-  }
-}
-
+// Move success uses a success toast on the assumption optimistic update
+// already shows the row in the new spot — the toast confirms intent. The
+// error toast is handled by the mutation itself (`useRenameNote` /
+// `useRenameFolder` `onError`), so we don't double-toast here.
 function moveSuccessToast(targetFolder: string) {
   toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
 }
@@ -90,12 +85,12 @@ function buildDropTargetProps(
       }
       const newPath = newPathAfterMove(src.path, targetFolder)
       const mutation = src.kind === 'file' ? renameNote : renameFolder
+      // Fire-and-forget. The mutation's own onError toasts on failure
+      // (and rolls back the optimistic cache); the success toast just
+      // confirms what the user already sees.
       mutation.mutate(
         { old_path: src.path, new_path: newPath },
-        {
-          onSuccess: () => moveSuccessToast(targetFolder),
-          onError: (err) => moveErrorToast(err),
-        },
+        { onSuccess: () => moveSuccessToast(targetFolder) },
       )
     },
   }
@@ -108,7 +103,6 @@ interface UseTreeRowActionsResult {
   renaming: boolean
   showDelete: boolean
   showMove: boolean
-  renameError: string | undefined
 
   // Openers
   openContextMenu: (pos: { x: number; y: number }) => void
@@ -120,12 +114,14 @@ interface UseTreeRowActionsResult {
   startMove: () => void
   copyWikilink: (label: string) => Promise<void>
 
-  // Commit handlers
-  commitRename: (next: string) => Promise<void>
+  // Commit handlers — fire-and-forget; the underlying mutations are
+  // optimistic, so UI state closes immediately and errors surface as
+  // toasts from the mutation's own onError handler.
+  commitRename: (next: string) => void
   cancelRename: () => void
-  confirmDelete: () => Promise<void>
+  confirmDelete: () => void
   cancelDelete: () => void
-  commitMove: (folder: string) => Promise<void>
+  commitMove: (folder: string) => void
   cancelMove: () => void
 
   // Drag helpers
@@ -146,7 +142,6 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
   const [renaming, setRenaming] = useState(false)
   const [showDelete, setShowDelete] = useState(false)
   const [showMove, setShowMove] = useState(false)
-  const [renameError, setRenameError] = useState<string | undefined>(undefined)
 
   const renameNote = useRenameNote()
   const renameFolder = useRenameFolder()
@@ -158,14 +153,8 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
   const openContextMenu = useCallback((pos: { x: number; y: number }) => setMenuPos(pos), [])
   const openDrawer = useCallback(() => setDrawerOpen(true), [])
 
-  const startRename = useCallback(() => {
-    setRenameError(undefined)
-    setRenaming(true)
-  }, [])
-  const cancelRename = useCallback(() => {
-    setRenaming(false)
-    setRenameError(undefined)
-  }, [])
+  const startRename = useCallback(() => setRenaming(true), [])
+  const cancelRename = useCallback(() => setRenaming(false), [])
   const startDelete = useCallback(() => setShowDelete(true), [])
   const cancelDelete = useCallback(() => setShowDelete(false), [])
   const startMove = useCallback(() => setShowMove(true), [])
@@ -182,68 +171,53 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
   )
 
   const commitRename = useCallback(
-    async (next: string) => {
+    (next: string) => {
       const newPath = computeNewPath(next)
       if (newPath === row.path) {
         cancelRename()
         return
       }
+      // Close UI immediately — the optimistic cache update in the
+      // mutation's onMutate has already swapped the row's label/path.
+      // Errors surface via the mutation's onError toast + cache rollback.
+      setRenaming(false)
       const mutation = row.kind === 'file' ? renameNote : renameFolder
-      try {
-        await mutation.mutateAsync({ old_path: row.path, new_path: newPath })
-        setRenaming(false)
-        setRenameError(undefined)
-        toast.success(`Renamed to ${next}`)
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          setRenameError(`A ${row.kind === 'file' ? 'file' : 'folder'} with that name already exists.`)
-        } else if (err instanceof ApiError && err.status === 404) {
-          toast.error('Item no longer exists.')
-          setRenaming(false)
-        } else {
-          setRenameError('Rename failed.')
-        }
-      }
+      mutation.mutate(
+        { old_path: row.path, new_path: newPath },
+        { onSuccess: () => toast.success(`Renamed to ${next}`) },
+      )
     },
     [row.path, row.kind, computeNewPath, renameNote, renameFolder, cancelRename],
   )
 
-  const confirmDelete = useCallback(async () => {
+  const confirmDelete = useCallback(() => {
+    // Close confirm dialog immediately; optimistic update removes the
+    // row from the tree so the user sees the deletion right away.
+    setShowDelete(false)
     const mutation = row.kind === 'file' ? deleteNote : deleteFolder
-    try {
-      await mutation.mutateAsync({ path: row.path })
-      setShowDelete(false)
-      toast.success(`Deleted ${row.label}`)
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        toast.error('Item no longer exists.')
-        setShowDelete(false)
-      } else {
-        toast.error('Delete failed.')
-      }
-    }
+    mutation.mutate(
+      { path: row.path },
+      { onSuccess: () => toast.success(`Deleted ${row.label}`) },
+    )
   }, [row.kind, row.path, row.label, deleteNote, deleteFolder])
 
   const commitMove = useCallback(
-    async (targetFolder: string) => {
+    (targetFolder: string) => {
       const src: DragNode = { kind: row.kind, path: row.path }
       if (!isValidDropTarget(src, targetFolder)) {
         setShowMove(false)
         return
       }
+      setShowMove(false)
       const newPath = newPathAfterMove(row.path, targetFolder)
       const mutation = row.kind === 'file' ? renameNote : renameFolder
-      try {
-        await mutation.mutateAsync({ old_path: row.path, new_path: newPath })
-        setShowMove(false)
-        toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          toast.error('Target already has an item with that name.')
-        } else {
-          toast.error('Move failed.')
-        }
-      }
+      mutation.mutate(
+        { old_path: row.path, new_path: newPath },
+        {
+          onSuccess: () =>
+            toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`),
+        },
+      )
     },
     [row.kind, row.path, renameNote, renameFolder],
   )
@@ -279,7 +253,6 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
     renaming,
     showDelete,
     showMove,
-    renameError,
     openContextMenu,
     openDrawer,
     closeMenu,

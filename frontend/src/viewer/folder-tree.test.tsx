@@ -2,9 +2,18 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { toast } from 'sonner'
 import FolderTree from './folder-tree'
 import { FolderTreeProvider } from '../layout/folder-tree-context'
 import { ApiError } from '../api/client'
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    info: vi.fn(),
+  },
+}))
 
 // ── Mutation spies (hoisted so vi.mock can see them) ─────────
 const {
@@ -83,7 +92,17 @@ vi.mock('../api/queries', async () => {
       return { data: [], isLoading: false }
     },
     useRenameNote: () => ({
-      mutate: renameNoteMutate,
+      mutate: vi.fn(
+        (
+          vars: { old_path: string; new_path: string },
+          opts?: { onSuccess?: () => void; onError?: (e: ApiError) => void },
+        ) => {
+          renameNoteMutate(vars)
+          const err = renameNoteError()
+          if (err) opts?.onError?.(err)
+          else opts?.onSuccess?.()
+        },
+      ),
       mutateAsync: vi.fn((vars: { old_path: string; new_path: string }) => {
         const err = renameNoteError()
         renameNoteMutate(vars)
@@ -92,7 +111,15 @@ vi.mock('../api/queries', async () => {
       isPending: false,
     }),
     useRenameFolder: () => ({
-      mutate: renameFolderMutate,
+      mutate: vi.fn(
+        (
+          vars: { old_path: string; new_path: string },
+          opts?: { onSuccess?: () => void },
+        ) => {
+          renameFolderMutate(vars)
+          opts?.onSuccess?.()
+        },
+      ),
       mutateAsync: vi.fn((vars: { old_path: string; new_path: string }) => {
         renameFolderMutate(vars)
         return Promise.resolve({ renamed: true, ...vars, count: 0 })
@@ -100,7 +127,10 @@ vi.mock('../api/queries', async () => {
       isPending: false,
     }),
     useDeleteNote: () => ({
-      mutate: deleteNoteMutate,
+      mutate: vi.fn((vars: { path: string }, opts?: { onSuccess?: () => void }) => {
+        deleteNoteMutate(vars)
+        opts?.onSuccess?.()
+      }),
       mutateAsync: vi.fn((vars: { path: string }) => {
         deleteNoteMutate(vars)
         return Promise.resolve({ deleted: true })
@@ -108,7 +138,10 @@ vi.mock('../api/queries', async () => {
       isPending: false,
     }),
     useDeleteFolder: () => ({
-      mutate: deleteFolderMutate,
+      mutate: vi.fn((vars: { path: string }, opts?: { onSuccess?: () => void }) => {
+        deleteFolderMutate(vars)
+        opts?.onSuccess?.()
+      }),
       mutateAsync: vi.fn((vars: { path: string }) => {
         deleteFolderMutate(vars)
         return Promise.resolve({ deleted: true })
@@ -155,6 +188,9 @@ beforeEach(() => {
   createNoteMutate.mockReset()
   duplicateNoteMutate.mockReset()
   setRenameNoteError(null)
+  ;(toast.error as ReturnType<typeof vi.fn>).mockReset()
+  ;(toast.success as ReturnType<typeof vi.fn>).mockReset()
+  ;(toast.info as ReturnType<typeof vi.fn>).mockReset()
 })
 
 describe('FolderTree tree actions', () => {
@@ -337,7 +373,7 @@ describe('FolderTree tree actions', () => {
     })
   })
 
-  it('409 from rename keeps row in edit mode with error visible', async () => {
+  it('409 from rename surfaces a toast (no inline error; row closes optimistically)', async () => {
     setRenameNoteError(new ApiError(409, 'conflict'))
     renderTree()
     const link = screen.getByRole('link', { name: /a/i })
@@ -351,8 +387,13 @@ describe('FolderTree tree actions', () => {
     await waitFor(() => {
       expect(renameNoteMutate).toHaveBeenCalled()
     })
-    // Row should still be in rename mode (input still mounted) and error visible
-    expect(await screen.findByRole('alert')).toHaveTextContent(/already exists|conflict|exists/i)
-    expect(screen.getByRole('textbox')).toBeInTheDocument()
+    // Inline alert is gone — failure surfaces via toast instead. Real
+    // useRenameNote also rolls back the optimistic cache; the mocked
+    // mutation here only fires the onError callback, which doesn't toast
+    // (the toast lives in the real mutation's onError). What we DO
+    // assert: the row exited rename mode (UI closed optimistically)
+    // rather than staying stuck in an edit state.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
   })
 })

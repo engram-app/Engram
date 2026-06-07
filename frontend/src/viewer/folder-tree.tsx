@@ -197,10 +197,7 @@ function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps)
           <RenameInput
             initial={node.name}
             kind="folder"
-            error={rowActions.renameError}
-            onCommit={(next) => {
-              void rowActions.commitRename(next)
-            }}
+            onCommit={rowActions.commitRename}
             onCancel={rowActions.cancelRename}
           />
         </div>
@@ -253,9 +250,7 @@ function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps)
       {rowActions.showDelete && (
         <DeleteConfirm
           node={{ kind: 'folder', path: node.fullPath, childCount }}
-          onConfirm={() => {
-            void rowActions.confirmDelete()
-          }}
+          onConfirm={rowActions.confirmDelete}
           onCancel={rowActions.cancelDelete}
         />
       )}
@@ -263,9 +258,7 @@ function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps)
         <MoveDialog
           folders={folders.map((f) => ({ name: f.name }))}
           node={{ kind: 'folder', path: node.fullPath }}
-          onPick={(folder) => {
-            void rowActions.commitMove(folder)
-          }}
+          onPick={rowActions.commitMove}
           onCancel={rowActions.cancelMove}
         />
       )}
@@ -401,10 +394,7 @@ function NoteLeaf({
           <RenameInput
             initial={fileName}
             kind="file"
-            error={rowActions.renameError}
-            onCommit={(next) => {
-              void rowActions.commitRename(next)
-            }}
+            onCommit={rowActions.commitRename}
             onCancel={rowActions.cancelRename}
           />
         </div>
@@ -455,9 +445,7 @@ function NoteLeaf({
       {rowActions.showDelete && (
         <DeleteConfirm
           node={{ kind: 'file', path: note.path }}
-          onConfirm={() => {
-            void rowActions.confirmDelete()
-          }}
+          onConfirm={rowActions.confirmDelete}
           onCancel={rowActions.cancelDelete}
         />
       )}
@@ -465,9 +453,7 @@ function NoteLeaf({
         <MoveDialog
           folders={folders.map((f) => ({ name: f.name }))}
           node={{ kind: 'file', path: note.path }}
-          onPick={(folder) => {
-            void rowActions.commitMove(folder)
-          }}
+          onPick={rowActions.commitMove}
           onCancel={rowActions.cancelMove}
         />
       )}

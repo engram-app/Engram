@@ -1,7 +1,24 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    info: vi.fn(),
+  },
+}))
+
+// Pin the active vault id so cache keys are deterministic for the
+// optimistic-update tests below. The hook reads from a module-scoped
+// store + localStorage; setting localStorage before module import is
+// brittle, so we mock the hook directly.
+vi.mock('./active-vault', async () => {
+  const actual = await vi.importActual<typeof import('./active-vault')>('./active-vault')
+  return { ...actual, useActiveVaultId: () => 42 }
+})
 
 const { get, post, del } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -144,9 +161,11 @@ describe('useRenameNote', () => {
       old_path: 'a/x.md',
       new_path: 'b/y.md',
     })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['note'] })
+    // onSettled scopes invalidation by vault — broader keys would
+    // touch other vaults' caches needlessly.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['note', 42] })
   })
 
   it('surfaces 409 as ApiError', async () => {
@@ -173,8 +192,8 @@ describe('useRenameFolder', () => {
       old_path: 'a',
       new_path: 'b',
     })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
   })
 
   it('surfaces 409 as ApiError', async () => {
@@ -201,9 +220,11 @@ describe('useDeleteNote', () => {
     // Each path segment is URL-encoded but slashes are preserved so the
     // Phoenix splat route matches.
     expect(del).toHaveBeenCalledWith('/notes/foo%20bar/x%20y.md')
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
-    expect(removeSpy).toHaveBeenCalledWith({ queryKey: ['note'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
+    // The optimistic onMutate removes the note's body cache, so we
+    // assert removeQueries was called with the specific keyed note.
+    expect(removeSpy).toHaveBeenCalledWith({ queryKey: ['note', 42, 'foo bar/x y.md'] })
   })
 
   it('surfaces backend errors as ApiError', async () => {
@@ -242,8 +263,8 @@ describe('useDuplicateNote', () => {
       '/notes',
       expect.objectContaining({ path: 'a (copy).md', content: 'hello world' }),
     )
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
   })
 
   it('surfaces 409 from POST as ApiError so callers can toast', async () => {
@@ -268,8 +289,8 @@ describe('useDeleteFolder', () => {
     })
 
     expect(del).toHaveBeenCalledWith('/folders/my%20folder/sub')
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
   })
 
   it('surfaces backend errors as ApiError', async () => {
@@ -279,5 +300,173 @@ describe('useDeleteFolder', () => {
     await expect(result.current.mutateAsync({ path: 'gone' })).rejects.toMatchObject({
       status: 404,
     })
+  })
+})
+
+// ── Optimistic-update behaviour ──────────────────────────────
+//
+// These tests don't assert on network calls — that's the responsibility
+// of the per-mutation specs above. They lock in the snappy-UI contract:
+// caches mutate synchronously on `onMutate`, and `onError` restores the
+// pre-mutation snapshot so a rejected request leaves no visible trace.
+
+function seedFolderNotes(folder: string, notes: Array<Partial<{ path: string; title: string }>>) {
+  qc.setQueryData(['folderNotes', 42, folder], {
+    notes: notes.map((n) => ({
+      path: n.path ?? '',
+      title: n.title ?? '',
+      folder,
+      tags: [],
+      version: 1,
+      mtime: '',
+      created_at: '',
+      updated_at: '',
+    })),
+  })
+}
+
+function seedFolders(folders: Array<{ name: string; count: number }>) {
+  qc.setQueryData(['folders', 42], { folders })
+}
+
+describe('optimistic rename note', () => {
+  it('removes the note from the old folder cache and inserts into the new folder before the network resolves', async () => {
+    seedFolderNotes('a', [{ path: 'a/x.md', title: 'X' }])
+    seedFolderNotes('b', [])
+    seedFolders([
+      { name: 'a', count: 1 },
+      { name: 'b', count: 0 },
+    ])
+
+    // Hold the POST so we can inspect the optimistic state.
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useRenameNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ old_path: 'a/x.md', new_path: 'b/x.md' })
+    })
+
+    await waitFor(() => {
+      const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+        'folderNotes',
+        42,
+        'a',
+      ])
+      expect(oldList?.notes.map((n) => n.path)).toEqual([])
+    })
+
+    const newList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+      'folderNotes',
+      42,
+      'b',
+    ])
+    expect(newList?.notes.map((n) => n.path)).toContain('b/x.md')
+
+    const folders = qc.getQueryData<{ folders: Array<{ name: string; count: number }> }>([
+      'folders',
+      42,
+    ])
+    expect(folders?.folders.find((f) => f.name === 'a')?.count).toBe(0)
+    expect(folders?.folders.find((f) => f.name === 'b')?.count).toBe(1)
+
+    // Settle the promise so React Query unwinds cleanly.
+    resolvePost({ renamed: true, old_path: 'a/x.md', new_path: 'b/x.md' })
+  })
+
+  it('restores the pre-mutation cache snapshot when the mutation rejects', async () => {
+    seedFolderNotes('a', [{ path: 'a/x.md', title: 'X' }])
+    seedFolderNotes('b', [])
+    seedFolders([
+      { name: 'a', count: 1 },
+      { name: 'b', count: 0 },
+    ])
+
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useRenameNote(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ old_path: 'a/x.md', new_path: 'b/x.md' })
+      } catch {
+        // Expected — we want the rollback.
+      }
+    })
+
+    const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+      'folderNotes',
+      42,
+      'a',
+    ])
+    expect(oldList?.notes.map((n) => n.path)).toEqual(['a/x.md'])
+
+    const newList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+      'folderNotes',
+      42,
+      'b',
+    ])
+    expect(newList?.notes.map((n) => n.path)).toEqual([])
+
+    const folders = qc.getQueryData<{ folders: Array<{ name: string; count: number }> }>([
+      'folders',
+      42,
+    ])
+    expect(folders?.folders.find((f) => f.name === 'a')?.count).toBe(1)
+    expect(folders?.folders.find((f) => f.name === 'b')?.count).toBe(0)
+  })
+})
+
+describe('optimistic delete note', () => {
+  it('removes the note from the folder cache before the request resolves', async () => {
+    seedFolderNotes('', [
+      { path: 'gone.md', title: 'Gone' },
+      { path: 'stays.md', title: 'Stays' },
+    ])
+    seedFolders([{ name: '', count: 2 }])
+
+    let resolveDel!: (v: unknown) => void
+    del.mockReturnValue(new Promise((r) => (resolveDel = r)))
+
+    const { result } = renderHook(() => useDeleteNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ path: 'gone.md' })
+    })
+
+    await waitFor(() => {
+      const list = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+        'folderNotes',
+        42,
+        '',
+      ])
+      expect(list?.notes.map((n) => n.path)).toEqual(['stays.md'])
+    })
+
+    resolveDel({ deleted: true })
+  })
+
+  it('restores the cache when the delete fails', async () => {
+    seedFolderNotes('', [
+      { path: 'gone.md', title: 'Gone' },
+      { path: 'stays.md', title: 'Stays' },
+    ])
+    seedFolders([{ name: '', count: 2 }])
+
+    del.mockRejectedValue(new ApiError(500, 'boom'))
+
+    const { result } = renderHook(() => useDeleteNote(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ path: 'gone.md' })
+      } catch {
+        // expected
+      }
+    })
+
+    const list = qc.getQueryData<{ notes: Array<{ path: string }> }>([
+      'folderNotes',
+      42,
+      '',
+    ])
+    expect(list?.notes.map((n) => n.path).sort()).toEqual(['gone.md', 'stays.md'])
   })
 })
