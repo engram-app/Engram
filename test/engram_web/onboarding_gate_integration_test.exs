@@ -100,4 +100,25 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     resp = post(conn, "/api/notes", body)
     assert resp.status in [200, 201]
   end
+
+  test "suspended user gets 402 from RequireActiveSubscription on vault routes",
+       %{conn: conn, user: user} do
+    # Pass onboarding fully: terms accepted, Free tier accepted (counts as
+    # subscription_ok), profile complete, vault present (setup already added one).
+    {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, user} = Engram.Onboarding.accept_free_tier(user)
+    {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+
+    # Now suspend the user — RequireOnboarding still passes (Free accepted),
+    # but RequireActiveSubscription should halt with 402 account_suspended.
+    {:ok, _user} =
+      user
+      |> Ecto.Changeset.change(suspended_at: DateTime.utc_now())
+      |> Engram.Repo.update()
+
+    resp = get(conn, "/api/notes/changes")
+    body = json_response(resp, 402)
+    assert body["error"] == "limit_exceeded"
+    assert body["reason"] == "account_suspended"
+  end
 end
