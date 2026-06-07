@@ -49,4 +49,19 @@ describe('useLongPress', () => {
     expect(onLongPress).not.toHaveBeenCalled()
     vi.useRealTimers()
   })
+
+  it('fires onMoveExceedThreshold when threshold exceeded AFTER long-press fires', () => {
+    vi.useFakeTimers()
+    const onLongPress = vi.fn()
+    const onMoveExceedThreshold = vi.fn()
+    const { result } = renderHook(() =>
+      useLongPress({ onLongPress, onMoveExceedThreshold, delayMs: 500 })
+    )
+    act(() => result.current.onPointerDown({ pointerId: 1, clientX: 0, clientY: 0 } as any))
+    act(() => vi.advanceTimersByTime(500))
+    expect(onLongPress).toHaveBeenCalledOnce()
+    act(() => result.current.onPointerMove({ pointerId: 1, clientX: 20, clientY: 0 } as any))
+    expect(onMoveExceedThreshold).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
 })

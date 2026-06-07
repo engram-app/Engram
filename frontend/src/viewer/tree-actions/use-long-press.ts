@@ -31,8 +31,8 @@ export function useLongPress({
 
   return {
     onPointerDown(e: React.PointerEvent) {
+      cancel()
       start.current = { x: e.clientX, y: e.clientY }
-      fired.current = false
       timer.current = setTimeout(() => {
         fired.current = true
         onLongPress()
