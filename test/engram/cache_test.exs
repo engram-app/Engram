@@ -97,12 +97,19 @@ defmodule Engram.CacheTest do
   end
 
   describe "Engram.Cache.Redix child_spec" do
-    test "passes the :https-shape hostname match_fun to Redix via :socket_opts" do
-      # Mirrors EngramWeb.RateLimiter.Redis: ElastiCache/Valkey wildcard certs
-      # (`*.cluster.cache.amazonaws.com`) fail Erlang's default strict literal
-      # hostname check against leftmost-label hosts. The match_fun is ignored
-      # for plain-tcp `redis://` URLs (no TLS handshake) so passing
-      # unconditionally is safe for selfhost.
+    test "omits :socket_opts for plain-tcp redis:// URLs" do
+      # `customize_hostname_check` is `:ssl`-only. Redix passes
+      # `:socket_opts` to `:gen_tcp.connect/4` for `redis://` which barfs
+      # ArgumentError → boot-loop. MUST be omitted entirely on plain-tcp.
+      spec = Engram.Cache.Redix.child_spec(url: "redis://localhost:6379")
+      assert {Redix, :start_link, [_url, opts]} = spec.start
+      assert opts == [name: :engram_cache_redix, sync_connect: false]
+    end
+
+    test "appends the :https-shape hostname match_fun via :socket_opts for rediss:// URLs" do
+      # AWS ElastiCache/Valkey wildcard certs (`*.cluster.cache.amazonaws.com`)
+      # fail Erlang's default strict literal hostname check on leftmost-label
+      # hosts. The `:https`-shape match_fun applies RFC 6125 wildcard rules.
       spec = Engram.Cache.Redix.child_spec(url: "rediss://master.example:6379")
       assert {Redix, :start_link, [_url, opts]} = spec.start
 
