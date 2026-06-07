@@ -270,8 +270,12 @@ defmodule EngramWeb.NotesControllerTest do
 
       conn3 = post(conn, "/api/notes", %{path: "C.md", content: "# C", mtime: 3.0})
 
-      assert %{"error" => "notes_cap_reached", "upgrade_required" => true} =
-               json_response(conn3, 402)
+      body = json_response(conn3, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "notes_cap_exceeded"
+      assert body["limit_key"] == "notes_cap"
+      assert body["limit"] == 2
+      assert body["current"] == 2
     end
 
     test "permits updates to existing notes after cap is hit", %{conn: conn, user: user} do
@@ -282,6 +286,41 @@ defmodule EngramWeb.NotesControllerTest do
       # Updating A is fine — only NEW notes are gated
       conn2 = post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0})
       assert %{"note" => _} = json_response(conn2, 200)
+    end
+  end
+
+  # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.halt/5
+  describe "POST /api/notes — Free tier notes_cap exceeded" do
+    setup %{conn: conn} do
+      user =
+        insert(:user, free_tier_accepted_at: DateTime.utc_now(), suspended_at: nil)
+
+      _vault = insert(:vault, user: user, is_default: true)
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "ft-test-key")
+      grant_api_write!(user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      # Fast-set the maintained meter to the Free-tier default cap (10_000)
+      # instead of inserting 10k real notes. Limit enforcement reads
+      # UsageMeters.notes_count/1, so this is the only state the resolver
+      # cares about for the 402 branch.
+      :ok = Engram.UsageMeters.inc_notes_count(user.id, 10_000)
+
+      authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
+      %{conn: authed, user: user}
+    end
+
+    test "returns standardized 402 shape", %{conn: conn} do
+      payload = %{"path" => "new.md", "content" => "x", "mtime" => 1_000.0}
+      conn = post(conn, ~p"/api/notes", payload)
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "notes_cap_exceeded"
+      assert body["tier"] == "free"
+      assert body["limit_key"] == "notes_cap"
+      assert body["limit"] == 10_000
+      assert body["current"] == 10_000
+      assert body["upgrade_url"] =~ "/settings/billing"
     end
   end
 end
