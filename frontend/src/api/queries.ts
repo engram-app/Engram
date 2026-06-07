@@ -878,15 +878,17 @@ export function useRenameNote() {
 export function useRenameFolder() {
   const qc = useQueryClient()
   return useMutation<
-    { renamed: boolean; old_path: string; new_path: string },
+    { renamed: boolean; old_path: string; new_path: string; count: number },
     ApiError,
     { old_path: string; new_path: string }
   >({
     mutationFn: (vars) =>
-      api.post<{ renamed: boolean; old_path: string; new_path: string }>(
-        '/folders/rename',
-        vars,
-      ),
+      api.post<{
+        renamed: boolean
+        old_path: string
+        new_path: string
+        count: number
+      }>('/folders/rename', vars),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['folderNotes'] })

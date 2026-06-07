@@ -155,7 +155,7 @@ describe('useRenameNote', () => {
 
 describe('useRenameFolder', () => {
   it('POSTs /folders/rename and invalidates folders + folder lists', async () => {
-    post.mockResolvedValue({ renamed: true, old_path: 'a', new_path: 'b' })
+    post.mockResolvedValue({ renamed: true, old_path: 'a', new_path: 'b', count: 3 })
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
 
     const { result } = renderHook(() => useRenameFolder(), { wrapper })

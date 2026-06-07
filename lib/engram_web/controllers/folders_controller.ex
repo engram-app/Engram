@@ -78,16 +78,16 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
-  def rename(conn, %{"old_folder" => old_folder, "new_folder" => new_folder}) do
+  def rename(conn, %{"old_path" => old_path, "new_path" => new_path}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Notes.rename_folder(user, vault, old_folder, new_folder) do
+    case Notes.rename_folder(user, vault, old_path, new_path) do
       {:ok, 0} ->
         conn |> put_status(404) |> json(%{error: "folder not found"})
 
       {:ok, count} ->
-        json(conn, %{renamed: true, old_folder: old_folder, new_folder: new_folder, count: count})
+        json(conn, %{renamed: true, old_path: old_path, new_path: new_path, count: count})
 
       {:error, :conflict} ->
         conn |> put_status(409) |> json(%{error: "conflict"})
