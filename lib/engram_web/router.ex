@@ -265,10 +265,17 @@ defmodule EngramWeb.Router do
 
   # Vault-scoped authenticated endpoints (VaultPlug resolves current_vault)
   scope "/api", EngramWeb do
-    # RequireOnboarding gates vault access on TOS + active subscription
-    # (skipped entirely in self-host mode; see lib/engram/onboarding.ex).
+    # NotesRateLimit runs FIRST — before Auth — so 401-loop attacks against
+    # /api/notes/* are bucketed by {ip, jwt-sub-or-anon} and rejected with
+    # 429 even when the Bearer token is garbage. Cloudflare cannot count
+    # response-conditional (auth-rejected) requests on the Free tier, so
+    # this is the only thing standing between an attacker and the auth
+    # gate. RequireOnboarding gates vault access on TOS + active
+    # subscription (skipped entirely in self-host mode; see
+    # lib/engram/onboarding.ex).
     pipe_through [
       :api,
+      EngramWeb.Plugs.NotesRateLimit,
       EngramWeb.Plugs.Auth,
       EngramWeb.Plugs.AccountDeleted,
       EngramWeb.Plugs.DeviceFingerprint,
