@@ -1,0 +1,117 @@
+import { Search, X } from 'lucide-react'
+import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { type SearchResult, useSearch } from '../api/queries'
+import { pushRecent, readRecent } from './recent-searches'
+import { useRailView } from './rail-view-context'
+
+export default function SearchPanel() {
+  const { setView } = useRailView()
+  const [input, setInput] = useState('')
+  const deferred = useDeferredValue(input.trim())
+  const { data: results, isLoading, error } = useSearch(deferred)
+  const [recent, setRecent] = useState<string[]>(() => readRecent())
+  const inputRef = useRef<HTMLInputElement>(null)
+  const lastRecordedRef = useRef<string>('')
+  const hasResults = !!results && results.length > 0
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    if (deferred.length >= 2 && hasResults && lastRecordedRef.current !== deferred) {
+      lastRecordedRef.current = deferred
+      setRecent(pushRecent(deferred))
+    }
+  }, [deferred, hasResults])
+
+  const close = () => setView('files')
+
+  return (
+    <div className="flex h-full flex-col">
+      <header className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Search</h2>
+        <Button variant="ghost" size="icon-sm" aria-label="Close search" title="Return to files" onClick={close}>
+          <X className="h-4 w-4" />
+        </Button>
+      </header>
+      <div className="border-b border-border p-2">
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            type="search"
+            placeholder="Search your notes…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') close()
+            }}
+            className="w-full rounded-md border border-border bg-background py-1.5 pl-7 pr-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+      </div>
+      <ScrollArea className="flex-1">
+        {!deferred && recent.length > 0 && <RecentList recent={recent} onPick={(q) => setInput(q)} />}
+        {deferred && isLoading && <p className="px-3 py-2 text-xs text-muted-foreground">Searching…</p>}
+        {error && <p className="px-3 py-2 text-xs text-destructive">Search failed: {error.message}</p>}
+        {deferred && results && results.length === 0 && !isLoading && (
+          <p className="px-3 py-2 text-xs text-muted-foreground">No results for "{deferred}"</p>
+        )}
+        {results && results.length > 0 && (
+          <ul className="space-y-1 p-2">
+            {results.map((r) => (
+              <li key={r.path}>
+                <ResultRow result={r} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </ScrollArea>
+    </div>
+  )
+}
+
+function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) => void }) {
+  return (
+    <section className="p-2">
+      <p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent</p>
+      <ul className="space-y-0.5">
+        {recent.map((q) => (
+          <li key={q}>
+            <button
+              type="button"
+              onClick={() => onPick(q)}
+              className="block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent"
+            >
+              {q}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function ResultRow({ result }: { result: SearchResult }) {
+  const href = `/note/${result.path.split('/').map(encodeURIComponent).join('/')}`
+  return (
+    <Link
+      to={href}
+      className="block rounded-md border border-border bg-card p-2 text-sm hover:border-primary/40 hover:bg-accent"
+    >
+      <p className="font-medium">{result.title || lastSegment(result.path)}</p>
+      {result.heading_path && result.heading_path !== result.title && (
+        <p className="text-xs text-muted-foreground">↳ {result.heading_path}</p>
+      )}
+      {result.snippet && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{result.snippet}</p>}
+    </Link>
+  )
+}
+
+function lastSegment(path: string): string {
+  return (path.split('/').pop() ?? path).replace(/\.md$/, '')
+}
