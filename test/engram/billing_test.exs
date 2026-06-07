@@ -27,14 +27,21 @@ defmodule Engram.BillingTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           # Three calls with the same unknown price ID — must log only once.
-          # Unknown defaults to "free" (pricing v3) so a bogus payload can't
-          # silently grant paid features.
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+          # Unknown returns {:error, :unknown_price_id} so the caller can
+          # decide what to do (typically: do NOT mutate the user's tier and
+          # alert ops) rather than silently coercing to a tier.
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
 
           # A different unknown price → should also log once.
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_b"))
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_b"))
         end)
 
       occurrences = log |> String.split("paddle_unknown_price_id") |> length() |> Kernel.-(1)
@@ -52,16 +59,41 @@ defmodule Engram.BillingTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert "starter" ==
+          assert {:ok, :starter} ==
                    Billing.tier_from_subscription(%{
                      "items" => [%{"price" => %{"id" => starter_id}}]
                    })
 
-          assert "pro" ==
+          assert {:ok, :pro} ==
                    Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro_id}}]})
         end)
 
       refute log =~ "paddle_unknown_price_id"
+    end
+
+    test "returns {:ok, :starter} for starter monthly price id" do
+      starter = Application.get_env(:engram, :paddle_starter_monthly_price_id)
+
+      assert {:ok, :starter} =
+               Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => starter}}]})
+    end
+
+    test "returns {:ok, :pro} for pro monthly price id" do
+      pro = Application.get_env(:engram, :paddle_pro_monthly_price_id)
+
+      assert {:ok, :pro} =
+               Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro}}]})
+    end
+
+    test "returns {:error, :unknown_price_id} for unknown price id" do
+      assert {:error, :unknown_price_id} =
+               Billing.tier_from_subscription(%{
+                 "items" => [%{"price" => %{"id" => "pri_unknown_xyz"}}]
+               })
+    end
+
+    test "returns {:error, :unknown_price_id} for malformed payload" do
+      assert {:error, :unknown_price_id} = Billing.tier_from_subscription(%{})
     end
   end
 
