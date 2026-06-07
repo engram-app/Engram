@@ -10,6 +10,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { useMe } from '../api/queries'
 import { config } from '../config'
 import { Rail } from '../layout/app-sidebar'
@@ -54,11 +55,12 @@ export default function SettingsLayout() {
   const isAdmin = me?.role === 'admin'
   const sections = buildSettingsSections(config.authProvider, config.billingEnabled, isAdmin)
   const [navOpen, setNavOpen] = useState(false)
+  const isDesktop = useMediaQuery('(min-width: 768px)')
 
   return (
     <RailViewProvider>
       <section className="flex h-screen bg-background text-foreground">
-        <Rail />
+        {isDesktop && <Rail />}
         <section className="relative min-h-0 flex-1 overflow-hidden">
           {/* Brand grid texture behind the settings panel (matches onboarding). */}
           <AuthBackdrop />

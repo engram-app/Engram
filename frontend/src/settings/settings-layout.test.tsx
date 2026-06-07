@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -32,6 +32,10 @@ function renderAt(path: string) {
 }
 
 describe('SettingsLayout', () => {
+  beforeEach(() => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as any
+  })
+
   it('renders the app rail, the settings nav, and the routed section', () => {
     renderAt('/settings/api-keys')
     // Rail replaced the old AppHeader; assert on its nav landmark + the

@@ -11,7 +11,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import ThemeToggle from '../theme/theme-toggle'
 import FolderTree from '../viewer/folder-tree'
 import FolderActions from './folder-actions'
 import { FolderTreeProvider } from './folder-tree-context'
@@ -82,7 +81,6 @@ export default function MobileLayout() {
           </Link>
         </section>
         <nav className="flex items-center gap-1" aria-label="Main navigation">
-          <ThemeToggle />
           <UserMenu />
           {rightContent && (
             <Sheet open={rightOpen} onOpenChange={setRightOpen}>
