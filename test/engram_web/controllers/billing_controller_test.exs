@@ -29,11 +29,14 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/status" do
-    test "returns inactive status for new user with no subscription", %{conn: conn} do
+    test "returns free-tier status for new user with no subscription", %{conn: conn} do
+      # Under Free-as-default (Phase 1 Task 1.3), `Billing.active?/1` returns
+      # true unless the user is suspended — un-onboarded users with no
+      # subscription resolve to `tier=:free` and `active=true`.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["tier"] == "free"
-      assert body["active"] == false
+      assert body["active"] == true
       assert body["trial_days_remaining"] == 0
       assert body["subscription"] == nil
     end

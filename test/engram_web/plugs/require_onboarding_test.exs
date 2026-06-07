@@ -59,26 +59,30 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     refute conn.halted
   end
 
-  test "halts 403 with missing=[profile,subscription,terms] when all three gates fail",
+  test "halts 403 with missing=[profile,terms] when terms and profile both missing",
        %{conn: conn} do
+    # Under Free-as-default (Task 2.2), subscription_ok passes implicitly via
+    # `tier=:free`, so :subscription is never in the missing-list. The two
+    # remaining gates are terms + profile.
     user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["error"] == "onboarding_required"
-    assert Enum.sort(body["missing"]) == ["profile", "subscription", "terms"]
+    assert Enum.sort(body["missing"]) == ["profile", "terms"]
   end
 
-  test "halts 403 with missing=[profile,subscription] when only terms is satisfied",
+  test "halts 403 with missing=[profile] when only terms is satisfied",
        %{conn: conn} do
+    # Under Free-as-default (Task 2.2), the subscription gate auto-passes.
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
-    assert Enum.sort(body["missing"]) == ["profile", "subscription"]
+    assert Enum.sort(body["missing"]) == ["profile"]
   end
 
   test "halts 403 with missing=[profile,terms] when only subscription is satisfied",
@@ -162,12 +166,14 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert body["next_step"] == "agreement"
   end
 
-  test "403 next_step is 'billing' when terms accepted but no subscription", %{conn: conn} do
+  test "403 next_step is 'tools' when terms accepted (Free is implicit default)", %{conn: conn} do
+    # Under Free-as-default (Task 2.2), subscription_ok passes via `tier=:free`,
+    # so the wizard advances past :billing once terms are accepted.
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     body = Phoenix.ConnTest.json_response(conn, 403)
-    assert body["next_step"] == "billing"
+    assert body["next_step"] == "tools"
   end
 
   test "403 includes Content-Type application/json", %{conn: conn} do
