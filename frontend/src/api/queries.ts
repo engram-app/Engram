@@ -838,3 +838,85 @@ export function useConfirmPlanChange() {
     onSuccess: () => invalidateBilling(qc),
   })
 }
+
+// ── Tree mutations (rename / delete) ─────────────────────────
+//
+// Folder/note rename + delete on the tree. Rename endpoints return 409
+// on target-exists (collision) and 404 if the source is missing — both
+// surface as ApiError to the caller via api.post / api.del.
+//
+// Cache invalidation is broad on purpose: a rename can move a note out
+// of its old parent and into a new one, and a folder rename can
+// reshape multiple folder-notes lists (every list under the renamed
+// subtree). Rather than calculate the affected keys precisely, we
+// invalidate the whole ['folders'] and ['folderNotes'] families and
+// let React Query refetch the ones that are currently mounted. That
+// matches what useUpdateNote / useCreateNote already do.
+
+export function useRenameNote() {
+  const qc = useQueryClient()
+  return useMutation<
+    { renamed: boolean; old_path: string; new_path: string; note: Note },
+    ApiError,
+    { old_path: string; new_path: string }
+  >({
+    mutationFn: (vars) =>
+      api.post<{ renamed: boolean; old_path: string; new_path: string; note: Note }>(
+        '/notes/rename',
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['folderNotes'] })
+      // Note bodies are keyed by path; the old path's cache entry is
+      // stale (it now 404s) and the new path needs to be fetched fresh.
+      qc.invalidateQueries({ queryKey: ['note'] })
+    },
+  })
+}
+
+export function useRenameFolder() {
+  const qc = useQueryClient()
+  return useMutation<
+    { renamed: boolean; old_path: string; new_path: string },
+    ApiError,
+    { old_path: string; new_path: string }
+  >({
+    mutationFn: (vars) =>
+      api.post<{ renamed: boolean; old_path: string; new_path: string }>(
+        '/folders/rename',
+        vars,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['folderNotes'] })
+    },
+  })
+}
+
+export function useDeleteNote() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: boolean } | void, ApiError, { path: string }>({
+    mutationFn: ({ path }) =>
+      api.del<{ deleted: boolean }>(`/notes/${encodePathSegments(path)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['folderNotes'] })
+      // Drop the deleted note's cached body entirely; refetching would
+      // 404 and that's just noise.
+      qc.removeQueries({ queryKey: ['note'] })
+    },
+  })
+}
+
+export function useDeleteFolder() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: boolean } | void, ApiError, { path: string }>({
+    mutationFn: ({ path }) =>
+      api.del<{ deleted: boolean }>(`/folders/${encodePathSegments(path)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['folderNotes'] })
+    },
+  })
+}
