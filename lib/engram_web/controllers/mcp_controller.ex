@@ -13,6 +13,30 @@ defmodule EngramWeb.McpController do
   @capabilities %{"tools" => %{"listChanged" => false}}
   @protocol_version "2025-03-26"
 
+  # engram-app/engram-infra#340 — closed-set map from tool name strings to
+  # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx
+  # metrics. Keeps `String.to_atom/1` (atom-table pollution) out of the
+  # hot path while keeping the tag stable.
+  @tool_atoms %{
+    "list_vaults" => :list_vaults,
+    "set_vault" => :set_vault,
+    "search_notes" => :search_notes,
+    "list_tags" => :list_tags,
+    "list_folders" => :list_folders,
+    "list_folder" => :list_folder,
+    "create_folder" => :create_folder,
+    "suggest_folder" => :suggest_folder,
+    "get_note" => :get_note,
+    "create_note" => :create_note,
+    "write_note" => :write_note,
+    "append_to_note" => :append_to_note,
+    "patch_note" => :patch_note,
+    "update_section" => :update_section,
+    "rename_note" => :rename_note,
+    "rename_folder" => :rename_folder,
+    "delete_note" => :delete_note
+  }
+
   def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
     result = dispatch(conn, method, params["params"] || %{})
     send_jsonrpc(conn, id, result)
@@ -96,12 +120,42 @@ defmodule EngramWeb.McpController do
   end
 
   defp call_tool(tool, user, vault, args) do
+    # engram-app/engram-infra#340 — span emits
+    # [:engram, :mcp, :tool, :stop] for the PromEx Mcp plugin.
+    # Cardinality contract: only `:tool` (bounded enum from
+    # `Engram.MCP.Tools.list/0`, ~16 tools) + `:status`.
+    tool_atom = Map.get(@tool_atoms, tool.name, :unknown)
+    start_mono = System.monotonic_time()
+
+    :telemetry.execute(
+      [:engram, :mcp, :tool, :start],
+      %{system_time: System.system_time(), monotonic_time: start_mono},
+      %{tool: tool_atom}
+    )
+
+    {result, status, result_bytes} = run_tool_handler(tool, user, vault, args)
+
+    :telemetry.execute(
+      [:engram, :mcp, :tool, :stop],
+      %{duration: System.monotonic_time() - start_mono, result_bytes: result_bytes},
+      %{tool: tool_atom, status: status}
+    )
+
+    result
+  end
+
+  defp run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
-        {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
+        result = {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
+        {result, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
-        {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+        result =
+          {:ok,
+           %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+
+        {result, :error, byte_size_safe(msg)}
     end
   catch
     kind, reason ->
@@ -124,12 +178,18 @@ defmodule EngramWeb.McpController do
           :throw -> "Unexpected throw"
         end
 
-      {:ok,
-       %{
-         "content" => [%{"type" => "text", "text" => "Error: #{message}"}],
-         "isError" => true
-       }}
+      result =
+        {:ok,
+         %{
+           "content" => [%{"type" => "text", "text" => "Error: #{message}"}],
+           "isError" => true
+         }}
+
+      {result, :error, byte_size_safe(message)}
   end
+
+  defp byte_size_safe(s) when is_binary(s), do: byte_size(s)
+  defp byte_size_safe(_), do: 0
 
   defp classify_throw_reason(reason) when is_atom(reason), do: reason
   defp classify_throw_reason(%{__exception__: true} = e), do: e.__struct__

@@ -97,6 +97,47 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_in("push_note", params, socket) do
+    span_sync(:push_note, fn -> do_push_note(params, socket) end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # delete_note
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def handle_in("delete_note", %{"path" => path}, socket) do
+    span_sync(:delete_note, fn -> do_delete_note(path, socket) end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # rename_note
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def handle_in("rename_note", %{"old_path" => old_path, "new_path" => new_path}, socket) do
+    span_sync(:rename_note, fn -> do_rename_note(old_path, new_path, socket) end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # pull_changes
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def handle_in("pull_changes", %{"since" => since_str}, socket) do
+    span_sync(:pull_changes, fn -> do_pull_changes(since_str, socket) end)
+  end
+
+  def handle_in("pull_changes", _params, socket) do
+    # T3.7 — missing `since` key; no need to gate (no DEK access before param parse).
+    # The since-required check is purely structural validation — not a DEK write path.
+    {:reply, {:error, %{"reason" => "since is required"}}, socket}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Per-op implementations
+  # ---------------------------------------------------------------------------
+
+  defp do_push_note(params, socket) do
     # T3.7 — re-read the lock state; socket.assigns.current_user is a stale
     # snapshot from connect/3 and will not reflect a lock acquired after join.
     case RotationGate.check(socket.assigns.current_user.id) do
@@ -131,12 +172,7 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # delete_note
-  # ---------------------------------------------------------------------------
-
-  @impl true
-  def handle_in("delete_note", %{"path" => path}, socket) do
+  defp do_delete_note(path, socket) do
     # T3.7 — re-read the lock state; stale snapshot from connect/3.
     case RotationGate.check(socket.assigns.current_user.id) do
       {:error, :rotation_in_progress} ->
@@ -160,12 +196,7 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # rename_note
-  # ---------------------------------------------------------------------------
-
-  @impl true
-  def handle_in("rename_note", %{"old_path" => old_path, "new_path" => new_path}, socket) do
+  defp do_rename_note(old_path, new_path, socket) do
     # T3.7 — re-read the lock state; stale snapshot from connect/3.
     case RotationGate.check(socket.assigns.current_user.id) do
       {:error, :rotation_in_progress} ->
@@ -194,12 +225,7 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # pull_changes
-  # ---------------------------------------------------------------------------
-
-  @impl true
-  def handle_in("pull_changes", %{"since" => since_str}, socket) do
+  defp do_pull_changes(since_str, socket) do
     # T3.7 — re-read the lock state; stale snapshot from connect/3. Reads are
     # also blocked: between a sweep batch writing dek_version=new and final_flip
     # invalidating the DekCache, the old DEK in cache cannot decrypt the new
@@ -252,11 +278,24 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  def handle_in("pull_changes", _params, socket) do
-    # T3.7 — missing `since` key; no need to gate (no DEK access before param parse).
-    # The since-required check is purely structural validation — not a DEK write path.
-    {:reply, {:error, %{"reason" => "since is required"}}, socket}
+  # ---------------------------------------------------------------------------
+  # Telemetry helpers — engram-app/engram-infra#340
+  # ---------------------------------------------------------------------------
+
+  # Wrap a sync handler in `:telemetry.span` so the PromEx Sync subscriber
+  # sees per-op latency + status. Status is derived from the `{:reply,
+  # {:ok | :error, _}, _}` Phoenix Channel reply tuple. NEVER include
+  # user_id/vault_id/path in metadata — cardinality contract.
+  defp span_sync(op, fun) when is_atom(op) and is_function(fun, 0) do
+    :telemetry.span([:engram, :sync, :event], %{op: op}, fn ->
+      reply = fun.()
+      {reply, %{op: op, status: sync_status(reply)}}
+    end)
   end
+
+  defp sync_status({:reply, {:ok, _}, _}), do: :ok
+  defp sync_status({:reply, {:error, _}, _}), do: :error
+  defp sync_status(_), do: :ok
 
   # ---------------------------------------------------------------------------
   # Private helpers

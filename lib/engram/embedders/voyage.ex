@@ -34,10 +34,35 @@ defmodule Engram.Embedders.Voyage do
 
   @impl true
   def embed_texts(texts, opts) when is_list(texts) do
-    with :ok <- throttle_check(opts) do
-      do_embed_texts(texts, opts)
-    end
+    purpose = Keyword.get(opts, :purpose, :index)
+
+    # Span tracks every request reaching the network OR fast-failing the
+    # client-side throttle. The synthetic-429 path emits its own
+    # `[:engram, :embed, :client_rate_limited]` counter (handled by the
+    # PromEx Voyage plugin); here we still flag it `status: :throttled` so
+    # the Voyage `embed_total` rate isn't dragged down by silent drops.
+    :telemetry.span(
+      [:engram, :voyage, :embed],
+      %{purpose: purpose, text_count: length(texts)},
+      fn ->
+        result =
+          with :ok <- throttle_check(opts) do
+            do_embed_texts(texts, opts)
+          end
+
+        {result, %{purpose: purpose, status: status_label(result)}}
+      end
+    )
   end
+
+  defp status_label({:ok, _}), do: :ok
+  defp status_label({:error, {429, %{"detail" => "client_rate_limited"}}}), do: :throttled
+
+  defp status_label({:error, {status, _}}) when is_integer(status) and status >= 500,
+    do: :server_error
+
+  defp status_label({:error, {status, _}}) when is_integer(status), do: :client_error
+  defp status_label({:error, _}), do: :error
 
   defp do_embed_texts(texts, opts) do
     url = Application.get_env(:engram, :voyage_url, @default_url)
