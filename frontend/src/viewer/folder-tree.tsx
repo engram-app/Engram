@@ -1,6 +1,15 @@
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { type NoteSummary, useFolders, useFolderNotes, type Folder } from '../api/queries'
 import { type SortKey, useFolderTreeState } from '../layout/folder-tree-context'
+import { ActionDrawer } from './tree-actions/action-drawer'
+import { actionsFor, type ActionId } from './tree-actions/action-list'
+import { ContextMenu } from './tree-actions/context-menu'
+import { DeleteConfirm } from './tree-actions/delete-confirm'
+import { MoveDialog } from './tree-actions/move-dialog'
+import { RenameInput } from './tree-actions/rename-input'
+import { useLongPress } from './tree-actions/use-long-press'
+import { useTreeRowActions } from './tree-actions/use-tree-row-actions'
 
 interface TreeNode {
   name: string
@@ -80,7 +89,7 @@ export default function FolderTree() {
     <nav aria-label="Files" className="py-2 text-base" data-testid="folder-tree-root">
       <ul role="list" className="space-y-1">
         {hasRootFiles && (
-          <RootFiles selectedNotePath={selectedNotePath} />
+          <RootFiles selectedNotePath={selectedNotePath} folders={folders} />
         )}
         {tree.map((node) => (
           <FolderNode
@@ -88,6 +97,7 @@ export default function FolderTree() {
             node={node}
             depth={0}
             selectedNotePath={selectedNotePath}
+            folders={folders}
           />
         ))}
       </ul>
@@ -95,7 +105,13 @@ export default function FolderTree() {
   )
 }
 
-function RootFiles({ selectedNotePath }: { selectedNotePath: string | null }) {
+function RootFiles({
+  selectedNotePath,
+  folders,
+}: {
+  selectedNotePath: string | null
+  folders: Folder[]
+}) {
   const { data: notes } = useFolderNotes('', { enabled: true })
   const { sort } = useFolderTreeState()
   if (!notes || notes.length === 0) return null
@@ -107,6 +123,8 @@ function RootFiles({ selectedNotePath }: { selectedNotePath: string | null }) {
           note={note}
           depth={0}
           selectedNotePath={selectedNotePath}
+          folders={folders}
+          siblingNotes={notes}
         />
       ))}
     </>
@@ -117,9 +135,10 @@ interface FolderNodeProps {
   node: TreeNode
   depth: number
   selectedNotePath: string | null
+  folders: Folder[]
 }
 
-function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
+function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps) {
   const { isOpen: getIsOpen, toggle } = useFolderTreeState()
   // Force-open the chain leading to the active note so the user can always see
   // where they are. Side effect: "Collapse all" leaves the active-note chain
@@ -127,26 +146,114 @@ function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
   const containsSelected = selectedNotePath?.startsWith(`${node.fullPath}/`) ?? false
   const isOpen = getIsOpen(node.fullPath) || containsSelected
 
+  const rowActions = useTreeRowActions({ kind: 'folder', path: node.fullPath, label: node.name })
+  const longPress = useLongPress({ onLongPress: () => rowActions.openDrawer() })
+
+  // childCount for delete-confirm — count immediate children + nested-folder counts.
+  // Using the `folders` list count gives us a sane number without an extra fetch.
+  const childCount = useMemo(() => {
+    const direct = folders.find((f) => f.name === node.fullPath)?.count ?? 0
+    const descendants = folders
+      .filter((f) => f.name.startsWith(`${node.fullPath}/`))
+      .reduce((sum, f) => sum + f.count, 0)
+    return direct + descendants
+  }, [folders, node.fullPath])
+
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const onPick = (id: ActionId) => handlePickAction(id, rowActions, { kind: 'folder', label: node.name })
+
+  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'F2') {
+      e.preventDefault()
+      rowActions.startRename()
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault()
+      rowActions.startDelete()
+    }
+  }
+
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => toggle(node.fullPath)}
-        aria-expanded={isOpen}
-        className="flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
-        style={{ paddingLeft: `${depth * 12 + 4}px` }}
-      >
-        <span
-          className={`shrink-0 text-[10px] text-gray-400 dark:text-gray-500 transition-transform ${
-            isOpen ? 'rotate-90' : ''
-          }`}
-          aria-hidden="true"
+      {rowActions.renaming ? (
+        <div
+          className="flex w-full items-center gap-1 py-0.5 pl-1 pr-3"
+          style={{ paddingLeft: `${depth * 12 + 4}px` }}
         >
-          ▶
-        </span>
-        <FolderIcon open={isOpen} />
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
-      </button>
+          <RenameInput
+            initial={node.name}
+            kind="folder"
+            error={rowActions.renameError}
+            onCommit={(next) => {
+              void rowActions.commitRename(next)
+            }}
+            onCancel={rowActions.cancelRename}
+          />
+        </div>
+      ) : (
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => toggle(node.fullPath)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            rowActions.openContextMenu({ x: e.clientX, y: e.clientY })
+          }}
+          onKeyDown={onKeyDown}
+          aria-expanded={isOpen}
+          className="flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+          style={{ paddingLeft: `${depth * 12 + 4}px` }}
+          {...rowActions.dragSourceProps}
+          {...rowActions.dropTargetProps(node.fullPath)}
+          {...longPress}
+        >
+          <span
+            className={`shrink-0 text-[10px] text-gray-400 dark:text-gray-500 transition-transform ${
+              isOpen ? 'rotate-90' : ''
+            }`}
+            aria-hidden="true"
+          >
+            ▶
+          </span>
+          <FolderIcon open={isOpen} />
+          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        </button>
+      )}
+
+      {rowActions.menuPos && (
+        <ContextMenu
+          actions={actionsFor({ kind: 'folder' })}
+          position={rowActions.menuPos}
+          onPick={onPick}
+          onClose={rowActions.closeMenu}
+        />
+      )}
+      {rowActions.drawerOpen && (
+        <ActionDrawer
+          title={node.name}
+          actions={actionsFor({ kind: 'folder' })}
+          onPick={onPick}
+          onClose={rowActions.closeDrawer}
+        />
+      )}
+      {rowActions.showDelete && (
+        <DeleteConfirm
+          node={{ kind: 'folder', path: node.fullPath, childCount }}
+          onConfirm={() => {
+            void rowActions.confirmDelete()
+          }}
+          onCancel={rowActions.cancelDelete}
+        />
+      )}
+      {rowActions.showMove && (
+        <MoveDialog
+          folders={folders.map((f) => ({ name: f.name }))}
+          node={{ kind: 'folder', path: node.fullPath }}
+          onPick={(folder) => {
+            void rowActions.commitMove(folder)
+          }}
+          onCancel={rowActions.cancelMove}
+        />
+      )}
 
       {isOpen && (
         <ul role="list" className="space-y-1">
@@ -156,12 +263,14 @@ function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
               node={child}
               depth={depth + 1}
               selectedNotePath={selectedNotePath}
+              folders={folders}
             />
           ))}
           <FolderFiles
             folderPath={node.fullPath}
             depth={depth + 1}
             selectedNotePath={selectedNotePath}
+            folders={folders}
           />
         </ul>
       )}
@@ -173,10 +282,12 @@ function FolderFiles({
   folderPath,
   depth,
   selectedNotePath,
+  folders,
 }: {
   folderPath: string
   depth: number
   selectedNotePath: string | null
+  folders: Folder[]
 }) {
   const { data: notes, isLoading } = useFolderNotes(folderPath, { enabled: true })
   const { sort } = useFolderTreeState()
@@ -199,6 +310,8 @@ function FolderFiles({
           note={note}
           depth={depth}
           selectedNotePath={selectedNotePath}
+          folders={folders}
+          siblingNotes={notes}
         />
       ))}
     </>
@@ -209,35 +322,154 @@ function NoteLeaf({
   note,
   depth,
   selectedNotePath,
+  folders,
+  siblingNotes,
 }: {
   note: NoteSummary
   depth: number
   selectedNotePath: string | null
+  folders: Folder[]
+  siblingNotes: NoteSummary[]
 }) {
   const isSelected = selectedNotePath === note.path
   const extension = nonMdExtension(note.path)
+  const label = noteLabel(note)
+  const fileName = note.path.split('/').pop() ?? note.path
+  const [isFocused, setIsFocused] = useState(false)
+
+  const rowActions = useTreeRowActions({ kind: 'file', path: note.path, label })
+  const longPress = useLongPress({ onLongPress: () => rowActions.openDrawer() })
+
+  const onPick = (id: ActionId) => handlePickAction(id, rowActions, { kind: 'file', label, note, siblingNotes })
+
+  const onKeyDown = (e: KeyboardEvent<HTMLAnchorElement>) => {
+    if (e.key === 'F2') {
+      e.preventDefault()
+      rowActions.startRename()
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault()
+      rowActions.startDelete()
+    }
+  }
+
+  // Mark isFocused so it's used; future-proofs a keyboard-focus style.
+  void isFocused
+
   return (
     <li>
-      <Link
-        to={`/note/${encodePathForRouter(note.path)}`}
-        aria-current={isSelected ? 'page' : undefined}
-        className={`flex items-center gap-1 rounded py-0.5 pl-1 pr-3 ${
-          isSelected
-            ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
-            : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
-        }`}
-        style={{ paddingLeft: `${depth * 12 + 16}px` }}
-      >
-        <FileIcon />
-        <span className="min-w-0 flex-1 truncate">{noteLabel(note)}</span>
-        {extension && (
-          <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">
-            {extension}
-          </span>
-        )}
-      </Link>
+      {rowActions.renaming ? (
+        <div
+          className="flex items-center gap-1 py-0.5 pl-1 pr-3"
+          style={{ paddingLeft: `${depth * 12 + 16}px` }}
+        >
+          <RenameInput
+            initial={fileName}
+            kind="file"
+            error={rowActions.renameError}
+            onCommit={(next) => {
+              void rowActions.commitRename(next)
+            }}
+            onCancel={rowActions.cancelRename}
+          />
+        </div>
+      ) : (
+        <Link
+          to={`/note/${encodePathForRouter(note.path)}`}
+          aria-current={isSelected ? 'page' : undefined}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            rowActions.openContextMenu({ x: e.clientX, y: e.clientY })
+          }}
+          onKeyDown={onKeyDown}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          className={`flex items-center gap-1 rounded py-0.5 pl-1 pr-3 ${
+            isSelected
+              ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
+              : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+          }`}
+          style={{ paddingLeft: `${depth * 12 + 16}px` }}
+          {...rowActions.dragSourceProps}
+          {...longPress}
+        >
+          <FileIcon />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {extension && (
+            <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">
+              {extension}
+            </span>
+          )}
+        </Link>
+      )}
+
+      {rowActions.menuPos && (
+        <ContextMenu
+          actions={actionsFor({ kind: 'file' })}
+          position={rowActions.menuPos}
+          onPick={onPick}
+          onClose={rowActions.closeMenu}
+        />
+      )}
+      {rowActions.drawerOpen && (
+        <ActionDrawer
+          title={label}
+          actions={actionsFor({ kind: 'file' })}
+          onPick={onPick}
+          onClose={rowActions.closeDrawer}
+        />
+      )}
+      {rowActions.showDelete && (
+        <DeleteConfirm
+          node={{ kind: 'file', path: note.path }}
+          onConfirm={() => {
+            void rowActions.confirmDelete()
+          }}
+          onCancel={rowActions.cancelDelete}
+        />
+      )}
+      {rowActions.showMove && (
+        <MoveDialog
+          folders={folders.map((f) => ({ name: f.name }))}
+          node={{ kind: 'file', path: note.path }}
+          onPick={(folder) => {
+            void rowActions.commitMove(folder)
+          }}
+          onCancel={rowActions.cancelMove}
+        />
+      )}
     </li>
   )
+}
+
+// Action dispatch — keeps the row components small. Duplicate is intentionally
+// deferred (no read-then-write mutation exists yet without firing extra hooks
+// per row); future commit can wire it through useCreateNote + useNote.
+function handlePickAction(
+  id: ActionId,
+  rowActions: ReturnType<typeof useTreeRowActions>,
+  ctx:
+    | { kind: 'folder'; label: string }
+    | { kind: 'file'; label: string; note: NoteSummary; siblingNotes: NoteSummary[] },
+) {
+  switch (id) {
+    case 'rename':
+      rowActions.startRename()
+      return
+    case 'delete':
+      rowActions.startDelete()
+      return
+    case 'move':
+      rowActions.startMove()
+      return
+    case 'copy-wikilink':
+      if (ctx.kind === 'file') void rowActions.copyWikilink(ctx.label)
+      return
+    case 'duplicate':
+      // Duplicate requires reading the note content + writing a new note, which
+      // can't be done from a switch (hooks rule). It's scaffolded but inert
+      // here; see Task 14 manual smoke + follow-up.
+      return
+  }
 }
 
 function noteLabel(note: NoteSummary): string {
