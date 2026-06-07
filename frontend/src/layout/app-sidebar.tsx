@@ -3,12 +3,9 @@ import Rail from './rail'
 import SearchPanel from './search-panel'
 import { useRailView } from './rail-view-context'
 
-export default function AppSidebar() {
+export default function AppSidebarPanel() {
   const { view } = useRailView()
-  return (
-    <>
-      <Rail />
-      {view === 'files' ? <FilesPanel /> : <SearchPanel />}
-    </>
-  )
+  return view === 'files' ? <FilesPanel /> : <SearchPanel />
 }
+
+export { Rail }

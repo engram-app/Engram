@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import Rail from './rail'
 import { RailViewProvider, useRailView } from './rail-view-context'
+import { ThemeProvider } from '../theme/theme-provider'
 
 vi.mock('../auth/use-auth-adapter', () => ({
   useAuthAdapter: () => ({ user: { email: 'todd@example.com' }, logout: vi.fn() }),
@@ -10,9 +11,11 @@ vi.mock('../auth/use-auth-adapter', () => ({
 
 function Wrap({ children, initialEntries }: { children: React.ReactNode; initialEntries?: string[] }) {
   return (
-    <MemoryRouter initialEntries={initialEntries ?? ['/']}>
-      <RailViewProvider>{children}</RailViewProvider>
-    </MemoryRouter>
+    <ThemeProvider>
+      <MemoryRouter initialEntries={initialEntries ?? ['/']}>
+        <RailViewProvider>{children}</RailViewProvider>
+      </MemoryRouter>
+    </ThemeProvider>
   )
 }
 
