@@ -907,30 +907,45 @@ defmodule Engram.Notes do
   # Phase B.3: plaintext `folder` is gone — match by folder_hmac. Returns
   # true if any non-deleted row (note or folder marker) lives directly in
   # `folder`. Used as the pre-check for rename_folder/4's conflict gate.
+  #
+  # NESTED-COLLISION GAP (intentional, documented):
+  # This check only catches DIRECT-CHILD collisions — rows whose immediate
+  # parent folder hashes to `target_hmac`. It does NOT catch nested
+  # collisions like renaming `src` → `dst` where both `src/sub/x.md` and
+  # `dst/sub/x.md` already exist. Those still surface as a
+  # `Postgrex.Error{unique_violation, "notes_user_vault_path_hmac_v2"}`
+  # from the cascade `update_all` in `do_rename_folder/5`.
+  #
+  # Why accepted: with opaque HMAC fields we can't do a prefix scan
+  # (`WHERE folder LIKE 'dst/%'` is impossible on ciphertext+HMAC), and a
+  # full decrypt-and-scan would be O(notes) for every rename. Defense in
+  # depth for the nested case is deferred until we either index prefix
+  # hashes or fold the check into the cascade transaction itself. The
+  # common case (renaming onto a populated immediate folder or marker) is
+  # caught here and returns `{:error, :conflict}` cleanly.
+  #
+  # Optimistic `{:ok, _} = dek_filter_key(user)` match: the only caller
+  # (`rename_folder/4`) gates on `Crypto.ensure_user_dek/1` first, so
+  # `:no_dek` is unreachable. Any other crypto failure (KMS down, provider
+  # error) crashes loudly here rather than being silently masked.
   defp folder_target_exists?(user, vault, folder) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        target_hmac = Crypto.hmac_field(filter_key, folder)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    target_hmac = Crypto.hmac_field(filter_key, folder)
 
-        # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
-        # Unwrap once so the caller can branch on a plain boolean.
-        {:ok, exists?} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.exists?(
-              from(n in Note,
-                where:
-                  n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at) and n.folder_hmac == ^target_hmac
-              )
-            )
-          end)
+    # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
+    # Unwrap once so the caller can branch on a plain boolean.
+    {:ok, exists?} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.exists?(
+          from(n in Note,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and
+                is_nil(n.deleted_at) and n.folder_hmac == ^target_hmac
+          )
+        )
+      end)
 
-        exists?
-
-      {:error, :no_dek} ->
-        # No DEK = no encrypted rows possible = nothing in target folder.
-        false
-    end
+    exists?
   end
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do

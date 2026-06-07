@@ -1092,6 +1092,39 @@ defmodule Engram.NotesTest do
       assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
     end
 
+    # Lock-down test: documents the nested-collision gap in
+    # folder_target_exists?/3. The immediate-children fingerprint check
+    # passes (no row sits directly in `dst`), but the cascade then trips
+    # the unique (user, vault, path_hmac) constraint when src/sub/x.md
+    # tries to become dst/sub/x.md (which already exists). If a future
+    # change silently masks this — e.g. by catching the Postgrex error
+    # and returning {:ok, _} or {:error, :conflict} without a deliberate
+    # design — this test fails and forces a re-review of the gap doc.
+    test "nested collision still raises Postgrex.Error (documented gap)",
+         %{user: user, vault: vault} do
+      # src has a nested file
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/sub/x.md",
+          "content" => "# X (src)",
+          "mtime" => 1_000.0
+        })
+
+      # dst is EMPTY at the immediate level (no dst/* row), so
+      # folder_target_exists?/3 returns false and the rename proceeds...
+      # but dst/sub/x.md already exists, so the cascade collides.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "dst/sub/x.md",
+          "content" => "# X (dst)",
+          "mtime" => 1_000.0
+        })
+
+      assert_raise Postgrex.Error, fn ->
+        Notes.rename_folder(user, vault, "src", "dst")
+      end
+    end
+
     test "cascades to all children including nested subfolders",
          %{user: user, vault: vault} do
       {:ok, _} =
