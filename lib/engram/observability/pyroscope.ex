@@ -261,7 +261,7 @@ defmodule Engram.Observability.Pyroscope do
   # ── Push to Pyroscope ─────────────────────────────────────────────
 
   @doc false
-  @spec render_folded(map()) :: iodata()
+  @spec render_folded(map()) :: iolist()
   def render_folded(counters) do
     counters
     |> Enum.map(fn {stack, count} -> [stack, ?\s, Integer.to_string(count), ?\n] end)
@@ -326,7 +326,6 @@ defmodule Engram.Observability.Pyroscope do
   defp hostname do
     case :inet.gethostname() do
       {:ok, name} -> List.to_string(name)
-      _ -> "unknown"
     end
   end
 
