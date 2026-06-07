@@ -131,32 +131,33 @@ defmodule Engram.Billing do
   # ── Tier & Status Queries ──────────────────────────────────────
 
   @doc """
-  Returns the user's effective tier as an atom.
-  Users without a subscription (or with a canceled one) are :free.
-  """
-  def tier(user) do
-    case get_subscription(user) do
-      %Subscription{status: status, tier: tier} when status in ~w(active past_due trialing) ->
-        String.to_existing_atom(tier)
+  Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
-      _ ->
-        :free
+  Only an `active` paid subscription resolves to `:starter` or `:pro`.
+  Everyone else — un-onboarded users, self-host, canceled / past_due /
+  trialing subscriptions — resolves to `:free`. Always returns an atom
+  (never `nil`); the un-onboarded path is gated upstream by
+  `RequireOnboarding` but a Free default keeps `effective_limit/2` and
+  `default_for/2` total.
+  """
+  @spec tier(Engram.Accounts.User.t()) :: :free | :starter | :pro
+  def tier(%Engram.Accounts.User{} = user) do
+    case get_subscription(user) do
+      %Subscription{status: "active", tier: "starter"} -> :starter
+      %Subscription{status: "active", tier: "pro"} -> :pro
+      _ -> :free
     end
   end
 
   @doc """
-  Returns true if the user has an active, past_due, or trialing subscription.
-  Users must start a 7-day trial (card on file) via the Paddle overlay
-  before syncing — the trial is configured on the Paddle price.
+  Returns true when the user is not suspended. Tier defaults to `:free`
+  for un-onboarded users — see `tier/1`. Account access is gated by
+  suspension only; tier-based feature gating happens via
+  `effective_limit/2` and `check_limit/3` / `check_feature/2`.
   """
-  def active?(user) do
-    case get_subscription(user) do
-      %Subscription{status: status} when status in ~w(active past_due trialing) ->
-        true
-
-      _ ->
-        false
-    end
+  @spec active?(Engram.Accounts.User.t()) :: boolean()
+  def active?(%Engram.Accounts.User{} = user) do
+    is_nil(user.suspended_at)
   end
 
   @doc """
@@ -167,6 +168,10 @@ defmodule Engram.Billing do
   """
   def get_subscription(%{subscription: %Subscription{} = sub}), do: sub
   def get_subscription(%{subscription: nil}), do: nil
+  # Non-persisted user (built but not inserted) — no row to load. Keeps
+  # `tier/1` total over `build(:user, ...)` for unit tests that don't need
+  # a DB round-trip.
+  def get_subscription(%{id: nil}), do: nil
 
   def get_subscription(user) do
     Repo.one(
