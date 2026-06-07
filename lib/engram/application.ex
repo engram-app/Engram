@@ -40,6 +40,9 @@ defmodule Engram.Application do
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
+        # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
+        # is unset (dev, test, self-host), and Enum.reject below filters it out.
+        pyroscope_child(),
         EngramWeb.Endpoint
       ]
       |> Enum.reject(&is_nil/1)
@@ -153,6 +156,16 @@ defmodule Engram.Application do
     if Application.get_env(:engram, :auth_provider) == :clerk &&
          Application.get_env(:engram, :clerk_jwks_url) do
       {Engram.Auth.ClerkStrategy, time_interval: 60_000, first_fetch_sync: true}
+    end
+  end
+
+  # Continuous BEAM CPU profiler. Started only when the three SOPS-wired
+  # env vars (GRAFANA_PYROSCOPE_URL/USERNAME + GRAFANA_AGENT_TOKEN) are
+  # all present at runtime — see config/runtime.exs. Dev/test/self-host
+  # leave them unset and the supervisor never sees the child.
+  defp pyroscope_child do
+    if Engram.Observability.Pyroscope.configured?() do
+      Engram.Observability.Pyroscope
     end
   end
 

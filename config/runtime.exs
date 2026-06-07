@@ -674,3 +674,29 @@ if key = System.get_env("POSTHOG_API_KEY") do
     posthog_key: key,
     posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
 end
+
+# Pyroscope continuous CPU profiling. Same opt-in shape as Sentry/PostHog:
+# the worker's child_spec/1 returns :ignore when any of the three required
+# env vars is missing, so dev/test/self-host emit no profiling traffic and
+# the supervisor silently drops the child from the start order.
+#
+# Wired infra-side via engram-infra/main/envs/prod/ecs_secrets.tf:
+#   GRAFANA_PYROSCOPE_URL       → grafana_pyroscope_url       (SOPS)
+#   GRAFANA_PYROSCOPE_USERNAME  → grafana_pyroscope_username  (SOPS)
+#   GRAFANA_AGENT_TOKEN         → grafana_agent_token         (SOPS)
+# (The token is shared with Loki/Tempo/Prom remote_write — same Grafana
+#  Cloud access policy, scoped to "metrics:write logs:write traces:write
+#  profiles:write".)
+if pyroscope_url = System.get_env("GRAFANA_PYROSCOPE_URL") do
+  config :engram, :pyroscope,
+    url: pyroscope_url,
+    username:
+      System.get_env("GRAFANA_PYROSCOPE_USERNAME") ||
+        raise("GRAFANA_PYROSCOPE_USERNAME required when GRAFANA_PYROSCOPE_URL is set"),
+    token:
+      System.get_env("GRAFANA_AGENT_TOKEN") ||
+        raise("GRAFANA_AGENT_TOKEN required when GRAFANA_PYROSCOPE_URL is set"),
+    app_name: System.get_env("PYROSCOPE_APP_NAME", "engram-saas-prod"),
+    env: to_string(config_env()),
+    instance: System.get_env("HOSTNAME", System.get_env("ECS_TASK_ID", "unknown"))
+end
