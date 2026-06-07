@@ -230,14 +230,12 @@ function TrialNotice({
         <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Changed your mind?</p>
           <p className="mt-1">
-            Use <strong>Keep my subscription</strong> at the top of this page to reverse the
-            cancellation.
+            Use <strong>Keep my subscription</strong> right below the Current Plan section to
+            reverse the cancellation.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Close</Button>
         </div>
       </section>
     )
