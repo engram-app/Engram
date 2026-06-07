@@ -224,6 +224,9 @@ defmodule EngramWeb.Router do
     # so the wizard can actually function before completion.
     get "/onboarding/status", OnboardingController, :status
     post "/onboarding/accept-terms", OnboardingController, :accept_terms
+    # Free-tier acceptance — Continue with Free CTA in /onboard/billing.
+    # Sets `free_tier_accepted_at` (idempotent) and returns updated status.
+    post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
     # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
     patch "/onboarding/profile", OnboardingController, :set_profile
     post "/onboarding/actions", OnboardingController, :record
