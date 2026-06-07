@@ -182,4 +182,30 @@ describe('PlanChangePanel', () => {
 
     expect(onSwitchToCancel).toHaveBeenCalledOnce()
   })
+
+  it('trial with cancel already scheduled: hides Cancel button, points at PendingChangeBanner', () => {
+    // Without this guard, a second click on Cancel free trial calls
+    // Paddle's cancel endpoint again and gets a 422
+    // (`subscription_locked_renewal` or similar) — the user has no way
+    // to know they already canceled.
+    const trial = billing({
+      tier: 'trial',
+      subscription: { status: 'trialing', tier: 'pro', current_period_end: '2026-06-11' },
+    })
+
+    qc.setQueryData(['billing', 'subscription'], {
+      currency: 'USD',
+      amount: null,
+      billing_cycle: { interval: 'month', frequency: 1 },
+      next_billed_at: null,
+      scheduled_change: { action: 'cancel', effective_at: '2026-06-11T20:56:02Z' },
+    })
+
+    render(<PlanChangePanel billing={trial} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
+
+    expect(screen.getByText(/already scheduled to cancel/i)).toBeInTheDocument()
+    expect(screen.getByText(/Keep my subscription/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cancel free trial/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /close/i })).toBeInTheDocument()
+  })
 })

@@ -191,6 +191,13 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 // `subscription_trialing_items_update_invalid_options` for tier swaps,
 // `subscription_new_items_not_valid` for cadence swaps). Surface the
 // constraint honestly instead of pretending the picker works.
+//
+// Two states:
+//   1. Trial active, no cancel scheduled — offer Cancel free trial.
+//   2. Trial active, cancel already scheduled — point at the existing
+//      PendingChangeBanner ("Keep my subscription") at the top of the
+//      page; do NOT offer another Cancel button (a second cancel call
+//      would 422 with `subscription_locked_renewal` or similar).
 function TrialNotice({
   billing,
   onClose,
@@ -200,9 +207,41 @@ function TrialNotice({
   onClose: () => void
   onSwitchToCancel: () => void
 }) {
+  const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription))
+  const alreadyCanceled = detail?.scheduled_change?.action === 'cancel'
+  const cancelAt = detail?.scheduled_change?.effective_at
+    ? new Date(detail.scheduled_change.effective_at).toLocaleDateString()
+    : null
   const renewsAt = billing.subscription?.current_period_end
     ? new Date(billing.subscription.current_period_end).toLocaleDateString()
     : null
+
+  if (alreadyCanceled) {
+    return (
+      <section role="region" aria-label="Change plan" className="space-y-4 pt-2">
+        <header>
+          <h2 className="text-base font-semibold text-foreground">Change your plan</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Your free trial is already scheduled to cancel
+            {cancelAt ? <> on <strong>{cancelAt}</strong></> : null}. You won't be charged. You can
+            subscribe to the plan you want once your trial ends.
+          </p>
+        </header>
+        <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Changed your mind?</p>
+          <p className="mt-1">
+            Use <strong>Keep my subscription</strong> at the top of this page to reverse the
+            cancellation.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section role="region" aria-label="Change plan" className="space-y-4 pt-2">
