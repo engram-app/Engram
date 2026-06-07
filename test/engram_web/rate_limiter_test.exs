@@ -68,11 +68,21 @@ defmodule EngramWeb.RateLimiterTest do
   describe "Redis backend start options" do
     alias EngramWeb.RateLimiter.Redis, as: RedisLimiter
 
-    test "start_opts/1 passes only :url through to Redix" do
-      # :prefix and :timeout are compile-time `use Hammer` options, NOT Redix
-      # start options. Only :url is a valid runtime start option for the
-      # Hammer.Redis backend, so the runtime config must pass nothing else.
-      assert RedisLimiter.start_opts("redis://localhost:6379") == [url: "redis://localhost:6379"]
+    test "start_opts/1 passes :url and TLS-wildcard hostname-match fun through to Redix" do
+      # :prefix and :timeout are compile-time `use Hammer` options. Runtime
+      # start options must include :url plus :socket_opts carrying the
+      # :https-shape hostname match_fun — Erlang's default hostname check
+      # is strict literal, which rejects ElastiCache/Valkey wildcard certs
+      # (`*.cluster.cache.amazonaws.com`) on connections to leftmost-label
+      # hosts like `master.cluster.cache.amazonaws.com`. The match_fun is
+      # ignored for plain-tcp `redis://` URLs (no TLS handshake), so passing
+      # it unconditionally is safe for selfhost.
+      assert [
+               url: "redis://localhost:6379",
+               socket_opts: [customize_hostname_check: [match_fun: match_fun]]
+             ] = RedisLimiter.start_opts("redis://localhost:6379")
+
+      assert is_function(match_fun)
     end
 
     test "limiter starts under a supervisor with the production opt shape" do
