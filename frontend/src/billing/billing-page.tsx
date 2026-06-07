@@ -13,6 +13,7 @@ import {
 } from '../api/queries'
 import { api } from '../api/client'
 import { useTheme } from '../theme/theme-provider'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CadenceToggle, PLAN_CATALOG, PlanCard } from './plan-cards'
 import CurrentPlanCard from './current-plan-card'
@@ -30,16 +31,6 @@ import { useSubscriptionActivatedEvents } from './use-subscription-activated-eve
 const COOLDOWN_MS = 15_000
 
 const INLINE_FRAME_TARGET = 'paddle-checkout'
-
-async function openPortal(action?: string) {
-  try {
-    const path = action ? `/billing/portal?action=${action}` : '/billing/portal'
-    const { url } = await api.get<{ url: string }>(path)
-    window.location.href = url
-  } catch {
-    toast.error('Could not open the billing portal. Please try again.')
-  }
-}
 
 async function downloadInvoice(transactionId: string) {
   try {
@@ -88,6 +79,11 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   // Inline panel state for the in-app cancel + plan-change flows (replaces
   // the previous openPortal('cancel') / portal-redirect path).
   const [panel, setPanel] = useState<'cancel' | 'change' | null>(null)
+  // Shared latch for any click that does an api.get → Paddle round-trip
+  // before navigating away or opening the overlay. The portal-redirect and
+  // payment-update flows both incur the same backend round-trip, so the
+  // user needs immediate feedback that the click registered.
+  const [portalLoading, setPortalLoading] = useState(false)
 
   // Latch — onActivated must fire at most once even if the broadcast lands
   // multiple times (subscription.created followed by subscription.activated
@@ -265,12 +261,25 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const needsSubscription = !billing.active
   const checkoutReady = Boolean(paddle && config)
 
+  async function openPortal(action?: string) {
+    setPortalLoading(true)
+    try {
+      const path = action ? `/billing/portal?action=${action}` : '/billing/portal'
+      const { url } = await api.get<{ url: string }>(path)
+      window.location.href = url
+    } catch {
+      toast.error('Could not open the billing portal. Please try again.')
+      setPortalLoading(false)
+    }
+  }
+
   async function handleUpdatePayment() {
     if (!paddle) {
       openPortal('update_payment')
       return
     }
 
+    setPortalLoading(true)
     try {
       const { transaction_id } = await api.get<{ transaction_id: string }>(
         '/billing/payment-update-transaction',
@@ -278,6 +287,8 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
       paddle.Checkout.open({ transactionId: transaction_id })
     } catch {
       toast.error('Could not start the payment update. Please try again.')
+    } finally {
+      setPortalLoading(false)
     }
   }
 
@@ -397,6 +408,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
           <PaymentMethodCard
             paymentMethod={history?.payment_method ?? null}
             onUpdate={handleUpdatePayment}
+            updating={portalLoading}
           />
           <BillingHistoryTable
             transactions={history?.transactions ?? []}
@@ -407,14 +419,19 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               can still self-serve through Paddle's hosted portal. Sits
               outside the cards so it reads as a fallback option, not as
               one of the primary plan actions. */}
-          <div className="flex justify-center pt-2">
-            <button
+          <div className="flex flex-col items-center gap-1.5 pt-2">
+            <Button
               type="button"
+              variant="outline"
               onClick={() => openPortal()}
-              className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              disabled={portalLoading}
             >
-              Manage payment in Paddle, our payment processor
-            </button>
+              {portalLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
+              {portalLoading ? 'Opening Paddle…' : 'Open Paddle billing portal'}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Paddle is our payment processor. Use this if the controls above don't cover what you need.
+            </p>
           </div>
         </>
       )}

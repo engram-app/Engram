@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useReverseCancel, type SubscriptionDetail } from '../api/queries'
@@ -39,7 +40,8 @@ export default function PendingChangeBanner({
       </p>
       {scheduledChange.action === 'cancel' && (
         <Button size="sm" onClick={onReverse} disabled={reverseCancel.isPending}>
-          Keep my subscription
+          {reverseCancel.isPending && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
+          {reverseCancel.isPending ? 'Reversing…' : 'Keep my subscription'}
         </Button>
       )}
     </aside>

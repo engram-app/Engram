@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -133,7 +134,9 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
                   ? 'Loading proration…'
                   : isSelected && preview.data
                     ? formatProration(preview.data)
-                    : undefined
+                    : isSelected && preview.isError
+                      ? 'Could not load proration. You can still confirm — final charge applies on confirm.'
+                      : undefined
               }
             />
           )
@@ -147,11 +150,11 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
             !selectedTier ||
             !targetPriceId ||
             preview.isFetching ||
-            !preview.data ||
             confirm.isPending
           }
         >
-          Confirm change
+          {confirm.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
+          {confirm.isPending ? 'Applying…' : 'Confirm change'}
         </Button>
         <Button variant="ghost" onClick={onClose} disabled={confirm.isPending}>
           Cancel

@@ -113,6 +113,22 @@ describe('PlanChangePanel', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
+  it('preview error: surfaces inline message and keeps Confirm clickable', async () => {
+    // Backend bucketed Paddle errors as :paddle_unavailable (503) or
+    // :no_active_subscription (422) — both surface as ApiError.throw, query
+    // → isError. Without the inline message + open-confirm fix, the user
+    // saw "Loading proration…" flash then disappear with a permanently
+    // disabled Confirm and no clue why.
+    post.mockRejectedValue(new Error('paddle_unavailable'))
+
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    expect(await screen.findByText(/could not load proration/i)).toBeInTheDocument()
+    const confirmBtn = screen.getByRole('button', { name: /confirm change/i })
+    await waitFor(() => expect(confirmBtn).not.toBeDisabled())
+  })
+
   it('Cancel button closes without firing a mutation', () => {
     const onClose = vi.fn()
     render(<PlanChangePanel billing={billing()} onClose={onClose} />, { wrapper: Wrapper })

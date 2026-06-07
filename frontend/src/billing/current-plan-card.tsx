@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react'
+import { Sparkles } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { BillingStatus } from '../api/queries'
 
 const TIER_LABELS: Record<BillingStatus['tier'], string> = {
@@ -8,6 +10,10 @@ const TIER_LABELS: Record<BillingStatus['tier'], string> = {
   starter: 'Starter',
   pro: 'Pro',
 }
+
+// Paid + trial tiers get the flashier pill — gradient, ring, sparkle.
+// Free/none stay muted; promoting an absent plan would mis-signal.
+const FLASHY_TIERS: BillingStatus['tier'][] = ['starter', 'pro', 'trial']
 
 export default function CurrentPlanCard({
   billing,
@@ -30,7 +36,17 @@ export default function CurrentPlanCard({
     <section className="space-y-4 rounded-lg border border-border bg-card p-6">
       <header className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-foreground">Current Plan</h2>
-        <span className="rounded-full bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold',
+            FLASHY_TIERS.includes(billing.tier)
+              ? 'bg-gradient-to-r from-primary via-primary to-primary/75 text-primary-foreground shadow-sm ring-1 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground',
+          )}
+        >
+          {FLASHY_TIERS.includes(billing.tier) && (
+            <Sparkles aria-hidden className="size-3.5" />
+          )}
           {TIER_LABELS[billing.tier]}
         </span>
       </header>
