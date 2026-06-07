@@ -760,6 +760,21 @@ defmodule Engram.OnboardingTest do
     end
   end
 
+  describe "accept_free_tier/1" do
+    test "sets free_tier_accepted_at on the user" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      assert {:ok, updated} = Onboarding.accept_free_tier(user)
+      assert updated.free_tier_accepted_at != nil
+    end
+
+    test "is idempotent — second call leaves timestamp untouched" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      {:ok, first} = Onboarding.accept_free_tier(user)
+      {:ok, second} = Onboarding.accept_free_tier(first)
+      assert DateTime.compare(first.free_tier_accepted_at, second.free_tier_accepted_at) == :eq
+    end
+  end
+
   defp with_agreement_query_count(fun) do
     # Scope to this test's pid: telemetry handlers run in the emitting process,
     # so without this a concurrent async test could leak into the count.
