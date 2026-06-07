@@ -323,7 +323,11 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
             </div>
           )}
           {billing.subscription && panel === 'change' && (
-            <PlanChangePanel billing={billing} onClose={() => setPanel(null)} />
+            <PlanChangePanel
+              billing={billing}
+              onClose={() => setPanel(null)}
+              onSwitchToCancel={() => setPanel('cancel')}
+            />
           )}
           {billing.subscription && panel === 'cancel' && (
             <CancelPanel

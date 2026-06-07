@@ -56,7 +56,7 @@ function billing(overrides: Partial<BillingStatus> = {}): BillingStatus {
 
 describe('PlanChangePanel', () => {
   it('renders Starter + Pro cards using shared PlanCard styling', () => {
-    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     expect(screen.getByText('Starter')).toBeInTheDocument()
     expect(screen.getByText('Pro')).toBeInTheDocument()
     expect(screen.getByText('$7/mo')).toBeInTheDocument()
@@ -64,7 +64,7 @@ describe('PlanChangePanel', () => {
   })
 
   it('marks the user current tier and shows the inert You are on this plan indicator', () => {
-    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     // Starter is current → 'Your plan' badge + inert "You're on this plan" status
     expect(screen.getAllByText(/your plan/i).length).toBeGreaterThan(0)
     expect(screen.getByRole('status', { name: /your current plan/i })).toBeInTheDocument()
@@ -78,7 +78,7 @@ describe('PlanChangePanel', () => {
       next_billed_at: '2026-07-01T00:00:00Z',
     })
 
-    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
 
     await waitFor(() =>
@@ -100,7 +100,7 @@ describe('PlanChangePanel', () => {
       .mockResolvedValueOnce({ transaction_id: 'txn_xyz' })
 
     const onClose = vi.fn()
-    render(<PlanChangePanel billing={billing()} onClose={onClose} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={onClose} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
     await screen.findByText(/charged \$3\.50 today/i)
     fireEvent.click(screen.getByRole('button', { name: /confirm change/i }))
@@ -121,7 +121,7 @@ describe('PlanChangePanel', () => {
     // disabled Confirm and no clue why.
     post.mockRejectedValue(new Error('paddle_unavailable'))
 
-    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
 
     expect(await screen.findByText(/could not load proration/i)).toBeInTheDocument()
@@ -137,7 +137,7 @@ describe('PlanChangePanel', () => {
       next_billed_at: '2026-07-01T00:00:00Z',
     })
 
-    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
     expect(await screen.findByText(/no charge today/i)).toBeInTheDocument()
     expect(screen.queryByText(/credited \$0\.00/i)).not.toBeInTheDocument()
@@ -145,9 +145,41 @@ describe('PlanChangePanel', () => {
 
   it('Cancel button closes without firing a mutation', () => {
     const onClose = vi.fn()
-    render(<PlanChangePanel billing={billing()} onClose={onClose} />, { wrapper: Wrapper })
+    render(<PlanChangePanel billing={billing()} onClose={onClose} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
     expect(post).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('trial subscription: shows TrialNotice instead of picker; no preview POST', () => {
+    // Paddle rejects items-array mutations on a trialing subscription
+    // (`subscription_trialing_items_update_invalid_options` for tier swaps,
+    // `subscription_new_items_not_valid` for cadence swaps). The picker
+    // would 422 on every selection — render the notice instead.
+    const trial = billing({
+      tier: 'trial',
+      trial_days_remaining: 4,
+      subscription: { status: 'trialing', tier: 'pro', current_period_end: '2026-06-11' },
+    })
+
+    render(<PlanChangePanel billing={trial} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, { wrapper: Wrapper })
+
+    expect(screen.getByText(/payment processor.*doesn't allow plan changes/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel free trial/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('trial: "Cancel free trial" button invokes onSwitchToCancel', () => {
+    const onSwitchToCancel = vi.fn()
+    const trial = billing({
+      tier: 'trial',
+      subscription: { status: 'trialing', tier: 'pro', current_period_end: '2026-06-11' },
+    })
+
+    render(<PlanChangePanel billing={trial} onClose={vi.fn()} onSwitchToCancel={onSwitchToCancel} />, { wrapper: Wrapper })
+    fireEvent.click(screen.getByRole('button', { name: /cancel free trial/i }))
+
+    expect(onSwitchToCancel).toHaveBeenCalledOnce()
   })
 })
