@@ -388,15 +388,27 @@ defmodule Engram.Billing do
   def upsert_from_paddle_event(%{"event_type" => "subscription.created", "data" => data}) do
     case extract_user_id(data) do
       {:ok, user_id} ->
-        attrs = %{
+        base_attrs = %{
           user_id: user_id,
           paddle_customer_id: data["customer_id"],
           paddle_subscription_id: data["id"],
-          tier: tier_from_subscription(data),
           status: data["status"],
           current_period_end: parse_period_end(data),
           custom_data: data["custom_data"] || %{}
         }
+
+        attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier))
+
+            {:error, :unknown_price_id} ->
+              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                extra: %{user_id: user_id, payload_keys: Map.keys(data)}
+              )
+
+              base_attrs
+          end
 
         # Omit :custom_data from the replace list. Paddle delivers at-least-once,
         # so a retried subscription.created must NOT clobber the affiliate /
@@ -442,13 +454,27 @@ defmodule Engram.Billing do
            skip_tenant_check: true
          ) do
       %Subscription{tier: prev_tier, status: prev_status} = sub ->
+        base_attrs = %{
+          status: data["status"],
+          current_period_end: parse_period_end(data)
+        }
+
+        update_attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier))
+
+            {:error, :unknown_price_id} ->
+              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+              )
+
+              base_attrs
+          end
+
         result =
           sub
-          |> Subscription.changeset(%{
-            status: data["status"],
-            tier: tier_from_subscription(data),
-            current_period_end: parse_period_end(data)
-          })
+          |> Subscription.changeset(update_attrs)
           |> Repo.update(skip_tenant_check: true)
 
         case result do
@@ -514,41 +540,44 @@ defmodule Engram.Billing do
   defp extract_user_id(_), do: :error
 
   @doc """
-  Resolve a tier name (`"free"` | `"starter"` | `"pro"`) from a Paddle
-  subscription data map. Defaults to `"free"` for unknown or missing
-  prices (logged loudly via `Logger.error`) so a bogus payload can't
-  silently grant paid features — reconciliation surfaces the mismatch
-  separately.
+  Resolve a tier (`:starter` | `:pro`) from a Paddle subscription data
+  map. Returns `{:error, :unknown_price_id}` for unknown or missing
+  prices (logged loudly via `Logger.error`) so the caller can decide what
+  to do — typically: do NOT mutate the user's tier, and alert ops. This
+  avoids silently downgrading a paying user to free when Paddle sends a
+  price_id we don't recognize (e.g., a mis-configured env var).
   """
-  @spec tier_from_subscription(map()) :: String.t()
-  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
-    do: tier_from_price_id(price_id)
+  @spec tier_from_subscription(map()) ::
+          {:ok, :starter | :pro} | {:error, :unknown_price_id}
+  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}) do
+    tier_from_price_id(price_id)
+  end
 
   def tier_from_subscription(other) do
-    Logger.error("paddle subscription missing items[0].price.id; defaulting to free",
+    Logger.error("paddle subscription missing items[0].price.id",
       payload_keys: Map.keys(other || %{})
     )
 
-    "free"
+    {:error, :unknown_price_id}
   end
 
   defp tier_from_price_id(price_id) do
     cond do
       price_id == Application.get_env(:engram, :paddle_starter_monthly_price_id) ->
-        "starter"
+        {:ok, :starter}
 
       price_id == Application.get_env(:engram, :paddle_starter_annual_price_id) ->
-        "starter"
+        {:ok, :starter}
 
       price_id == Application.get_env(:engram, :paddle_pro_monthly_price_id) ->
-        "pro"
+        {:ok, :pro}
 
       price_id == Application.get_env(:engram, :paddle_pro_annual_price_id) ->
-        "pro"
+        {:ok, :pro}
 
       true ->
         log_unknown_price_id_once(price_id)
-        "free"
+        {:error, :unknown_price_id}
     end
   end
 

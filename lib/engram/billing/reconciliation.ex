@@ -175,7 +175,7 @@ defmodule Engram.Billing.Reconciliation do
           }
         ]
 
-      Engram.Billing.tier_from_subscription(paddle_sub) != local.tier ->
+      paddle_tier_string(paddle_sub) != local.tier ->
         [
           %{
             subscription_id: id,
@@ -197,6 +197,18 @@ defmodule Engram.Billing.Reconciliation do
 
       true ->
         []
+    end
+  end
+
+  # Resolve a Paddle subscription's tier into a string comparable to the
+  # local subscription's `tier` column. Unknown price IDs surface as
+  # `nil`, which `tier_mismatch` then flags vs the local tier (the
+  # `paddle:` payload still carries the full `{:error, :unknown_price_id}`
+  # tuple so operators can see WHY).
+  defp paddle_tier_string(paddle_sub) do
+    case Engram.Billing.tier_from_subscription(paddle_sub) do
+      {:ok, tier} -> Atom.to_string(tier)
+      {:error, :unknown_price_id} -> nil
     end
   end
 
