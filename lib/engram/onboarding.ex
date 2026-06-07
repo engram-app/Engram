@@ -371,6 +371,20 @@ defmodule Engram.Onboarding do
   defp profile_has_tools?(_), do: false
 
   @doc """
+  Mark the user as having chosen the Free tier during onboarding. Idempotent:
+  if `free_tier_accepted_at` is already set, returns the user unchanged.
+  """
+  @spec accept_free_tier(Engram.Accounts.User.t()) ::
+          {:ok, Engram.Accounts.User.t()} | {:error, Ecto.Changeset.t()}
+  def accept_free_tier(%{free_tier_accepted_at: %DateTime{}} = user), do: {:ok, user}
+
+  def accept_free_tier(%Engram.Accounts.User{} = user) do
+    user
+    |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
+    |> Repo.update()
+  end
+
+  @doc """
   Record an onboarding milestone for `user_id`. Idempotent — re-recording the
   same action returns `:ok` with no extra row. Returns `{:error, changeset}`
   only on enum/validation failure.
