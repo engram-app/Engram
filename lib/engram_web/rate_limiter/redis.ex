@@ -21,20 +21,29 @@ defmodule EngramWeb.RateLimiter.Redis do
   boot). The key prefix and command timeout are compiled in via the `use`
   opts above.
 
-  `:socket_opts` carries `customize_hostname_check` so `rediss://` URLs
-  against wildcard certs (AWS ElastiCache/Valkey:
+  For `rediss://` URLs ONLY: append `:socket_opts` with
+  `customize_hostname_check` so wildcard certs (AWS ElastiCache/Valkey:
   `*.cluster.cache.amazonaws.com`) negotiate TLS successfully. Erlang
   `:ssl`'s default match_fun is strict literal — it rejects wildcard SANs
   on leftmost-label hosts like `master.cluster.cache.amazonaws.com` and
-  emits `CLIENT ALERT: Fatal - Handshake Failure` every reconnect (silent
-  rate-limiter fail-open in prod). The `:https`-shape match_fun applies
-  RFC 6125 wildcard rules. Ignored for plain-tcp `redis://` URLs (no TLS
-  handshake), so unconditional is safe for selfhost.
+  emits `CLIENT ALERT: Fatal - Handshake Failure` every reconnect.
+
+  MUST be gated on the `rediss://` scheme: for plain-tcp `redis://` URLs
+  Redix passes `socket_opts` directly to `:gen_tcp.connect/4`, which
+  validates strictly and rejects `customize_hostname_check` (an `:ssl`
+  option) with ArgumentError → boot-loops the limiter → crashes the app
+  supervisor on staging-fastraid + selfhost. The original `Pull #496`
+  claimed "unconditional is safe" — wrong.
   """
   @spec start_opts(String.t()) :: keyword()
   def start_opts(redis_url) when is_binary(redis_url) do
+    base = [url: redis_url]
+
+    if String.starts_with?(redis_url, "rediss://"), do: base ++ tls_opts(), else: base
+  end
+
+  defp tls_opts do
     [
-      url: redis_url,
       socket_opts: [
         customize_hostname_check: [
           match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
