@@ -284,6 +284,7 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.DeviceFingerprint,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireOnboarding,
+      EngramWeb.Plugs.RequireActiveSubscription,
       EngramWeb.Plugs.BumpActivity,
       EngramWeb.Plugs.RequireApiRpsBudget,
       EngramWeb.Plugs.RequireApiWriteEnabled,
