@@ -306,23 +306,48 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["error"] == "paddle_unavailable"
     end
 
-    test "Paddle 4xx maps to 422 paddle_rejected with status in body", %{conn: conn, user: user} do
+    test "Paddle 4xx maps to 422 paddle_rejected with code + detail surfaced from body",
+         %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_422")
 
+      paddle_body = %{
+        "error" => %{
+          "code" => "subscription_locked_renewal",
+          "detail" => "Subscription is locked because it's currently renewing.",
+          "documentation_url" => "https://developer.paddle.com/errors/x"
+        }
+      }
+
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
-        {:error, {:paddle_error, 422}}
+        {:error, {:paddle_error, 422, paddle_body}}
       end)
 
       body = conn |> post("/api/billing/cancel-subscription") |> json_response(422)
       assert body["error"] == "paddle_rejected"
       assert body["paddle_status"] == 422
+      assert body["paddle_code"] == "subscription_locked_renewal"
+      assert body["paddle_detail"] =~ "currently renewing"
+    end
+
+    test "Paddle 4xx with no parseable body returns paddle_rejected without code",
+         %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_422_thin")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 422, "plain text upstream"}}
+      end)
+
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(422)
+      assert body["error"] == "paddle_rejected"
+      assert body["paddle_status"] == 422
+      refute Map.has_key?(body, "paddle_code")
     end
 
     test "Paddle 5xx maps to 502 paddle_upstream_error", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_502")
 
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
-        {:error, {:paddle_error, 502}}
+        {:error, {:paddle_error, 502, %{}}}
       end)
 
       body = conn |> post("/api/billing/cancel-subscription") |> json_response(502)

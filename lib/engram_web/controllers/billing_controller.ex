@@ -207,22 +207,46 @@ defmodule EngramWeb.BillingController do
     conn |> put_status(422) |> json(%{error: "no_active_subscription"})
   end
 
-  defp respond_paddle({:error, {:paddle_error, status}}, conn, _opts)
+  defp respond_paddle({:error, {:paddle_error, status, body}}, conn, _opts)
        when status >= 400 and status < 500 do
     conn
     |> put_status(422)
-    |> json(%{error: "paddle_rejected", paddle_status: status})
+    |> json(paddle_error_payload("paddle_rejected", status, body))
   end
 
-  defp respond_paddle({:error, {:paddle_error, status}}, conn, _opts) do
+  defp respond_paddle({:error, {:paddle_error, status, body}}, conn, _opts) do
     conn
     |> put_status(502)
-    |> json(%{error: "paddle_upstream_error", paddle_status: status})
+    |> json(paddle_error_payload("paddle_upstream_error", status, body))
   end
 
   defp respond_paddle({:error, :paddle_unavailable}, conn, _opts) do
     conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
   end
+
+  # Paddle errors come back as `%{"error" => %{"code" => ..., "detail" => ...,
+  # "documentation_url" => ...}}`. Surface the code + detail in our API
+  # response so the user can see WHY Paddle rejected the request without
+  # SSH-ing to the backend. Fall back to bare status if the body shape
+  # doesn't match — older Paddle endpoints sometimes return plain text.
+  defp paddle_error_payload(error, status, body) do
+    base = %{error: error, paddle_status: status}
+
+    case body do
+      %{"error" => %{"code" => code} = err} when is_binary(code) ->
+        base
+        |> Map.put(:paddle_code, code)
+        |> maybe_put(:paddle_detail, Map.get(err, "detail"))
+
+      _ ->
+        base
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value) when is_binary(value), do: Map.put(map, key, value)
+  defp maybe_put(map, _key, _other), do: map
 
   # Allow-list: only the 4 catalog price IDs surfaced by /billing/config are
   # valid plan-change targets. Without this guard a caller could submit an

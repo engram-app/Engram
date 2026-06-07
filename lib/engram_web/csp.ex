@@ -157,11 +157,18 @@ defmodule EngramWeb.CSP do
   # Both sandbox and live Paddle environments serve from `*.paddle.com`.
   # PADDLE_ENV (read in runtime.exs:341) selects which Paddle backend
   # API the server calls; the browser-facing CDN hosts are stable.
+  #
+  # `style-src` is required because Paddle Checkout injects a `<link>`
+  # to `sandbox-cdn.paddle.com/paddle/v2/assets/css/paddle.css` (the
+  # live CDN equivalent in production). Without it the overlay renders
+  # unstyled and the browser console shows a `style-src` CSP violation
+  # — the exact failure mode that surfaced on staging 2026-06-06.
   defp paddle_directives do
     hosts = ["https://*.paddle.com"]
 
     %{
       "script-src" => hosts,
+      "style-src" => hosts,
       "connect-src" => hosts,
       "frame-src" => hosts
     }
@@ -209,20 +216,32 @@ defmodule EngramWeb.CSP do
   # Sentry error reporting (browser SDK).
   #
   # The SDK itself ships bundled in the SPA (no extra script-src host),
-  # but every captured event POSTs to the project's ingest host on
-  # `*.ingest.sentry.io`, and Sentry uses regional shards (us / eu) so
-  # the wildcard is necessary. Without this `connect-src` entry the
-  # browser blocks the POST and exceptions never reach Sentry — a
-  # silent-success failure mode where the SDK reports "queued" but the
-  # event evaporates at the CSP gate.
+  # but every captured event POSTs to the project's ingest host. Sentry
+  # uses regional shards — the actual ingest hostname is
+  # `<orgId>.ingest.<region>.sentry.io` (e.g.
+  # `o4511498169942016.ingest.us.sentry.io`), four labels after the org
+  # prefix. CSP wildcards match exactly ONE label, so the single
+  # `*.ingest.sentry.io` did NOT cover regional shards even though
+  # Sentry's docs imply it does. Listing both `*.ingest.<region>.
+  # sentry.io` and the bare `*.ingest.sentry.io` covers projects on the
+  # legacy non-sharded ingest plus US/EU regions.
+  #
+  # Without these entries the browser blocks the POST and exceptions
+  # never reach Sentry — a silent-success failure mode where the SDK
+  # reports "queued" but the event evaporates at the CSP gate. This
+  # exact failure surfaced on staging 2026-06-06: DSN was correct,
+  # ingest was on us-region, CSP only listed the unsharded wildcard.
   #
   # Unconditionally on because the frontend bundle is the same for
   # SaaS + self-host; the actual `Sentry.init` call is gated on
   # `VITE_SENTRY_DSN`, and self-host builds without the DSN never
-  # produce any traffic to this host. CSP is a static allow-list and
-  # gains nothing from runtime gating.
+  # produce any traffic to this host.
   defp sentry_directives do
-    hosts = ["https://*.ingest.sentry.io"]
+    hosts = [
+      "https://*.ingest.sentry.io",
+      "https://*.ingest.us.sentry.io",
+      "https://*.ingest.de.sentry.io"
+    ]
 
     %{
       "connect-src" => hosts

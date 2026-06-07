@@ -44,15 +44,19 @@ defmodule Engram.Billing.SubscriptionsTest do
       assert {:error, :paddle_unavailable} = Subscriptions.cancel(user)
     end
 
-    test "Paddle 4xx bubbles as {:error, {:paddle_error, status}}" do
+    test "Paddle 4xx bubbles as {:error, {:paddle_error, status, body}}" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_cancel_422")
 
+      body = %{
+        "error" => %{"code" => "subscription_locked", "detail" => "Subscription is locked"}
+      }
+
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
-        {:error, {:paddle_error, 422}}
+        {:error, {:paddle_error, 422, body}}
       end)
 
-      assert {:error, {:paddle_error, 422}} = Subscriptions.cancel(user)
+      assert {:error, {:paddle_error, 422, ^body}} = Subscriptions.cancel(user)
     end
   end
 
@@ -98,27 +102,41 @@ defmodule Engram.Billing.SubscriptionsTest do
                Subscriptions.preview_plan_change(user, "pri_new")
     end
 
-    test "Paddle 4xx bubbles as {:error, {:paddle_error, status}}" do
+    test "Paddle 4xx bubbles as {:error, {:paddle_error, status, body}}" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_preview_422")
 
+      body = %{"error" => %{"code" => "invalid_field", "detail" => "items is invalid"}}
+
       expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn _, _, _ ->
-        {:error, {:paddle_error, 400}}
+        {:error, {:paddle_error, 400, body}}
       end)
 
-      assert {:error, {:paddle_error, 400}} =
+      assert {:error, {:paddle_error, 400, ^body}} =
                Subscriptions.preview_plan_change(user, "pri_new")
     end
 
-    test "Paddle 5xx bubbles as {:error, {:paddle_error, status}}" do
+    test "Paddle 5xx bubbles as {:error, {:paddle_error, status, body}}" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_preview_503")
 
       expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn _, _, _ ->
-        {:error, {:paddle_error, 503}}
+        {:error, {:paddle_error, 503, %{}}}
       end)
 
-      assert {:error, {:paddle_error, 503}} =
+      assert {:error, {:paddle_error, 503, %{}}} =
+               Subscriptions.preview_plan_change(user, "pri_new")
+    end
+
+    test "back-compat: 2-tuple {:paddle_error, status} normalizes to 3-tuple with empty body" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_preview_legacy")
+
+      expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn _, _, _ ->
+        {:error, {:paddle_error, 422}}
+      end)
+
+      assert {:error, {:paddle_error, 422, %{}}} =
                Subscriptions.preview_plan_change(user, "pri_new")
     end
   end

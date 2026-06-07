@@ -31,7 +31,7 @@ defmodule Engram.Paddle.Client.HTTP do
             reason_label: inspect(body)
           )
 
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -50,7 +50,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("subscription", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -71,7 +71,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("transactions", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -90,7 +90,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("transaction-invoice", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -109,7 +109,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("portal-session", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -179,7 +179,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
       {:ok, %Req.Response{status: status, body: body}} ->
         log_non_2xx("subscriptions-list", status, body)
-        {:error, {:paddle_error, status}}
+        {:error, {:paddle_error, status, body}}
 
       {:error, reason} ->
         Logger.warning("Paddle subscriptions-list transport error",
@@ -205,7 +205,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("update-payment-transaction", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -233,7 +233,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("subscription-cancel", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -254,7 +254,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("subscription-preview", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
@@ -281,7 +281,7 @@ defmodule Engram.Paddle.Client.HTTP do
 
         {:ok, %Req.Response{status: status, body: body}} ->
           log_non_2xx("subscription-update", status, body)
-          {:error, {:paddle_error, status}}
+          {:error, {:paddle_error, status, body}}
 
         {:error, reason} ->
           {:error, reason}
