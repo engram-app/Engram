@@ -445,8 +445,87 @@ defmodule Engram.Billing do
     end
   end
 
+  def upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => data}) do
+    subscription_id = data["id"]
+
+    case Repo.one(
+           from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
+           skip_tenant_check: true
+         ) do
+      %Subscription{} = sub ->
+        sub_with_user = Repo.preload(sub, :user, skip_tenant_check: true)
+        user = sub_with_user.user
+        prev_tier = if user, do: tier(user), else: :free
+
+        base_attrs = %{
+          status: data["status"],
+          current_period_end: parse_period_end(data)
+        }
+
+        update_attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier_atom} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier_atom))
+
+            {:error, :unknown_price_id} ->
+              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+              )
+
+              base_attrs
+          end
+
+        # Flip the user to Free at cancellation (period end per Paddle's engine).
+        # `free_tier_accepted_at` is stamped only when nil so a user who had
+        # originally accepted Free, upgraded, then canceled keeps the original
+        # acceptance timestamp. Wrap both writes in a transaction so a partial
+        # failure rolls back together.
+        result =
+          Repo.transaction(fn ->
+            updated_sub =
+              sub
+              |> Subscription.changeset(update_attrs)
+              |> Repo.update!(skip_tenant_check: true)
+
+            if user && is_nil(user.free_tier_accepted_at) do
+              user
+              |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
+              |> Repo.update!()
+            end
+
+            updated_sub
+          end)
+
+        case result do
+          {:ok, updated} ->
+            broadcast_subscription_activated(updated.user_id, updated)
+
+            # Force-disconnect open sockets so the next reconnect re-runs the
+            # tier gate with the canceled subscription. Mirrors the behaviour
+            # in subscription.updated/activated when tier or status flips.
+            Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
+
+            if user do
+              :telemetry.execute(
+                [:engram, :tier_downgraded],
+                %{count: 1},
+                %{user_id: user.id, from: prev_tier, to: :free}
+              )
+            end
+
+            {:ok, updated}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      nil ->
+        {:error, :subscription_not_found}
+    end
+  end
+
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
-      when type in ~w(subscription.activated subscription.updated subscription.past_due subscription.canceled) do
+      when type in ~w(subscription.activated subscription.updated subscription.past_due) do
     subscription_id = data["id"]
 
     case Repo.one(
