@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 24 catalog keys" do
+    test "returns the 25 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 24
+      assert length(keys) == 25
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -101,9 +101,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 72 tuples (24 keys × 3 tiers)" do
+    test "emits 75 tuples (25 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 72
+      assert length(tuples) == 75
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -135,5 +135,13 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:mcp_connections_cap, :starter) == nil
       assert LimitKeys.default_for(:mcp_connections_cap, :pro) == nil
     end
+  end
+
+  test "attachments_enabled key is defined for all three tiers" do
+    assert LimitKeys.defined?(:attachments_enabled)
+    assert LimitKeys.type(:attachments_enabled) == :boolean
+    assert LimitKeys.default_for(:attachments_enabled, :free) == false
+    assert LimitKeys.default_for(:attachments_enabled, :starter) == true
+    assert LimitKeys.default_for(:attachments_enabled, :pro) == true
   end
 end
