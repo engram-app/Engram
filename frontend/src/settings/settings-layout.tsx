@@ -1,11 +1,14 @@
-import { Menu } from 'lucide-react'
-// X imported below alongside other dialog primitives
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { Menu, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
-import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
 import { Dialog, DialogOverlay } from '@/components/ui/dialog'
+
+// Keep this in sync with the duration-200 class on DialogPrimitive.Content
+// below — we hold the dialog mounted for one animation cycle after
+// onOpenChange(false) so Radix's exit transition plays before we navigate.
+const CLOSE_ANIMATION_MS = 200
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Sheet,
@@ -58,7 +61,7 @@ export default function SettingsLayout() {
 
   useEffect(() => {
     if (open) return
-    const t = setTimeout(() => navigate('/'), 200)
+    const t = setTimeout(() => navigate('/'), CLOSE_ANIMATION_MS)
     return () => clearTimeout(t)
   }, [open, navigate])
 
