@@ -305,6 +305,30 @@ defmodule EngramWeb.BillingControllerTest do
       body = conn |> post("/api/billing/cancel-subscription") |> json_response(503)
       assert body["error"] == "paddle_unavailable"
     end
+
+    test "Paddle 4xx maps to 422 paddle_rejected with status in body", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_422")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 422}}
+      end)
+
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(422)
+      assert body["error"] == "paddle_rejected"
+      assert body["paddle_status"] == 422
+    end
+
+    test "Paddle 5xx maps to 502 paddle_upstream_error", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_502")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 502}}
+      end)
+
+      body = conn |> post("/api/billing/cancel-subscription") |> json_response(502)
+      assert body["error"] == "paddle_upstream_error"
+      assert body["paddle_status"] == 502
+    end
   end
 
   describe "POST /api/billing/reverse-cancel" do

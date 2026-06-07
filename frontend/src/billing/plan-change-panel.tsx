@@ -169,8 +169,15 @@ function formatProration(data: {
   new_total: number
   next_billed_at: string
 }): string {
+  const renewal = new Date(data.next_billed_at).toLocaleDateString()
+  const newTotal = formatCents(data.new_total)
+  // Exact-cadence flips (e.g. monthly→monthly mid-cycle of the same
+  // tier) come back as 0 — "Credited $0.00 today" reads as a billing
+  // mistake. Make the no-op explicit.
+  if (data.immediate_charge_or_credit === 0) {
+    return `No charge today; next bill ${newTotal} on ${renewal}`
+  }
   const direction = data.immediate_charge_or_credit > 0 ? 'Charged' : 'Credited'
   const amount = formatCents(Math.abs(data.immediate_charge_or_credit))
-  const renewal = new Date(data.next_billed_at).toLocaleDateString()
-  return `${direction} ${amount} today; next bill ${formatCents(data.new_total)} on ${renewal}`
+  return `${direction} ${amount} today; next bill ${newTotal} on ${renewal}`
 }

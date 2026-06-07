@@ -135,36 +135,25 @@ defmodule EngramWeb.BillingController do
     * 202 — Paddle accepted, scheduled-change is in flight; webhook will
       mirror it back into our DB
     * 422 `no_active_subscription` — user has no Paddle subscription id
-    * 503 `paddle_unavailable` — Paddle non-2xx / transport error
+    * 422 `paddle_rejected` — Paddle returned 4xx (user-caused, e.g. sub
+      already canceled or replaced). `paddle_status` in body.
+    * 502 `paddle_upstream_error` — Paddle returned 5xx
+    * 503 `paddle_unavailable` — transport failure (no HTTP response)
   """
   def cancel_subscription(conn, _params) do
     with_billing(conn, fn ->
-      case Subscriptions.cancel(conn.assigns.current_user) do
-        {:ok, data} ->
-          conn |> put_status(202) |> json(data)
-
-        {:error, :no_active_subscription} ->
-          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
-
-        {:error, :paddle_unavailable} ->
-          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
-      end
+      conn.assigns.current_user
+      |> Subscriptions.cancel()
+      |> respond_paddle(conn, ok_status: 202)
     end)
   end
 
   @doc "Reverse a scheduled cancel before its effective date."
   def reverse_cancel(conn, _params) do
     with_billing(conn, fn ->
-      case Subscriptions.reverse_cancel(conn.assigns.current_user) do
-        {:ok, data} ->
-          conn |> put_status(202) |> json(data)
-
-        {:error, :no_active_subscription} ->
-          conn |> put_status(422) |> json(%{error: "no_active_subscription"})
-
-        {:error, :paddle_unavailable} ->
-          conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
-      end
+      conn.assigns.current_user
+      |> Subscriptions.reverse_cancel()
+      |> respond_paddle(conn, ok_status: 202)
     end)
   end
 
@@ -175,16 +164,9 @@ defmodule EngramWeb.BillingController do
   def plan_change_preview(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
     with_billing(conn, fn ->
       if valid_catalog_price_id?(price_id) do
-        case Subscriptions.preview_plan_change(conn.assigns.current_user, price_id) do
-          {:ok, preview} ->
-            json(conn, preview)
-
-          {:error, :no_active_subscription} ->
-            conn |> put_status(422) |> json(%{error: "no_active_subscription"})
-
-          {:error, :paddle_unavailable} ->
-            conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
-        end
+        conn.assigns.current_user
+        |> Subscriptions.preview_plan_change(price_id)
+        |> respond_paddle(conn, ok_status: 200)
       else
         conn |> put_status(422) |> json(%{error: "invalid_price_id"})
       end
@@ -199,16 +181,9 @@ defmodule EngramWeb.BillingController do
   def plan_change_confirm(conn, %{"target_price_id" => price_id}) when is_binary(price_id) do
     with_billing(conn, fn ->
       if valid_catalog_price_id?(price_id) do
-        case Subscriptions.confirm_plan_change(conn.assigns.current_user, price_id) do
-          {:ok, data} ->
-            conn |> put_status(202) |> json(data)
-
-          {:error, :no_active_subscription} ->
-            conn |> put_status(422) |> json(%{error: "no_active_subscription"})
-
-          {:error, :paddle_unavailable} ->
-            conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
-        end
+        conn.assigns.current_user
+        |> Subscriptions.confirm_plan_change(price_id)
+        |> respond_paddle(conn, ok_status: 202)
       else
         conn |> put_status(422) |> json(%{error: "invalid_price_id"})
       end
@@ -217,6 +192,36 @@ defmodule EngramWeb.BillingController do
 
   def plan_change_confirm(conn, _params) do
     conn |> put_status(422) |> json(%{error: "target_price_id required"})
+  end
+
+  # Single response mapper for the four user-initiated subscription actions.
+  # Distinguishes Paddle 4xx (user-caused) from 5xx (upstream outage) from
+  # transport failure (`:paddle_unavailable`) so log dashboards and support
+  # can triage without re-parsing strings — and so the frontend can show a
+  # 'try again' message for 5xx but a 'this won't work' message for 4xx.
+  defp respond_paddle({:ok, data}, conn, opts) do
+    conn |> put_status(Keyword.fetch!(opts, :ok_status)) |> json(data)
+  end
+
+  defp respond_paddle({:error, :no_active_subscription}, conn, _opts) do
+    conn |> put_status(422) |> json(%{error: "no_active_subscription"})
+  end
+
+  defp respond_paddle({:error, {:paddle_error, status}}, conn, _opts)
+       when status >= 400 and status < 500 do
+    conn
+    |> put_status(422)
+    |> json(%{error: "paddle_rejected", paddle_status: status})
+  end
+
+  defp respond_paddle({:error, {:paddle_error, status}}, conn, _opts) do
+    conn
+    |> put_status(502)
+    |> json(%{error: "paddle_upstream_error", paddle_status: status})
+  end
+
+  defp respond_paddle({:error, :paddle_unavailable}, conn, _opts) do
+    conn |> put_status(503) |> json(%{error: "paddle_unavailable"})
   end
 
   # Allow-list: only the 4 catalog price IDs surfaced by /billing/config are

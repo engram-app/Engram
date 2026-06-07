@@ -14,12 +14,30 @@ export default function PendingChangeBanner({
 }: {
   scheduledChange: SubscriptionDetail['scheduled_change']
 }) {
-  const reverseCancel = useReverseCancel()
-
   if (!scheduledChange) return null
 
   const label = ACTION_LABELS[scheduledChange.action] ?? 'Your plan changes'
   const date = new Date(scheduledChange.effective_at).toLocaleDateString()
+
+  return (
+    <aside
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
+    >
+      <p className="font-medium text-foreground">
+        {label} on {date}
+      </p>
+      {scheduledChange.action === 'cancel' && <ReverseCancelButton />}
+    </aside>
+  )
+}
+
+// Hook isolated to its own component so the mutation state isn't allocated
+// for non-cancel scheduled changes (pause/resume) where the button never
+// renders. Tiny gain alone — pattern matters when the parent is in the
+// always-mounted billing surface.
+function ReverseCancelButton() {
+  const reverseCancel = useReverseCancel()
 
   async function onReverse() {
     try {
@@ -31,19 +49,9 @@ export default function PendingChangeBanner({
   }
 
   return (
-    <aside
-      role="status"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
-    >
-      <p className="font-medium text-foreground">
-        {label} on {date}
-      </p>
-      {scheduledChange.action === 'cancel' && (
-        <Button size="sm" onClick={onReverse} disabled={reverseCancel.isPending}>
-          {reverseCancel.isPending && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
-          {reverseCancel.isPending ? 'Reversing…' : 'Keep my subscription'}
-        </Button>
-      )}
-    </aside>
+    <Button size="sm" onClick={onReverse} disabled={reverseCancel.isPending}>
+      {reverseCancel.isPending && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
+      {reverseCancel.isPending ? 'Reversing…' : 'Keep my subscription'}
+    </Button>
   )
 }

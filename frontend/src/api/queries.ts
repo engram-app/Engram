@@ -818,6 +818,13 @@ export function usePlanChangePreview(targetPriceId: string | null) {
       api.post<PlanChangePreview>('/billing/plan-change/preview', {
         target_price_id: targetPriceId,
       }),
+    // Preview hits Paddle. Without these, every window focus/refocus
+    // (alt-tab back to the picker tab) re-POSTs to Paddle. The data
+    // is stable for the lifetime of the picker session — proration
+    // math only changes when the user picks a different target or
+    // a webhook flips their subscription (both invalidate the key).
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   })
 }
 

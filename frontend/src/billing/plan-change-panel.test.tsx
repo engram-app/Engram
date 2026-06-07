@@ -129,6 +129,20 @@ describe('PlanChangePanel', () => {
     await waitFor(() => expect(confirmBtn).not.toBeDisabled())
   })
 
+  it('proration $0: shows "No charge today" instead of Credited $0.00', async () => {
+    post.mockResolvedValue({
+      old_total: 700,
+      new_total: 700,
+      immediate_charge_or_credit: 0,
+      next_billed_at: '2026-07-01T00:00:00Z',
+    })
+
+    render(<PlanChangePanel billing={billing()} onClose={vi.fn()} />, { wrapper: Wrapper })
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    expect(await screen.findByText(/no charge today/i)).toBeInTheDocument()
+    expect(screen.queryByText(/credited \$0\.00/i)).not.toBeInTheDocument()
+  })
+
   it('Cancel button closes without firing a mutation', () => {
     const onClose = vi.fn()
     render(<PlanChangePanel billing={billing()} onClose={onClose} />, { wrapper: Wrapper })
