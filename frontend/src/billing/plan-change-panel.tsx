@@ -16,6 +16,10 @@ import { CadenceToggle, PLAN_CATALOG, PlanCard, type PlanTier } from './plan-car
 interface PlanChangePanelProps {
   billing: BillingStatus
   onClose: () => void
+  // Trial users can't change plan shape via Paddle (see TrialNotice). The
+  // panel offers a "Cancel free trial" path instead — parent owns the
+  // panel-swap so we don't reach into siblings.
+  onSwitchToCancel: () => void
 }
 
 function formatCents(cents: number | null | undefined): string {
@@ -41,7 +45,24 @@ function deriveCurrentCadence(detail: SubscriptionDetail | undefined): BillingCa
   return detail?.billing_cycle?.interval === 'year' ? 'annual' : 'monthly'
 }
 
-export default function PlanChangePanel({ billing, onClose }: PlanChangePanelProps) {
+export default function PlanChangePanel({
+  billing,
+  onClose,
+  onSwitchToCancel,
+}: PlanChangePanelProps) {
+  // Paddle refuses any items-array mutation on a trialing subscription —
+  // both tier swaps (`subscription_trialing_items_update_invalid_options`)
+  // AND cadence swaps (`subscription_new_items_not_valid`). We can't work
+  // around it client-side; the trial has to end first. Render an
+  // explanatory state instead of a picker that's guaranteed to 422.
+  if (billing.subscription?.status === 'trialing') {
+    return <TrialNotice billing={billing} onClose={onClose} onSwitchToCancel={onSwitchToCancel} />
+  }
+
+  return <PlanChangePicker billing={billing} onClose={onClose} />
+}
+
+function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClose: () => void }) {
   const { data: config } = useBillingConfig()
   const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription))
   const currentTier = deriveCurrentTier(billing)
@@ -158,6 +179,54 @@ export default function PlanChangePanel({ billing, onClose }: PlanChangePanelPro
         </Button>
         <Button variant="ghost" onClick={onClose} disabled={confirm.isPending}>
           Cancel
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+// Renders when the user is on a Paddle free trial. Paddle won't accept
+// items-array mutations on a trialing subscription, so a picker would
+// just produce 422s for every selection (verified on staging 2026-06-06:
+// `subscription_trialing_items_update_invalid_options` for tier swaps,
+// `subscription_new_items_not_valid` for cadence swaps). Surface the
+// constraint honestly instead of pretending the picker works.
+function TrialNotice({
+  billing,
+  onClose,
+  onSwitchToCancel,
+}: {
+  billing: BillingStatus
+  onClose: () => void
+  onSwitchToCancel: () => void
+}) {
+  const renewsAt = billing.subscription?.current_period_end
+    ? new Date(billing.subscription.current_period_end).toLocaleDateString()
+    : null
+
+  return (
+    <section role="region" aria-label="Change plan" className="space-y-4 pt-2">
+      <header>
+        <h2 className="text-base font-semibold text-foreground">Change your plan</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a
+          subscription is in trial
+          {renewsAt ? <> — your trial converts on <strong>{renewsAt}</strong></> : null}.
+        </p>
+      </header>
+      <div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">Want a different plan?</p>
+        <p className="mt-1">
+          Cancel the free trial below — you won't be charged. You can subscribe to the plan you want
+          at any time.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="destructive" onClick={onSwitchToCancel}>
+          Cancel free trial
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Close
         </Button>
       </div>
     </section>
