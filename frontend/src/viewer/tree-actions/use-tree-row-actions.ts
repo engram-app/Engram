@@ -20,6 +20,87 @@ interface Row {
   label: string
 }
 
+// Module-scoped active-drag tracker. dataTransfer.getData() returns "" during
+// dragover (per HTML spec — only readable on drop), so we stash the dragged
+// node here on dragstart and read it back in dragover to decide whether to
+// preventDefault (= "drop allowed" cursor) or skip it (= "no-drop" cursor).
+// Module scope is fine because the OS only supports one drag at a time per
+// window; a Context would be heavier with no real benefit.
+let activeDrag: DragNode | null = null
+
+function moveErrorToast(err: unknown) {
+  if (err instanceof ApiError && err.status === 409) {
+    toast.error('Target already has an item with that name.')
+  } else {
+    toast.error('Move failed.')
+  }
+}
+
+function moveSuccessToast(targetFolder: string) {
+  toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
+}
+
+/**
+ * Shared drop-target event wiring used by both `useTreeRowActions` (folder
+ * rows) and `useTreeDrop` (tree root). Single source of truth for the drag
+ * affordance contract:
+ *
+ *  - dragover preventDefaults ONLY when the drop would be valid → browser
+ *    shows "no-drop" cursor over invalid targets (folder onto descendant,
+ *    file already in target folder).
+ *  - drop reads payload via dataTransfer (the source of truth), re-validates,
+ *    and dispatches the appropriate rename mutation.
+ */
+function buildDropTargetProps(
+  targetFolder: string,
+  renameNote: ReturnType<typeof useRenameNote>,
+  renameFolder: ReturnType<typeof useRenameFolder>,
+) {
+  return {
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DRAG_MIME)) return
+      // Stop propagation so an outer drop target (e.g. the root <nav>) can't
+      // override our "no" — without this, hovering an invalid target would
+      // still show "drop allowed" because the parent re-preventDefaults.
+      e.stopPropagation()
+      // dataTransfer.getData is empty during dragover (HTML spec); consult
+      // the stashed active drag node to decide whether to allow the drop.
+      const src = activeDrag
+      if (src && !isValidDropTarget(src, targetFolder)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault()
+      // Stop propagation so the root <nav> drop handler doesn't also fire
+      // (would re-interpret the drop as "move to root" and either no-op or
+      // produce the wrong target folder).
+      e.stopPropagation()
+      const raw = e.dataTransfer.getData(DRAG_MIME)
+      if (!raw) return
+      let src: DragNode
+      try {
+        src = JSON.parse(raw) as DragNode
+      } catch {
+        return
+      }
+      if (!isValidDropTarget(src, targetFolder)) {
+        toast.info('No move — already there')
+        return
+      }
+      const newPath = newPathAfterMove(src.path, targetFolder)
+      const mutation = src.kind === 'file' ? renameNote : renameFolder
+      mutation.mutate(
+        { old_path: src.path, new_path: newPath },
+        {
+          onSuccess: () => moveSuccessToast(targetFolder),
+          onError: (err) => moveErrorToast(err),
+        },
+      )
+    },
+  }
+}
+
 interface UseTreeRowActionsResult {
   // UI state
   menuPos: { x: number; y: number } | null
@@ -51,6 +132,7 @@ interface UseTreeRowActionsResult {
   dragSourceProps: {
     draggable: true
     onDragStart: (e: React.DragEvent) => void
+    onDragEnd: () => void
   }
   dropTargetProps: (targetFolder: string) => {
     onDragOver: (e: React.DragEvent) => void
@@ -179,47 +261,17 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
     draggable: true as const,
     onDragStart: (e: React.DragEvent) => {
       const payload: DragNode = { kind: row.kind, path: row.path }
+      activeDrag = payload
       e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload))
       e.dataTransfer.effectAllowed = 'move'
     },
+    onDragEnd: () => {
+      activeDrag = null
+    },
   }
 
-  const dropTargetProps = (targetFolder: string) => ({
-    onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes(DRAG_MIME)) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault()
-      const raw = e.dataTransfer.getData(DRAG_MIME)
-      if (!raw) return
-      let src: DragNode
-      try {
-        src = JSON.parse(raw) as DragNode
-      } catch {
-        return
-      }
-      if (!isValidDropTarget(src, targetFolder)) return
-      const newPath = newPathAfterMove(src.path, targetFolder)
-      const mutation = src.kind === 'file' ? renameNote : renameFolder
-      mutation.mutate(
-        { old_path: src.path, new_path: newPath },
-        {
-          onSuccess: () => {
-            toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
-          },
-          onError: (err) => {
-            if (err instanceof ApiError && err.status === 409) {
-              toast.error('Target already has an item with that name.')
-            } else {
-              toast.error('Move failed.')
-            }
-          },
-        },
-      )
-    },
-  })
+  const dropTargetProps = (targetFolder: string) =>
+    buildDropTargetProps(targetFolder, renameNote, renameFolder)
 
   return {
     menuPos,
@@ -259,42 +311,8 @@ export function useTreeDrop() {
   const renameNote = useRenameNote()
   const renameFolder = useRenameFolder()
 
-  const dropTargetProps = (targetFolder: string) => ({
-    onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes(DRAG_MIME)) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault()
-      const raw = e.dataTransfer.getData(DRAG_MIME)
-      if (!raw) return
-      let src: DragNode
-      try {
-        src = JSON.parse(raw) as DragNode
-      } catch {
-        return
-      }
-      if (!isValidDropTarget(src, targetFolder)) return
-      const newPath = newPathAfterMove(src.path, targetFolder)
-      const mutation = src.kind === 'file' ? renameNote : renameFolder
-      mutation.mutate(
-        { old_path: src.path, new_path: newPath },
-        {
-          onSuccess: () => {
-            toast.success(`Moved to ${targetFolder === '' ? '/' : targetFolder}`)
-          },
-          onError: (err) => {
-            if (err instanceof ApiError && err.status === 409) {
-              toast.error('Target already has an item with that name.')
-            } else {
-              toast.error('Move failed.')
-            }
-          },
-        },
-      )
-    },
-  })
+  const dropTargetProps = (targetFolder: string) =>
+    buildDropTargetProps(targetFolder, renameNote, renameFolder)
 
   return { dropTargetProps }
 }

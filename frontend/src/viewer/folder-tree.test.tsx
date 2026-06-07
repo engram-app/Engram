@@ -279,6 +279,64 @@ describe('FolderTree tree actions', () => {
     })
   })
 
+  it('F2 on focused note row enters rename mode', async () => {
+    renderTree()
+    const link = screen.getByRole('link', { name: /a/i })
+    fireEvent.keyDown(link, { key: 'F2' })
+
+    const input = await screen.findByRole('textbox')
+    expect(input).toHaveValue('a.md')
+  })
+
+  it('folder rename via context menu calls renameFolder with old + new paths', async () => {
+    renderTree()
+    const folderBtn = screen.getByRole('button', { name: /docs/i, expanded: false })
+    fireEvent.contextMenu(folderBtn)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+
+    const input = await screen.findByRole('textbox')
+    expect(input).toHaveValue('docs')
+    fireEvent.change(input, { target: { value: 'documents' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(renameFolderMutate).toHaveBeenCalledWith({
+        old_path: 'docs',
+        new_path: 'documents',
+      })
+    })
+  })
+
+  it('drop folder onto itself is rejected — no mutation fired', async () => {
+    renderTree()
+    const folderBtn = screen.getByRole('button', { name: /docs/i, expanded: false })
+
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      setData: (k: string, v: string) => data.set(k, v),
+      getData: (k: string) => data.get(k) ?? '',
+      types: [] as string[],
+      effectAllowed: 'move',
+      dropEffect: 'move',
+    }
+    Object.defineProperty(dataTransfer, 'types', {
+      get: () => Array.from(data.keys()),
+    })
+
+    // Drag the `docs` folder and drop it onto the `docs` button itself.
+    // isValidDropTarget rejects folder → self (and folder → descendant
+    // shares the same early-return branch in the drop handler).
+    fireEvent.dragStart(folderBtn, { dataTransfer })
+    fireEvent.dragOver(folderBtn, { dataTransfer })
+    fireEvent.drop(folderBtn, { dataTransfer })
+
+    // Give any deferred work a tick; nothing should have fired.
+    await waitFor(() => {
+      expect(renameFolderMutate).not.toHaveBeenCalled()
+      expect(renameNoteMutate).not.toHaveBeenCalled()
+    })
+  })
+
   it('409 from rename keeps row in edit mode with error visible', async () => {
     setRenameNoteError(new ApiError(409, 'conflict'))
     renderTree()

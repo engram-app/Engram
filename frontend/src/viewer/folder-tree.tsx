@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useMemo, useRef, type KeyboardEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -350,7 +350,6 @@ function NoteLeaf({
   const extension = nonMdExtension(note.path)
   const label = noteLabel(note)
   const fileName = note.path.split('/').pop() ?? note.path
-  const [isFocused, setIsFocused] = useState(false)
 
   const rowActions = useTreeRowActions({ kind: 'file', path: note.path, label })
   const longPress = useLongPress({ onLongPress: () => rowActions.openDrawer() })
@@ -392,9 +391,6 @@ function NoteLeaf({
     }
   }
 
-  // Mark isFocused so it's used; future-proofs a keyboard-focus style.
-  void isFocused
-
   return (
     <li>
       {rowActions.renaming ? (
@@ -421,8 +417,6 @@ function NoteLeaf({
             rowActions.openContextMenu({ x: e.clientX, y: e.clientY })
           }}
           onKeyDown={onKeyDown}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
           className={`flex items-center gap-1 rounded py-0.5 pl-1 pr-3 ${
             isSelected
               ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
