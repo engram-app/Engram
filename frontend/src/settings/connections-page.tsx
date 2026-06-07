@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { SettingsSectionCard } from '@/settings/account/section-card'
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ export default function ConnectionsPage() {
   const mcpCount = caps.mcpCap != null ? `${mcp.length} / ${caps.mcpCap}` : `${mcp.length}`
 
   return (
-    <article className="space-y-8 max-w-3xl">
+    <article className="space-y-8">
       <header>
         <h1 className="text-xl font-semibold text-foreground">Connections</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -112,10 +113,7 @@ export default function ConnectionsPage() {
         </nav>
       </header>
 
-      <section aria-labelledby="obs-h">
-        <h2 id="obs-h" className="mb-3 text-lg font-semibold">
-          Obsidian plugins ({obsCount})
-        </h2>
+      <SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
         {obs.length === 0 ? (
           <EmptyState text="Install the Engram Vault Sync plugin in Obsidian to connect this vault." />
         ) : (
@@ -140,12 +138,9 @@ export default function ConnectionsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </SettingsSectionCard>
 
-      <section aria-labelledby="mcp-h">
-        <h2 id="mcp-h" className="mb-3 text-lg font-semibold">
-          AI tools &amp; integrations ({mcpCount})
-        </h2>
+      <SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
         {mcp.length === 0 ? (
           <EmptyState text="Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool." />
         ) : (
@@ -166,7 +161,7 @@ export default function ConnectionsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </SettingsSectionCard>
 
       <PatSection
         pats={pats}
@@ -303,7 +298,7 @@ function ConnectionCard({
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <section className="rounded-lg border border-dashed border-input p-8 text-center">
+    <section className="rounded-lg border-2 border-dashed border-input p-8 text-center">
       <p className="text-sm text-muted-foreground">{text}</p>
     </section>
   )
@@ -324,22 +319,14 @@ function PatSection({
   const [newKey, setNewKey] = useState<{ key: string; id: number; name: string } | null>(null)
 
   return (
-    <section aria-labelledby="pat-h">
-      <header className="flex flex-col gap-3 mb-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 id="pat-h" className="text-lg font-semibold">
-          API keys ({pats.length})
-        </h2>
-        {canCreate && (
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            + New Key
-          </button>
-        )}
-      </header>
-
+    <SettingsSectionCard
+      title={`API keys (${pats.length})`}
+      headerAction={
+        canCreate ? (
+          <Button onClick={() => setShowCreate(true)}>+ New Key</Button>
+        ) : undefined
+      }
+    >
       {!canCreate && (
         <aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
           <p className="text-sm text-muted-foreground">
@@ -412,7 +399,7 @@ function PatSection({
       )}
 
       {newKey && <RevealKeyModal createdKey={newKey} onClose={() => setNewKey(null)} />}
-    </section>
+    </SettingsSectionCard>
   )
 }
 

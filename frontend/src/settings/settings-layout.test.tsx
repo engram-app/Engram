@@ -36,11 +36,12 @@ describe('SettingsLayout', () => {
     window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as any
   })
 
-  it('renders the app rail, the settings nav, and the routed section', () => {
+  it('renders as a dialog with the settings nav + routed section', () => {
     renderAt('/settings/api-keys')
-    // Rail replaced the old AppHeader; assert on its nav landmark + the
-    // settings-section nav landmark + the routed body.
-    expect(screen.getByRole('navigation', { name: 'App navigation' })).toBeInTheDocument()
+    // SettingsLayout is now a Radix Dialog overlaying whatever underlying
+    // app route is showing — the Rail lives on AppLayout (parent route), so
+    // assert on the dialog + section nav + routed body.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Account' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Billing' })).toBeInTheDocument()
     expect(screen.getByText('api keys body')).toBeInTheDocument()

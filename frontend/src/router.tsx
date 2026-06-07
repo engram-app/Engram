@@ -87,40 +87,37 @@ export const router = createBrowserRouter(
                   children: [
                     { path: ROUTES.HOME, element: <Dashboard /> },
                     { path: '/note/*', element: <NotePage /> },
+                    {
+                      path: 'settings',
+                      element: <SettingsLayout />,
+                      children: [
+                        {
+                          index: true,
+                          element: <Navigate to="account" replace />,
+                        },
+                        {
+                          path: 'account',
+                          element: (
+                            <Suspense
+                              fallback={<p className="text-muted-foreground">Loading…</p>}
+                            >
+                              <AccountPage />
+                            </Suspense>
+                          ),
+                        },
+                        { path: 'vaults', element: <VaultsPage /> },
+                        { path: 'connections', element: <ConnectionsPage /> },
+                        { path: 'api-keys', element: <Navigate to="/settings/connections" replace /> },
+                        ...(config.billingEnabled
+                          ? [{ path: 'billing', element: <BillingPage /> }]
+                          : []),
+                        ...(config.authProvider === 'local'
+                          ? [{ path: 'admin', element: <AdminPanel /> }]
+                          : []),
+                      ],
+                    },
                   ],
                 },
-              ],
-            },
-            {
-              path: '/settings',
-              element: <SettingsLayout />,
-              children: [
-                {
-                  index: true,
-                  element: (
-                    <Navigate to="account" replace />
-                  ),
-                },
-                {
-                  path: 'account',
-                  element: (
-                    <Suspense
-                      fallback={<p className="text-muted-foreground">Loading…</p>}
-                    >
-                      <AccountPage />
-                    </Suspense>
-                  ),
-                },
-                { path: 'vaults', element: <VaultsPage /> },
-                { path: 'connections', element: <ConnectionsPage /> },
-                { path: 'api-keys', element: <Navigate to="/settings/connections" replace /> },
-                ...(config.billingEnabled
-                  ? [{ path: 'billing', element: <BillingPage /> }]
-                  : []),
-                // Self-host only — AdminPanel runs its own role gate too.
-                ...(config.authProvider === 'local'
-                  ? [{ path: 'admin', element: <AdminPanel /> }]
-                  : []),
               ],
             },
             { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
