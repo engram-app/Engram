@@ -1,5 +1,5 @@
 import { FolderTree, Search, Settings } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import UserMenu from './user-menu'
 import { useRailView, type RailView } from './rail-view-context'
@@ -11,7 +11,15 @@ function ViewButton({ id, label, dataTour, Icon }: {
   Icon: typeof Search
 }) {
   const { view, setView } = useRailView()
+  const location = useLocation()
+  const navigate = useNavigate()
   const active = view === id
+  const onClick = () => {
+    setView(id)
+    if (location.pathname.startsWith('/settings')) {
+      navigate('/')
+    }
+  }
   return (
     <Button
       variant="ghost"
@@ -20,7 +28,7 @@ function ViewButton({ id, label, dataTour, Icon }: {
       aria-current={active ? 'page' : undefined}
       data-tour={dataTour}
       title={label}
-      onClick={() => setView(id)}
+      onClick={onClick}
       className={active ? 'bg-accent text-accent-foreground' : undefined}
     >
       <Icon className="h-4 w-4" />

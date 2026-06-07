@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, useLocation } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import Rail from './rail'
 import { RailViewProvider, useRailView } from './rail-view-context'
@@ -22,6 +22,11 @@ function Wrap({ children, initialEntries }: { children: React.ReactNode; initial
 function ActiveProbe() {
   const { view } = useRailView()
   return <span data-testid="view">{view}</span>
+}
+
+function PathProbe() {
+  const { pathname } = useLocation()
+  return <span data-testid="pathname">{pathname}</span>
 }
 
 describe('Rail', () => {
@@ -54,5 +59,25 @@ describe('Rail', () => {
   it('exposes data-tour="search" on the Search icon', () => {
     render(<Wrap><Rail /></Wrap>)
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('data-tour', 'search')
+  })
+
+  it('clicking Files from /settings navigates back to /', () => {
+    render(<Wrap initialEntries={['/settings']}><Rail /><PathProbe /></Wrap>)
+    expect(screen.getByTestId('pathname').textContent).toBe('/settings')
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+    expect(screen.getByTestId('pathname').textContent).toBe('/')
+  })
+
+  it('clicking Search from /settings navigates back to / and sets view to search', () => {
+    render(<Wrap initialEntries={['/settings']}><Rail /><PathProbe /><ActiveProbe /></Wrap>)
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    expect(screen.getByTestId('pathname').textContent).toBe('/')
+    expect(screen.getByTestId('view').textContent).toBe('search')
+  })
+
+  it('clicking Files from / does NOT change the pathname', () => {
+    render(<Wrap initialEntries={['/']}><Rail /><PathProbe /></Wrap>)
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+    expect(screen.getByTestId('pathname').textContent).toBe('/')
   })
 })
