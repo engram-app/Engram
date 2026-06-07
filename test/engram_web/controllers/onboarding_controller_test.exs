@@ -41,13 +41,11 @@ defmodule EngramWeb.OnboardingControllerTest do
 
   describe "GET /api/onboarding/status" do
     test "returns next_step=agreement for a new user", %{conn: conn} do
-      # Under Free-as-default (Task 2.2), `subscription_ok` is true for a new
-      # user because `Billing.tier/1` returns `:free`. Terms still gates first.
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
       assert body["enabled"] == true
       assert body["terms_ok"] == false
-      assert body["subscription_ok"] == true
+      assert body["subscription_ok"] == false
       assert body["next_step"] == "agreement"
       assert body["current_tos_version"] == "2026-05-15"
       assert body["current_privacy_version"] == "2026-05-15"
@@ -56,7 +54,7 @@ defmodule EngramWeb.OnboardingControllerTest do
     test "returns next_step=done for fully onboarded obsidian user with vault",
          %{conn: conn, user: user} do
       {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 

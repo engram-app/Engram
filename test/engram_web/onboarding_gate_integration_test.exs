@@ -41,19 +41,16 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
   end
 
   test "GET /api/folders returns 403 onboarding_required for new user", %{conn: conn} do
-    # Under Free-as-default (Task 2.2), the subscription gate auto-passes via
-    # `tier=:free`, so the only blocker for a brand-new user is :terms (the
-    # default factory user has no agreement row and no profile).
     conn = get(conn, "/api/folders")
     body = json_response(conn, 403)
     assert body["error"] == "onboarding_required"
+    assert "subscription" in body["missing"]
     assert "terms" in body["missing"]
-    refute "subscription" in body["missing"]
   end
 
   test "GET /api/folders returns 200 after onboarding completes", %{conn: conn, user: user} do
     {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     # Setup already inserts a vault — pair with uses_obsidian=false so the
     # new vault gate sees has_vault=true and lets the request through.
     {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
