@@ -57,6 +57,21 @@ defmodule Engram.Search do
     cross_vault = Keyword.get(opts, :cross_vault, false)
     started_at = System.monotonic_time(:millisecond)
 
+    # engram-app/engram-infra#340 — emit
+    # [:engram, :search, :request, :start/:stop] for the PromEx Search plugin.
+    # Hand-rolled (not `:telemetry.span/3`) so result_count is a measurement
+    # — `:telemetry.span` only allows extra metadata, not measurements.
+    # Cardinality contract: no user_id, vault_id, or query string.
+    rerank = rerank_label(user)
+    start_mono = System.monotonic_time()
+    start_meta = %{cross_vault: cross_vault, rerank: rerank}
+
+    :telemetry.execute(
+      [:engram, :search, :request, :start],
+      %{system_time: System.system_time(), monotonic_time: start_mono},
+      start_meta
+    )
+
     result =
       if cross_vault do
         case Engram.Billing.check_feature(user, :cross_vault_search) do
@@ -68,7 +83,34 @@ defmodule Engram.Search do
       end
 
     emit_search_performed(user, result, started_at, cross_vault)
+
+    :telemetry.execute(
+      [:engram, :search, :request, :stop],
+      %{
+        duration: System.monotonic_time() - start_mono,
+        result_count: result_count(result)
+      },
+      %{
+        status: search_status(result),
+        cross_vault: cross_vault,
+        rerank: rerank
+      }
+    )
+
     result
+  end
+
+  defp search_status({:ok, _}), do: :ok
+  defp search_status({:error, _}), do: :error
+
+  defp result_count({:ok, results}) when is_list(results), do: length(results)
+  defp result_count(_), do: 0
+
+  defp rerank_label(user) do
+    case Engram.Billing.check_feature(user, :reranker_enabled) do
+      :ok -> if reranker_active?(), do: :on, else: :off
+      {:error, _} -> :off
+    end
   end
 
   defp emit_search_performed(user, {:ok, results}, started_at, cross_vault)

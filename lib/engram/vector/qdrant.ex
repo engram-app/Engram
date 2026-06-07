@@ -20,6 +20,22 @@ defmodule Engram.Vector.Qdrant do
   defp binary_quantization_enabled?,
     do: Application.get_env(:engram, :qdrant_binary_quantization, true)
 
+  # Wrap an HTTP call in a `:telemetry.span` so the PromEx Qdrant plugin
+  # (engram-app/engram-infra#340) sees per-op latency + status. `op` is
+  # a bounded atom (`:search`, `:upsert`, etc.); status is derived from
+  # the result tuple. NEVER include collection name, point ids, or
+  # user/vault context — cardinality contract.
+  defp instrument(op, fun) when is_atom(op) and is_function(fun, 0) do
+    :telemetry.span([:engram, :qdrant, :request], %{op: op}, fn ->
+      result = fun.()
+      {result, %{op: op, status: qdrant_status(result)}}
+    end)
+  end
+
+  defp qdrant_status(:ok), do: :ok
+  defp qdrant_status({:ok, _}), do: :ok
+  defp qdrant_status({:error, _}), do: :error
+
   defp req_opts do
     {retry, max_retries} =
       case Application.get_env(:engram, :qdrant_retry, :transient) do
@@ -63,11 +79,13 @@ defmodule Engram.Vector.Qdrant do
 
     opts = [json: body] ++ req_opts()
 
-    case Req.put("#{base_url()}/collections/#{col}", opts) do
-      {:ok, %{status: status}} when status in [200, 201, 409] -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:ensure_collection, fn ->
+      case Req.put("#{base_url()}/collections/#{col}", opts) do
+        {:ok, %{status: status}} when status in [200, 201, 409] -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -76,11 +94,13 @@ defmodule Engram.Vector.Qdrant do
   def delete_collection(col) do
     opts = req_opts()
 
-    case Req.delete("#{base_url()}/collections/#{col}", opts) do
-      {:ok, %{status: status}} when status in [200, 404] -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:delete_collection, fn ->
+      case Req.delete("#{base_url()}/collections/#{col}", opts) do
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -90,11 +110,13 @@ defmodule Engram.Vector.Qdrant do
   def collection_info(col) do
     opts = req_opts()
 
-    case Req.get("#{base_url()}/collections/#{col}", opts) do
-      {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:collection_info, fn ->
+      case Req.get("#{base_url()}/collections/#{col}", opts) do
+        {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -106,11 +128,13 @@ defmodule Engram.Vector.Qdrant do
     serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector, payload: p.payload} end)
     opts = [json: %{points: serialized}] ++ req_opts()
 
-    case Req.put("#{base_url()}/collections/#{col}/points", opts) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:upsert, fn ->
+      case Req.put("#{base_url()}/collections/#{col}/points", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -125,11 +149,13 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
     opts = [json: %{points: point_ids, payload: payload}] ++ req_opts()
 
-    case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:set_payload, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -152,11 +178,13 @@ defmodule Engram.Vector.Qdrant do
 
     opts = [json: %{filter: filter}] ++ req_opts()
 
-    case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:delete, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -170,11 +198,13 @@ defmodule Engram.Vector.Qdrant do
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
     opts = [json: %{filter: filter}] ++ req_opts()
 
-    case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:delete, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -192,11 +222,13 @@ defmodule Engram.Vector.Qdrant do
 
     opts = [json: %{filter: filter}] ++ req_opts()
 
-    case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-      {:error, reason} -> {:error, reason}
-    end
+    instrument(:delete, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -230,20 +262,22 @@ defmodule Engram.Vector.Qdrant do
         offset -> Map.put(body, :offset, offset)
       end
 
-    case Req.post(url, [json: body] ++ req_opts()) do
-      {:ok,
-       %Req.Response{
-         status: 200,
-         body: %{"result" => %{"points" => points, "next_page_offset" => next}}
-       }} ->
-        {:ok, %{points: points, next_page_offset: next}}
+    instrument(:scroll, fn ->
+      case Req.post(url, [json: body] ++ req_opts()) do
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{"result" => %{"points" => points, "next_page_offset" => next}}
+         }} ->
+          {:ok, %{points: points, next_page_offset: next}}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {:qdrant_scroll, status, body}}
+        {:ok, %Req.Response{status: status, body: body}} ->
+          {:error, {:qdrant_scroll, status, body}}
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -295,6 +329,12 @@ defmodule Engram.Vector.Qdrant do
 
     opts = [json: body] ++ req_opts()
 
+    instrument(:search, fn ->
+      do_search(col, opts)
+    end)
+  end
+
+  defp do_search(col, opts) do
     case Req.post("#{base_url()}/collections/#{col}/points/query", opts) do
       {:ok, %{status: 200, body: %{"result" => result}}} ->
         points = if is_list(result), do: result, else: result["points"] || []
