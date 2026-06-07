@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useCancelSubscription, type BillingStatus } from '../api/queries'
 import type { SubscriptionDetail } from '../api/queries'
@@ -69,7 +70,8 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
           onClick={confirm}
           disabled={cancel.isPending}
         >
-          Cancel at period end
+          {cancel.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
+          {cancel.isPending ? 'Canceling…' : 'Cancel at period end'}
         </Button>
         <Button variant="ghost" onClick={onClose} disabled={cancel.isPending}>
           Keep my subscription

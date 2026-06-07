@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { PaymentMethod } from '../api/queries'
 
@@ -22,7 +23,8 @@ export default function PaymentMethodCard({
       <header className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-foreground">Payment method</h2>
         <Button variant="outline" size="sm" onClick={onUpdate} disabled={updating}>
-          Update
+          {updating && <Loader2 aria-hidden className="size-3 animate-spin" />}
+          {updating ? 'Opening…' : 'Update'}
         </Button>
       </header>
 

@@ -33,11 +33,16 @@ defmodule Engram.Billing.Subscriptions do
       anything here.
     * `{:error, :no_active_subscription}` — no `paddle_subscription_id` on
       file. Self-host users + users who have never paid land here.
-    * `{:error, :paddle_unavailable}` — Paddle returned non-2xx or the
-      transport failed. Surface as 503 at the controller boundary.
+    * `{:error, {:paddle_error, status}}` — Paddle returned a non-2xx
+      response. Status preserved so the controller can map 4xx (user-
+      caused, e.g. swapping to the current price) to 422 and 5xx (Paddle
+      outage) to 502 distinctly.
+    * `{:error, :paddle_unavailable}` — transport failure (Req error,
+      timeout, DNS, etc. — no HTTP response). Surface as 503.
   """
   @spec cancel(User.t(), :immediately | :next_billing_period) ::
-          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+          {:ok, map()}
+          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
   def cancel(user, effective_from \\ :next_billing_period)
       when effective_from in [:immediately, :next_billing_period] do
     case Billing.get_subscription(user) do
@@ -50,13 +55,23 @@ defmodule Engram.Billing.Subscriptions do
   end
 
   defp do_cancel(user, sub_id, effective_from) do
-    case Client.impl().cancel_subscription(sub_id, effective_from,
-           idempotency_key: idempotency_key(:cancel, user, sub_id, effective_from)
-         ) do
-      {:ok, data} -> {:ok, data}
-      {:error, _reason} -> {:error, :paddle_unavailable}
-    end
+    Client.impl().cancel_subscription(sub_id, effective_from,
+      idempotency_key: idempotency_key(:cancel, user, sub_id, effective_from)
+    )
+    |> normalize_paddle_result()
   end
+
+  # Paddle HTTP layer returns `{:error, {:paddle_error, status}}` for non-2xx
+  # responses and `{:error, transport_reason}` for connection failures.
+  # Preserve the status for the controller; collapse transport errors to a
+  # single `:paddle_unavailable` since callers can't act on transport detail.
+  defp normalize_paddle_result({:ok, data}), do: {:ok, data}
+
+  defp normalize_paddle_result({:error, {:paddle_error, status}}),
+    do: {:error, {:paddle_error, status}}
+
+  defp normalize_paddle_result({:error, _transport_reason}),
+    do: {:error, :paddle_unavailable}
 
   # Idempotency keys MUST be deterministic per logical request — Paddle's
   # `Paddle-IK` header is the dedup signal for retries (network blip, React
@@ -83,7 +98,8 @@ defmodule Engram.Billing.Subscriptions do
   Returns `{:ok, preview}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
   """
   @spec preview_plan_change(User.t(), String.t()) ::
-          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+          {:ok, map()}
+          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
   def preview_plan_change(user, new_price_id) when is_binary(new_price_id) do
     with_active_sub(user, fn sub_id ->
       Client.impl().preview_subscription_update(
@@ -103,7 +119,8 @@ defmodule Engram.Billing.Subscriptions do
   Returns `{:ok, paddle_data}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
   """
   @spec confirm_plan_change(User.t(), String.t()) ::
-          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+          {:ok, map()}
+          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
   def confirm_plan_change(user, new_price_id) when is_binary(new_price_id) do
     with_active_sub(user, fn sub_id ->
       Client.impl().update_subscription(
@@ -122,7 +139,8 @@ defmodule Engram.Billing.Subscriptions do
   Returns `{:ok, paddle_data}` or `{:error, :no_active_subscription | :paddle_unavailable}`.
   """
   @spec reverse_cancel(User.t()) ::
-          {:ok, map()} | {:error, :no_active_subscription | :paddle_unavailable}
+          {:ok, map()}
+          | {:error, :no_active_subscription | :paddle_unavailable | {:paddle_error, integer()}}
   def reverse_cancel(user) do
     with_active_sub(user, fn sub_id ->
       Client.impl().update_subscription(
@@ -137,10 +155,7 @@ defmodule Engram.Billing.Subscriptions do
   defp with_active_sub(user, fun) do
     case Billing.get_subscription(user) do
       %Subscription{paddle_subscription_id: sub_id} when is_binary(sub_id) ->
-        case fun.(sub_id) do
-          {:ok, data} -> {:ok, data}
-          {:error, _reason} -> {:error, :paddle_unavailable}
-        end
+        sub_id |> fun.() |> normalize_paddle_result()
 
       _ ->
         {:error, :no_active_subscription}

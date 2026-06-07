@@ -43,6 +43,17 @@ defmodule Engram.Billing.SubscriptionsTest do
 
       assert {:error, :paddle_unavailable} = Subscriptions.cancel(user)
     end
+
+    test "Paddle 4xx bubbles as {:error, {:paddle_error, status}}" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_cancel_422")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 422}}
+      end)
+
+      assert {:error, {:paddle_error, 422}} = Subscriptions.cancel(user)
+    end
   end
 
   describe "preview_plan_change/2" do
@@ -84,6 +95,30 @@ defmodule Engram.Billing.SubscriptionsTest do
       end)
 
       assert {:error, :paddle_unavailable} =
+               Subscriptions.preview_plan_change(user, "pri_new")
+    end
+
+    test "Paddle 4xx bubbles as {:error, {:paddle_error, status}}" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_preview_422")
+
+      expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn _, _, _ ->
+        {:error, {:paddle_error, 400}}
+      end)
+
+      assert {:error, {:paddle_error, 400}} =
+               Subscriptions.preview_plan_change(user, "pri_new")
+    end
+
+    test "Paddle 5xx bubbles as {:error, {:paddle_error, status}}" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_preview_503")
+
+      expect(Engram.Paddle.ClientMock, :preview_subscription_update, fn _, _, _ ->
+        {:error, {:paddle_error, 503}}
+      end)
+
+      assert {:error, {:paddle_error, 503}} =
                Subscriptions.preview_plan_change(user, "pri_new")
     end
   end
