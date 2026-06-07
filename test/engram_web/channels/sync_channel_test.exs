@@ -112,12 +112,47 @@ defmodule EngramWeb.SyncChannelTest do
           current_api_key: nil
         })
 
-      assert {:error, %{reason: "channel_forbidden_on_plan"}} =
+      assert {:error, err} =
                subscribe_and_join(
                  socket,
                  EngramWeb.SyncChannel,
                  "sync:#{free_user.id}:#{vault.id}"
                )
+
+      # Free-tier-launch spec §4.5 — error frame mirrors the 402 shape so
+      # the plugin's central handler can route realtime rejects the same
+      # way it routes HTTP 402s.
+      assert err.reason == "realtime_disabled"
+      assert err.limit_key == "realtime_sync_enabled"
+      assert err.tier == "free"
+      assert is_binary(err.upgrade_url)
+      assert err.upgrade_url =~ "/settings/billing"
+    end
+
+    test "paid user with realtime_sync_enabled override can join (gate on)" do
+      prev = Application.get_env(:engram, :realtime_sync_gate_enabled)
+      Application.put_env(:engram, :realtime_sync_gate_enabled, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :realtime_sync_gate_enabled),
+          else: Application.put_env(:engram, :realtime_sync_gate_enabled, prev)
+      end)
+
+      paid_user = insert(:user)
+      {:ok, paid_user} = Engram.Crypto.ensure_user_dek(paid_user)
+      vault = insert(:vault, user: paid_user, is_default: true)
+
+      # Equivalent to a paid tier from the gate's perspective — the
+      # override drives `effective_limit/2` for the boolean key.
+      insert(:user_limit_override,
+        user: paid_user,
+        key: "realtime_sync_enabled",
+        value: %{"v" => true}
+      )
+
+      socket = user_socket(paid_user)
+      assert {:ok, _, _} = join_sync(socket, paid_user, vault)
     end
   end
 
