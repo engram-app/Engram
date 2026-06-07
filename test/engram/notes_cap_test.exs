@@ -59,7 +59,7 @@ defmodule Engram.NotesCapTest do
 
     {:ok, _} = upsert(user, vault, "A.md")
     {:ok, _} = upsert(user, vault, "B.md")
-    assert {:error, :notes_cap_reached} = upsert(user, vault, "C.md")
+    assert {:error, {:notes_cap_reached, 2, 2}} = upsert(user, vault, "C.md")
 
     # The rejected insert must not have bumped the counter.
     assert UsageMeters.notes_count(user.id) == 2
@@ -70,7 +70,7 @@ defmodule Engram.NotesCapTest do
 
     {:ok, _} = upsert(user, vault, "A.md")
     {:ok, _} = upsert(user, vault, "B.md")
-    assert {:error, :notes_cap_reached} = upsert(user, vault, "C.md")
+    assert {:error, {:notes_cap_reached, 2, 2}} = upsert(user, vault, "C.md")
 
     :ok = Notes.delete_note(user, vault, "A.md")
     assert {:ok, _} = upsert(user, vault, "C.md")
@@ -90,7 +90,7 @@ defmodule Engram.NotesCapTest do
     assert UsageMeters.notes_count(user.id) == 1
 
     # A second real note must still be rejected because the cap is still full.
-    assert {:error, :notes_cap_reached} = upsert(user, vault, "B.md")
+    assert {:error, {:notes_cap_reached, 1, 1}} = upsert(user, vault, "B.md")
   end
 
   test "recount_notes! ignores folder markers", %{user: user, vault: vault} do

@@ -314,7 +314,13 @@ defmodule Engram.Notes do
 
     case Billing.check_limit(user, :notes_cap, current_count) do
       {:error, :limit_reached} ->
-        {:error, :notes_cap_reached}
+        # Free-tier launch §4.5 — carry the resolved limit + current count
+        # back to the controller so the 402 body can populate them. The
+        # resolver call here is the same one check_limit already made
+        # internally; a second call is cheaper than threading the value out
+        # of check_limit (no hot path).
+        limit = Billing.effective_limit(user, :notes_cap)
+        {:error, {:notes_cap_reached, limit, current_count}}
 
       :ok ->
         # T3.6 — pre-allocate the row id so the AAD bind string
