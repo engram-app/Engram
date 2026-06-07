@@ -1,6 +1,14 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useLocation } from 'react-router'
-import { type NoteSummary, useFolders, useFolderNotes, type Folder } from '../api/queries'
+import { toast } from 'sonner'
+import {
+  type NoteSummary,
+  useDuplicateNote,
+  useFolders,
+  useFolderNotes,
+  type Folder,
+} from '../api/queries'
+import { ApiError } from '../api/client'
 import { type SortKey, useFolderTreeState } from '../layout/folder-tree-context'
 import { ActionDrawer } from './tree-actions/action-drawer'
 import { actionsFor, type ActionId } from './tree-actions/action-list'
@@ -8,6 +16,7 @@ import { ContextMenu } from './tree-actions/context-menu'
 import { DeleteConfirm } from './tree-actions/delete-confirm'
 import { MoveDialog } from './tree-actions/move-dialog'
 import { RenameInput } from './tree-actions/rename-input'
+import { nextCopyName } from './tree-actions/duplicate'
 import { useLongPress } from './tree-actions/use-long-press'
 import { useTreeRowActions } from './tree-actions/use-tree-row-actions'
 
@@ -339,8 +348,33 @@ function NoteLeaf({
 
   const rowActions = useTreeRowActions({ kind: 'file', path: note.path, label })
   const longPress = useLongPress({ onLongPress: () => rowActions.openDrawer() })
+  const duplicateNote = useDuplicateNote()
 
-  const onPick = (id: ActionId) => handlePickAction(id, rowActions, { kind: 'file', label, note, siblingNotes })
+  const onDuplicate = async () => {
+    const existing = new Set<string>([note.path, ...siblingNotes.map((n) => n.path)])
+    const new_path = nextCopyName(note.path, existing)
+    try {
+      await duplicateNote.mutateAsync({ src_path: note.path, new_path })
+      toast.success('Duplicated')
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // A racing rename/create stole our generated name — surface it
+        // distinctly so the user knows to retry rather than thinking the
+        // action silently failed.
+        toast.error('A file with that name already exists.')
+      } else {
+        toast.error('Failed to duplicate')
+      }
+    }
+  }
+
+  const onPick = (id: ActionId) => {
+    if (id === 'duplicate') {
+      void onDuplicate()
+      return
+    }
+    handlePickAction(id, rowActions, { kind: 'file', label, note, siblingNotes })
+  }
 
   const onKeyDown = (e: KeyboardEvent<HTMLAnchorElement>) => {
     if (e.key === 'F2') {
@@ -441,9 +475,9 @@ function NoteLeaf({
   )
 }
 
-// Action dispatch — keeps the row components small. Duplicate is intentionally
-// deferred (no read-then-write mutation exists yet without firing extra hooks
-// per row); future commit can wire it through useCreateNote + useNote.
+// Action dispatch — keeps the row components small. `duplicate` is handled
+// one level up in NoteLeaf because it needs its own mutation hook (the rest
+// can ride on the shared `rowActions` set).
 function handlePickAction(
   id: ActionId,
   rowActions: ReturnType<typeof useTreeRowActions>,
@@ -465,9 +499,7 @@ function handlePickAction(
       if (ctx.kind === 'file') void rowActions.copyWikilink(ctx.label)
       return
     case 'duplicate':
-      // Duplicate requires reading the note content + writing a new note, which
-      // can't be done from a switch (hooks rule). It's scaffolded but inert
-      // here; see Task 14 manual smoke + follow-up.
+      // Handled by NoteLeaf.onPick before reaching here.
       return
   }
 }

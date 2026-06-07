@@ -7,21 +7,30 @@ import { FolderTreeProvider } from '../layout/folder-tree-context'
 import { ApiError } from '../api/client'
 
 // ── Mutation spies (hoisted so vi.mock can see them) ─────────
-const { renameNoteMutate, renameFolderMutate, deleteNoteMutate, deleteFolderMutate, createNoteMutate, renameNoteError, setRenameNoteError } =
-  vi.hoisted(() => {
-    let renameNoteErr: ApiError | null = null
-    return {
-      renameNoteMutate: vi.fn(),
-      renameFolderMutate: vi.fn(),
-      deleteNoteMutate: vi.fn(),
-      deleteFolderMutate: vi.fn(),
-      createNoteMutate: vi.fn(),
-      renameNoteError: () => renameNoteErr,
-      setRenameNoteError: (e: ApiError | null) => {
-        renameNoteErr = e
-      },
-    }
-  })
+const {
+  renameNoteMutate,
+  renameFolderMutate,
+  deleteNoteMutate,
+  deleteFolderMutate,
+  createNoteMutate,
+  duplicateNoteMutate,
+  renameNoteError,
+  setRenameNoteError,
+} = vi.hoisted(() => {
+  let renameNoteErr: ApiError | null = null
+  return {
+    renameNoteMutate: vi.fn(),
+    renameFolderMutate: vi.fn(),
+    deleteNoteMutate: vi.fn(),
+    deleteFolderMutate: vi.fn(),
+    createNoteMutate: vi.fn(),
+    duplicateNoteMutate: vi.fn(),
+    renameNoteError: () => renameNoteErr,
+    setRenameNoteError: (e: ApiError | null) => {
+      renameNoteErr = e
+    },
+  }
+})
 
 vi.mock('../api/queries', async () => {
   const actual = await vi.importActual<typeof import('../api/queries')>('../api/queries')
@@ -114,6 +123,14 @@ vi.mock('../api/queries', async () => {
       }),
       isPending: false,
     }),
+    useDuplicateNote: () => ({
+      mutate: duplicateNoteMutate,
+      mutateAsync: vi.fn((vars: { src_path: string; new_path: string }) => {
+        duplicateNoteMutate(vars)
+        return Promise.resolve({ note: { path: vars.new_path, content: 'hi' } })
+      }),
+      isPending: false,
+    }),
   }
 })
 
@@ -136,6 +153,7 @@ beforeEach(() => {
   deleteNoteMutate.mockReset()
   deleteFolderMutate.mockReset()
   createNoteMutate.mockReset()
+  duplicateNoteMutate.mockReset()
   setRenameNoteError(null)
 })
 
@@ -178,6 +196,20 @@ describe('FolderTree tree actions', () => {
 
     await waitFor(() => {
       expect(deleteNoteMutate).toHaveBeenCalledWith({ path: 'a.md' })
+    })
+  })
+
+  it('Duplicate fires duplicateNote with src + collision-free new path', async () => {
+    renderTree()
+    const link = screen.getByRole('link', { name: /a/i })
+    fireEvent.contextMenu(link)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
+
+    await waitFor(() => {
+      expect(duplicateNoteMutate).toHaveBeenCalledWith({
+        src_path: 'a.md',
+        new_path: 'a (copy).md',
+      })
     })
   })
 

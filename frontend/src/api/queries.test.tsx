@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { post, del } = vi.hoisted(() => ({ post: vi.fn(), del: vi.fn() }))
+const { get, post, del } = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+  del: vi.fn(),
+}))
 vi.mock('./client', async () => {
   const actual = await vi.importActual<typeof import('./client')>('./client')
   return {
     ...actual,
-    api: { get: vi.fn(), post, patch: vi.fn(), del },
+    api: { get, post, patch: vi.fn(), del },
     setTokenGetter: vi.fn(),
   }
 })
@@ -20,6 +24,7 @@ import {
   useConfirmPlanChange,
   useDeleteFolder,
   useDeleteNote,
+  useDuplicateNote,
   usePlanChangePreview,
   useRenameFolder,
   useRenameNote,
@@ -29,6 +34,7 @@ import {
 let qc: QueryClient
 
 beforeEach(() => {
+  get.mockReset()
   post.mockReset()
   del.mockReset()
   qc = new QueryClient()
@@ -207,6 +213,47 @@ describe('useDeleteNote', () => {
     await expect(result.current.mutateAsync({ path: 'gone.md' })).rejects.toMatchObject({
       status: 404,
     })
+  })
+})
+
+describe('useDuplicateNote', () => {
+  it('GETs source content then POSTs new note at new_path and invalidates listings', async () => {
+    get.mockResolvedValue({
+      path: 'a.md',
+      title: 'a',
+      folder: '',
+      tags: [],
+      version: 1,
+      mtime: '',
+      created_at: '',
+      updated_at: '',
+      content: 'hello world',
+    })
+    post.mockResolvedValue({ note: { path: 'a (copy).md', content: 'hello world' } })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useDuplicateNote(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ src_path: 'a.md', new_path: 'a (copy).md' })
+    })
+
+    expect(get).toHaveBeenCalledWith('/notes/a.md')
+    expect(post).toHaveBeenCalledWith(
+      '/notes',
+      expect.objectContaining({ path: 'a (copy).md', content: 'hello world' }),
+    )
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes'] })
+  })
+
+  it('surfaces 409 from POST as ApiError so callers can toast', async () => {
+    get.mockResolvedValue({ content: 'x' })
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useDuplicateNote(), { wrapper })
+    await expect(
+      result.current.mutateAsync({ src_path: 'a.md', new_path: 'a (copy).md' }),
+    ).rejects.toMatchObject({ status: 409 })
   })
 })
 

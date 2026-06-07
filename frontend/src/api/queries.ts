@@ -922,3 +922,32 @@ export function useDeleteFolder() {
     },
   })
 }
+
+// Duplicate a note: read source content, then write a fresh note at a
+// caller-chosen `new_path`. The collision-free name is computed by the
+// caller (see `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping
+// this mutation a thin GET-then-POST means tests don't need to reason
+// about siblings, and the name policy stays in one place.
+//
+// GET /api/notes/:path returns the Note JSON at the top level (see
+// `EngramWeb.NotesController.show/2` → `note_json(note)`), so `.content`
+// sits directly on the response. We don't bother caching the source via
+// React Query because the row already had `note.title`/`folder` from the
+// folder listing; only the body needs a network hop.
+export function useDuplicateNote() {
+  const qc = useQueryClient()
+  return useMutation<{ note: Note }, ApiError, { src_path: string; new_path: string }>({
+    mutationFn: async ({ src_path, new_path }) => {
+      const src = await api.get<Note>(`/notes/${encodePathSegments(src_path)}`)
+      return api.post<{ note: Note }>('/notes', {
+        path: new_path,
+        content: src.content ?? '',
+        mtime: Date.now() / 1000,
+      })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['folderNotes'] })
+    },
+  })
+}
