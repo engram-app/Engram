@@ -64,20 +64,20 @@ export default function FolderTree() {
     : null
 
   if (isLoading) {
-    return <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">Loading…</p>
+    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">Loading…</p>
   }
   if (isError) {
-    return <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">Failed to load folders.</p>
+    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-red-600 dark:text-red-400">Failed to load folders.</p>
   }
   if (!folders || folders.length === 0) {
-    return <p className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">No notes yet.</p>
+    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">No notes yet.</p>
   }
 
   const tree = buildTree(folders, sort)
   const hasRootFiles = folders.some((f) => f.name === '')
 
   return (
-    <nav aria-label="Files" className="py-2 text-base">
+    <nav aria-label="Files" className="py-2 text-base" data-testid="folder-tree-root">
       <ul role="list" className="space-y-1">
         {hasRootFiles && (
           <RootFiles selectedNotePath={selectedNotePath} />
