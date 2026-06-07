@@ -1,6 +1,6 @@
 import { Menu, PanelRightOpen, X } from 'lucide-react'
 import { type MouseEvent, useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router'
+import { Link, Outlet, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -18,21 +18,6 @@ import { FolderTreeProvider } from './folder-tree-context'
 import { useRightSidebar } from './right-sidebar-context'
 import UserMenu from './user-menu'
 import VaultSwitcher from './vault-switcher'
-
-function HeaderLink({ to, label }: { to: string; label: string }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        `text-sm transition hover:text-foreground ${
-          isActive ? 'font-medium text-foreground' : 'text-muted-foreground'
-        }`
-      }
-    >
-      {label}
-    </NavLink>
-  )
-}
 
 // Close the drawer only when the click originated on a navigation link.
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
@@ -97,7 +82,6 @@ export default function MobileLayout() {
           </Link>
         </section>
         <nav className="flex items-center gap-1" aria-label="Main navigation">
-          <HeaderLink to="/search" label="Search" />
           <ThemeToggle />
           <UserMenu />
           {rightContent && (

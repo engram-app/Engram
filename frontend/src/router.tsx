@@ -18,7 +18,6 @@ import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import { ROUTES } from './routes'
 import Dashboard from './viewer/dashboard'
 import NotePage from './viewer/note-page'
-import SearchPage from './viewer/search-page'
 import OnboardingGate from './onboarding/onboarding-gate'
 import OnboardLayout from './onboarding/onboard-layout'
 import OnboardRedirect from './onboarding/onboard-redirect'
@@ -88,7 +87,6 @@ export const router = createBrowserRouter(
                   children: [
                     { path: ROUTES.HOME, element: <Dashboard /> },
                     { path: '/note/*', element: <NotePage /> },
-                    { path: '/search', element: <SearchPage /> },
                   ],
                 },
               ],

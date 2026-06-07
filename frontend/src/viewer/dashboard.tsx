@@ -104,7 +104,7 @@ export default function Dashboard() {
         Select a folder from the sidebar to browse your notes.
       </p>
       <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-        Use <Link to="/search" className="text-blue-600 hover:underline">Search</Link> to find notes by keyword or semantic query.
+        Use the <strong className="font-semibold text-gray-700 dark:text-gray-200">Search</strong> icon in the sidebar to find notes by keyword or semantic query.
       </p>
     </section>
   )
