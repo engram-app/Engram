@@ -44,7 +44,6 @@ import {
   useDeleteNote,
   useDuplicateNote,
   useNote,
-  useNoteByPath,
   usePlanChangePreview,
   useRenameFolder,
   useRenameNote,
@@ -171,32 +170,6 @@ describe('useNote by id', () => {
 
   it('is disabled when id is null', () => {
     const { result } = renderHook(() => useNote(null), { wrapper })
-    expect(result.current.fetchStatus).toBe('idle')
-    expect(get).not.toHaveBeenCalled()
-  })
-})
-
-describe('useNoteByPath', () => {
-  it('fetches /notes/<encoded path> when path is non-empty', async () => {
-    get.mockResolvedValue({
-      id: 1,
-      path: 'src/a.md',
-      title: '',
-      folder: 'src',
-      tags: [],
-      version: 1,
-      content: '',
-      mtime: 's',
-      created_at: 's',
-      updated_at: 's',
-    } as Note)
-    const { result } = renderHook(() => useNoteByPath('src/a.md'), { wrapper })
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(get).toHaveBeenCalledWith('/notes/src/a.md')
-  })
-
-  it('is disabled when path is empty', () => {
-    const { result } = renderHook(() => useNoteByPath(''), { wrapper })
     expect(result.current.fetchStatus).toBe('idle')
     expect(get).not.toHaveBeenCalled()
   })

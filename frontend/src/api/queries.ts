@@ -120,18 +120,6 @@ export function useNote(id: number | null) {
   })
 }
 
-// Legacy path-keyed resolver. Task 6 wires this up behind the
-// `/note/*` catch-all so old links keep working: it fetches by path,
-// pulls the `id`, and replaces the URL with `/note/by-id/:id`.
-export function useNoteByPath(path: string) {
-  const vaultId = useActiveVaultId()
-  return useQuery({
-    queryKey: ['noteByPath', vaultId, path],
-    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
-    enabled: path.length > 0,
-  })
-}
-
 export function useUpdateNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()

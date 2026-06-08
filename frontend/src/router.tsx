@@ -17,7 +17,6 @@ import VaultsPage from './settings/vaults-page'
 import OAuthAuthorizePage from './oauth/oauth-authorize-page'
 import { ROUTES } from './routes'
 import Dashboard from './viewer/dashboard'
-import { LegacyNoteResolver } from './viewer/legacy-note-resolver'
 import NotePage from './viewer/note-page'
 import OnboardingGate from './onboarding/onboarding-gate'
 import OnboardLayout from './onboarding/onboard-layout'
@@ -88,7 +87,6 @@ export const router = createBrowserRouter(
                   children: [
                     { path: ROUTES.HOME, element: <Dashboard /> },
                     { path: '/note/:id', element: <NotePage /> },
-                    { path: '/note/*', element: <LegacyNoteResolver /> },
                     {
                       path: 'settings',
                       element: <SettingsLayout />,

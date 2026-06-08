@@ -97,14 +97,9 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 }
 
 function ResultRow({ result }: { result: SearchResult }) {
-  // result.id is null for orphan search hits (Task 1 backend) — fall
-  // back to the legacy path-URL so LegacyNoteResolver can still route
-  // them. Once the orphan note materializes, future search hits will
-  // carry an id and use the canonical /note/:id form.
-  const href =
-    result.id != null
-      ? `/note/${result.id}`
-      : `/note/${result.path.split('/').map(encodeURIComponent).join('/')}`
+  // Orphan hits (no id) are unreachable — render nothing.
+  if (result.id == null) return null
+  const href = `/note/${result.id}`
   return (
     <Link
       to={href}

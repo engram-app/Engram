@@ -77,10 +77,8 @@ export default function FolderTree() {
   const { sort } = useFolderTreeState()
   const params = useParams()
   const rootDrop = useTreeDrop()
-  // Route now uses /note/:id (Task 7). selectedNoteId drives the
-  // highlight + auto-expand-to-selected behaviour. Legacy /note/<path>
-  // URLs are caught by LegacyNoteResolver and replaced before they
-  // reach this component.
+  // Route uses /note/:id. selectedNoteId drives the highlight +
+  // auto-expand-to-selected behaviour.
   const selectedNoteId = params.id ? Number(params.id) : null
   // Look up the selected note's folder from the QueryClient cache so
   // FolderNode can still auto-expand the chain leading to it. Cache
