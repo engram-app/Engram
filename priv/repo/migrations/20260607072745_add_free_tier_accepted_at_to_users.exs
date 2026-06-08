@@ -3,7 +3,7 @@ defmodule Engram.Repo.Migrations.AddFreeTierAcceptedAtToUsers do
 
   def change do
     alter table(:users) do
-      add :free_tier_accepted_at, :utc_datetime_usec
+      add :free_tier_accepted_at, :timestamptz
     end
   end
 end
