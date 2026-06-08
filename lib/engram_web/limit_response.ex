@@ -46,11 +46,5 @@ defmodule EngramWeb.LimitResponse do
   end
 
   defp tier_string(nil), do: nil
-
-  defp tier_string(user) do
-    case Engram.Billing.tier(user) do
-      nil -> nil
-      atom -> Atom.to_string(atom)
-    end
-  end
+  defp tier_string(user), do: user |> Engram.Billing.tier() |> Atom.to_string()
 end

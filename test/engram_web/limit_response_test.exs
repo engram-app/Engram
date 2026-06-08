@@ -11,6 +11,7 @@ defmodule EngramWeb.LimitResponseTest do
       assert conn.halted
       assert conn.status == 402
       body = Jason.decode!(conn.resp_body)
+
       assert body == %{
                "error" => "limit_exceeded",
                "reason" => "notes_cap_exceeded",
@@ -41,9 +42,11 @@ defmodule EngramWeb.LimitResponseTest do
 
     test "upgrade_url is nil when config sets it nil" do
       Application.put_env(:engram, :upgrade_url, nil)
+
       on_exit(fn ->
         Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
       end)
+
       user = insert(:user, free_tier_accepted_at: DateTime.utc_now())
       conn = build_conn() |> assign(:current_user, user)
       conn = LimitResponse.halt(conn, "notes_cap_exceeded", :notes_cap, 10_000, 10_000)
