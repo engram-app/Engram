@@ -150,16 +150,12 @@ export function useUpdateNote() {
   })
 }
 
-function encodePathForRouter(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/')
-}
-
 export function useCreateNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()
   const navigate = useNavigate()
 
-  return useMutation<{ path: string }, ApiError, { folder: string }>({
+  return useMutation<{ path: string; id: number }, ApiError, { folder: string }>({
     mutationFn: async ({ folder }) => {
       const existingNotes =
         qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
@@ -175,12 +171,12 @@ export function useCreateNote() {
         const name = collideBump(existingNames, 'Untitled.md', { cap: 1000 })
         const path = folder ? `${folder}/${name}` : name
         try {
-          await api.post<{ note: Note }>('/notes', {
+          const { note } = await api.post<{ note: Note }>('/notes', {
             path,
             content: '',
             mtime: Date.now() / 1000,
           })
-          return { path }
+          return { path, id: note.id }
         } catch (err) {
           if (err instanceof ApiError && err.status === 409) {
             existingNames.add(name)
@@ -191,10 +187,10 @@ export function useCreateNote() {
       }
       throw new ApiError(500, 'useCreateNote: exceeded race retries')
     },
-    onSuccess: ({ path }, vars) => {
+    onSuccess: ({ id }, vars) => {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
-      navigate(`/note/${encodePathForRouter(path)}`)
+      navigate(`/note/${id}`)
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 402) {

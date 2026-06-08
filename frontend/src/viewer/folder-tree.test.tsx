@@ -59,6 +59,7 @@ vi.mock('../api/queries', async () => {
         return {
           data: [
             {
+              id: 42,
               path: 'a.md',
               title: 'a',
               folder: '',
@@ -76,6 +77,7 @@ vi.mock('../api/queries', async () => {
         return {
           data: [
             {
+              id: 99,
               path: 'docs/spec.md',
               title: 'spec',
               folder: 'docs',
@@ -194,6 +196,12 @@ beforeEach(() => {
 })
 
 describe('FolderTree tree actions', () => {
+  it('emits Link href as /note/:id (not /note/<path>)', () => {
+    renderTree()
+    const link = screen.getByRole('link', { name: /a/i })
+    expect(link).toHaveAttribute('href', '/note/42')
+  })
+
   it('opens a context menu with file actions on right-click of a note row', () => {
     renderTree()
     const link = screen.getByRole('link', { name: /a/i })
@@ -231,7 +239,7 @@ describe('FolderTree tree actions', () => {
     fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      expect(deleteNoteMutate).toHaveBeenCalledWith({ path: 'a.md' })
+      expect(deleteNoteMutate).toHaveBeenCalledWith({ id: 42, path: 'a.md' })
     })
   })
 

@@ -22,7 +22,7 @@ function NoteRow({ note }: NoteRowProps) {
   return (
     <article className="border-b border-gray-100 dark:border-gray-800 py-3 last:border-0">
       <Link
-        to={`/note/${encodeURIComponent(note.path)}`}
+        to={`/note/${note.id}`}
         className="block hover:text-blue-700"
       >
         <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">{note.title || note.path}</h3>

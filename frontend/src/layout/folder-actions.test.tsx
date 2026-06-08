@@ -90,14 +90,14 @@ describe('FolderActions', () => {
     })
   })
 
-  it('navigates to the new note path on success', async () => {
-    post.mockResolvedValue({ note: { path: 'foo/Untitled.md' } })
+  it('navigates to the new note by id on success', async () => {
+    post.mockResolvedValue({ note: { id: 7, path: 'foo/Untitled.md' } })
     renderWithProviders()
 
     fireEvent.click(screen.getByRole('button', { name: 'New note' }))
 
     await waitFor(() => {
-      expect(navigate).toHaveBeenCalledWith('/note/foo/Untitled.md')
+      expect(navigate).toHaveBeenCalledWith('/note/7')
     })
   })
 

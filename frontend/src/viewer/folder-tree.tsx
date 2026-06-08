@@ -1,13 +1,16 @@
 import { useMemo, useRef, type KeyboardEvent } from 'react'
-import { Link, useLocation } from 'react-router'
+import { Link, useParams } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  type Note,
   type NoteSummary,
   useDuplicateNote,
   useFolders,
   useFolderNotes,
   type Folder,
 } from '../api/queries'
+import { useActiveVaultId } from '../api/active-vault'
 import { ApiError } from '../api/client'
 import { type SortKey, useFolderTreeState } from '../layout/folder-tree-context'
 import { ActionDrawer } from './tree-actions/action-drawer'
@@ -72,15 +75,24 @@ function sortNotes(notes: NoteSummary[], sort: SortKey): NoteSummary[] {
 export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
   const { sort } = useFolderTreeState()
-  const location = useLocation()
+  const params = useParams()
   const rootDrop = useTreeDrop()
-  // Note routes: /note/<path>. Read from pathname directly because
-  // useParams() in the parent layout doesn't expose the child route's
-  // splat. The pathname segments are %-encoded, decode each before
-  // joining so we can compare against raw note paths.
-  const selectedNotePath = location.pathname.startsWith('/note/')
-    ? decodePathFromRouter(location.pathname.slice('/note/'.length))
-    : null
+  // Route now uses /note/:id (Task 7). selectedNoteId drives the
+  // highlight + auto-expand-to-selected behaviour. Legacy /note/<path>
+  // URLs are caught by LegacyNoteResolver and replaced before they
+  // reach this component.
+  const selectedNoteId = params.id ? Number(params.id) : null
+  // Look up the selected note's folder from the QueryClient cache so
+  // FolderNode can still auto-expand the chain leading to it. Cache
+  // miss → selectedFolder is null and the chain stays collapsed (minor
+  // UX regression on first paint before useNote populates).
+  const vaultId = useActiveVaultId()
+  const qc = useQueryClient()
+  const selectedNote =
+    selectedNoteId != null
+      ? qc.getQueryData<Note>(['note', vaultId, selectedNoteId])
+      : null
+  const selectedFolder = selectedNote?.folder ?? null
 
   if (isLoading) {
     return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">Loading…</p>
@@ -104,14 +116,18 @@ export default function FolderTree() {
     >
       <ul role="list" className="space-y-1">
         {hasRootFiles && (
-          <RootFiles selectedNotePath={selectedNotePath} folders={folders} />
+          <RootFiles
+            selectedNoteId={selectedNoteId}
+            folders={folders}
+          />
         )}
         {tree.map((node) => (
           <FolderNode
             key={node.fullPath}
             node={node}
             depth={0}
-            selectedNotePath={selectedNotePath}
+            selectedNoteId={selectedNoteId}
+            selectedFolder={selectedFolder}
             folders={folders}
           />
         ))}
@@ -121,10 +137,10 @@ export default function FolderTree() {
 }
 
 function RootFiles({
-  selectedNotePath,
+  selectedNoteId,
   folders,
 }: {
-  selectedNotePath: string | null
+  selectedNoteId: number | null
   folders: Folder[]
 }) {
   const { data: notes } = useFolderNotes('', { enabled: true })
@@ -137,7 +153,7 @@ function RootFiles({
           key={note.path}
           note={note}
           depth={0}
-          selectedNotePath={selectedNotePath}
+          selectedNoteId={selectedNoteId}
           folders={folders}
           siblingNotes={notes}
         />
@@ -149,16 +165,25 @@ function RootFiles({
 interface FolderNodeProps {
   node: TreeNode
   depth: number
-  selectedNotePath: string | null
+  selectedNoteId: number | null
+  selectedFolder: string | null
   folders: Folder[]
 }
 
-function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps) {
+function FolderNode({ node, depth, selectedNoteId, selectedFolder, folders }: FolderNodeProps) {
   const { isOpen: getIsOpen, toggle } = useFolderTreeState()
   // Force-open the chain leading to the active note so the user can always see
   // where they are. Side effect: "Collapse all" leaves the active-note chain
   // open, which matches Obsidian's behaviour — intentional, not a bug.
-  const containsSelected = selectedNotePath?.startsWith(`${node.fullPath}/`) ?? false
+  //
+  // selectedFolder comes from the cached selected note's `folder` field
+  // (looked up via QueryClient in FolderTree). On a cache miss the chain
+  // stays collapsed until useNote populates — minor UX regression we
+  // accept rather than reproducing the full path-lookup table here.
+  const containsSelected =
+    selectedFolder != null &&
+    (selectedFolder === node.fullPath ||
+      selectedFolder.startsWith(`${node.fullPath}/`))
   const isOpen = getIsOpen(node.fullPath) || containsSelected
 
   const rowActions = useTreeRowActions({ kind: 'folder', path: node.fullPath, label: node.name })
@@ -270,14 +295,15 @@ function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps)
               key={child.fullPath}
               node={child}
               depth={depth + 1}
-              selectedNotePath={selectedNotePath}
+              selectedNoteId={selectedNoteId}
+              selectedFolder={selectedFolder}
               folders={folders}
             />
           ))}
           <FolderFiles
             folderPath={node.fullPath}
             depth={depth + 1}
-            selectedNotePath={selectedNotePath}
+            selectedNoteId={selectedNoteId}
             folders={folders}
           />
         </ul>
@@ -289,12 +315,12 @@ function FolderNode({ node, depth, selectedNotePath, folders }: FolderNodeProps)
 function FolderFiles({
   folderPath,
   depth,
-  selectedNotePath,
+  selectedNoteId,
   folders,
 }: {
   folderPath: string
   depth: number
-  selectedNotePath: string | null
+  selectedNoteId: number | null
   folders: Folder[]
 }) {
   const { data: notes, isLoading } = useFolderNotes(folderPath, { enabled: true })
@@ -317,7 +343,7 @@ function FolderFiles({
           key={note.path}
           note={note}
           depth={depth}
-          selectedNotePath={selectedNotePath}
+          selectedNoteId={selectedNoteId}
           folders={folders}
           siblingNotes={notes}
         />
@@ -329,17 +355,17 @@ function FolderFiles({
 function NoteLeaf({
   note,
   depth,
-  selectedNotePath,
+  selectedNoteId,
   folders,
   siblingNotes,
 }: {
   note: NoteSummary
   depth: number
-  selectedNotePath: string | null
+  selectedNoteId: number | null
   folders: Folder[]
   siblingNotes: NoteSummary[]
 }) {
-  const isSelected = selectedNotePath === note.path
+  const isSelected = selectedNoteId === note.id
   const extension = nonMdExtension(note.path)
   const label = noteLabel(note)
   const fileName = note.path.split('/').pop() ?? note.path
@@ -400,7 +426,7 @@ function NoteLeaf({
         </div>
       ) : (
         <Link
-          to={`/note/${encodePathForRouter(note.path)}`}
+          to={`/note/${note.id}`}
           aria-current={isSelected ? 'page' : undefined}
           onContextMenu={(e) => {
             e.preventDefault()
@@ -530,23 +556,6 @@ function nonMdExtension(path: string): string | null {
   const last = path.split('/').pop() ?? path
   const ext = recognizedExtension(last)
   return ext && ext !== 'md' ? ext : null
-}
-
-function encodePathForRouter(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/')
-}
-
-function decodePathFromRouter(encoded: string): string {
-  return encoded
-    .split('/')
-    .map((s) => {
-      try {
-        return decodeURIComponent(s)
-      } catch {
-        return s
-      }
-    })
-    .join('/')
 }
 
 function FolderIcon({ open }: { open: boolean }) {
