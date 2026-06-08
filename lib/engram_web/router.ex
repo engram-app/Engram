@@ -292,6 +292,8 @@ defmodule EngramWeb.Router do
     post "/notes/append", NotesController, :append
     post "/notes", NotesController, :upsert
     get "/notes/changes", NotesController, :changes
+    get "/notes/by-id/:id", NotesController, :show_by_id
+    delete "/notes/by-id/:id", NotesController, :delete_by_id
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 

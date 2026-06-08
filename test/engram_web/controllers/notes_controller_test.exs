@@ -219,6 +219,45 @@ defmodule EngramWeb.NotesControllerTest do
   # DELETE /notes/:path
   # ---------------------------------------------------------------------------
 
+  describe "GET /api/notes/by-id/:id" do
+    test "returns the note for the owner", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      conn = get(conn, ~p"/api/notes/by-id/#{note.id}")
+      body = json_response(conn, 200)
+      assert body["id"] == note.id
+      assert body["path"] == "a.md"
+    end
+
+    test "returns 404 for non-existent id", %{conn: conn} do
+      conn = get(conn, ~p"/api/notes/by-id/999999")
+      assert json_response(conn, 404) == %{"error" => "not found"}
+    end
+
+    test "returns 400 for non-numeric id", %{conn: conn} do
+      conn = get(conn, ~p"/api/notes/by-id/abc")
+      assert json_response(conn, 400) == %{"error" => "invalid id"}
+    end
+  end
+
+  describe "DELETE /api/notes/by-id/:id" do
+    test "deletes the note", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      conn = delete(conn, ~p"/api/notes/by-id/#{note.id}")
+      assert json_response(conn, 200) == %{"deleted" => true}
+      assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "returns 404 for non-existent id", %{conn: conn} do
+      conn = delete(conn, ~p"/api/notes/by-id/999999")
+      assert json_response(conn, 404) == %{"error" => "not found"}
+    end
+
+    test "returns 400 for non-numeric id", %{conn: conn} do
+      conn = delete(conn, ~p"/api/notes/by-id/abc")
+      assert json_response(conn, 400) == %{"error" => "invalid id"}
+    end
+  end
+
   describe "DELETE /notes/:path" do
     test "soft-deletes a note", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Bye.md", content: "# Bye", mtime: 1_000.0})
