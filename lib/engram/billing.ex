@@ -403,9 +403,10 @@ defmodule Engram.Billing do
               Map.put(base_attrs, :tier, Atom.to_string(tier))
 
             {:error, :unknown_price_id} ->
-              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                extra: %{user_id: user_id, payload_keys: Map.keys(data)}
-              )
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: user_id, payload_keys: Map.keys(data)}
+                )
 
               base_attrs
           end
@@ -468,9 +469,10 @@ defmodule Engram.Billing do
               Map.put(base_attrs, :tier, Atom.to_string(tier_atom))
 
             {:error, :unknown_price_id} ->
-              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
-              )
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+                )
 
               base_attrs
           end
@@ -544,9 +546,10 @@ defmodule Engram.Billing do
               Map.put(base_attrs, :tier, Atom.to_string(tier))
 
             {:error, :unknown_price_id} ->
-              Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
-                extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
-              )
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+                )
 
               base_attrs
           end
