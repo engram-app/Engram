@@ -271,6 +271,46 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # get_note_by_id/3
+  # ---------------------------------------------------------------------------
+
+  describe "get_note_by_id/3" do
+    test "returns the note for the owner", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, fetched} = Notes.get_note_by_id(user, vault, note.id)
+      assert fetched.id == note.id
+      assert fetched.path == "a.md"
+      assert fetched.content == "# A"
+    end
+
+    test "returns :not_found for non-existent id", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, 999_999)
+    end
+
+    test "returns :not_found across tenants (RLS)", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :not_found} = Notes.get_note_by_id(other_user, other_vault, note.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # delete_note/3
   # ---------------------------------------------------------------------------
 
@@ -305,6 +345,46 @@ defmodule Engram.NotesTest do
       assert :ok = Notes.delete_note(other_user, other_vault, "Test/Shared Path.md")
       # User A's note should still exist
       assert {:ok, _} = Notes.get_note(user, vault, "Test/Shared Path.md")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # delete_note_by_id/3
+  # ---------------------------------------------------------------------------
+
+  describe "delete_note_by_id/3" do
+    test "deletes the note and is not found afterward", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert :ok = Notes.delete_note_by_id(user, vault, note.id)
+      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "returns :not_found for non-existent id", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.delete_note_by_id(user, vault, 999_999)
+    end
+
+    test "RLS: cannot delete another user's note", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :not_found} = Notes.delete_note_by_id(other_user, other_vault, note.id)
+      # Original still accessible to owner
+      assert {:ok, _} = Notes.get_note_by_id(user, vault, note.id)
     end
   end
 

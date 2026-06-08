@@ -379,6 +379,36 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Gets a note by its primary key id, scoped to the given user + vault.
+
+  Returns `{:ok, note}` when found and owned by the caller, `{:error, :not_found}`
+  otherwise (including cross-tenant lookups and soft-deleted rows). Mirrors the
+  decrypt-on-read shape of `get_note/3` but keys by `notes.id` instead of
+  `path_hmac` — used by URL-by-id endpoints where the client holds a stable id.
+
+  RLS scopes the SELECT to the caller's tenant; the explicit
+  `user_id`/`vault_id` predicate is belt-and-suspenders.
+  """
+  @spec get_note_by_id(map(), map(), integer()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_by_id(user, vault, id) when is_integer(id) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      {:ok, result} =
+        Repo.with_tenant(user.id, fn ->
+          case Repo.get(Note, id) do
+            %Note{user_id: uid, vault_id: vid, deleted_at: nil} = note
+            when uid == user.id and vid == vault.id ->
+              {:ok, decrypt_or_raise!(note, user)}
+
+            _ ->
+              {:error, :not_found}
+          end
+        end)
+
+      result
+    end
+  end
+
   # Phase B.2: single normalization helper for path lookups.
   # All callers route through here so post-B.3 column drop is mechanical.
   # Opens its own tenant context — use note_by_path_query/3 directly when
@@ -632,6 +662,24 @@ defmodule Engram.Notes do
       end
 
     broadcast_change(user.id, vault.id, "delete", path)
+  end
+
+  @doc """
+  Soft-deletes a note by its primary key id, scoped to the given user + vault.
+
+  Returns `:ok` on success, `{:error, :not_found}` when the id doesn't resolve
+  to a live note owned by the caller (unlike `delete_note/3` which is
+  idempotent — callers of URL-by-id endpoints want a hard 404 signal).
+
+  Delegates to `delete_note/3` once ownership is verified, so Qdrant cleanup +
+  usage-meter decrement + `note_changed` broadcast all run as a side-effect.
+  """
+  @spec delete_note_by_id(map(), map(), integer()) :: :ok | {:error, :not_found}
+  def delete_note_by_id(user, vault, id) when is_integer(id) do
+    case get_note_by_id(user, vault, id) do
+      {:ok, note} -> delete_note(user, vault, note.path)
+      {:error, :not_found} -> {:error, :not_found}
+    end
   end
 
   @doc """
