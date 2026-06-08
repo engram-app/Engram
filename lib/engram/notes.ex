@@ -200,6 +200,7 @@ defmodule Engram.Notes do
           {:ok, Note.t()}
           | {:error, Ecto.Changeset.t()}
           | {:error, :version_conflict, Note.t()}
+          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
   def upsert_note(user, vault, attrs) do
     path = attrs["path"] || attrs[:path]
