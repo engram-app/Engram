@@ -404,7 +404,12 @@ async def test_free_tier_cap_blocks_second_mcp_consent(clerk_client):
         assert body["kind"] == "mcp"
         assert body["current"] == 1
         assert body["limit"] == 1
-        assert body["upgrade_url"] == "/settings/billing"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
@@ -425,7 +430,12 @@ async def test_free_tier_pat_minting_blocked(clerk_client):
         )
         body = resp.json()
         assert body["error"] == "pat_disabled_on_free"
-        assert body["upgrade_url"] == "/settings/billing"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
@@ -677,6 +687,11 @@ async def test_free_tier_cap_blocks_second_device_authorize(clerk_client):
         assert body["limit_key"] == "concurrent_devices"
         assert body["current"] == 1
         assert body["limit"] == 1
-        assert body["upgrade_url"] == "/settings/billing"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)
