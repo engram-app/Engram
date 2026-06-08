@@ -10,7 +10,6 @@ defmodule Engram.Onboarding do
   step (questionnaire + first vault) gates in every mode.
   """
 
-  alias Engram.Billing
   alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Onboarding.Action
@@ -168,6 +167,7 @@ defmodule Engram.Onboarding do
       not Application.get_env(:engram, :billing_enabled, true) or
         Engram.Billing.tier(user) in [:starter, :pro] or
         not is_nil(user.free_tier_accepted_at)
+
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)

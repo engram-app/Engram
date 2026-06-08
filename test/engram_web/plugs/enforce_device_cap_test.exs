@@ -3,6 +3,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
 
   import Engram.Factory
 
+  alias Engram.Auth.DeviceFlow
   alias EngramWeb.Plugs.EnforceDeviceCap
 
   # Build a minimal Plug.Conn with :current_user assigned, without going
@@ -213,7 +214,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
 
       insert(:device_refresh_token, user: user, vault: vault)
 
-      {:ok, auth} = Engram.Auth.DeviceFlow.start_device_flow("plugin-client")
+      {:ok, auth} = DeviceFlow.start_device_flow("plugin-client")
 
       conn =
         conn
@@ -254,7 +255,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       insert(:device_refresh_token, user: user, vault: vault, revoked_at: revoked_at)
       insert(:device_refresh_token, user: user, vault: vault)
 
-      {:ok, auth} = Engram.Auth.DeviceFlow.start_device_flow("plugin-client")
+      {:ok, auth} = DeviceFlow.start_device_flow("plugin-client")
 
       conn =
         conn
@@ -283,7 +284,7 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       )
 
       # 0 existing device connections → below cap of 2
-      {:ok, auth} = Engram.Auth.DeviceFlow.start_device_flow("plugin-client")
+      {:ok, auth} = DeviceFlow.start_device_flow("plugin-client")
 
       conn =
         conn
