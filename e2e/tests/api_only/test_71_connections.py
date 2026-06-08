@@ -672,8 +672,9 @@ async def test_free_tier_cap_blocks_second_device_authorize(clerk_client):
             f"second authorize should be 402, got {auth2.status_code}: {auth2.text}"
         )
         body = auth2.json()
-        assert body["error"] == "connection_cap_reached"
-        assert body["kind"] == "obsidian"
+        assert body["error"] == "limit_exceeded"
+        assert body["reason"] == "concurrent_devices_exceeded"
+        assert body["limit_key"] == "concurrent_devices"
         assert body["current"] == 1
         assert body["limit"] == 1
         assert body["upgrade_url"] == "/settings/billing"
