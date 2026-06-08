@@ -102,6 +102,7 @@ defmodule EngramWeb.FoldersController do
 
   defp note_summary(note) do
     %{
+      id: note.id,
       path: note.path,
       title: note.title,
       folder: note.folder || "",

@@ -410,6 +410,59 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns a map of `path => id` for the given paths, scoped to a single user.
+
+  Used by callers (e.g. search) that hold a path list (from Qdrant) and need
+  the DB primary keys without decrypting full notes. Cross-vault: when
+  `vault_id` is nil, scans across all of the user's vaults.
+
+  Missing paths are simply absent from the returned map. The caller is
+  expected to fall back to nil for ids it can't resolve.
+  """
+  @spec note_ids_for_paths(map(), map() | nil, [String.t()]) :: %{String.t() => integer()}
+  def note_ids_for_paths(_user, _vault, []), do: %{}
+
+  def note_ids_for_paths(user, vault, paths) when is_list(paths) do
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      hmac_to_path =
+        paths
+        |> Enum.uniq()
+        |> Map.new(fn p -> {Crypto.hmac_field(filter_key, p), p} end)
+
+      hmacs = Map.keys(hmac_to_path)
+
+      query =
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at),
+          select: {n.path_hmac, n.id}
+        )
+
+      query =
+        case vault do
+          %{id: vault_id} -> from(n in query, where: n.vault_id == ^vault_id)
+          _ -> query
+        end
+
+      rows =
+        case Repo.with_tenant(user.id, fn -> Repo.all(query) end) do
+          {:ok, rows} when is_list(rows) -> rows
+          rows when is_list(rows) -> rows
+          _ -> []
+        end
+
+      Enum.reduce(rows, %{}, fn {hmac, id}, acc ->
+        case Map.fetch(hmac_to_path, hmac) do
+          {:ok, path} -> Map.put(acc, path, id)
+          :error -> acc
+        end
+      end)
+    else
+      _ -> %{}
+    end
+  end
+
+  @doc """
   Renames a note to a new path. Sanitizes the new path, updates folder and title.
   Returns {:ok, updated_note} or {:error, :not_found}.
   """

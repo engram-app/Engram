@@ -3,11 +3,11 @@ defmodule EngramWeb.NotesControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   # ---------------------------------------------------------------------------
@@ -176,6 +176,20 @@ defmodule EngramWeb.NotesControllerTest do
       conn = get(conn, "/api/notes/Test/Readable.md")
       assert body = json_response(conn, 200)
       assert body["path"] == "Test/Readable.md"
+    end
+
+    test "GET /api/notes/:path includes numeric id", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "id-check.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      conn = get(conn, "/api/notes/id-check.md")
+      body = json_response(conn, 200)
+      assert body["id"] == note.id
+      assert is_integer(body["id"])
     end
 
     test "returns 404 for missing note", %{conn: conn} do

@@ -101,6 +101,15 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       body = json_response(conn, 200)
       assert body["notes"] == []
     end
+
+    test "GET folder-notes list includes id on each note", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "src/a.md", content: "# A", mtime: 1_000.0})
+
+      conn2 = get(conn, "/api/folders/list", %{folder: "src"})
+      body = json_response(conn2, 200)
+      [n | _] = body["notes"]
+      assert is_integer(n["id"])
+    end
   end
 
   # ---------------------------------------------------------------------------
