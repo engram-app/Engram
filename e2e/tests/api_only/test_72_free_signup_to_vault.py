@@ -70,13 +70,16 @@ def test_free_signup_to_first_note():
     clerk = ClerkClient(CLERK_SECRET)
     email = f"e2e-free-signup-{_ts()}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
-    _clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
+    _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
     )
-    api = ApiClient(API_URL, api_key)
-
-    # NB: we intentionally do NOT call grant_test_plan() — this user must
-    # remain Free-tier so /billing/status returns "free" below.
+    # Use Clerk JWT (not the API key) — Free's §G defaults set
+    # api_rps_cap=0 / api_write_enabled=false, which by design blocks all
+    # API-key-authed writes. JWT-authed traffic (i.e. the SPA flow this
+    # test simulates) is exempt from those gates per the RequireApiRpsBudget
+    # plug. We can't call grant_test_plan() here either: this user must
+    # remain Free-tier so /billing/status returns "free" at the end.
+    api = ApiClient(API_URL, clerk_auth)
 
     # ── 2. Accept Free tier (Phase 2 endpoint) ───────────────────────────
     resp = api.session.post(
@@ -127,9 +130,10 @@ def test_free_signup_to_first_note():
     )
 
     # ── 5. /notes/changes returns the new note ──────────────────────────
-    # since=0 returns the full manifest. The note must appear by path.
-    changes = api_v.get_changes(since="0")
-    paths = [n.get("path") for n in changes.get("notes", [])]
+    # The endpoint expects an ISO8601 `since`; epoch (2000-01-01) returns
+    # the full manifest. Response shape is {changes: [...], server_time}.
+    changes = api_v.get_changes(since="2000-01-01T00:00:00Z")
+    paths = [n.get("path") for n in changes.get("changes", [])]
     assert note_path in paths, (
         f"/notes/changes should list {note_path!r}; got paths: {paths}"
     )

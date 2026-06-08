@@ -232,8 +232,9 @@ def test_cancel_pro_to_free_over_limit():
     # ── 5. Reads still work — manifest reports the seeded count ─────────
     # We didn't insert real note rows, so /notes/changes won't list 12k
     # notes — what we CAN observe is that the read endpoint isn't 402'd.
-    changes = api_v.get_changes(since="0")
-    assert isinstance(changes.get("notes"), list), (
+    # The endpoint expects ISO8601 since; response key is `changes`.
+    changes = api_v.get_changes(since="2000-01-01T00:00:00Z")
+    assert isinstance(changes.get("changes"), list), (
         f"/notes/changes should still respond with a list on Free over-cap; got: {changes}"
     )
 
