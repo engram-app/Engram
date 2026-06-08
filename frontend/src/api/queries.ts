@@ -1111,27 +1111,30 @@ export function useRenameFolder() {
 
 interface DeleteNoteContext {
   folder: string
+  id: number
   folderNotes: { notes: NoteSummary[] } | undefined
   folders: { folders: Folder[] } | undefined
   note: Note | undefined
 }
 
+// `path` rides along so optimistic onMutate can locate the row in the
+// folderNotes cache + adjust the parent folder's count without a round
+// trip. The URL itself only needs the id.
 export function useDeleteNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()
   return useMutation<
     { deleted: boolean } | void,
     ApiError,
-    { path: string },
+    { id: number; path: string },
     DeleteNoteContext
   >({
-    mutationFn: ({ path }) =>
-      api.del<{ deleted: boolean }>(`/notes/${encodePathSegments(path)}`),
-    onMutate: async ({ path }) => {
+    mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
+    onMutate: async ({ id, path }) => {
       const folder = folderOf(path)
       const listKey = ['folderNotes', vaultId, folder] as const
       const foldersKey = ['folders', vaultId] as const
-      const noteKey = ['note', vaultId, path] as const
+      const noteKey = ['note', vaultId, id] as const
 
       await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
       await qc.cancelQueries({ queryKey: foldersKey })
@@ -1139,6 +1142,7 @@ export function useDeleteNote() {
 
       const ctx: DeleteNoteContext = {
         folder,
+        id,
         folderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
         folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
         note: qc.getQueryData<Note>(noteKey),
@@ -1146,7 +1150,7 @@ export function useDeleteNote() {
 
       if (ctx.folderNotes) {
         updateCachedList<NoteSummary>(qc, listKey, (prev) => ({
-          notes: prev.notes.filter((n) => n.path !== path),
+          notes: prev.notes.filter((n) => n.id !== id),
         }))
       }
       if (ctx.folders) {
@@ -1163,11 +1167,11 @@ export function useDeleteNote() {
       qc.removeQueries({ queryKey: noteKey })
       return ctx
     },
-    onError: (err, vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (!ctx) return
       const listKey = ['folderNotes', vaultId, ctx.folder]
       const foldersKey = ['folders', vaultId]
-      const noteKey = ['note', vaultId, vars.path]
+      const noteKey = ['note', vaultId, ctx.id]
       if (ctx.folderNotes !== undefined) qc.setQueryData(listKey, ctx.folderNotes)
       if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders)
       if (ctx.note !== undefined) qc.setQueryData(noteKey, ctx.note)

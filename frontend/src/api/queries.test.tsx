@@ -262,31 +262,32 @@ describe('useRenameFolder', () => {
 })
 
 describe('useDeleteNote', () => {
-  it('DELETEs encoded path and invalidates folders + folder list + removes note', async () => {
+  it('DELETEs /notes/by-id/:id and invalidates folders + folder list + removes note', async () => {
     del.mockResolvedValue({ deleted: true })
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
     const removeSpy = vi.spyOn(qc, 'removeQueries')
 
     const { result } = renderHook(() => useDeleteNote(), { wrapper })
     await act(async () => {
-      await result.current.mutateAsync({ path: 'foo bar/x y.md' })
+      await result.current.mutateAsync({ id: 42, path: 'foo bar/x y.md' })
     })
 
-    // Each path segment is URL-encoded but slashes are preserved so the
-    // Phoenix splat route matches.
-    expect(del).toHaveBeenCalledWith('/notes/foo%20bar/x%20y.md')
+    // URL is keyed on the note id — server is the source of truth for
+    // path/folder lookups, so the client just supplies the id.
+    expect(del).toHaveBeenCalledWith('/notes/by-id/42')
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', 42] })
-    // The optimistic onMutate removes the note's body cache, so we
-    // assert removeQueries was called with the specific keyed note.
-    expect(removeSpy).toHaveBeenCalledWith({ queryKey: ['note', 42, 'foo bar/x y.md'] })
+    // The optimistic onMutate removes the note's body cache, keyed by id.
+    expect(removeSpy).toHaveBeenCalledWith({ queryKey: ['note', 42, 42] })
   })
 
   it('surfaces backend errors as ApiError', async () => {
     del.mockRejectedValue(new ApiError(404, 'not found'))
 
     const { result } = renderHook(() => useDeleteNote(), { wrapper })
-    await expect(result.current.mutateAsync({ path: 'gone.md' })).rejects.toMatchObject({
+    await expect(
+      result.current.mutateAsync({ id: 7, path: 'gone.md' }),
+    ).rejects.toMatchObject({
       status: 404,
     })
   })
@@ -365,9 +366,13 @@ describe('useDeleteFolder', () => {
 // caches mutate synchronously on `onMutate`, and `onError` restores the
 // pre-mutation snapshot so a rejected request leaves no visible trace.
 
-function seedFolderNotes(folder: string, notes: Array<Partial<{ path: string; title: string }>>) {
+function seedFolderNotes(
+  folder: string,
+  notes: Array<Partial<{ id: number; path: string; title: string }>>,
+) {
   qc.setQueryData(['folderNotes', 42, folder], {
-    notes: notes.map((n) => ({
+    notes: notes.map((n, i) => ({
+      id: n.id ?? i + 1,
       path: n.path ?? '',
       title: n.title ?? '',
       folder,
@@ -474,8 +479,8 @@ describe('optimistic rename note', () => {
 describe('optimistic delete note', () => {
   it('removes the note from the folder cache before the request resolves', async () => {
     seedFolderNotes('', [
-      { path: 'gone.md', title: 'Gone' },
-      { path: 'stays.md', title: 'Stays' },
+      { id: 1, path: 'gone.md', title: 'Gone' },
+      { id: 2, path: 'stays.md', title: 'Stays' },
     ])
     seedFolders([{ name: '', count: 2 }])
 
@@ -484,7 +489,7 @@ describe('optimistic delete note', () => {
 
     const { result } = renderHook(() => useDeleteNote(), { wrapper })
     act(() => {
-      result.current.mutate({ path: 'gone.md' })
+      result.current.mutate({ id: 1, path: 'gone.md' })
     })
 
     await waitFor(() => {
@@ -501,8 +506,8 @@ describe('optimistic delete note', () => {
 
   it('restores the cache when the delete fails', async () => {
     seedFolderNotes('', [
-      { path: 'gone.md', title: 'Gone' },
-      { path: 'stays.md', title: 'Stays' },
+      { id: 1, path: 'gone.md', title: 'Gone' },
+      { id: 2, path: 'stays.md', title: 'Stays' },
     ])
     seedFolders([{ name: '', count: 2 }])
 
@@ -511,7 +516,7 @@ describe('optimistic delete note', () => {
     const { result } = renderHook(() => useDeleteNote(), { wrapper })
     await act(async () => {
       try {
-        await result.current.mutateAsync({ path: 'gone.md' })
+        await result.current.mutateAsync({ id: 1, path: 'gone.md' })
       } catch {
         // expected
       }

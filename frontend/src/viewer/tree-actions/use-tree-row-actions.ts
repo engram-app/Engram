@@ -11,13 +11,12 @@ import { isValidDropTarget, newPathAfterMove } from './use-tree-drag'
 
 const DRAG_MIME = 'application/x-engram-node'
 
-type RowKind = 'file' | 'folder'
-
-interface Row {
-  kind: RowKind
-  path: string
-  label: string
-}
+// `id` is required on file rows so `useDeleteNote` can target the by-id
+// route + key the optimistic note-body cache. Folder rows don't have an
+// id at the API level — folders are identified by path.
+export type Row =
+  | { kind: 'file'; id: number; path: string; label: string }
+  | { kind: 'folder'; path: string; label: string }
 
 // Module-scoped active-drag tracker. dataTransfer.getData() returns "" during
 // dragover (per HTML spec — only readable on drop), so we stash the dragged
@@ -194,12 +193,18 @@ export function useTreeRowActions(row: Row): UseTreeRowActionsResult {
     // Close confirm dialog immediately; optimistic update removes the
     // row from the tree so the user sees the deletion right away.
     setShowDelete(false)
-    const mutation = row.kind === 'file' ? deleteNote : deleteFolder
-    mutation.mutate(
-      { path: row.path },
-      { onSuccess: () => toast.success(`Deleted ${row.label}`) },
-    )
-  }, [row.kind, row.path, row.label, deleteNote, deleteFolder])
+    if (row.kind === 'file') {
+      deleteNote.mutate(
+        { id: row.id, path: row.path },
+        { onSuccess: () => toast.success(`Deleted ${row.label}`) },
+      )
+    } else {
+      deleteFolder.mutate(
+        { path: row.path },
+        { onSuccess: () => toast.success(`Deleted ${row.label}`) },
+      )
+    }
+  }, [row, deleteNote, deleteFolder])
 
   const commitMove = useCallback(
     (targetFolder: string) => {

@@ -344,7 +344,7 @@ function NoteLeaf({
   const label = noteLabel(note)
   const fileName = note.path.split('/').pop() ?? note.path
 
-  const rowActions = useTreeRowActions({ kind: 'file', path: note.path, label })
+  const rowActions = useTreeRowActions({ kind: 'file', id: note.id, path: note.path, label })
   const longPress = useLongPress({ onLongPress: () => rowActions.openDrawer() })
   const duplicateNote = useDuplicateNote()
 
