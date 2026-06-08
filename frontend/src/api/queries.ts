@@ -143,8 +143,12 @@ export function useUpdateNote() {
         version,
         mtime: Date.now() / 1000,
       }),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ['note', vaultId, vars.path] })
+    onSuccess: (data) => {
+      // The note cache is keyed by id (`['note', vaultId, id]`), not
+      // path. Invalidate the specific id when the server returns it,
+      // and refresh folder listings so the title/mtime stay current.
+      const id = data?.note?.id
+      if (id != null) qc.invalidateQueries({ queryKey: ['note', vaultId, id] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
     },
   })
@@ -890,7 +894,11 @@ interface RenameNoteContext {
   oldFolderNotes: { notes: NoteSummary[] } | undefined
   newFolderNotes: { notes: NoteSummary[] } | undefined
   folders: { folders: Folder[] } | undefined
-  oldNote: Note | undefined
+  // The note id is stable across rename — only `path`/`folder` shift.
+  // We snapshot the previous note value so rollback restores those
+  // fields under the SAME cache key.
+  noteId: number | null
+  prevNote: Note | undefined
 }
 
 export function useRenameNote() {
@@ -913,64 +921,93 @@ export function useRenameNote() {
       const oldListKey = ['folderNotes', vaultId, oldFolder] as const
       const newListKey = ['folderNotes', vaultId, newFolder] as const
       const foldersKey = ['folders', vaultId] as const
-      const oldNoteKey = ['note', vaultId, old_path] as const
-      const newNoteKey = ['note', vaultId, new_path] as const
 
       // Stop in-flight queries from clobbering the optimistic write.
       await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
       await qc.cancelQueries({ queryKey: foldersKey })
-      await qc.cancelQueries({ queryKey: oldNoteKey })
+      await qc.cancelQueries({ queryKey: ['note', vaultId] })
+
+      const oldFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(oldListKey)
+      const newFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(newListKey)
+      const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey)
+
+      // Resolve the note id from whatever cache has it. The folder
+      // list is the cheapest lookup; failing that, walk every cached
+      // `['note', vaultId, *]` entry looking for the matching path.
+      const fromList = oldFolderNotes?.notes.find((n) => n.path === old_path)
+      let noteId: number | null = fromList?.id ?? null
+      let prevNote: Note | undefined
+      if (noteId == null) {
+        const cached = qc
+          .getQueryCache()
+          .findAll({ queryKey: ['note', vaultId] })
+          .map((q) => q.state.data as Note | undefined)
+          .find((n) => n?.path === old_path)
+        if (cached) {
+          noteId = cached.id
+          prevNote = cached
+        }
+      } else {
+        prevNote = qc.getQueryData<Note>(['note', vaultId, noteId])
+      }
 
       const ctx: RenameNoteContext = {
         oldFolder,
         newFolder,
-        oldFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(oldListKey),
-        newFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(newListKey),
-        folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
-        oldNote: qc.getQueryData<Note>(oldNoteKey),
+        oldFolderNotes,
+        newFolderNotes,
+        folders,
+        noteId,
+        prevNote,
       }
 
-      // Pull the note out of the old folder list.
-      const moved =
-        ctx.oldFolderNotes?.notes.find((n) => n.path === old_path) ??
-        // If the old list isn't cached, synthesize a stub from the note
-        // body so we still have something to drop into the new folder.
-        (ctx.oldNote
-          ? ({
-              id: ctx.oldNote.id,
-              path: ctx.oldNote.path,
-              title: ctx.oldNote.title,
-              folder: ctx.oldNote.folder,
-              tags: ctx.oldNote.tags,
-              version: ctx.oldNote.version,
-              mtime: ctx.oldNote.mtime,
-              created_at: ctx.oldNote.created_at,
-              updated_at: ctx.oldNote.updated_at,
-            } satisfies NoteSummary)
-          : null)
+      // Build a renamed NoteSummary either from the existing list row
+      // or from the cached note body so the new folder list still gets
+      // a visible entry even when the old list isn't cached.
+      const renamedSummary: NoteSummary | null = fromList
+        ? { ...fromList, path: new_path, folder: newFolder }
+        : prevNote
+          ? {
+              id: prevNote.id,
+              path: new_path,
+              title: prevNote.title,
+              folder: newFolder,
+              tags: prevNote.tags,
+              version: prevNote.version,
+              mtime: prevNote.mtime,
+              created_at: prevNote.created_at,
+              updated_at: prevNote.updated_at,
+            }
+          : null
 
-      if (ctx.oldFolderNotes) {
+      // Remove from old list (by id when we have it, by path otherwise).
+      if (oldFolderNotes) {
         updateCachedList<NoteSummary>(qc, oldListKey, (prev) => ({
-          notes: prev.notes.filter((n) => n.path !== old_path),
+          notes: prev.notes.filter((n) =>
+            noteId != null ? n.id !== noteId : n.path !== old_path,
+          ),
         }))
       }
 
       // Drop a renamed copy into the new folder list (if cached).
-      if (moved) {
-        const renamed: NoteSummary = { ...moved, path: new_path, folder: newFolder }
-        if (ctx.newFolderNotes) {
-          updateCachedList<NoteSummary>(qc, newListKey, (prev) => ({
-            notes: [...prev.notes.filter((n) => n.path !== new_path), renamed],
-          }))
-        }
+      if (renamedSummary && newFolderNotes) {
+        updateCachedList<NoteSummary>(qc, newListKey, (prev) => ({
+          notes: [
+            ...prev.notes.filter((n) =>
+              noteId != null ? n.id !== noteId : n.path !== new_path,
+            ),
+            renamedSummary,
+          ],
+        }))
       }
 
       // Adjust folder counts when the note crosses folder boundaries.
-      if (oldFolder !== newFolder && ctx.folders) {
+      if (oldFolder !== newFolder && folders) {
         qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
           if (!prev) return prev
-          let next = prev.folders
-            .map((f) => (f.name === oldFolder ? { ...f, count: Math.max(0, f.count - 1) } : f))
+          let next = prev.folders.map((f) =>
+            f.name === oldFolder ? { ...f, count: Math.max(0, f.count - 1) } : f,
+          )
           const hasNewEntry = next.some((f) => f.name === newFolder)
           if (hasNewEntry) {
             next = next.map((f) =>
@@ -986,10 +1023,16 @@ export function useRenameNote() {
         })
       }
 
-      // Move the note body cache from old to new path.
-      if (ctx.oldNote) {
-        qc.setQueryData<Note>(newNoteKey, { ...ctx.oldNote, path: new_path, folder: newFolder })
-        qc.removeQueries({ queryKey: oldNoteKey })
+      // The note id is stable across rename — only `path` and `folder`
+      // change. Update those fields in place under the SAME cache key
+      // (`['note', vaultId, id]`). No key shuffle: any subscriber to
+      // useNote(id) sees the new fields without remounting.
+      if (noteId != null && prevNote) {
+        qc.setQueryData<Note>(['note', vaultId, noteId], {
+          ...prevNote,
+          path: new_path,
+          folder: newFolder,
+        })
       }
 
       return ctx
@@ -999,13 +1042,12 @@ export function useRenameNote() {
       const oldListKey = ['folderNotes', vaultId, ctx.oldFolder]
       const newListKey = ['folderNotes', vaultId, ctx.newFolder]
       const foldersKey = ['folders', vaultId]
-      const oldNoteKey = ['note', vaultId, _vars.old_path]
-      const newNoteKey = ['note', vaultId, _vars.new_path]
       if (ctx.oldFolderNotes !== undefined) qc.setQueryData(oldListKey, ctx.oldFolderNotes)
       if (ctx.newFolderNotes !== undefined) qc.setQueryData(newListKey, ctx.newFolderNotes)
       if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders)
-      if (ctx.oldNote !== undefined) qc.setQueryData(oldNoteKey, ctx.oldNote)
-      qc.removeQueries({ queryKey: newNoteKey })
+      if (ctx.noteId != null && ctx.prevNote !== undefined) {
+        qc.setQueryData(['note', vaultId, ctx.noteId], ctx.prevNote)
+      }
       renameErrorToast(err, 'file')
     },
     onSettled: () => {
@@ -1023,6 +1065,10 @@ interface RenameFolderContext {
   // child folderNotes entries to force refetch on next expand, which
   // means rollback needs to restore them.
   childLists: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>
+  // Notes cached by id whose `folder` was under the old prefix. We
+  // rewrite path/folder in place under the same key (id is stable);
+  // snapshots capture the pre-rename value for rollback.
+  noteSnapshots: Array<{ id: number; note: Note }>
 }
 
 export function useRenameFolder() {
@@ -1053,9 +1099,12 @@ export function useRenameFolder() {
       await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
       await qc.cancelQueries({ queryKey: foldersKey })
 
+      await qc.cancelQueries({ queryKey: ['note', vaultId] })
+
       const ctx: RenameFolderContext = {
         folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
         childLists: [],
+        noteSnapshots: [],
       }
 
       // Rewrite folder names.
@@ -1088,6 +1137,30 @@ export function useRenameFolder() {
         qc.removeQueries({ queryKey: q.queryKey })
       }
 
+      // Rewrite every cached `['note', vaultId, id]` whose folder sits
+      // under the old prefix. The id is stable across folder rename —
+      // path + folder shift, key stays put. This keeps any open
+      // useNote(id) subscriber coherent without a remount.
+      const oldPrefix = `${old_path}/`
+      const allNotes = qc.getQueryCache().findAll({ queryKey: ['note', vaultId] })
+      for (const q of allNotes) {
+        const note = q.state.data as Note | undefined
+        if (!note) continue
+        if (note.folder !== old_path && !note.folder.startsWith(oldPrefix)) continue
+        ctx.noteSnapshots.push({ id: note.id, note })
+        const suffixFolder =
+          note.folder === old_path ? '' : note.folder.slice(oldPrefix.length)
+        const newFolder = suffixFolder ? `${new_path}/${suffixFolder}` : new_path
+        // The note path always starts with `${old_path}/` (a note can't
+        // live AT a folder key), so strip + reattach.
+        const newPath = `${new_path}/${note.path.slice(oldPrefix.length)}`
+        qc.setQueryData<Note>(['note', vaultId, note.id], {
+          ...note,
+          path: newPath,
+          folder: newFolder,
+        })
+      }
+
       return ctx
     },
     onError: (err, _vars, ctx) => {
@@ -1096,11 +1169,15 @@ export function useRenameFolder() {
       for (const entry of ctx.childLists) {
         if (entry.data !== undefined) qc.setQueryData(entry.key, entry.data)
       }
+      for (const snap of ctx.noteSnapshots) {
+        qc.setQueryData<Note>(['note', vaultId, snap.id], snap.note)
+      }
       renameErrorToast(err, 'folder')
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['note', vaultId] })
     },
   })
 }
@@ -1253,6 +1330,7 @@ export function useDeleteFolder() {
 interface DuplicateNoteContext {
   newFolder: string
   newFolderNotes: { notes: NoteSummary[] } | undefined
+  placeholderId: number
 }
 
 export function useDuplicateNote() {
@@ -1277,9 +1355,14 @@ export function useDuplicateNote() {
       const listKey = ['folderNotes', vaultId, newFolder] as const
       await qc.cancelQueries({ queryKey: listKey })
 
+      // Placeholder id — the real one arrives with the POST response.
+      // Negative to avoid collisions with real backend ids; onSuccess
+      // swaps it for the server-assigned id in the cached list.
+      const placeholderId = -Date.now()
       const ctx: DuplicateNoteContext = {
         newFolder,
         newFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
+        placeholderId,
       }
 
       // Seed metadata from the source row if we have it cached — gives
@@ -1289,10 +1372,7 @@ export function useDuplicateNote() {
         ?.notes.find((n) => n.path === src_path)
       const now = new Date().toISOString()
       const placeholder: NoteSummary = {
-        // Placeholder id — the real one arrives with the POST response.
-        // Negative to avoid collisions with real backend ids; onSettled
-        // refetches the folder list so this gets replaced.
-        id: -Date.now(),
+        id: placeholderId,
         path: new_path,
         title: srcRowFromOldList?.title ?? '',
         folder: newFolder,
@@ -1309,6 +1389,36 @@ export function useDuplicateNote() {
         }))
       }
       return ctx
+    },
+    onSuccess: (data, _vars, ctx) => {
+      if (!ctx) return
+      const real = data.note
+      if (!real?.id) return
+      // Swap the placeholder row for the real server-assigned id so
+      // any tree consumer using `n.id` as a stable key transitions
+      // smoothly. onSettled below also invalidates, but the swap
+      // avoids a momentary "missing note" flash for the placeholder.
+      const listKey = ['folderNotes', vaultId, ctx.newFolder]
+      const curr = qc.getQueryData<{ notes: NoteSummary[] }>(listKey)
+      if (!curr) return
+      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, {
+        notes: curr.notes.map((n) =>
+          n.id === ctx.placeholderId
+            ? {
+                ...n,
+                id: real.id,
+                path: real.path ?? n.path,
+                title: real.title ?? n.title,
+                folder: real.folder ?? n.folder,
+                tags: real.tags ?? n.tags,
+                version: real.version ?? n.version,
+                mtime: real.mtime ?? n.mtime,
+                created_at: real.created_at ?? n.created_at,
+                updated_at: real.updated_at ?? n.updated_at,
+              }
+            : n,
+        ),
+      })
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.newFolderNotes !== undefined) {

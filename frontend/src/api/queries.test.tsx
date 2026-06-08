@@ -530,3 +530,143 @@ describe('optimistic delete note', () => {
     expect(list?.notes.map((n) => n.path).sort()).toEqual(['gone.md', 'stays.md'])
   })
 })
+
+// ── Id-stable optimistic updates (URL-by-id Task 9) ─────────
+//
+// Notes are cached by id (`['note', vaultId, id]`). On rename, the
+// id never changes — only `path` / `folder` shift. The cache entry
+// must update in place under the same key; the prior path-keyed
+// shuffle (write to new key + remove old) is dead.
+
+function seedNoteById(id: number, note: Partial<Note>) {
+  qc.setQueryData(['note', 42, id], {
+    id,
+    path: '',
+    title: '',
+    folder: '',
+    tags: [],
+    version: 1,
+    content: '',
+    mtime: 's',
+    created_at: 's',
+    updated_at: 's',
+    ...note,
+  } satisfies Note)
+}
+
+describe('optimistic rename note — id-stable cache', () => {
+  it('updates the note body cache in place under [note, vaultId, id]', async () => {
+    seedFolderNotes('a', [{ id: 42, path: 'a/x.md', title: 'X' }])
+    seedFolderNotes('b', [])
+    seedFolders([
+      { name: 'a', count: 1 },
+      { name: 'b', count: 0 },
+    ])
+    seedNoteById(42, { id: 42, path: 'a/x.md', folder: 'a', title: 'X', content: '# X' })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useRenameNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ old_path: 'a/x.md', new_path: 'b/y.md' })
+    })
+
+    await waitFor(() => {
+      // Same key — id 42 — value updated in place.
+      const cached = qc.getQueryData<Note>(['note', 42, 42])
+      expect(cached?.path).toBe('b/y.md')
+      expect(cached?.folder).toBe('b')
+      // Content + title preserved.
+      expect(cached?.content).toBe('# X')
+      expect(cached?.title).toBe('X')
+    })
+
+    // The old path key was never used; it must not appear.
+    expect(qc.getQueryData(['note', 42, 'a/x.md'])).toBeUndefined()
+    expect(qc.getQueryData(['note', 42, 'b/y.md'])).toBeUndefined()
+
+    resolvePost({
+      renamed: true,
+      old_path: 'a/x.md',
+      new_path: 'b/y.md',
+      note: { id: 42, path: 'b/y.md' },
+    })
+  })
+
+  it('restores the note body cache under [note, vaultId, id] on rollback', async () => {
+    seedFolderNotes('a', [{ id: 42, path: 'a/x.md', title: 'X' }])
+    seedFolderNotes('b', [])
+    seedNoteById(42, { id: 42, path: 'a/x.md', folder: 'a', content: '# X' })
+
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useRenameNote(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ old_path: 'a/x.md', new_path: 'b/y.md' })
+      } catch {
+        // expected
+      }
+    })
+
+    const cached = qc.getQueryData<Note>(['note', 42, 42])
+    expect(cached?.path).toBe('a/x.md')
+    expect(cached?.folder).toBe('a')
+  })
+})
+
+describe('optimistic rename folder — rewrites cached notes under old prefix', () => {
+  it('rewrites path + folder on every cached [note, vaultId, *] under the old prefix', async () => {
+    qc.setQueryData(['folders', 42], {
+      folders: [
+        { name: 'src', count: 2 },
+        { name: 'src/sub', count: 1 },
+      ],
+    })
+    seedNoteById(10, { id: 10, path: 'src/a.md', folder: 'src' })
+    seedNoteById(11, { id: 11, path: 'src/sub/b.md', folder: 'src/sub' })
+    // An unrelated note — must NOT be touched.
+    seedNoteById(99, { id: 99, path: 'other/c.md', folder: 'other' })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useRenameFolder(), { wrapper })
+    act(() => {
+      result.current.mutate({ old_path: 'src', new_path: 'dst' })
+    })
+
+    await waitFor(() => {
+      expect(qc.getQueryData<Note>(['note', 42, 10])?.path).toBe('dst/a.md')
+    })
+    expect(qc.getQueryData<Note>(['note', 42, 10])?.folder).toBe('dst')
+    expect(qc.getQueryData<Note>(['note', 42, 11])?.path).toBe('dst/sub/b.md')
+    expect(qc.getQueryData<Note>(['note', 42, 11])?.folder).toBe('dst/sub')
+    // Untouched.
+    expect(qc.getQueryData<Note>(['note', 42, 99])?.path).toBe('other/c.md')
+
+    resolvePost({ renamed: true, old_path: 'src', new_path: 'dst', count: 2 })
+  })
+
+  it('restores cached [note, vaultId, *] entries when the folder rename rejects', async () => {
+    seedNoteById(10, { id: 10, path: 'src/a.md', folder: 'src' })
+    seedNoteById(11, { id: 11, path: 'src/sub/b.md', folder: 'src/sub' })
+
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useRenameFolder(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ old_path: 'src', new_path: 'dst' })
+      } catch {
+        // expected
+      }
+    })
+
+    expect(qc.getQueryData<Note>(['note', 42, 10])?.path).toBe('src/a.md')
+    expect(qc.getQueryData<Note>(['note', 42, 10])?.folder).toBe('src')
+    expect(qc.getQueryData<Note>(['note', 42, 11])?.path).toBe('src/sub/b.md')
+    expect(qc.getQueryData<Note>(['note', 42, 11])?.folder).toBe('src/sub')
+  })
+})
