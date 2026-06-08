@@ -39,6 +39,13 @@ TEST_USER_OVERRIDES = {
     # the 402 (e.g. test_73 Free attachment block) intentionally do NOT
     # call grant_test_plan, so this override does not leak to them.
     "attachments_enabled": True,
+    # Free-tier `concurrent_devices` defaults to 1 (§G). test_49's
+    # cross-auth scenario provisions OAuth on the same user that already
+    # holds an API key session, which trips EnforceDeviceCap at the
+    # device-authorize step (`Device authorize failed: 402`). -1 lifts
+    # the cap to unlimited. Tests that need to assert the 1-device gate
+    # (test_71 connections cap) do NOT call grant_test_plan.
+    "concurrent_devices": -1,
 }
 
 
