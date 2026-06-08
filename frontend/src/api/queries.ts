@@ -20,6 +20,7 @@ export interface Folder {
 }
 
 export interface NoteSummary {
+  id: number
   path: string
   title: string
   folder: string
@@ -35,6 +36,9 @@ export interface Note extends NoteSummary {
 }
 
 export interface SearchResult {
+  // null for orphan path hits (Task 1 backend) — frontend should treat
+  // these as non-clickable since there's no id-routable target.
+  id: number | null
   path: string
   title: string
   folder: string
@@ -87,7 +91,11 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
     const notes: NoteSummary[] = matchFolder
       ? demo.notes
           .filter((n) => n.folder_id === matchFolder.id)
-          .map((n) => ({
+          .map((n, i) => ({
+            // Demo notes have string ids; synthesize negative numeric ids
+            // so they don't collide with real backend ids and so the
+            // NoteSummary contract is satisfied (id: number).
+            id: -(i + 1),
             path: n.path,
             title: n.title,
             folder: matchFolder.path,
@@ -103,33 +111,25 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
   return query
 }
 
-export function useNote(path: string) {
+export function useNote(id: number | null) {
   const vaultId = useActiveVaultId()
-  const demo = useDemoVaultOptional()
-  const query = useQuery({
-    queryKey: ['note', vaultId, path],
-    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
-    enabled: !demo?.active && !!path,
+  return useQuery({
+    queryKey: ['note', vaultId, id],
+    queryFn: () => api.get<Note>(`/notes/by-id/${id}`),
+    enabled: id != null,
   })
-  if (demo?.active) {
-    const hit = demo.notes.find((n) => n.path === path)
-    if (!hit) return query
-    const folder = demo.folders.find((f) => f.id === hit.folder_id)
-    const now = new Date().toISOString()
-    const data: Note = {
-      path: hit.path,
-      title: hit.title,
-      folder: folder?.path ?? '',
-      tags: [],
-      version: 1,
-      mtime: now,
-      created_at: now,
-      updated_at: now,
-      content: hit.content,
-    }
-    return { ...query, data, isLoading: false, isFetching: false, error: null }
-  }
-  return query
+}
+
+// Legacy path-keyed resolver. Task 6 wires this up behind the
+// `/note/*` catch-all so old links keep working: it fetches by path,
+// pulls the `id`, and replaces the URL with `/note/by-id/:id`.
+export function useNoteByPath(path: string) {
+  const vaultId = useActiveVaultId()
+  return useQuery({
+    queryKey: ['noteByPath', vaultId, path],
+    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
+    enabled: path.length > 0,
+  })
 }
 
 export function useUpdateNote() {
@@ -941,6 +941,7 @@ export function useRenameNote() {
         // body so we still have something to drop into the new folder.
         (ctx.oldNote
           ? ({
+              id: ctx.oldNote.id,
               path: ctx.oldNote.path,
               title: ctx.oldNote.title,
               folder: ctx.oldNote.folder,
@@ -1288,6 +1289,10 @@ export function useDuplicateNote() {
         ?.notes.find((n) => n.path === src_path)
       const now = new Date().toISOString()
       const placeholder: NoteSummary = {
+        // Placeholder id — the real one arrives with the POST response.
+        // Negative to avoid collisions with real backend ids; onSettled
+        // refetches the folder list so this gets replaced.
+        id: -Date.now(),
         path: new_path,
         title: srcRowFromOldList?.title ?? '',
         folder: newFolder,

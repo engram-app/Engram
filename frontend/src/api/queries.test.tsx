@@ -36,12 +36,15 @@ vi.mock('./client', async () => {
 
 import { ApiError } from './client'
 import {
+  type Note,
   useAcceptTerms,
   useCancelSubscription,
   useConfirmPlanChange,
   useDeleteFolder,
   useDeleteNote,
   useDuplicateNote,
+  useNote,
+  useNoteByPath,
   usePlanChangePreview,
   useRenameFolder,
   useRenameNote,
@@ -144,6 +147,58 @@ describe('inline billing mutations', () => {
     // No fetch happens for null target — query is disabled.
     expect(post).not.toHaveBeenCalled()
     expect(result.current.fetchStatus).toBe('idle')
+  })
+})
+
+describe('useNote by id', () => {
+  it('fetches /notes/by-id/:id and caches by id', async () => {
+    get.mockResolvedValue({
+      id: 42,
+      path: 'a.md',
+      title: 'A',
+      folder: '',
+      tags: [],
+      version: 1,
+      content: '# A',
+      mtime: 's',
+      created_at: 's',
+      updated_at: 's',
+    } as Note)
+    const { result } = renderHook(() => useNote(42), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(get).toHaveBeenCalledWith('/notes/by-id/42')
+  })
+
+  it('is disabled when id is null', () => {
+    const { result } = renderHook(() => useNote(null), { wrapper })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(get).not.toHaveBeenCalled()
+  })
+})
+
+describe('useNoteByPath', () => {
+  it('fetches /notes/<encoded path> when path is non-empty', async () => {
+    get.mockResolvedValue({
+      id: 1,
+      path: 'src/a.md',
+      title: '',
+      folder: 'src',
+      tags: [],
+      version: 1,
+      content: '',
+      mtime: 's',
+      created_at: 's',
+      updated_at: 's',
+    } as Note)
+    const { result } = renderHook(() => useNoteByPath('src/a.md'), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(get).toHaveBeenCalledWith('/notes/src/a.md')
+  })
+
+  it('is disabled when path is empty', () => {
+    const { result } = renderHook(() => useNoteByPath(''), { wrapper })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(get).not.toHaveBeenCalled()
   })
 })
 
