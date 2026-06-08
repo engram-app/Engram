@@ -69,14 +69,17 @@ def test_free_attachment_blocked_note_passes():
     clerk = ClerkClient(CLERK_SECRET)
     email = f"e2e-free-att-{_ts()}+clerk_test@example.com"
     password = secrets.token_urlsafe(32)
-    _clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
+    _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
     )
-    api = ApiClient(API_URL, api_key)
-
-    # NB: NOT calling grant_test_plan() — user stays Free-tier, which
-    # is exactly what attachments_enabled=false in §G's Free defaults
-    # is keyed on.
+    # Use Clerk JWT auth (not the API key). Free's §G defaults set
+    # api_rps_cap=0 / api_write_enabled=false, which gate ALL API-key-
+    # authed writes — we'd 429/403 on the create_vault below before ever
+    # reaching the attachment 402 we're trying to assert. JWT traffic is
+    # exempt from those gates per RequireApiRpsBudget. We still skip
+    # grant_test_plan() — the user must stay Free-tier so
+    # attachments_enabled=false (the actual key under test) holds.
+    api = ApiClient(API_URL, clerk_auth)
 
     # First call accept_free_tier so the onboarding plug stops gating
     # the vault-scoped pipeline once we open a vault.
