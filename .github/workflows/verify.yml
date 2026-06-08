@@ -1889,6 +1889,11 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
           mix ecto.create
+          # Idempotent cluster bootstrap (engram_app role + DEFAULT
+          # PRIVILEGES). Must run BEFORE migrate — baseline migration's
+          # structure dump references engram_app in GRANT statements.
+          # Mirrors prod entrypoint.sh ordering and the unit-tests job.
+          mix engram.prepare_database
           mix ecto.migrate
           echo "DB now at prev release schema."
 
