@@ -1040,12 +1040,22 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get --only test
 
-      - name: Probe env for RESEND leak (debug)
+      - name: Probe env + Application env for RESEND leak (debug)
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
         run: |
           echo "--- env keys matching RESEND_|EMAIL_FROM ---"
-          env | grep -E "^(RESEND_|EMAIL_FROM)=" | sed 's/=.*$/=<redacted>/' || echo "(none set)"
+          MATCHED=$(env | grep -E "^(RESEND_|EMAIL_FROM)=" | sed 's/=.*$/=<redacted>/')
+          if [ -z "$MATCHED" ]; then echo "(none set)"; else echo "$MATCHED"; fi
           echo "--- /etc/environment ---"
-          grep -E "^(RESEND_|EMAIL_FROM)" /etc/environment 2>/dev/null | sed 's/=.*$/=<redacted>/' || echo "(none in /etc/environment)"
+          MATCHED2=$(grep -E "^(RESEND_|EMAIL_FROM)" /etc/environment 2>/dev/null | sed 's/=.*$/=<redacted>/')
+          if [ -z "$MATCHED2" ]; then echo "(none in /etc/environment)"; else echo "$MATCHED2"; fi
+          echo "--- what Elixir sees under MIX_ENV=test ---"
+          MIX_ENV=test mix run --no-start -e '
+            IO.puts("email_provider=" <> inspect(Application.get_env(:engram, :email_provider)))
+            IO.puts("resend_api_key_set=" <> inspect(not is_nil(Application.get_env(:engram, :resend_api_key))))
+            IO.puts("email_from=" <> inspect(Application.get_env(:engram, :email_from)))
+          ' 2>&1 | grep -E "^(email_provider|resend_api_key|email_from)="
 
       - name: Run Elixir unit tests
         env:
