@@ -1,14 +1,30 @@
+import type React from 'react'
 import { Link } from 'react-router'
 import type { ItemInstance } from '@headless-tree/core'
 import type { LoaderItem } from './loader'
 import type { TreeItem } from './types'
 import { RenameInput } from '../tree-actions/rename-input'
+import { useLongPress } from '../tree-actions/use-long-press'
 
 interface Props {
   instance: ItemInstance<LoaderItem>
+  onContextMenu?: (itemId: string, x: number, y: number) => void
+  onLongPress?: (itemId: string) => void
 }
 
-export function TreeRow({ instance }: Props) {
+export function TreeRow({ instance, onContextMenu, onLongPress }: Props) {
+  const itemId = instance.getId()
+  const longPressHandlers = useLongPress({
+    onLongPress: () => onLongPress?.(itemId),
+  })
+  const longPressProps = onLongPress ? longPressHandlers : undefined
+  const contextMenuHandler = onContextMenu
+    ? (e: React.MouseEvent) => {
+        e.preventDefault()
+        onContextMenu(itemId, e.clientX, e.clientY)
+      }
+    : undefined
+
   const data = instance.getItemData()
   const item = data.item
   const depth = instance.getItemMeta()?.level ?? 0
@@ -48,6 +64,8 @@ export function TreeRow({ instance }: Props) {
       <button
         type="button"
         {...instance.getProps()}
+        {...longPressProps}
+        onContextMenu={contextMenuHandler}
         aria-expanded={instance.isExpanded()}
         aria-selected={instance.isSelected()}
         className={rowClass(instance)}
@@ -64,6 +82,8 @@ export function TreeRow({ instance }: Props) {
     <Link
       to={`/note/${item.id}`}
       {...instance.getProps()}
+      {...longPressProps}
+      onContextMenu={contextMenuHandler}
       aria-selected={instance.isSelected()}
       className={rowClass(instance)}
       style={{ paddingLeft: `${notePad}px` }}

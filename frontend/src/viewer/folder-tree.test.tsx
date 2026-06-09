@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
@@ -131,6 +131,36 @@ describe('FolderTree (HT)', () => {
     renderTree()
     const link = await screen.findByRole('treeitem', { name: 'a' })
     expect(link).toHaveAttribute('href', '/note/42')
+  })
+
+  it('right-click on a folder row opens the ContextMenu', async () => {
+    renderTree()
+    const projects = await screen.findByRole('treeitem', { name: 'Projects' })
+    fireEvent.contextMenu(projects, { clientX: 50, clientY: 60 })
+    await waitFor(() => {
+      // ContextMenu renders role=menu + menuitems with action labels
+      const menu = screen.getByRole('menu')
+      expect(menu).toBeInTheDocument()
+      expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeInTheDocument()
+      expect(screen.getByRole('menuitem', { name: 'Move to…' })).toBeInTheDocument()
+      expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
+    })
+  })
+
+  it('long-press on a row opens the ActionDrawer; Select more enters selection mode', async () => {
+    renderTree()
+    const projects = await screen.findByRole('treeitem', { name: 'Projects' })
+    // Long-press: pointerDown then wait the configured 500ms
+    fireEvent.pointerDown(projects, { clientX: 5, clientY: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    // Drawer renders Select more
+    const selectMore = await screen.findByRole('button', { name: 'Select more' })
+    expect(selectMore).toBeInTheDocument()
+    fireEvent.click(selectMore)
+    // SelectionBar appears with 1 selected
+    await waitFor(() => {
+      expect(screen.getByText(/1 selected/i)).toBeInTheDocument()
+    })
   })
 
   it('shows loading state', () => {

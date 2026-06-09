@@ -12,6 +12,7 @@ import {
   useBatchMoveFolders,
   useRenameNote,
   useRenameFolder,
+  useDuplicateNote,
 } from '../api/queries'
 import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
@@ -22,6 +23,10 @@ import { parseItemId } from './tree/types'
 import type { LoaderItem } from './tree/loader'
 import { DeleteConfirm } from './tree-actions/delete-confirm'
 import { MoveDialog } from './tree-actions/move-dialog'
+import { ContextMenu } from './tree-actions/context-menu'
+import { ActionDrawer } from './tree-actions/action-drawer'
+import { actionsFor, type ActionId } from './tree-actions/action-list'
+import { nextCopyName } from './tree-actions/duplicate'
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -33,8 +38,10 @@ type MoveRow =
 
 type DialogState =
   | { kind: 'none' }
-  | { kind: 'delete'; nodes: DeleteRow[] }
-  | { kind: 'move'; nodes: MoveRow[] }
+  | { kind: 'delete'; nodes: DeleteRow[]; itemIds: string[] }
+  | { kind: 'move'; nodes: MoveRow[]; itemIds: string[] }
+  | { kind: 'context'; itemId: string; position: { x: number; y: number } }
+  | { kind: 'drawer'; itemId: string }
 
 export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
@@ -57,6 +64,7 @@ export default function FolderTree() {
   const batchMoveFolders = useBatchMoveFolders()
   const renameNote = useRenameNote()
   const renameFolder = useRenameFolder()
+  const duplicateNote = useDuplicateNote()
 
   // Rename handler — TreeRow already wires HT's renaming state. HT calls
   // back with the new leaf-name; we rebuild the new full path from the
@@ -150,24 +158,137 @@ export default function FolderTree() {
     [selectedItems, folders],
   )
 
-  function openDelete() {
-    setDialog({ kind: 'delete', nodes: itemsToRows('delete') as DeleteRow[] })
+  // Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
+  function rowsFor(itemId: string, mode: 'delete' | 'move'): DeleteRow[] | MoveRow[] {
+    const p = parseItemId(itemId)
+    if (p.kind === 'note') {
+      const note = lookupNote(p.id)
+      if (!note) return []
+      return mode === 'delete'
+        ? [{ kind: 'file', path: note.path }]
+        : [{ kind: 'file', path: note.path }]
+    }
+    if (p.kind === 'folder') {
+      const folder = folders?.find((f) => f.id === p.id)
+      if (!folder) return []
+      const direct = folder.count
+      const descendants =
+        folders?.filter((f) => f.name.startsWith(`${folder.name}/`)).reduce((sum, f) => sum + f.count, 0) ?? 0
+      return mode === 'delete'
+        ? [{ kind: 'folder', path: folder.name, childCount: direct + descendants }]
+        : [{ kind: 'folder', path: folder.name }]
+    }
+    return []
   }
 
-  function openMove() {
-    setDialog({ kind: 'move', nodes: itemsToRows('move') as MoveRow[] })
+  function lookupNote(id: number): { id: number; path: string; title?: string } | undefined {
+    const cached = qc
+      .getQueryCache()
+      .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+      .flatMap((q) => (q.state.data as Array<{ id: number; path: string; title?: string }> | undefined) ?? [])
+      .find((n) => n.id === id)
+    if (cached) return cached
+    return rootNotes.find((n) => n.id === id)
+  }
+
+  function kindOf(itemId: string): 'file' | 'folder' {
+    const p = parseItemId(itemId)
+    return p.kind === 'folder' ? 'folder' : 'file'
+  }
+
+  function titleForItem(itemId: string): string {
+    const p = parseItemId(itemId)
+    if (p.kind === 'folder') {
+      const f = folders?.find((x) => x.id === p.id)
+      return f ? f.name.split('/').pop() ?? f.name : 'Folder'
+    }
+    if (p.kind === 'note') {
+      const n = lookupNote(p.id)
+      return n?.title || n?.path.split('/').pop() || 'Note'
+    }
+    return ''
+  }
+
+  function openDelete(itemIds?: string[]) {
+    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
+    const nodes = itemIds
+      ? (itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[])
+      : (itemsToRows('delete') as DeleteRow[])
+    setDialog({ kind: 'delete', nodes, itemIds: ids })
+  }
+
+  function openMove(itemIds?: string[]) {
+    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
+    const nodes = itemIds
+      ? (itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[])
+      : (itemsToRows('move') as MoveRow[])
+    setDialog({ kind: 'move', nodes, itemIds: ids })
+  }
+
+  function handleContextMenu(itemId: string, x: number, y: number) {
+    setDialog({ kind: 'context', itemId, position: { x, y } })
+  }
+
+  function handleLongPress(itemId: string) {
+    setDialog({ kind: 'drawer', itemId })
+  }
+
+  function handleActionPick(actionId: ActionId, itemId: string) {
+    switch (actionId) {
+      case 'rename': {
+        const instance = tree.getItemInstance(itemId)
+        if (instance) instance.startRenaming()
+        break
+      }
+      case 'delete':
+        openDelete([itemId])
+        break
+      case 'move':
+        openMove([itemId])
+        break
+      case 'duplicate': {
+        const p = parseItemId(itemId)
+        if (p.kind !== 'note') break
+        const note = lookupNote(p.id)
+        if (!note) break
+        // No reliable sibling-name set on hand — pass an empty Set and let
+        // the backend reject if collision happens; the toast surfaces it.
+        const new_path = nextCopyName(note.path, new Set<string>())
+        duplicateNote
+          .mutateAsync({ src_path: note.path, new_path })
+          .then(() => toast.success('Duplicated'))
+          .catch(() => toast.error('Duplicate failed'))
+        break
+      }
+      case 'copy-wikilink': {
+        const p = parseItemId(itemId)
+        if (p.kind !== 'note') break
+        const note = lookupNote(p.id)
+        if (!note) break
+        const label = note.title || note.path.split('/').pop() || note.path
+        navigator.clipboard
+          .writeText(`[[${label}]]`)
+          .then(() => toast.success('Copied wikilink'))
+          .catch(() => toast.error('Copy failed'))
+        break
+      }
+    }
+  }
+
+  function partition(itemIds: string[]): { noteIds: number[]; folderIds: number[] } {
+    const noteIds: number[] = []
+    const folderIds: number[] = []
+    for (const id of itemIds) {
+      const p = parseItemId(id)
+      if (p.kind === 'note') noteIds.push(p.id)
+      else if (p.kind === 'folder') folderIds.push(p.id)
+    }
+    return { noteIds, folderIds }
   }
 
   function commitDelete() {
-    const noteIds: number[] = []
-    const folderIds: number[] = []
-    for (const inst of selectedItems) {
-      const data = inst.getItemData() as LoaderItem | undefined
-      if (!data) continue
-      const item = data.item
-      if (item.kind === 'note') noteIds.push(item.id)
-      else folderIds.push(item.id)
-    }
+    if (dialog.kind !== 'delete') return
+    const { noteIds, folderIds } = partition(dialog.itemIds)
     if (noteIds.length) batchDeleteNotes.mutate({ ids: noteIds })
     if (folderIds.length) batchDeleteFolders.mutate({ ids: folderIds })
     tree.setSelectedItems([])
@@ -175,20 +296,13 @@ export default function FolderTree() {
   }
 
   function commitMove(targetFolderName: string) {
+    if (dialog.kind !== 'move') return
     const target = folders?.find((f) => f.name === targetFolderName)
     if (!target) {
       setDialog({ kind: 'none' })
       return
     }
-    const noteIds: number[] = []
-    const folderIds: number[] = []
-    for (const inst of selectedItems) {
-      const data = inst.getItemData() as LoaderItem | undefined
-      if (!data) continue
-      const item = data.item
-      if (item.kind === 'note') noteIds.push(item.id)
-      else folderIds.push(item.id)
-    }
+    const { noteIds, folderIds } = partition(dialog.itemIds)
     if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
     if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
     tree.setSelectedItems([])
@@ -232,6 +346,8 @@ export default function FolderTree() {
               key={items[v.index]?.getId() ?? v.index}
               virtualItem={v}
               items={items}
+              onContextMenu={handleContextMenu}
+              onLongPress={handleLongPress}
             />
           ))}
         </div>
@@ -239,8 +355,8 @@ export default function FolderTree() {
 
       <SelectionBar
         count={selectionCount}
-        onMove={openMove}
-        onDelete={openDelete}
+        onMove={() => openMove()}
+        onDelete={() => openDelete()}
         onCancel={() => tree.setSelectedItems([])}
       />
 
@@ -257,6 +373,26 @@ export default function FolderTree() {
           folders={folders.map((f) => ({ name: f.name }))}
           onPick={commitMove}
           onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {dialog.kind === 'context' && (
+        <ContextMenu
+          actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+          position={dialog.position}
+          onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
+          onClose={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {dialog.kind === 'drawer' && (
+        <ActionDrawer
+          title={titleForItem(dialog.itemId)}
+          actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+          onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
+          onClose={() => setDialog({ kind: 'none' })}
+          onSelectMore={() => {
+            tree.setSelectedItems([dialog.itemId])
+            setDialog({ kind: 'none' })
+          }}
         />
       )}
     </>

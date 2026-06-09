@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act } from 'react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { TreeRow } from './tree-row'
 import type { TreeItem } from './types'
@@ -143,6 +144,50 @@ describe('TreeRow', () => {
     )
     const btn = screen.getByRole('button')
     expect(btn.style.paddingLeft).toBe('28px') // 2 * 12 + 4
+  })
+
+  it('invokes onContextMenu with item id + clientX/Y on right-click of a folder row', () => {
+    const onContextMenu = vi.fn()
+    const instance = mockInstance({ data: folderItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('button'), { clientX: 42, clientY: 99 })
+    expect(onContextMenu).toHaveBeenCalledWith('f:1', 42, 99)
+  })
+
+  it('invokes onContextMenu with item id + clientX/Y on right-click of a note row', () => {
+    const onContextMenu = vi.fn()
+    const instance = mockInstance({ data: noteItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('link'), { clientX: 10, clientY: 20 })
+    expect(onContextMenu).toHaveBeenCalledWith('n:100', 10, 20)
+  })
+
+  it('invokes onLongPress with item id after the long-press delay', () => {
+    vi.useFakeTimers()
+    const onLongPress = vi.fn()
+    const instance = mockInstance({ data: noteItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onLongPress={onLongPress} />
+      </MemoryRouter>,
+    )
+    const link = screen.getByRole('link')
+    act(() => {
+      fireEvent.pointerDown(link, { clientX: 5, clientY: 5 })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onLongPress).toHaveBeenCalledWith('n:100')
+    vi.useRealTimers()
   })
 
   it('spreads HT row props onto the rendered element', () => {
