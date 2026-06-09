@@ -34,15 +34,9 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
   const { title, body } = copyFor(reason)
   const connKind = isConnectionCap(reason)
 
-  // No-escape modal: the user must either disconnect an existing connection
-  // (inline below) or upgrade. Hides the X, blocks outside-click + Escape.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        onInteractOutside={(e) => e.preventDefault()}
-        onEscapeKeyDown={(e) => e.preventDefault()}
-      >
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{body}</DialogDescription>

@@ -30,11 +30,10 @@ describe("UpgradeRequiredDialog", () => {
     expect(await screen.findByTestId("billing-page")).toBeInTheDocument()
   })
 
-  it("has no Dismiss button — action required (Upgrade or inline disconnect)", () => {
+  it("has no explicit Dismiss button — X / outside click / Escape still close", () => {
     renderWithRouter(
       <UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={() => {}} />,
     )
     expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: /close/i })).not.toBeInTheDocument()
   })
 })
