@@ -68,4 +68,32 @@ defmodule Engram.Notes.MaterializationTest do
     assert marker.folder_hmac != nil
     assert byte_size(marker.folder_hmac) == 32
   end
+
+  test "un-deletes a soft-deleted marker and counts it as inserted", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "Projects/notes.md",
+        "content" => "x",
+        "mtime" => 1.0
+      })
+
+    # First run materializes the "Projects" marker.
+    {:ok, %{inserted: 1, existing: 0}} = Materialization.run(user, vault)
+
+    # Soft-delete the marker out from under us.
+    {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "Projects")
+    assert Notes.list_folder_markers(user, vault) == []
+
+    # Re-run: create_folder_marker/3 un-deletes the existing row, and
+    # because it returns {:ok, _}, our heuristic counter records it as
+    # `inserted: 1` (documented behavior).
+    assert {:ok, %{inserted: 1, existing: 0}} = Materialization.run(user, vault)
+
+    [marker] = Notes.list_folder_markers(user, vault)
+    assert marker.folder == "Projects"
+    assert marker.deleted_at == nil
+  end
 end

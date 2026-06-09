@@ -865,16 +865,17 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns the distinct set of cleartext folder paths for non-folder
-  notes (kind="note") in this vault. Root ("") is excluded — only
-  non-root parents are returned.
+  Returns the distinct set of cleartext folder paths *implied* by
+  non-folder notes (kind="note") in this vault. Folder marker rows are
+  intentionally excluded — this is the "where do notes live" view.
+  Root ("") is excluded — only non-root parents are returned.
 
   Folder paths are encrypted at rest (Phase B.3), so this enumerates the
   distinct ciphertext rows and decrypts each. Batch-grade — intended for
   backfill workflows (`Notes.Materialization`), not per-request paths.
   """
-  @spec list_all_note_folders(map(), map()) :: [String.t()]
-  def list_all_note_folders(user, vault) do
+  @spec list_folders_implied_by_notes(map(), map()) :: {:ok, [String.t()]}
+  def list_folders_implied_by_notes(user, vault) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
@@ -894,12 +895,15 @@ defmodule Engram.Notes do
             )
           end)
 
-        Enum.map(rows, fn {id, dv, ct, nonce} ->
-          decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
-        end)
+        folders =
+          Enum.map(rows, fn {id, dv, ct, nonce} ->
+            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
+          end)
+
+        {:ok, folders}
 
       {:error, :no_dek} ->
-        []
+        {:ok, []}
     end
   end
 

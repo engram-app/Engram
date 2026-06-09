@@ -8,18 +8,32 @@ defmodule Engram.Notes.Materialization do
   rollout: once a folder is a real row, it has a stable id consumers
   can key off of (drag/drop targets, tree expansion state, etc.).
 
-  ## Implementation notes
+  ## Semantics
 
-  - Per-vault atomic transaction. If the run fails partway through, no
-    partial state is committed.
-  - Reuses `Notes.create_folder_marker/3` for inserts, which means new
-    markers get HMAC + DEK + AAD binding via the same code path everything
-    else uses. No new crypto surface.
-  - Concurrent inserters (race) are tolerated: a `{:error, _}` from
-    `create_folder_marker/3` for an already-existing folder is silently
-    absorbed (the marker exists, which is the intended end state).
-  - `list_all_note_folders/2` enumerates encrypted rows + decrypts each.
-    Fine for backfill; not appropriate for hot paths.
+  Best-effort idempotent backfill, wrapped in a per-vault transaction:
+
+  - **Real failures roll back.** If `Notes.create_folder_marker/3`
+    returns `{:error, reason}` mid-loop, the transaction is rolled back
+    via `Repo.rollback({:create_folder_marker_failed, folder_path, reason})`
+    — no partial state is committed. Re-running picks up where it left
+    off because the operation is idempotent on the inputs that already
+    succeeded on the next attempt.
+  - **Race tolerance is implicit.** `create_folder_marker/3` returns
+    `{:ok, existing_marker}` on a unique-constraint collision (it
+    re-fetches the winner), so concurrent inserters do not surface as
+    errors here. The end state — the marker exists — is correct.
+  - **`inserted` is a heuristic counter.** It counts successful
+    `create_folder_marker/3` calls in this run. Under a concurrent run
+    against the same user (not a supported scenario), the counter may
+    over-count by the size of the race window. Precision is not
+    critical: this metric is for observability of bulk runs, not
+    invariants.
+  - `list_folders_implied_by_notes/2` enumerates encrypted rows +
+    decrypts each. Fine for backfill; not appropriate for hot paths.
+
+  Reuses `Notes.create_folder_marker/3` for inserts, which means new
+  markers get HMAC + DEK + AAD binding via the same code path everything
+  else uses. No new crypto surface.
   """
 
   alias Engram.Notes
@@ -39,10 +53,11 @@ defmodule Engram.Notes.Materialization do
       inserted =
         Enum.reduce(missing, 0, fn folder_path, acc ->
           case Notes.create_folder_marker(user, vault, folder_path) do
-            {:ok, _} -> acc + 1
-            # Race: marker created by a concurrent process between our read
-            # and write. End-state is the marker exists, which is correct.
-            {:error, _} -> acc
+            {:ok, _} ->
+              acc + 1
+
+            {:error, reason} ->
+              Repo.rollback({:create_folder_marker_failed, folder_path, reason})
           end
         end)
 
@@ -51,11 +66,13 @@ defmodule Engram.Notes.Materialization do
   end
 
   defp collect_implied_folder_paths(user, vault) do
-    user
-    |> Notes.list_all_note_folders(vault)
+    {:ok, folders} = Notes.list_folders_implied_by_notes(user, vault)
+
+    folders
     |> Enum.flat_map(&ancestors/1)
     |> Enum.uniq()
     |> Enum.reject(&(&1 == ""))
+    # Deterministic order for test assertions + debug log readability.
     |> Enum.sort()
   end
 
