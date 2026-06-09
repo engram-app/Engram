@@ -214,11 +214,11 @@ export default function DeviceLinkPage() {
           {step === 'pick-vault' ? 'Choose a vault to sync' : 'Link Obsidian Vault'}
         </h1>
 
-        {capCheck.atCap && capCheck.swapCooldownHours != null && step !== 'success' ? (
-          // Cooldown banner takes priority over the "linking will disconnect"
-          // warning: if we let the user click Sync we'd disconnect the
-          // existing device FIRST and then trip the 402 on authorize,
-          // leaving them with 0 connections. Block the action instead.
+        {capCheck.swapCooldownHours != null && step !== 'success' ? (
+          // Cooldown gates the Sync button (line 319) regardless of whether
+          // an active device still exists — the backend rejects a new family
+          // inside the swap window. Render the banner on cooldown alone, not
+          // gated on `atCap`, so the disabled button always has its reason.
           <div
             role="alert"
             className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
