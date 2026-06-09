@@ -683,6 +683,45 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Atomically soft-deletes a list of notes by id, scoped to the caller's
+  user + vault. All-or-nothing: if any id fails to resolve to a live note
+  owned by the caller, the entire batch rolls back and no notes are
+  deleted.
+
+  Returns `{:ok, %{deleted: n}}` on success (n = `length(ids)`), or
+  `{:error, {:not_found, id}}` identifying the first offending id when
+  one or more ids don't resolve.
+
+  Empty list short-circuits to `{:ok, %{deleted: 0}}` without opening a
+  transaction. Composed on top of `delete_note_by_id/3` — each per-id
+  delete runs inside the outer `Repo.transaction`, so a later `:not_found`
+  reverts prior successful deletes (Qdrant/Oban side-effects enqueued
+  during the rolled-back transaction are still inserted via Oban's
+  `Repo.insert`, but only become visible after commit; on rollback they
+  vanish with the transaction).
+  """
+  @spec batch_delete_notes(map(), map(), [integer()]) ::
+          {:ok, %{deleted: non_neg_integer()}}
+          | {:error, {:not_found, integer()} | term()}
+  def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
+
+  def batch_delete_notes(user, vault, ids) when is_list(ids) do
+    Repo.transaction(fn ->
+      Enum.reduce_while(ids, %{deleted: 0}, fn id, acc ->
+        case delete_note_by_id(user, vault, id) do
+          :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
+          {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+          {:error, reason} -> {:halt, {:rollback, reason}}
+        end
+      end)
+      |> case do
+        {:rollback, reason} -> Repo.rollback(reason)
+        acc -> acc
+      end
+    end)
+  end
+
+  @doc """
   Returns notes changed (upserted or deleted) since the given datetime.
   Deleted notes are included with deleted: true.
   """
