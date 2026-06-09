@@ -196,13 +196,16 @@ export default function OAuthAuthorizePage() {
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : capCheck.atCap ? (
           <section className="flex flex-col gap-3">
-            <p className="text-sm text-foreground">
+            <div
+              role="status"
+              className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+            >
               {copyFor(
                 clientKind === 'obsidian'
                   ? 'obsidian_connections_exceeded'
                   : 'mcp_connections_exceeded',
               ).body}
-            </p>
+            </div>
             <ExistingConnectionsPanel
               kind={clientKind}
               onChanged={() => qc.invalidateQueries({ queryKey: ['billing', 'status'] })}

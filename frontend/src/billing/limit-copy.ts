@@ -64,11 +64,11 @@ const TABLE: Record<LimitReason, LimitCopy> = {
   },
   mcp_connections_exceeded: {
     title: "External connection limit reached",
-    body: "Your Free plan includes 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+    body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
   },
   obsidian_connections_exceeded: {
     title: "External connection limit reached",
-    body: "Your Free plan includes 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+    body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
   },
   account_suspended: {
     title: "Account suspended",
