@@ -39,8 +39,8 @@ const TABLE: Record<LimitReason, LimitCopy> = {
     body: "Upgrade to upload larger files.",
   },
   concurrent_devices_exceeded: {
-    title: "Already signed in elsewhere",
-    body: "Free supports 1 device at a time. Upgrade for multi-device.",
+    title: "Device sync limit reached",
+    body: "Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.",
   },
   device_swap_cooldown: {
     title: "Device swap cooldown active",

@@ -113,6 +113,12 @@ export default function DeviceLinkPage() {
       qc.invalidateQueries({ queryKey: ['vaults'] })
       setStep('success')
     } catch (e: unknown) {
+      // LimitExceededError is surfaced by UpgradeDialogProvider (the cap
+      // dialog opens with Disconnect + Upgrade). Don't double-render its
+      // raw message as an inline error.
+      if (e instanceof Error && e.name === 'LimitExceededError') {
+        return
+      }
       const message = e instanceof Error ? e.message : 'Authorization failed'
       if (message.includes('404') || message.includes('not found')) {
         setError('This code is invalid or has expired. Please try again from Obsidian.')
