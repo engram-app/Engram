@@ -34,9 +34,15 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
   const { title, body } = copyFor(reason)
   const connKind = isConnectionCap(reason)
 
+  // No-escape modal: the user must either disconnect an existing connection
+  // (inline below) or upgrade. Hides the X, blocks outside-click + Escape.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        showCloseButton={false}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{body}</DialogDescription>
@@ -45,20 +51,6 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
         {connKind ? <ExistingConnectionsPanel kind={connKind} onChanged={() => onOpenChange(false)} /> : null}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Dismiss
-          </Button>
-          {connKind ? (
-            <Button
-              variant="outline"
-              onClick={() => {
-                onOpenChange(false)
-                navigate("/settings/connections")
-              }}
-            >
-              Manage connections
-            </Button>
-          ) : null}
           <Button
             onClick={() => {
               onOpenChange(false)

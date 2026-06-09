@@ -30,12 +30,11 @@ describe("UpgradeRequiredDialog", () => {
     expect(await screen.findByTestId("billing-page")).toBeInTheDocument()
   })
 
-  it("Dismiss button closes the dialog", () => {
-    const onOpenChange = vi.fn()
+  it("has no Dismiss button — action required (Upgrade or inline disconnect)", () => {
     renderWithRouter(
-      <UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={onOpenChange} />,
+      <UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={() => {}} />,
     )
-    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }))
-    expect(onOpenChange).toHaveBeenCalledWith(false)
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /close/i })).not.toBeInTheDocument()
   })
 })

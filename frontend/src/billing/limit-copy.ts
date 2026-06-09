@@ -63,12 +63,12 @@ const TABLE: Record<LimitReason, LimitCopy> = {
     body: "Upgrade for live sync.",
   },
   mcp_connections_exceeded: {
-    title: "MCP connection limit reached",
-    body: "Your Free plan includes 1 active MCP connection (Claude Desktop, Claude Code, Cursor, etc.). Disconnect the existing one in Settings → Connections, or upgrade for unlimited connections.",
+    title: "External connection limit reached",
+    body: "Your Free plan includes 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
   },
   obsidian_connections_exceeded: {
-    title: "Obsidian connection limit reached",
-    body: "Your Free plan includes 1 active Obsidian vault connection. Disconnect the existing one in Settings → Connections, or upgrade to connect more vaults.",
+    title: "External connection limit reached",
+    body: "Your Free plan includes 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
   },
   account_suspended: {
     title: "Account suspended",
