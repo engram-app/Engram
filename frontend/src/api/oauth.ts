@@ -3,6 +3,10 @@ import { api } from './client'
 export interface OAuthClientMetadata {
   client_id: string
   client_name: string
+  // "mcp" | "obsidian" — drives the proactive cap UI on /oauth/consent.
+  // DCR rejects "obsidian"; device-flow clients carry that kind. The
+  // backend `oauth_clients_controller.show/2` echoes it from the DB row.
+  kind: 'mcp' | 'obsidian'
 }
 
 export interface OAuthConsentParams {

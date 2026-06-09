@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 75 tuples (25 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 81 tuples (27 keys × 3 tiers)
   """
 
   @catalog %{
@@ -19,7 +19,15 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 1_073_741_824, starter: 3_221_225_472, pro: 16_106_127_360}
     },
-    attachments_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
+    attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
+    # Free is restricted to text/* uploads only; Starter+ get the full
+    # MimeWhitelist surface (images, audio, video, PDFs, office docs).
+    # `true` means "Free-style restriction is ON" so the gate matches
+    # the pattern of every other paid-feature boolean.
+    attachments_text_only: %{
+      type: :boolean,
+      defaults: %{free: true, starter: false, pro: false}
+    },
     max_file_bytes: %{
       type: :integer,
       defaults: %{free: 10_485_760, starter: 209_715_200, pro: 524_288_000}
@@ -29,11 +37,7 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: 20_000_000, starter: nil, pro: nil}
     },
     concurrent_devices: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
-    device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 12, starter: 0, pro: 0}},
-    realtime_sync_enabled: %{
-      type: :boolean,
-      defaults: %{free: false, starter: true, pro: true}
-    },
+    device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     ai_conversations_per_day: %{type: :integer, defaults: %{free: 5, starter: nil, pro: nil}},
     ai_queries_per_conversation: %{
       type: :integer,
@@ -44,6 +48,17 @@ defmodule Engram.Billing.LimitKeys do
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
     api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 10, pro: 30}},
+    # Rolling-24h search caps on the Free tier. Split by where the request
+    # came from so a noisy MCP / PAT bot can't burn the user's in-app
+    # budget and vice-versa. Both fire on POST /api/search only — note
+    # reads, manifest pulls, attachment fetches are NOT counted.
+    #
+    # `external_ai_searches_per_day`: API-key + OAuth + device-flow + MCP
+    # access. Tight number on Free because the abuse vector is automated.
+    # `inapp_searches_per_day`: Web SPA (Clerk JWT). Generous because the
+    # cap exists for spam defense, not to throttle the user in the app.
+    external_ai_searches_per_day: %{type: :integer, defaults: %{free: 15, starter: nil, pro: nil}},
+    inapp_searches_per_day: %{type: :integer, defaults: %{free: 60, starter: nil, pro: nil}},
     inactivity_warn_60_days: %{
       type: :boolean,
       defaults: %{free: true, starter: false, pro: false}

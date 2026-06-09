@@ -130,7 +130,7 @@ const BILLING_INACTIVE = {
   active: false,
   trial_days_remaining: 0,
   subscription: null,
-  caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: false },
+  caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: false, vaults: null },
 }
 
 const BILLING_ACTIVE = {
@@ -138,7 +138,7 @@ const BILLING_ACTIVE = {
   active: true,
   trial_days_remaining: 7,
   subscription: { status: 'trialing', tier: 'starter', current_period_end: '2026-07-01' },
-  caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
+  caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true, vaults: null },
 }
 
 const BILLING_CONFIG = {

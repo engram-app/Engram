@@ -45,11 +45,13 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       assert conn.halted
       assert conn.status == 402
       body = Phoenix.ConnTest.json_response(conn, 402)
-      assert body["error"] == "connection_cap_reached"
-      assert body["kind"] == "obsidian"
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "obsidian_connections_exceeded"
+      assert body["limit_key"] == "obsidian_connections_cap"
       assert body["current"] == 1
       assert body["limit"] == 1
-      assert body["upgrade_url"] == "/settings/billing"
+      assert body["upgrade_url"] == "https://app.engram.page/settings/billing"
+      assert body["tier"] == "free"
     end
 
     test "obsidian cap does not affect mcp consent", %{conn: conn, user: user, obs: obs, mcp: mcp} do

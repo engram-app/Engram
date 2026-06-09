@@ -9,7 +9,11 @@ export type LimitReason =
   | "ai_conversations_per_day_exceeded"
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
-  | "realtime_disabled"
+  | "external_ai_searches_per_day_exceeded"
+  | "inapp_searches_per_day_exceeded"
+  | "attachment_must_be_text"
+  | "mcp_connections_exceeded"
+  | "obsidian_connections_exceeded"
   | "account_suspended"
   | "no_tier"
 
@@ -37,8 +41,8 @@ const TABLE: Record<LimitReason, LimitCopy> = {
     body: "Upgrade to upload larger files.",
   },
   concurrent_devices_exceeded: {
-    title: "Already signed in elsewhere",
-    body: "Free supports 1 device at a time. Upgrade for multi-device.",
+    title: "Device sync limit reached",
+    body: "Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.",
   },
   device_swap_cooldown: {
     title: "Device swap cooldown active",
@@ -56,9 +60,25 @@ const TABLE: Record<LimitReason, LimitCopy> = {
     title: "Daily AI query limit reached",
     body: "Upgrade for more.",
   },
-  realtime_disabled: {
-    title: "Realtime sync is a Pro feature",
-    body: "Upgrade for live sync.",
+  external_ai_searches_per_day_exceeded: {
+    title: "Daily external-tool search limit reached",
+    body: "Your Free plan allows 15 searches per day from MCP clients, the Obsidian plugin, and API-key scripts. Upgrade for unlimited.",
+  },
+  inapp_searches_per_day_exceeded: {
+    title: "Daily in-app search limit reached",
+    body: "Your Free plan allows 60 searches per day in the web app. Upgrade for unlimited.",
+  },
+  attachment_must_be_text: {
+    title: "Free plan: text attachments only",
+    body: "Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.",
+  },
+  mcp_connections_exceeded: {
+    title: "External connection limit reached",
+    body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+  },
+  obsidian_connections_exceeded: {
+    title: "External connection limit reached",
+    body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
   },
   account_suspended: {
     title: "Account suspended",

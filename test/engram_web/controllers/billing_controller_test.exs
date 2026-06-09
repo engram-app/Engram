@@ -41,6 +41,11 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["active"] == false
       assert body["trial_days_remaining"] == 0
       assert body["subscription"] == nil
+      # Bundled connection counts let the cap UI on /link and /oauth/consent
+      # decide atCap from a single fetch — a brand-new user has zero of each.
+      assert body["current_connections"] == %{"obsidian" => 0, "mcp" => 0}
+      # No prior device revoke → no swap cooldown in flight.
+      assert body["device_swap_cooldown_remaining_hours"] == nil
     end
 
     test "returns subscription status for subscribed user", %{conn: conn, user: user} do
