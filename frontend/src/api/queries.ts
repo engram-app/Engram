@@ -318,7 +318,19 @@ export interface BillingStatus {
     obsidian_connections: number | null
     mcp_connections: number | null
     api_write_enabled: boolean
+    vaults: number | null
   }
+  // Bundled into /billing/status so the proactive cap UI (on /link and
+  // /oauth/consent) can decide atCap from a single fetch — no separate
+  // /connections call just to count.
+  current_connections: {
+    obsidian: number
+    mcp: number
+  }
+  // Hours remaining on the Free-tier device-swap cooldown after a recent
+  // device revoke; `null` when no cooldown is in effect. Lets /link render
+  // a cooldown banner + disable Authorize BEFORE the user trips the 402.
+  device_swap_cooldown_remaining_hours: number | null
 }
 
 // Billing hooks
@@ -516,45 +528,13 @@ export function useSetOnboardingProfile() {
   })
 }
 
-// API key types
-
-export interface ApiKey {
-  id: number
-  name: string
-  created_at: string
-  last_used: string | null
-}
+// API key result shape — created by useCreatePat below; kept as a named
+// type because the reveal modal in settings/connections-page.tsx imports it.
 
 export interface CreatedApiKey {
   id: number
   name: string
   key: string
-}
-
-// API key hooks
-
-export function useApiKeys() {
-  return useQuery({
-    queryKey: ['api-keys'],
-    queryFn: () => api.get<{ keys: ApiKey[] }>('/api-keys'),
-    select: (data) => data.keys,
-  })
-}
-
-export function useCreateApiKey() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (name: string) => api.post<CreatedApiKey>('/api-keys', { name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
-  })
-}
-
-export function useRevokeApiKey() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: number) => api.del<{ deleted: boolean }>(`/api-keys/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
-  })
 }
 
 // ── Connections ─────────────────────────────────────────────
@@ -608,7 +588,6 @@ export function useCreatePat() {
       api.post<{ key: string; id: number; name: string }>('/connections/pat', { name }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
-      qc.invalidateQueries({ queryKey: ['api-keys'] }) // legacy queries also need refresh
     },
   })
 }
@@ -635,7 +614,6 @@ export function useRevokePat() {
     mutationFn: (id: number) => api.del(`/connections/pat/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
-      qc.invalidateQueries({ queryKey: ['api-keys'] })
     },
   })
 }

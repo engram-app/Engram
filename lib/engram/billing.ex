@@ -131,32 +131,33 @@ defmodule Engram.Billing do
   # ── Tier & Status Queries ──────────────────────────────────────
 
   @doc """
-  Returns the user's effective tier as an atom.
-  Users without a subscription (or with a canceled one) are :free.
-  """
-  def tier(user) do
-    case get_subscription(user) do
-      %Subscription{status: status, tier: tier} when status in ~w(active past_due trialing) ->
-        String.to_existing_atom(tier)
+  Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
-      _ ->
-        :free
+  Only an `active` paid subscription resolves to `:starter` or `:pro`.
+  Everyone else — un-onboarded users, self-host, canceled / past_due /
+  trialing subscriptions — resolves to `:free`. Always returns an atom
+  (never `nil`); the un-onboarded path is gated upstream by
+  `RequireOnboarding` but a Free default keeps `effective_limit/2` and
+  `default_for/2` total.
+  """
+  @spec tier(Engram.Accounts.User.t()) :: :free | :starter | :pro
+  def tier(%Engram.Accounts.User{} = user) do
+    case get_subscription(user) do
+      %Subscription{status: "active", tier: "starter"} -> :starter
+      %Subscription{status: "active", tier: "pro"} -> :pro
+      _ -> :free
     end
   end
 
   @doc """
-  Returns true if the user has an active, past_due, or trialing subscription.
-  Users must start a 7-day trial (card on file) via the Paddle overlay
-  before syncing — the trial is configured on the Paddle price.
+  Returns true when the user is not suspended. Tier defaults to `:free`
+  for un-onboarded users — see `tier/1`. Account access is gated by
+  suspension only; tier-based feature gating happens via
+  `effective_limit/2` and `check_limit/3` / `check_feature/2`.
   """
-  def active?(user) do
-    case get_subscription(user) do
-      %Subscription{status: status} when status in ~w(active past_due trialing) ->
-        true
-
-      _ ->
-        false
-    end
+  @spec active?(Engram.Accounts.User.t()) :: boolean()
+  def active?(%Engram.Accounts.User{} = user) do
+    is_nil(user.suspended_at)
   end
 
   @doc """
@@ -167,6 +168,10 @@ defmodule Engram.Billing do
   """
   def get_subscription(%{subscription: %Subscription{} = sub}), do: sub
   def get_subscription(%{subscription: nil}), do: nil
+  # Non-persisted user (built but not inserted) — no row to load. Keeps
+  # `tier/1` total over `build(:user, ...)` for unit tests that don't need
+  # a DB round-trip.
+  def get_subscription(%{id: nil}), do: nil
 
   def get_subscription(user) do
     Repo.one(
@@ -383,15 +388,28 @@ defmodule Engram.Billing do
   def upsert_from_paddle_event(%{"event_type" => "subscription.created", "data" => data}) do
     case extract_user_id(data) do
       {:ok, user_id} ->
-        attrs = %{
+        base_attrs = %{
           user_id: user_id,
           paddle_customer_id: data["customer_id"],
           paddle_subscription_id: data["id"],
-          tier: tier_from_subscription(data),
           status: data["status"],
           current_period_end: parse_period_end(data),
           custom_data: data["custom_data"] || %{}
         }
+
+        attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier))
+
+            {:error, :unknown_price_id} ->
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: user_id, payload_keys: Map.keys(data)}
+                )
+
+              base_attrs
+          end
 
         # Omit :custom_data from the replace list. Paddle delivers at-least-once,
         # so a retried subscription.created must NOT clobber the affiliate /
@@ -428,8 +446,88 @@ defmodule Engram.Billing do
     end
   end
 
+  def upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => data}) do
+    subscription_id = data["id"]
+
+    case Repo.one(
+           from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
+           skip_tenant_check: true
+         ) do
+      %Subscription{} = sub ->
+        sub_with_user = Repo.preload(sub, :user, skip_tenant_check: true)
+        user = sub_with_user.user
+        prev_tier = if user, do: tier(user), else: :free
+
+        base_attrs = %{
+          status: data["status"],
+          current_period_end: parse_period_end(data)
+        }
+
+        update_attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier_atom} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier_atom))
+
+            {:error, :unknown_price_id} ->
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+                )
+
+              base_attrs
+          end
+
+        # Flip the user to Free at cancellation (period end per Paddle's engine).
+        # `free_tier_accepted_at` is stamped only when nil so a user who had
+        # originally accepted Free, upgraded, then canceled keeps the original
+        # acceptance timestamp. Wrap both writes in a transaction so a partial
+        # failure rolls back together.
+        result =
+          Repo.transaction(fn ->
+            updated_sub =
+              sub
+              |> Subscription.changeset(update_attrs)
+              |> Repo.update!(skip_tenant_check: true)
+
+            if user && is_nil(user.free_tier_accepted_at) do
+              user
+              |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
+              |> Repo.update!()
+            end
+
+            updated_sub
+          end)
+
+        case result do
+          {:ok, updated} ->
+            broadcast_subscription_activated(updated.user_id, updated)
+
+            # Force-disconnect open sockets so the next reconnect re-runs the
+            # tier gate with the canceled subscription. Mirrors the behaviour
+            # in subscription.updated/activated when tier or status flips.
+            Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
+
+            if user do
+              :telemetry.execute(
+                [:engram, :tier_downgraded],
+                %{count: 1},
+                %{user_id: user.id, from: prev_tier, to: :free}
+              )
+            end
+
+            {:ok, updated}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      nil ->
+        {:error, :subscription_not_found}
+    end
+  end
+
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
-      when type in ~w(subscription.activated subscription.updated subscription.past_due subscription.canceled) do
+      when type in ~w(subscription.activated subscription.updated subscription.past_due) do
     subscription_id = data["id"]
 
     case Repo.one(
@@ -437,13 +535,28 @@ defmodule Engram.Billing do
            skip_tenant_check: true
          ) do
       %Subscription{tier: prev_tier, status: prev_status} = sub ->
+        base_attrs = %{
+          status: data["status"],
+          current_period_end: parse_period_end(data)
+        }
+
+        update_attrs =
+          case tier_from_subscription(data) do
+            {:ok, tier} ->
+              Map.put(base_attrs, :tier, Atom.to_string(tier))
+
+            {:error, :unknown_price_id} ->
+              _ =
+                Sentry.capture_message("Unknown Paddle price_id, tier unchanged",
+                  extra: %{user_id: sub.user_id, payload_keys: Map.keys(data)}
+                )
+
+              base_attrs
+          end
+
         result =
           sub
-          |> Subscription.changeset(%{
-            status: data["status"],
-            tier: tier_from_subscription(data),
-            current_period_end: parse_period_end(data)
-          })
+          |> Subscription.changeset(update_attrs)
           |> Repo.update(skip_tenant_check: true)
 
         case result do
@@ -509,41 +622,44 @@ defmodule Engram.Billing do
   defp extract_user_id(_), do: :error
 
   @doc """
-  Resolve a tier name (`"free"` | `"starter"` | `"pro"`) from a Paddle
-  subscription data map. Defaults to `"free"` for unknown or missing
-  prices (logged loudly via `Logger.error`) so a bogus payload can't
-  silently grant paid features — reconciliation surfaces the mismatch
-  separately.
+  Resolve a tier (`:starter` | `:pro`) from a Paddle subscription data
+  map. Returns `{:error, :unknown_price_id}` for unknown or missing
+  prices (logged loudly via `Logger.error`) so the caller can decide what
+  to do — typically: do NOT mutate the user's tier, and alert ops. This
+  avoids silently downgrading a paying user to free when Paddle sends a
+  price_id we don't recognize (e.g., a mis-configured env var).
   """
-  @spec tier_from_subscription(map()) :: String.t()
-  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}),
-    do: tier_from_price_id(price_id)
+  @spec tier_from_subscription(map()) ::
+          {:ok, :starter | :pro} | {:error, :unknown_price_id}
+  def tier_from_subscription(%{"items" => [%{"price" => %{"id" => price_id}} | _]}) do
+    tier_from_price_id(price_id)
+  end
 
   def tier_from_subscription(other) do
-    Logger.error("paddle subscription missing items[0].price.id; defaulting to free",
+    Logger.error("paddle subscription missing items[0].price.id",
       payload_keys: Map.keys(other || %{})
     )
 
-    "free"
+    {:error, :unknown_price_id}
   end
 
   defp tier_from_price_id(price_id) do
     cond do
       price_id == Application.get_env(:engram, :paddle_starter_monthly_price_id) ->
-        "starter"
+        {:ok, :starter}
 
       price_id == Application.get_env(:engram, :paddle_starter_annual_price_id) ->
-        "starter"
+        {:ok, :starter}
 
       price_id == Application.get_env(:engram, :paddle_pro_monthly_price_id) ->
-        "pro"
+        {:ok, :pro}
 
       price_id == Application.get_env(:engram, :paddle_pro_annual_price_id) ->
-        "pro"
+        {:ok, :pro}
 
       true ->
         log_unknown_price_id_once(price_id)
-        "free"
+        {:error, :unknown_price_id}
     end
   end
 

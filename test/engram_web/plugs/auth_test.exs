@@ -76,6 +76,15 @@ defmodule EngramWeb.Plugs.AuthTest do
     refute conn.halted
   end
 
+  # The Auth plug's 3rd-tuple branch (`{:ok, user, :internal_jwt}` →
+  # assign(:current_auth_method)) is covered by
+  # `Engram.Auth.TokenResolverTest` end-to-end — that test sets up a
+  # Clerk bypass so the fallback path actually fires. Reproducing the
+  # bypass here just to assert one assign would duplicate ~30 lines of
+  # provider setup. The plug's `case` branch is a literal pattern
+  # match; the contract on the TokenResolver side is the thing that
+  # needs locking.
+
   test "rejects missing auth header" do
     conn =
       build_conn()

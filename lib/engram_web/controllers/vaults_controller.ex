@@ -2,7 +2,6 @@ defmodule EngramWeb.VaultsController do
   use EngramWeb, :controller
 
   alias Engram.Auth.DeviceFlow
-  alias Engram.Billing
   alias Engram.Vaults
 
   @zero_counts %{notes: 0, attachments: 0}
@@ -55,12 +54,15 @@ defmodule EngramWeb.VaultsController do
         |> put_status(201)
         |> json(%{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
-      {:error, :vault_limit_reached} ->
-        limit = Billing.effective_limit(user, :vaults_cap)
-
-        conn
-        |> put_status(402)
-        |> json(%{error: "vault_limit_reached", limit: limit})
+      {:error, {:vault_limit_reached, limit, current}} ->
+        # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "vaults_cap_exceeded",
+          :vaults_cap,
+          limit,
+          current
+        )
 
       {:error, changeset} ->
         conn
@@ -153,12 +155,15 @@ defmodule EngramWeb.VaultsController do
           {:ok, vault} ->
             json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 
-          {:error, :limit_reached} ->
-            limit = Billing.effective_limit(user, :vaults_cap)
-
-            conn
-            |> put_status(402)
-            |> json(%{error: "vault_limit_reached", limit: limit})
+          {:error, {:limit_reached, limit, current}} ->
+            # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
+            EngramWeb.LimitResponse.halt(
+              conn,
+              "vaults_cap_exceeded",
+              :vaults_cap,
+              limit,
+              current
+            )
 
           {:error, :not_found} ->
             not_found(conn)
@@ -217,12 +222,15 @@ defmodule EngramWeb.VaultsController do
             |> Map.put(:status, "existing")
           )
 
-        {:error, :vault_limit_reached} ->
-          limit = Billing.effective_limit(user, :vaults_cap)
-
-          conn
-          |> put_status(402)
-          |> json(%{error: "vault_limit_reached", limit: limit})
+        {:error, {:vault_limit_reached, limit, current}} ->
+          # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
+          EngramWeb.LimitResponse.halt(
+            conn,
+            "vaults_cap_exceeded",
+            :vaults_cap,
+            limit,
+            current
+          )
       end
     end
   end

@@ -24,7 +24,10 @@ defmodule EngramWeb.OAuthClientsControllerTest do
 
       assert json["client_id"] == client.client_id
       assert json["client_name"] == "My App"
-      assert Map.keys(json) |> Enum.sort() == ["client_id", "client_name"]
+      # `kind` is "mcp" for DCR-minted clients (the public endpoint rejects
+      # "obsidian"); the consent page reads it to pick the right cap key.
+      assert json["kind"] == "mcp"
+      assert Map.keys(json) |> Enum.sort() == ["client_id", "client_name", "kind"]
     end
 
     test "does not require Authorization header (public endpoint)", %{conn: conn} do

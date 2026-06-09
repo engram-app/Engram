@@ -45,7 +45,8 @@ defmodule Engram.VaultsTest do
     test "enforces default billing limit of 1", %{user: user} do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Second"})
+      assert {:error, {:vault_limit_reached, 1, 1}} =
+               Vaults.create_vault(user, %{name: "Second"})
     end
 
     test "unlimited override (-1) allows any number of vaults", %{user: user} do
@@ -61,12 +62,16 @@ defmodule Engram.VaultsTest do
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Third"})
+
+      assert {:error, {:vault_limit_reached, 2, 2}} =
+               Vaults.create_vault(user, %{name: "Third"})
     end
 
     test "override upgrade: blocked by default, then lifted", %{user: user} do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Second"})
+
+      assert {:error, {:vault_limit_reached, 1, 1}} =
+               Vaults.create_vault(user, %{name: "Second"})
 
       # Lift the limit via per-user override
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
@@ -224,7 +229,7 @@ defmodule Engram.VaultsTest do
     test "returns :vault_limit_reached when default limit exceeded", %{user: user} do
       Vaults.register_vault(user, "First", "client-1")
 
-      assert {:error, :vault_limit_reached} =
+      assert {:error, {:vault_limit_reached, 1, 1}} =
                Vaults.register_vault(user, "Second", "client-2")
     end
 
@@ -341,7 +346,7 @@ defmodule Engram.VaultsTest do
       {:ok, _} = Vaults.delete_vault(user, first.id)
       {:ok, _replacement} = Vaults.create_vault(user, %{name: "Replacement"})
 
-      assert {:error, :limit_reached} = Vaults.restore_vault(user, first.id)
+      assert {:error, {:limit_reached, 1, 1}} = Vaults.restore_vault(user, first.id)
       # Blocked restore leaves the vault soft-deleted: it stays in the trash
       # list and is NOT promoted back into the active list.
       assert first.id in deleted_ids(user)

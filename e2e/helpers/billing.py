@@ -30,6 +30,28 @@ TEST_USER_OVERRIDES = {
     "api_rps_cap": 1000,
     "obsidian_connections_cap": -1,
     "mcp_connections_cap": -1,
+    # Free-tier launch (§G) gates attachments behind `attachments_enabled`
+    # which defaults false for Free. Existing attachment-bearing e2e tests
+    # (test_19 write isolation, test_40 storage endpoint, test_70 MIME
+    # whitelist) provision via `sync_user`/`isolation_user` fixtures which
+    # already call grant_test_plan; flipping this true here lifts the gate
+    # for all such tests without per-test edits. Tests that need to assert
+    # the 402 (e.g. test_73 Free attachment block) intentionally do NOT
+    # call grant_test_plan, so this override does not leak to them.
+    "attachments_enabled": True,
+    # Free additionally restricts attachments to text/* MIMEs via
+    # `attachments_text_only`. Same logic as above — the tests granted a
+    # paid plan need the full MimeWhitelist surface (PNG, PDF, the .exe
+    # rejection assertions, etc.). test_73 leaves this alone to assert
+    # the 402.
+    "attachments_text_only": False,
+    # Free-tier `concurrent_devices` defaults to 1 (§G). test_49's
+    # cross-auth scenario provisions OAuth on the same user that already
+    # holds an API key session, which trips EnforceDeviceCap at the
+    # device-authorize step (`Device authorize failed: 402`). -1 lifts
+    # the cap to unlimited. Tests that need to assert the 1-device gate
+    # (test_71 connections cap) do NOT call grant_test_plan.
+    "concurrent_devices": -1,
 }
 
 

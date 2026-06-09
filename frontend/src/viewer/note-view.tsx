@@ -1,6 +1,6 @@
 import matter from 'gray-matter'
 import { useMemo } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
@@ -9,6 +9,8 @@ import remarkCallouts from '@portaljs/remark-callouts'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import remarkWikiLink from 'remark-wiki-link'
+import { useBillingStatus } from '../api/queries'
+import { AttachmentFallback } from './attachment-fallback'
 import AttachmentImg from './attachment-img'
 import MermaidBlock from './mermaid-block'
 
@@ -50,7 +52,13 @@ const rehypePlugins = [
   rehypeHighlight,
 ] as const
 
+// Attachment file extensions are anything OTHER than markdown / canvas — those
+// are first-class note types that should still link normally on Free.
+const TEXT_EMBED = /\.(md|canvas)$/i
+
 export default function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
+  const { data: billing } = useBillingStatus()
+  const tier = billing?.tier
   const { frontmatter, body } = useMemo(() => {
     try {
       const parsed = matter(content)
@@ -96,6 +104,12 @@ export default function NoteView({ content, title, tags, updatedAt }: NoteViewPr
         <ReactMarkdown
           remarkPlugins={remarkPlugins as never}
           rehypePlugins={rehypePlugins as never}
+          // react-markdown@10 strips URLs with schemes outside its safe list;
+          // preserve our internal `engram-attachment:` sentinel so the img
+          // component override can route it to AttachmentImg / fallback.
+          urlTransform={(url) =>
+            url.startsWith(ATTACHMENT_SCHEME) ? url : defaultUrlTransform(url)
+          }
           components={{
             code({ className, children, ...rest }) {
               const lang = /language-(\w+)/.exec(className ?? '')?.[1]
@@ -111,7 +125,14 @@ export default function NoteView({ content, title, tags, updatedAt }: NoteViewPr
             },
             img({ src, alt }) {
               if (typeof src === 'string' && src.startsWith(ATTACHMENT_SCHEME)) {
-                return <AttachmentImg path={src.slice(ATTACHMENT_SCHEME.length)} alt={alt} />
+                const path = src.slice(ATTACHMENT_SCHEME.length)
+                // Free tier: gate any non-text attachment (images, pdfs, etc).
+                // `.md` / `.canvas` embeds remain free-tier-allowed because
+                // they're first-class note types, not stored attachments.
+                if (tier === 'free' && !TEXT_EMBED.test(path)) {
+                  return <AttachmentFallback filename={path} />
+                }
+                return <AttachmentImg path={path} alt={alt} />
               }
               return <img src={src as string | undefined} alt={alt ?? ''} className="my-2 max-w-full rounded" />
             },

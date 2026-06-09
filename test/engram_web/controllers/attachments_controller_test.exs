@@ -13,6 +13,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
+    # Free-tier launch §4.5 — Free gets text-only uploads. Existing happy-
+    # path coverage exercises non-text MIMEs (PNG, PDF) that Free can't
+    # upload, so seed an active Pro subscription before any upload runs
+    # through the controller gate.
+    insert(:subscription, user: user, tier: "pro", status: "active")
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
@@ -193,10 +198,13 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 2.0
         })
 
+      # Free-tier launch §4.5 — standardized LimitResponse shape.
       body = json_response(conn2, 402)
-      assert body["error"] == "storage_cap_reached"
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "attachments_quota_exceeded"
+      assert body["limit_key"] == "attachment_bytes_cap"
       assert body["limit"] == 2 * 1_048_576
-      assert body["used"] == 1_500_000
+      assert body["current"] == 1_500_000
     end
 
     test "upsert subtracts existing path's size from the lifetime total (§G)",
@@ -244,10 +252,63 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 1_000.0
         })
 
-      assert conn.status == 413
-      body = json_response(conn, 413)
-      assert body["error"] == "attachment exceeds size limit"
+      # Free-tier launch §4.5 — single-file too-large now flows through
+      # LimitResponse as 402 file_too_large rather than 413.
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "file_too_large"
+      assert body["limit_key"] == "max_file_bytes"
       assert body["limit"] == 1_048_576
+    end
+
+    test "Free user gets 402 attachment_must_be_text when uploading non-text MIME", %{
+      conn: conn,
+      user: user
+    } do
+      # Demote the setup-Pro user back to Free by deleting the subscription.
+      # `tier/1` resolves to :free with no subscription row, which lights up
+      # the `attachments_text_only` flag per LimitKeys.
+      sub =
+        Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
+          skip_tenant_check: true
+        )
+
+      Engram.Repo.delete!(sub, skip_tenant_check: true)
+
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "blocked.png",
+          content_base64: @sample_base64,
+          mtime: 1.0
+        })
+
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "attachment_must_be_text"
+      assert body["limit_key"] == "attachments_text_only"
+      assert body["tier"] == "free"
+      assert body["limit"] == true
+      assert Map.has_key?(body, "upgrade_url")
+    end
+
+    test "Free user CAN upload a text/markdown attachment", %{conn: conn, user: user} do
+      sub =
+        Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
+          skip_tenant_check: true
+        )
+
+      Engram.Repo.delete!(sub, skip_tenant_check: true)
+
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "notes/readme.md",
+          content_base64: Base.encode64("# Free can attach text"),
+          mtime: 1.0
+        })
+
+      assert %{"attachment" => att} = json_response(conn, 200)
+      assert att["path"] == "notes/readme.md"
+      assert att["mime_type"] == "text/markdown"
     end
 
     test "returns 401 without auth", %{conn: conn} do

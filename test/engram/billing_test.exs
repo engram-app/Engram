@@ -27,14 +27,21 @@ defmodule Engram.BillingTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           # Three calls with the same unknown price ID — must log only once.
-          # Unknown defaults to "free" (pricing v3) so a bogus payload can't
-          # silently grant paid features.
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+          # Unknown returns {:error, :unknown_price_id} so the caller can
+          # decide what to do (typically: do NOT mutate the user's tier and
+          # alert ops) rather than silently coercing to a tier.
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
+
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_a"))
 
           # A different unknown price → should also log once.
-          assert "free" == Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_b"))
+          assert {:error, :unknown_price_id} ==
+                   Billing.tier_from_subscription(paddle_sub_unknown.("pri_unknown_b"))
         end)
 
       occurrences = log |> String.split("paddle_unknown_price_id") |> length() |> Kernel.-(1)
@@ -52,72 +59,106 @@ defmodule Engram.BillingTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert "starter" ==
+          assert {:ok, :starter} ==
                    Billing.tier_from_subscription(%{
                      "items" => [%{"price" => %{"id" => starter_id}}]
                    })
 
-          assert "pro" ==
+          assert {:ok, :pro} ==
                    Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro_id}}]})
         end)
 
       refute log =~ "paddle_unknown_price_id"
     end
+
+    test "returns {:ok, :starter} for starter monthly price id" do
+      starter = Application.get_env(:engram, :paddle_starter_monthly_price_id)
+
+      assert {:ok, :starter} =
+               Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => starter}}]})
+    end
+
+    test "returns {:ok, :pro} for pro monthly price id" do
+      pro = Application.get_env(:engram, :paddle_pro_monthly_price_id)
+
+      assert {:ok, :pro} =
+               Billing.tier_from_subscription(%{"items" => [%{"price" => %{"id" => pro}}]})
+    end
+
+    test "returns {:error, :unknown_price_id} for unknown price id" do
+      assert {:error, :unknown_price_id} =
+               Billing.tier_from_subscription(%{
+                 "items" => [%{"price" => %{"id" => "pri_unknown_xyz"}}]
+               })
+    end
+
+    test "returns {:error, :unknown_price_id} for malformed payload" do
+      assert {:error, :unknown_price_id} = Billing.tier_from_subscription(%{})
+    end
   end
 
   describe "tier/1" do
-    test "returns :free for user with no subscription" do
-      user = insert(:user)
+    test "returns :starter when user has active starter subscription" do
+      user = build(:user) |> with_subscription(tier: "starter", status: "active")
+      assert Billing.tier(user) == :starter
+    end
+
+    test "returns :pro when user has active pro subscription" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "active")
+      assert Billing.tier(user) == :pro
+    end
+
+    test "returns :free when no subscription (un-onboarded or self-host)" do
+      user = build(:user, free_tier_accepted_at: nil)
       assert Billing.tier(user) == :free
     end
 
-    test "returns tier atom for user with active subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, tier: "starter", status: "active")
-      assert Billing.tier(user) == :starter
+    test "returns :free when free_tier_accepted_at set" do
+      user = build(:user, free_tier_accepted_at: DateTime.utc_now())
+      assert Billing.tier(user) == :free
     end
 
-    test "returns tier atom for user with trialing subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, tier: "starter", status: "trialing")
-      assert Billing.tier(user) == :starter
+    test "returns :free when subscription is canceled" do
+      user =
+        build(:user, free_tier_accepted_at: DateTime.utc_now())
+        |> with_subscription(tier: "pro", status: "canceled")
+
+      assert Billing.tier(user) == :free
     end
 
-    test "returns :free for user with canceled subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, tier: "starter", status: "canceled")
+    test "returns :free when subscription is trialing (pricing v3: only active counts)" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "trialing")
+      assert Billing.tier(user) == :free
+    end
+
+    test "returns :free when subscription is past_due (pricing v3: only active counts)" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "past_due")
       assert Billing.tier(user) == :free
     end
   end
 
-  describe "active?/1" do
-    test "returns false for user with no subscription" do
-      user = insert(:user)
-      assert Billing.active?(user) == false
+  describe "active?/1 (re-purposed: suspension-only)" do
+    test "true for Free user (no subscription, not suspended)" do
+      user = build(:user, free_tier_accepted_at: nil, suspended_at: nil)
+      assert Billing.active?(user)
     end
 
-    test "returns true for user with trialing subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "trialing")
-      assert Billing.active?(user) == true
+    test "true for Pro user (not suspended)" do
+      user =
+        build(:user, suspended_at: nil)
+        |> with_subscription(tier: "pro", status: "active")
+
+      assert Billing.active?(user)
     end
 
-    test "returns true for user with active subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "active")
-      assert Billing.active?(user) == true
-    end
+    test "false when suspended" do
+      user =
+        build(:user,
+          free_tier_accepted_at: DateTime.utc_now(),
+          suspended_at: DateTime.utc_now()
+        )
 
-    test "returns true for user with past_due subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "past_due")
-      assert Billing.active?(user) == true
-    end
-
-    test "returns false for user with canceled subscription" do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "canceled")
-      assert Billing.active?(user) == false
+      refute Billing.active?(user)
     end
   end
 
@@ -777,16 +818,24 @@ defmodule Engram.BillingTest do
       assert queries == 0
     end
 
-    test "active?/1 and tier/1 reuse a preloaded subscription (zero extra queries)" do
+    test "tier/1 reuses a preloaded subscription (zero extra queries)" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       user = Repo.preload(user, :subscription)
 
       {_, queries} =
         with_subscription_query_count(fn ->
-          assert Billing.active?(user)
           assert Billing.tier(user) == :pro
         end)
+
+      assert queries == 0
+    end
+
+    test "active?/1 issues zero queries (suspension-only, no subscription read)" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      {_, queries} = with_subscription_query_count(fn -> assert Billing.active?(user) end)
 
       assert queries == 0
     end

@@ -29,13 +29,23 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/status" do
-    test "returns inactive status for new user with no subscription", %{conn: conn} do
+    test "returns free-tier status for new user with no subscription", %{conn: conn} do
+      # `active` here means "has a paid (Starter/Pro) subscription" — drives the
+      # frontend's `needsSubscription = !billing.active` plan-picker render.
+      # Suspension is gated upstream by RequireActiveSubscription; this endpoint
+      # only tells the UI whether to show "you're on Free / upgrade" vs the paid
+      # billing dashboard.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["tier"] == "free"
       assert body["active"] == false
       assert body["trial_days_remaining"] == 0
       assert body["subscription"] == nil
+      # Bundled connection counts let the cap UI on /link and /oauth/consent
+      # decide atCap from a single fetch — a brand-new user has zero of each.
+      assert body["current_connections"] == %{"obsidian" => 0, "mcp" => 0}
+      # No prior device revoke → no swap cooldown in flight.
+      assert body["device_swap_cooldown_remaining_hours"] == nil
     end
 
     test "returns subscription status for subscribed user", %{conn: conn, user: user} do
