@@ -146,6 +146,13 @@ export default function OAuthAuthorizePage() {
       const { redirect_uri } = await postOAuthConsent(body)
       window.location.assign(redirect_uri)
     } catch (e: unknown) {
+      // LimitExceededError is already surfaced by UpgradeDialogProvider
+      // (it's a 402 — the dialog opens and offers Disconnect / Upgrade).
+      // Don't double-render its raw message as an inline error.
+      if (e instanceof Error && e.name === 'LimitExceededError') {
+        setSubmitting(false)
+        return
+      }
       const message = e instanceof Error ? e.message : 'Authorization failed'
       setSubmitError(message)
       setSubmitting(false)
