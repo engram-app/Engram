@@ -686,7 +686,8 @@ defmodule Engram.Notes do
   Delegates to `delete_note/3` once ownership is verified, so Qdrant cleanup +
   usage-meter decrement + `note_changed` broadcast all run as a side-effect.
   """
-  @spec delete_note_by_id(map(), map(), integer()) :: :ok | {:error, :not_found}
+  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), integer()) ::
+          :ok | {:error, :not_found}
   def delete_note_by_id(user, vault, id) when is_integer(id) do
     case get_note_by_id(user, vault, id) do
       {:ok, note} -> delete_note(user, vault, note.path)
