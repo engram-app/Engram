@@ -104,10 +104,6 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
         <p className="text-base text-foreground">
           We'll tailor your setup around the tools you already work with.
         </p>
-        <p className="text-sm text-muted-foreground">
-          Not a comprehensive list — pick <strong>Other connection</strong> if
-          yours isn't here.
-        </p>
       </header>
 
       {isFree ? (
@@ -145,6 +141,11 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
         onToggle={toggleTool}
         layout="row"
       />
+
+      <p className="text-sm text-muted-foreground">
+        Not a comprehensive list — pick <strong>Other connection</strong> if
+        yours isn't here.
+      </p>
 
       {hasError ? (
         <p role="alert" className="text-sm text-destructive">
