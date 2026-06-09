@@ -12,7 +12,7 @@ const folders = [
 describe('MoveDialog', () => {
   it('lists all folders including root', () => {
     // Source file lives in `notes/` so all four folders (root, src, src/sub, docs)
-    // are valid drop targets per isValidDropTarget (currentFolder='notes' ≠ any).
+    // are valid move targets per isValidMoveTarget (currentFolder='notes' ≠ any).
     render(<MoveDialog folders={folders} nodes={[{ kind: 'file', path: 'notes/a.md' }]} onPick={() => {}} onCancel={() => {}} />)
     expect(screen.getByText('/ (root)')).toBeInTheDocument()
     expect(screen.getByText('src')).toBeInTheDocument()

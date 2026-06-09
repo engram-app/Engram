@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
-import { isValidDropTarget, type DragNode } from './use-tree-drag'
+import { isValidMoveTarget, type MoveNode } from './move-path'
 
 interface Props {
   folders: { name: string }[]
-  nodes: DragNode[]
+  nodes: MoveNode[]
   onPick: (folder: string) => void
   onCancel: () => void
 }
 
-function buildMessage(nodes: DragNode[]): string {
+function buildMessage(nodes: MoveNode[]): string {
   if (nodes.length > 1) return `Move ${nodes.length} items to…`
   return 'Move to…'
 }
@@ -19,10 +19,10 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
   const placeholder = buildMessage(nodes)
 
   const candidates = useMemo(() => {
-    // A folder is eligible only if it's a valid drop target for EVERY node.
+    // A folder is eligible only if it's a valid move target for EVERY node.
     const eligible = folders
       .map((f) => f.name)
-      .filter((name) => nodes.every((node) => isValidDropTarget(node, name)))
+      .filter((name) => nodes.every((node) => isValidMoveTarget(node, name)))
     if (!query) return eligible
     const q = query.toLowerCase()
     return eligible.filter((name) => (name || 'root').toLowerCase().includes(q))
