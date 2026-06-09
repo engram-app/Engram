@@ -47,7 +47,8 @@ defmodule EngramWeb.RequestLogger do
       status: conn.status,
       request_path: conn.request_path,
       request_query: conn.query_string,
-      user_id: current_user_id(conn)
+      user_id: current_user_id(conn),
+      mtls_clientcert_subject: mtls_clientcert_subject(conn)
     )
   end
 
@@ -55,4 +56,20 @@ defmodule EngramWeb.RequestLogger do
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil
+
+  # x-amzn-mtls-clientcert-subject is injected by ALB when its HTTPS
+  # listener has mutual_authentication set to "passthrough" or "verify"
+  # and a client cert was presented (or any cert, in passthrough mode).
+  # Present = CF→ALB mTLS handshake reached us carrying a cert. Absent
+  # = no AOP layer in front (dev, test, AOP disabled — in verify mode
+  # a missing cert never reaches HTTP at all since the TLS handshake
+  # fails first).
+  #
+  # Plug normalizes header names to lowercase, so the match key is
+  # lowercase regardless of what ALB sends on the wire.
+  defp mtls_clientcert_subject(%Plug.Conn{} = conn) do
+    conn
+    |> Plug.Conn.get_req_header("x-amzn-mtls-clientcert-subject")
+    |> List.first()
+  end
 end
