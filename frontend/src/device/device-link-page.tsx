@@ -200,12 +200,19 @@ export default function DeviceLinkPage() {
           >
             Heads up — your Free plan syncs files between 1 device at a time.
             Linking this device will disconnect{' '}
-            <strong>{existingObsidian.name ?? 'your previous device'}</strong>, which
-            will stop receiving sync changes. <a
+            <strong>{describeObsidianDevice(existingObsidian)}</strong>, which
+            will stop receiving sync changes.{' '}
+            <a
               className="underline underline-offset-4"
-              onClick={(e) => { e.preventDefault(); navigate('/settings/billing') }}
+              onClick={(e) => {
+                e.preventDefault()
+                navigate('/settings/billing')
+              }}
               href="/settings/billing"
-            >Upgrade</a> to keep both connected.
+            >
+              Upgrade
+            </a>{' '}
+            to keep both connected.
           </div>
         )}
 
@@ -446,4 +453,49 @@ function VaultPickerFieldset({
       </label>
     </fieldset>
   )
+}
+
+// Build a user-facing identifier for the Obsidian device that's about to be
+// disconnected. We layer signals from the Connection record so the banner
+// reads as specifically as the data allows:
+//   "the device syncing your 'Notes' vault on macOS (last active 2 days ago)"
+// Falls back to "your previous device" when nothing useful is available
+// (e.g., a freshly seeded test row with no UA / no vault name).
+function describeObsidianDevice(c: Connection): string {
+  const parts: string[] = []
+  if (c.vault_name) parts.push(`the device syncing your '${c.vault_name}' vault`)
+  const os = parseUserAgentOs(c.first_user_agent)
+  if (os) parts.push(`on ${os}`)
+  const since = relativeTime(c.last_used_at ?? c.connected_at)
+  if (since) parts.push(`(last active ${since})`)
+  if (parts.length === 0) return c.name ?? 'your previous device'
+  return parts.join(' ')
+}
+
+function parseUserAgentOs(ua: string | null): string | null {
+  if (!ua) return null
+  if (/iphone|ipad|ipod/i.test(ua)) return 'iOS'
+  if (/android/i.test(ua)) return 'Android'
+  if (/mac os|macintosh/i.test(ua)) return 'macOS'
+  if (/windows/i.test(ua)) return 'Windows'
+  if (/linux/i.test(ua)) return 'Linux'
+  return null
+}
+
+function relativeTime(iso: string | null): string | null {
+  if (!iso) return null
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return null
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`
+  const years = Math.floor(months / 12)
+  return `${years} year${years === 1 ? '' : 's'} ago`
 }
