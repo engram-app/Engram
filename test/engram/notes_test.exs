@@ -1370,9 +1370,21 @@ defmodule Engram.NotesTest do
       assert paths == ["Projects/a.md", "Projects/b.md"]
     end
 
-    test "returns {:error, :not_found} when marker doesn't exist or belongs to other vault",
+    test "returns {:error, :not_found} when marker doesn't exist",
          %{user: user, vault: vault} do
       assert {:error, :not_found} = Notes.list_folder_notes_by_id(user, vault, 999_999)
+    end
+
+    test "returns {:error, :not_found} when marker belongs to another vault (RLS)", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+
+      assert {:error, :not_found} =
+               Notes.list_folder_notes_by_id(other_user, other_vault, marker.id)
     end
 
     test "excludes folder markers themselves", %{user: user, vault: vault} do
