@@ -58,6 +58,14 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
       },
+      '/oauth': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
+      '/.well-known': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
       '/socket': {
         target: apiTarget,
         changeOrigin: true,
