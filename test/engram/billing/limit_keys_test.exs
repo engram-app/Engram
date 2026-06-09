@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 26 catalog keys" do
+    test "returns the 27 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 26
+      assert length(keys) == 27
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -57,7 +57,8 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 1
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
-      assert LimitKeys.default_for(:external_queries_per_day, :free) == 100
+      assert LimitKeys.default_for(:external_ai_searches_per_day, :free) == 15
+      assert LimitKeys.default_for(:inapp_searches_per_day, :free) == 60
       assert LimitKeys.default_for(:ai_conversations_per_day, :free) == 5
       assert LimitKeys.default_for(:ai_queries_per_conversation, :free) == 50
       assert LimitKeys.default_for(:ai_queries_per_day, :free) == nil
@@ -99,9 +100,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 78 tuples (26 keys × 3 tiers)" do
+    test "emits 81 tuples (27 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 78
+      assert length(tuples) == 81
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do

@@ -301,7 +301,7 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.RequireActiveSubscription,
       EngramWeb.Plugs.BumpActivity,
       EngramWeb.Plugs.RequireApiRpsBudget,
-      EngramWeb.Plugs.EnforceExternalQueryCap,
+      EngramWeb.Plugs.EnforceSearchCap,
       EngramWeb.Plugs.RequireApiWriteEnabled,
       EngramWeb.Plugs.VaultPlug
     ]

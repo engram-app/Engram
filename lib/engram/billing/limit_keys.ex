@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 78 tuples (26 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 81 tuples (27 keys × 3 tiers)
   """
 
   @catalog %{
@@ -48,11 +48,17 @@ defmodule Engram.Billing.LimitKeys do
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
     api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 10, pro: 30}},
-    # Rolling-24h cap on programmatic ("external tooling") reads. Counts
-    # API-key + OAuth + device-flow + MCP access; web-SPA Clerk-JWT traffic
-    # is exempt. Free placeholder is intentionally generous — the hard
-    # number will be tuned after we see real traffic.
-    external_queries_per_day: %{type: :integer, defaults: %{free: 100, starter: nil, pro: nil}},
+    # Rolling-24h search caps on the Free tier. Split by where the request
+    # came from so a noisy MCP / PAT bot can't burn the user's in-app
+    # budget and vice-versa. Both fire on POST /api/search only — note
+    # reads, manifest pulls, attachment fetches are NOT counted.
+    #
+    # `external_ai_searches_per_day`: API-key + OAuth + device-flow + MCP
+    # access. Tight number on Free because the abuse vector is automated.
+    # `inapp_searches_per_day`: Web SPA (Clerk JWT). Generous because the
+    # cap exists for spam defense, not to throttle the user in the app.
+    external_ai_searches_per_day: %{type: :integer, defaults: %{free: 15, starter: nil, pro: nil}},
+    inapp_searches_per_day: %{type: :integer, defaults: %{free: 60, starter: nil, pro: nil}},
     inactivity_warn_60_days: %{
       type: :boolean,
       defaults: %{free: true, starter: false, pro: false}

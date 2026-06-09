@@ -9,7 +9,8 @@ export type LimitReason =
   | "ai_conversations_per_day_exceeded"
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
-  | "external_queries_per_day_exceeded"
+  | "external_ai_searches_per_day_exceeded"
+  | "inapp_searches_per_day_exceeded"
   | "attachment_must_be_text"
   | "mcp_connections_exceeded"
   | "obsidian_connections_exceeded"
@@ -59,9 +60,13 @@ const TABLE: Record<LimitReason, LimitCopy> = {
     title: "Daily AI query limit reached",
     body: "Upgrade for more.",
   },
-  external_queries_per_day_exceeded: {
-    title: "Daily external-query limit reached",
-    body: "Your Free plan caps programmatic reads from external tools (MCP clients, the Obsidian plugin, API-key scripts). Upgrade for unlimited.",
+  external_ai_searches_per_day_exceeded: {
+    title: "Daily external-tool search limit reached",
+    body: "Your Free plan allows 15 searches per day from MCP clients, the Obsidian plugin, and API-key scripts. Upgrade for unlimited.",
+  },
+  inapp_searches_per_day_exceeded: {
+    title: "Daily in-app search limit reached",
+    body: "Your Free plan allows 60 searches per day in the web app. Upgrade for unlimited.",
   },
   attachment_must_be_text: {
     title: "Free plan: text attachments only",
