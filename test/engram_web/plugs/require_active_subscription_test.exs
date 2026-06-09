@@ -1,38 +1,65 @@
 defmodule EngramWeb.Plugs.RequireActiveSubscriptionTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false because the suspended-branch assertion checks the
+  # configured :upgrade_url and limit_response_test mutates that same
+  # global env mid-flight — a race that crashes us with `nil =~ ...`.
+  use EngramWeb.ConnCase, async: false
 
   alias EngramWeb.Plugs.RequireActiveSubscription
 
+  setup do
+    prev = Application.get_env(:engram, :upgrade_url)
+    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
+    on_exit(fn -> Application.put_env(:engram, :upgrade_url, prev) end)
+    :ok
+  end
+
   describe "call/2" do
-    test "passes through for user with trialing subscription", %{conn: conn} do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "trialing")
-      conn = assign(conn, :current_user, user) |> RequireActiveSubscription.call([])
+    test "passes Free user (no subscription, not suspended)" do
+      user = insert(:user, free_tier_accepted_at: DateTime.utc_now(), suspended_at: nil)
+      conn = build_conn() |> assign(:current_user, user) |> RequireActiveSubscription.call([])
       refute conn.halted
     end
 
-    test "passes through for user with active subscription", %{conn: conn} do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "active")
-      conn = assign(conn, :current_user, user) |> RequireActiveSubscription.call([])
+    test "passes Pro user (active sub, not suspended)" do
+      user =
+        insert(:user, suspended_at: nil)
+        |> with_subscription(tier: "pro", status: "active")
+
+      conn = build_conn() |> assign(:current_user, user) |> RequireActiveSubscription.call([])
       refute conn.halted
     end
 
-    test "halts with 403 for user with no subscription", %{conn: conn} do
-      user = insert(:user)
-      conn = assign(conn, :current_user, user) |> RequireActiveSubscription.call([])
+    test "passes Starter user" do
+      user =
+        insert(:user, suspended_at: nil)
+        |> with_subscription(tier: "starter", status: "active")
+
+      conn = build_conn() |> assign(:current_user, user) |> RequireActiveSubscription.call([])
+      refute conn.halted
+    end
+
+    test "passes a user with neither paid sub nor free_tier_accepted_at (defaults to Free)" do
+      user = insert(:user, free_tier_accepted_at: nil, suspended_at: nil)
+      conn = build_conn() |> assign(:current_user, user) |> RequireActiveSubscription.call([])
+      refute conn.halted
+    end
+
+    test "402 + reason account_suspended when suspended_at set" do
+      user =
+        insert(:user,
+          free_tier_accepted_at: DateTime.utc_now(),
+          suspended_at: DateTime.utc_now()
+        )
+
+      conn = build_conn() |> assign(:current_user, user) |> RequireActiveSubscription.call([])
+
       assert conn.halted
-      assert conn.status == 403
+      assert conn.status == 402
       body = Jason.decode!(conn.resp_body)
-      assert body["error"] == "subscription_required"
-    end
-
-    test "halts with 403 for canceled subscription", %{conn: conn} do
-      user = insert(:user)
-      insert(:subscription, user: user, status: "canceled")
-      conn = assign(conn, :current_user, user) |> RequireActiveSubscription.call([])
-      assert conn.halted
-      assert conn.status == 403
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "account_suspended"
+      assert body["tier"] == "free"
+      assert body["upgrade_url"] =~ "/settings/billing"
     end
   end
 end

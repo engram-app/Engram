@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 24 catalog keys" do
+    test "returns the 27 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 24
+      assert length(keys) == 27
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -39,7 +39,6 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "returns :boolean for feature flags" do
-      assert LimitKeys.type(:realtime_sync_enabled) == :boolean
       assert LimitKeys.type(:reranker_enabled) == :boolean
       assert LimitKeys.type(:api_write_enabled) == :boolean
     end
@@ -57,8 +56,9 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 1
-      assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 12
-      assert LimitKeys.default_for(:realtime_sync_enabled, :free) == false
+      assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
+      assert LimitKeys.default_for(:external_ai_searches_per_day, :free) == 15
+      assert LimitKeys.default_for(:inapp_searches_per_day, :free) == 60
       assert LimitKeys.default_for(:ai_conversations_per_day, :free) == 5
       assert LimitKeys.default_for(:ai_queries_per_conversation, :free) == 50
       assert LimitKeys.default_for(:ai_queries_per_day, :free) == nil
@@ -76,7 +76,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 3_221_225_472
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
-      assert LimitKeys.default_for(:realtime_sync_enabled, :starter) == true
       assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
       assert LimitKeys.default_for(:api_rps_cap, :starter) == 10
     end
@@ -101,9 +100,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 72 tuples (24 keys × 3 tiers)" do
+    test "emits 81 tuples (27 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 72
+      assert length(tuples) == 81
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -135,5 +134,21 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:mcp_connections_cap, :starter) == nil
       assert LimitKeys.default_for(:mcp_connections_cap, :pro) == nil
     end
+  end
+
+  test "attachments_enabled key is defined for all three tiers" do
+    assert LimitKeys.defined?(:attachments_enabled)
+    assert LimitKeys.type(:attachments_enabled) == :boolean
+    assert LimitKeys.default_for(:attachments_enabled, :free) == true
+    assert LimitKeys.default_for(:attachments_enabled, :starter) == true
+    assert LimitKeys.default_for(:attachments_enabled, :pro) == true
+  end
+
+  test "attachments_text_only restricts Free uploads to text/* MIMEs" do
+    assert LimitKeys.defined?(:attachments_text_only)
+    assert LimitKeys.type(:attachments_text_only) == :boolean
+    assert LimitKeys.default_for(:attachments_text_only, :free) == true
+    assert LimitKeys.default_for(:attachments_text_only, :starter) == false
+    assert LimitKeys.default_for(:attachments_text_only, :pro) == false
   end
 end

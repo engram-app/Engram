@@ -136,6 +136,133 @@ defmodule Engram.Embedders.VoyageTest do
     end
   end
 
+  describe "token usage telemetry" do
+    test "emits [:engram, :voyage, :embed, :tokens] when response includes usage", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{
+          "data" => [%{"embedding" => [0.1, 0.2]}],
+          "model" => "voyage-4-large",
+          "usage" => %{"total_tokens" => 42}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _vectors} = Voyage.embed_texts(["hello"], purpose: :query)
+
+        assert_received {:voyage_tokens, %{total_tokens: 42}, %{purpose: :query}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "defaults purpose tag to :index when caller omits opts", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{
+          "data" => [%{"embedding" => [0.1]}],
+          "usage" => %{"total_tokens" => 7}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_default_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _} = Voyage.embed_texts(["hello"])
+        assert_received {:voyage_tokens, %{total_tokens: 7}, %{purpose: :index}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "does NOT emit tokens event when response omits usage field", %{bypass: bypass} do
+      # Defensive: Voyage's documented embedding response always includes
+      # usage, but we should not crash or emit a 0-token event if a future
+      # endpoint shape drops it. Absence-of-event is the contract.
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{"data" => [%{"embedding" => [0.1]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_absent_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _} = Voyage.embed_texts(["hello"])
+        refute_received {:voyage_tokens, _, _}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "does NOT emit tokens event on non-200 response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        Plug.Conn.send_resp(conn, 500, ~s({"error": "server"}))
+      end)
+
+      handler_id = {__MODULE__, :tokens_error_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:error, _} = Voyage.embed_texts(["hello"], retry: false)
+        refute_received {:voyage_tokens, _, _}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+  end
+
   describe "embed_texts/2" do
     test "uses model override when provided", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->

@@ -202,7 +202,7 @@ defmodule Engram.OnboardingTest do
     test "steps stays [:agreement, :billing, :tools, :vault] regardless of profile.uses_obsidian" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
     end
@@ -218,7 +218,7 @@ defmodule Engram.OnboardingTest do
     test "next_step=done when terms accepted, active subscription, profile set (obsidian user with vault)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
@@ -235,14 +235,19 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=done when terms accepted, past_due subscription, profile set (obsidian user with vault)" do
+    test "next_step=billing when terms accepted but subscription is past_due (no explicit Free)" do
+      # Under the Free-tier model + tightened predicate, only `status:"active"`
+      # paid subs resolve to `:starter`/`:pro`; past_due → `tier=:free`. Without
+      # explicit Free acceptance (`free_tier_accepted_at`), `subscription_ok`
+      # fails and the wizard bounces back to `:billing` so the user can either
+      # repair payment or click "Continue with Free".
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "past_due")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
-      assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
+      assert %{terms_ok: true, subscription_ok: false, next_step: :billing} =
                Onboarding.status(user)
     end
 
@@ -601,7 +606,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :vault when fresh-start profile complete but no vault exists" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
 
       assert %{has_vault: false, next_step: :vault} = Onboarding.status(user)
@@ -610,7 +615,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
       assert %{has_vault: false, next_step: :vault} = Onboarding.status(user)
@@ -619,7 +624,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :done for obsidian user once the plugin creates a vault" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
@@ -629,7 +634,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :done for fresh user once a vault has been created" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
 
@@ -669,7 +674,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :tools when terms + subscription ok but no tools yet" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
 
       assert %{
                terms_ok: true,
@@ -682,7 +687,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :vault once tools are POSTed but uses_obsidian still missing" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
 
       assert %{
@@ -696,7 +701,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
 
       assert %{profile_complete: true, has_vault: false, next_step: :vault} =
@@ -706,7 +711,7 @@ defmodule Engram.OnboardingTest do
     test "next_step :done once an obsidian user has a vault row" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
@@ -723,7 +728,7 @@ defmodule Engram.OnboardingTest do
 
     test "next_step :agreement still wins when terms not accepted" do
       user = insert(:user, onboarding_profile: %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
 
       assert %{next_step: :agreement} = Onboarding.status(user)
     end
@@ -758,6 +763,80 @@ defmodule Engram.OnboardingTest do
     test "rejects unknown action atom", %{user: user} do
       assert {:error, %Ecto.Changeset{}} = Onboarding.record_action(user.id, :bogus)
     end
+  end
+
+  describe "accept_free_tier/1" do
+    test "sets free_tier_accepted_at on the user" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      assert {:ok, updated} = Onboarding.accept_free_tier(user)
+      assert updated.free_tier_accepted_at != nil
+    end
+
+    test "is idempotent — second call leaves timestamp untouched" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      {:ok, first} = Onboarding.accept_free_tier(user)
+      {:ok, second} = Onboarding.accept_free_tier(first)
+      assert DateTime.compare(first.free_tier_accepted_at, second.free_tier_accepted_at) == :eq
+    end
+  end
+
+  describe "next_step — Free tier" do
+    setup do
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        content_hash: "canonical",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-15",
+        content_hash: "p",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.reset_version_cache()
+      on_exit(&LegalFixtures.reset_version_cache/0)
+
+      on_exit(fn ->
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+      end)
+
+      :ok
+    end
+
+    test "user with free_tier_accepted_at and other steps done → :done" do
+      user = insert(:user, free_tier_accepted_at: DateTime.utc_now(), onboarding_profile: %{})
+      seed_onboarding_complete_except_billing(user)
+      assert %{next_step: :done} = Onboarding.status(user)
+    end
+
+    test "user without free_tier or paid subscription → :billing" do
+      # Under the tightened predicate (Option C), users must EXPLICITLY accept
+      # Free via the onboarding wizard (`free_tier_accepted_at` set). Without
+      # that acceptance, `subscription_ok` fails and `next_step` is `:billing`.
+      user = insert(:user, free_tier_accepted_at: nil, onboarding_profile: %{})
+      seed_onboarding_complete_except_billing(user)
+      assert %{next_step: :billing} = Onboarding.status(user)
+    end
+  end
+
+  # Bring user to "all gates pass except billing/free-tier": accept current
+  # ToS, set profile (tools + uses_obsidian), and create a vault. Mirrors the
+  # setup used by the "next_step=done" tests in `status/1 when billing is
+  # enabled`. Caller controls billing state (subscription row or
+  # `free_tier_accepted_at`).
+  defp seed_onboarding_complete_except_billing(user) do
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+    insert(:vault, user: user)
+    :ok
   end
 
   defp with_agreement_query_count(fun) do

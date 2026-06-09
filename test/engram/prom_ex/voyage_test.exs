@@ -107,7 +107,11 @@ defmodule Engram.PromEx.VoyageTest do
 
       assert_receive {:embed_stop, ^ref, measurements, metadata}, 5_000
       assert is_integer(measurements[:duration])
-      assert metadata[:status] in [:ok, :error]
+      # The Voyage worker emits :throttled when a prior call left the
+      # in-process rate limiter saturated — same telemetry shape as a
+      # network success/failure, so it's a valid status the test cares
+      # about ("stop fires with a status, regardless of outcome").
+      assert metadata[:status] in [:ok, :error, :throttled]
       assert metadata[:purpose] in [:query, :index]
     end
   end

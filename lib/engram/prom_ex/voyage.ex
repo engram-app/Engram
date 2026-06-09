@@ -7,6 +7,9 @@ defmodule Engram.PromEx.Voyage do
     * `[:engram, :voyage, :embed, :start]`
     * `[:engram, :voyage, :embed, :stop]` — `%{duration: native}`, metadata
       `%{status: :ok | :error, purpose: :index | :query}`
+    * `[:engram, :voyage, :embed, :tokens]` — `%{total_tokens: integer}`,
+      metadata `%{purpose: :index | :query}`. Only emitted on a successful
+      200 with `usage.total_tokens` present in the Voyage payload.
 
   Metrics:
 
@@ -19,6 +22,11 @@ defmodule Engram.PromEx.Voyage do
     * `engram_prom_ex_voyage_client_rate_limited_total` — counter for the
       synthetic-429 path (`[:engram, :embed, :client_rate_limited]`,
       already emitted by the adapter), tagged by `:purpose`.
+    * `engram_prom_ex_voyage_embed_tokens_total` — sum of `total_tokens`
+      per request, tagged by `:purpose`. Drives the Grafana tokens/min +
+      estimated-cost panels (the dashboard expr multiplies by the
+      per-1M-token price as a Grafana constant). NOT per-tenant — see
+      `Engram.UsageMeters` for tenant-attributed token accounting.
 
   Cardinality contract: only bounded labels (`status`, `purpose`). NEVER
   add `user_id`, `vault_id`, model strings, or any per-tenant identifier
@@ -28,6 +36,7 @@ defmodule Engram.PromEx.Voyage do
   use PromEx.Plugin
 
   @embed_stop_event [:engram, :voyage, :embed, :stop]
+  @embed_tokens_event [:engram, :voyage, :embed, :tokens]
   @client_rate_limited_event [:engram, :embed, :client_rate_limited]
 
   @impl true
@@ -60,6 +69,14 @@ defmodule Engram.PromEx.Voyage do
           event_name: @client_rate_limited_event,
           description:
             "Synthetic 429s from the local Hammer throttle — purpose-tagged for tuning :voyage_rpm vs :voyage_query_rpm.",
+          tags: [:purpose]
+        ),
+        sum(
+          metric_prefix ++ [:embed, :tokens, :total],
+          event_name: @embed_tokens_event,
+          measurement: :total_tokens,
+          description:
+            "Voyage embedding tokens billed, summed per request. Drives tokens/min and estimated-cost dashboard panels. Not per-tenant — see Engram.UsageMeters.",
           tags: [:purpose]
         )
       ]

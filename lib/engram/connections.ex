@@ -72,6 +72,24 @@ defmodule Engram.Connections do
   end
 
   @doc """
+  Returns the most recent `revoked_at` timestamp across the user's device
+  refresh tokens, or `nil` if no device family has ever been revoked.
+
+  Used by `EngramWeb.Plugs.EnforceDeviceCap` to detect whether a Free user
+  is inside the `device_swap_cooldown_hours` window after revoking a
+  device. Family-grain (not row-grain): one revoke per swap.
+  """
+  @spec most_recent_device_revoke(integer()) :: DateTime.t() | nil
+  def most_recent_device_revoke(user_id) do
+    from(rt in DeviceRefreshToken,
+      where: rt.user_id == ^user_id,
+      where: not is_nil(rt.revoked_at),
+      select: max(rt.revoked_at)
+    )
+    |> Repo.one()
+  end
+
+  @doc """
   Revokes (sets `revoked_at = now`) all active refresh tokens for `(user_id, client_id, vault_id)`.
 
   When `vault_id` is `nil`, ALL vault scopes for that user+client are revoked —

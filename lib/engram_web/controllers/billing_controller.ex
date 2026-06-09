@@ -3,6 +3,7 @@ defmodule EngramWeb.BillingController do
 
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
+  alias Engram.Connections
 
   require Logger
 
@@ -12,7 +13,7 @@ defmodule EngramWeb.BillingController do
 
     json(conn, %{
       tier: to_string(Billing.tier(user)),
-      active: Billing.active?(user),
+      active: Billing.tier(user) in [:starter, :pro],
       trial_days_remaining: Billing.trial_days_remaining(user),
       subscription:
         if sub do
@@ -25,9 +26,45 @@ defmodule EngramWeb.BillingController do
       caps: %{
         obsidian_connections: cap_json(Billing.effective_limit(user, :obsidian_connections_cap)),
         mcp_connections: cap_json(Billing.effective_limit(user, :mcp_connections_cap)),
-        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled))
-      }
+        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled)),
+        vaults: cap_json(Billing.effective_limit(user, :vaults_cap))
+      },
+      # Bundled into /billing/status so the proactive cap UI on /link and
+      # /oauth/consent only needs ONE fetch to decide whether to render the
+      # disconnect panel vs the normal flow.
+      current_connections: %{
+        obsidian: Connections.count_active(user.id, :obsidian),
+        mcp: Connections.count_active(user.id, :mcp)
+      },
+      # Free-tier swap cooldown: hours remaining until the user is allowed
+      # to revoke + add another obsidian device family. `nil` when no
+      # cooldown is in effect (no recent revoke, cooldown disabled, or
+      # window already elapsed). Lets /link render a cooldown-specific
+      # banner + disable Authorize BEFORE the user trips the 402.
+      device_swap_cooldown_remaining_hours: swap_cooldown_remaining(user)
     })
+  end
+
+  # Mirrors `EnforceDeviceCap.remaining_cooldown_hours/2`: computed from
+  # the most recent obsidian device revoke + the user's effective
+  # `device_swap_cooldown_hours`. Returns the hour count (rounded UP) when
+  # the user is still inside the window, else `nil`.
+  defp swap_cooldown_remaining(user) do
+    cooldown_hours = Billing.effective_limit(user, :device_swap_cooldown_hours)
+
+    case Connections.most_recent_device_revoke(user.id) do
+      %DateTime{} = revoked_at when is_integer(cooldown_hours) and cooldown_hours > 0 ->
+        elapsed_seconds = DateTime.diff(DateTime.utc_now(), revoked_at, :second)
+        window_seconds = cooldown_hours * 3600
+
+        if elapsed_seconds < window_seconds do
+          # Round up so a sub-hour remainder still surfaces as ≥ 1.
+          div(window_seconds - elapsed_seconds + 3599, 3600)
+        end
+
+      _ ->
+        nil
+    end
   end
 
   @doc """

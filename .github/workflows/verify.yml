@@ -69,10 +69,12 @@ env:
   # The `||` fallback covers Dependabot PRs, which by GitHub policy don't receive
   # workflow secrets. Without it, `secrets.CI_ENCRYPTION_MASTER_KEY` evaluates to
   # empty string and Phoenix boot crashes with "ENCRYPTION_MASTER_KEY is required
-  # when KEY_PROVIDER=local". The fallback is a known constant — no secret value
-  # since the CI DB is recreated per run.
+  # when KEY_PROVIDER=local". The fallback must base64-decode to exactly 32 bytes
+  # (Engram.Crypto.Config.decode_master_key!/2) — using 32 zero bytes here so the
+  # value is unambiguously a CI fixture, not a leaked key. Per the doc above the
+  # CI database is recreated per run; nothing the fallback wraps survives.
   KEY_PROVIDER: "local"
-  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'ci-dependabot-fallback-key-ephemeral-only-not-secret' }}
+  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
 
 jobs:
   # Fingerprint: content-hash of every source path that affects test
@@ -1889,6 +1891,11 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
           mix ecto.create
+          # Idempotent cluster bootstrap (engram_app role + DEFAULT
+          # PRIVILEGES). Must run BEFORE migrate — baseline migration's
+          # structure dump references engram_app in GRANT statements.
+          # Mirrors prod entrypoint.sh ordering and the unit-tests job.
+          mix engram.prepare_database
           mix ecto.migrate
           echo "DB now at prev release schema."
 

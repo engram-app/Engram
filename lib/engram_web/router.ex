@@ -219,19 +219,36 @@ defmodule EngramWeb.Router do
     post "/billing/plan-change/preview", BillingController, :plan_change_preview
     post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
 
+    # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
+    # JWT after the React consent UI is approved. Returns JSON
+    # `{redirect_uri: "..."}` so the SPA can `window.location.assign`.
+    post "/oauth/authorize/consent", OAuthAuthorizeController, :consent
+  end
+
+  # Onboarding scope — same as the user-scoped pipeline above, but WITHOUT
+  # `RequireApiRpsBudget`. Free tier defaults `api_rps_cap=0` (Pricing v2 §G),
+  # which would 429 the very first onboarding write for any Free user
+  # authenticating with an API key — they could never complete onboarding.
+  # Onboarding endpoints are bounded by the Auth-pipe rate limit; per-plan
+  # RPS gating only applies once the user is past onboarding.
+  scope "/api", EngramWeb do
+    pipe_through [
+      :api,
+      EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.RotationLockCheck
+    ]
+
     # Onboarding wizard — status + TOS acceptance. Exempt from
     # RequireOnboarding (the plug is only on the vault-scoped pipeline)
     # so the wizard can actually function before completion.
     get "/onboarding/status", OnboardingController, :status
     post "/onboarding/accept-terms", OnboardingController, :accept_terms
+    # Free-tier acceptance — Continue with Free CTA in /onboard/billing.
+    # Sets `free_tier_accepted_at` (idempotent) and returns updated status.
+    post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
     # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
     patch "/onboarding/profile", OnboardingController, :set_profile
     post "/onboarding/actions", OnboardingController, :record
-
-    # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
-    # JWT after the React consent UI is approved. Returns JSON
-    # `{redirect_uri: "..."}` so the SPA can `window.location.assign`.
-    post "/oauth/authorize/consent", OAuthAuthorizeController, :consent
   end
 
   # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
@@ -281,8 +298,10 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.DeviceFingerprint,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireOnboarding,
+      EngramWeb.Plugs.RequireActiveSubscription,
       EngramWeb.Plugs.BumpActivity,
       EngramWeb.Plugs.RequireApiRpsBudget,
+      EngramWeb.Plugs.EnforceSearchCap,
       EngramWeb.Plugs.RequireApiWriteEnabled,
       EngramWeb.Plugs.VaultPlug
     ]

@@ -5,6 +5,7 @@ import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import WaitlistPage from './auth/waitlist'
 import BillingPage from './billing/billing-page'
+import { UpgradeDialogProvider } from './billing/upgrade-dialog-provider'
 import { config } from './config'
 import AdminPanel from './features/admin/AdminPanel'
 import ResetPasswordPage from './features/auth/ResetPasswordPage'
@@ -36,8 +37,23 @@ const AccountPage = lazy(() =>
     : import('./settings/account-page-local'),
 )
 
+// Root layout — mounts the UpgradeDialogProvider INSIDE the router so the
+// dialog's `useNavigate` works, and so any nested API call that 402s opens
+// the modal via the module-level handler. Wrapping `RouterProvider` from
+// `main.tsx` would not give the provider router context.
+function RootLayout() {
+  return (
+    <UpgradeDialogProvider>
+      <Outlet />
+    </UpgradeDialogProvider>
+  )
+}
+
 export const router = createBrowserRouter(
   [
+    {
+      element: <RootLayout />,
+      children: [
     // Public routes
     { path: ROUTES.SIGN_IN, element: <SignInPage /> },
     { path: ROUTES.SIGN_UP, element: <SignUpPage /> },
@@ -67,6 +83,11 @@ export const router = createBrowserRouter(
         // requires the user to complete device-flow here before progressing.
         // Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
         { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
+
+        // OAuth consent — reachable mid-onboarding so an MCP client (e.g.
+        // Claude Desktop) initiating a connection during signup can complete
+        // the OAuth dance without being bounced to /onboard.
+        { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
 
         // Dashboard tree — gated by OnboardingGate.
         {
@@ -120,7 +141,6 @@ export const router = createBrowserRouter(
                 },
               ],
             },
-            { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
           ],
         },
       ],
@@ -128,5 +148,7 @@ export const router = createBrowserRouter(
 
     // Catch-all (public — typos shouldn't trigger Clerk redirect)
     { path: '*', element: <NotFoundPage /> },
+      ],
+    },
   ],
 )

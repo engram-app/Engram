@@ -58,6 +58,16 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
       },
+      // OAuth API endpoints — Phoenix-served JSON. /oauth/consent is a SPA
+      // route (React renders consent UI) so we DON'T proxy that one.
+      '/oauth/register': { target: apiTarget, changeOrigin: true },
+      '/oauth/token': { target: apiTarget, changeOrigin: true },
+      '/oauth/revoke': { target: apiTarget, changeOrigin: true },
+      '/oauth/authorize': { target: apiTarget, changeOrigin: true },
+      '/.well-known': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
       '/socket': {
         target: apiTarget,
         changeOrigin: true,

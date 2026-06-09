@@ -68,11 +68,26 @@ defmodule EngramWeb.RateLimiterTest do
   describe "Redis backend start options" do
     alias EngramWeb.RateLimiter.Redis, as: RedisLimiter
 
-    test "start_opts/1 passes only :url through to Redix" do
-      # :prefix and :timeout are compile-time `use Hammer` options, NOT Redix
-      # start options. Only :url is a valid runtime start option for the
-      # Hammer.Redis backend, so the runtime config must pass nothing else.
+    test "start_opts/1 omits :socket_opts for plain-tcp redis:// URLs" do
+      # `customize_hostname_check` is an `:ssl`-only option. Redix passes
+      # `:socket_opts` to `:gen_tcp.connect/4` for `redis://` URLs which
+      # validates strictly and rejects it with ArgumentError, boot-looping
+      # the limiter. MUST be omitted entirely on plain-tcp.
       assert RedisLimiter.start_opts("redis://localhost:6379") == [url: "redis://localhost:6379"]
+    end
+
+    test "start_opts/1 appends TLS-wildcard hostname-match fun for rediss:// URLs" do
+      # AWS ElastiCache/Valkey TLS endpoints present wildcard certs
+      # (`*.cluster.cache.amazonaws.com`). Erlang's default match_fun is
+      # strict literal — it rejects them on leftmost-label hosts like
+      # `master.cluster.cache.amazonaws.com`. The `:https`-shape match_fun
+      # applies RFC 6125 wildcard rules.
+      assert [
+               url: "rediss://master.example:6379",
+               socket_opts: [customize_hostname_check: [match_fun: match_fun]]
+             ] = RedisLimiter.start_opts("rediss://master.example:6379")
+
+      assert is_function(match_fun)
     end
 
     test "limiter starts under a supervisor with the production opt shape" do

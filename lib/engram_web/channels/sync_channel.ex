@@ -11,7 +11,6 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
-  alias Engram.Billing
   alias Engram.Crypto.RotationGate
   alias Engram.{Notes, Vaults}
   alias EngramWeb.Presence
@@ -22,20 +21,8 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def join("sync:" <> ids, params, socket) do
-    user = socket.assigns.current_user
-
-    # Pricing v2 §G — Free's realtime_sync_enabled is false. Gate is
-    # enforced when :realtime_sync_gate_enabled config is true (set on
-    # launch day; default false so pre-v2-launch Free users keep syncing).
-    if gate_enabled?() and
-         Billing.effective_limit(user, :realtime_sync_enabled) == false do
-      {:error, %{reason: "channel_forbidden_on_plan"}}
-    else
-      do_join(ids, params, socket, user)
-    end
+    do_join(ids, params, socket, socket.assigns.current_user)
   end
-
-  defp gate_enabled?, do: Application.get_env(:engram, :realtime_sync_gate_enabled, false)
 
   defp do_join(ids, params, socket, user) do
     case String.split(ids, ":") do

@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { VaultCreateForm } from '@/components/vault-create-form'
 import { SettingsSectionCard } from '@/settings/account/section-card'
-import { useVaults, useUpdateVault, type Vault } from '@/api/queries'
+import { useVaults, useUpdateVault, useBillingStatus, type Vault } from '@/api/queries'
 import { DeleteVaultDialog } from './delete-vault-dialog'
 
 const inputClass =
@@ -12,20 +12,41 @@ const inputClass =
 
 export function ActiveVaultsSection() {
   const { data: vaults, isLoading } = useVaults()
+  const { data: billing } = useBillingStatus()
   const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
+  const vaultsCap = billing?.caps.vaults ?? null
+  const vaultCount = vaults?.length ?? 0
+  const atCap = typeof vaultsCap === 'number' && vaultsCap > 0 && vaultCount >= vaultsCap
+  const titleSuffix = vaultsCap != null ? ` (${vaultCount} / ${vaultsCap})` : ''
+
   return (
     <SettingsSectionCard
-      title="Vaults"
+      title={`Vaults${titleSuffix}`}
       description="Rename, set a default, or delete your vaults."
       headerAction={
-        <Button onClick={() => setCreateOpen((o) => !o)}>
-          {createOpen ? 'Cancel' : 'New vault'}
-        </Button>
+        !atCap ? (
+          <Button onClick={() => setCreateOpen((o) => !o)}>
+            {createOpen ? 'Cancel' : 'New vault'}
+          </Button>
+        ) : undefined
       }
     >
-      {createOpen && (
+      {atCap && (
+        <aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm text-foreground">
+            Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
+          </p>
+          <a
+            href="/settings/billing"
+            className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Upgrade
+          </a>
+        </aside>
+      )}
+      {createOpen && !atCap && (
         <section className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
           <VaultCreateForm
             autoFocus

@@ -3,6 +3,10 @@ defmodule EngramWeb.StorageControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
+    # Free-tier launch §4.5 — attachment uploads now gate on attachments_enabled,
+    # which is paid-only. Tests that POST to /api/attachments need an active
+    # Pro subscription to clear the controller gate.
+    insert(:subscription, user: user, tier: "pro", status: "active")
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)

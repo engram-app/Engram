@@ -10,7 +10,6 @@ defmodule Engram.Onboarding do
   step (questionnaire + first vault) gates in every mode.
   """
 
-  alias Engram.Billing
   alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Onboarding.Action
@@ -160,7 +159,15 @@ defmodule Engram.Onboarding do
     {terms_ok, current_tos, current_privacy, terms_notice} =
       terms_state(user, billing_active)
 
-    subscription_ok = if billing_active, do: Billing.active?(user), else: true
+    # Under the Free-tier model: paid tiers (:starter / :pro) pass on tier alone;
+    # Free users must EXPLICITLY accept the Free tier via the onboarding wizard
+    # (`free_tier_accepted_at` set). Self-host (`billing_enabled=false`)
+    # auto-passes without consulting the resolver.
+    subscription_ok =
+      not Application.get_env(:engram, :billing_enabled, true) or
+        Engram.Billing.tier(user) in [:starter, :pro] or
+        not is_nil(user.free_tier_accepted_at)
+
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
@@ -369,6 +376,20 @@ defmodule Engram.Onboarding do
 
   defp profile_has_tools?(%{"tools" => [_ | _]}), do: true
   defp profile_has_tools?(_), do: false
+
+  @doc """
+  Mark the user as having chosen the Free tier during onboarding. Idempotent:
+  if `free_tier_accepted_at` is already set, returns the user unchanged.
+  """
+  @spec accept_free_tier(Engram.Accounts.User.t()) ::
+          {:ok, Engram.Accounts.User.t()} | {:error, Ecto.Changeset.t()}
+  def accept_free_tier(%{free_tier_accepted_at: %DateTime{}} = user), do: {:ok, user}
+
+  def accept_free_tier(%Engram.Accounts.User{} = user) do
+    user
+    |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
+    |> Repo.update()
+  end
 
   @doc """
   Record an onboarding milestone for `user_id`. Idempotent — re-recording the

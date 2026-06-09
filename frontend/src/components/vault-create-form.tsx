@@ -36,7 +36,13 @@ export function VaultCreateForm({
           setName('')
           onCreated?.(res.vault.id)
         },
-        onError: () => toast.error('Could not create vault (limit reached?)'),
+        onError: (e) => {
+          // 402 cap errors are already surfaced by UpgradeDialogProvider via
+          // the central LimitExceededError handler — don't double-render as a
+          // toast.
+          if (e instanceof Error && e.name === 'LimitExceededError') return
+          toast.error('Could not create vault')
+        },
       },
     )
   }

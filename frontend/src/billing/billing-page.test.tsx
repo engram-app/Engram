@@ -95,6 +95,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
           vaults_cap: null,
         }
       if (url === '/me') return { user: ME }
+      if (url === '/onboarding/status') return { next_step: 'tools', enabled: true }
       throw new Error(`unexpected GET ${url}`)
     })
 
@@ -151,6 +152,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
           vaults_cap: null,
         }
       if (url === '/me') return { user: ME }
+      if (url === '/onboarding/status') return { next_step: 'tools', enabled: true }
       throw new Error(`unexpected GET ${url}`)
     })
   }
@@ -364,6 +366,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
           vaults_cap: null,
         }
       if (url === '/me') return { user: ME }
+      if (url === '/onboarding/status') return { next_step: 'tools', enabled: true }
       throw new Error(`unexpected GET ${url}`)
     })
 

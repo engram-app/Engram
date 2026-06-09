@@ -84,7 +84,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
   test "halts 403 with missing=[profile,terms] when only subscription is satisfied",
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
@@ -96,7 +96,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
@@ -110,7 +110,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
@@ -120,7 +120,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
@@ -133,7 +133,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
     {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
