@@ -297,6 +297,15 @@ defmodule EngramWeb.Router do
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 
+    # Notes batch ops — IdempotencyKey enforces X-Idempotency-Key + replay cache
+    # so retries (mobile flaps, double-clicks) don't double-execute. The plug
+    # halts with the cached response BEFORE the action runs.
+    scope "/" do
+      pipe_through EngramWeb.Plugs.IdempotencyKey
+      post "/notes/batch-delete", NotesController, :batch_delete
+      post "/notes/batch-move", NotesController, :batch_move
+    end
+
     # Metadata
     get "/tags", TagsController, :index
     get "/folders/explicit", FoldersController, :explicit
