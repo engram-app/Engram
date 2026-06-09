@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 75 tuples (25 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 72 tuples (24 keys × 3 tiers)
   """
 
   @catalog %{
@@ -30,10 +30,6 @@ defmodule Engram.Billing.LimitKeys do
     },
     concurrent_devices: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
-    realtime_sync_enabled: %{
-      type: :boolean,
-      defaults: %{free: false, starter: true, pro: true}
-    },
     ai_conversations_per_day: %{type: :integer, defaults: %{free: 5, starter: nil, pro: nil}},
     ai_queries_per_conversation: %{
       type: :integer,

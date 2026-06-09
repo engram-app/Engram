@@ -9,7 +9,6 @@ export type LimitReason =
   | "ai_conversations_per_day_exceeded"
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
-  | "realtime_disabled"
   | "mcp_connections_exceeded"
   | "obsidian_connections_exceeded"
   | "account_suspended"
@@ -57,10 +56,6 @@ const TABLE: Record<LimitReason, LimitCopy> = {
   ai_queries_per_day_exceeded: {
     title: "Daily AI query limit reached",
     body: "Upgrade for more.",
-  },
-  realtime_disabled: {
-    title: "Realtime sync is a Pro feature",
-    body: "Upgrade for live sync.",
   },
   mcp_connections_exceeded: {
     title: "External connection limit reached",

@@ -284,14 +284,6 @@ if System.get_env("REQUIRE_PHONE_FOR_EMBED") in ["1", "true"] do
   config :engram, :require_phone_for_embed, true
 end
 
-# Pricing v2 §G — sync channel realtime_sync_enabled gate. Default off so
-# pre-v2-launch Free users keep their realtime sync. Cloud ops flips to
-# "true" on launch day; Free users joining sync:* get
-# %{reason: "channel_forbidden_on_plan"}.
-if System.get_env("REALTIME_SYNC_GATE_ENABLED") in ["1", "true"] do
-  config :engram, :realtime_sync_gate_enabled, true
-end
-
 # Pricing v2 §H — attachment MIME / extension whitelist self-host knobs.
 # Default: gate is ON. Operators who want to allow executables (e.g.
 # distributing an internal tool from a self-hosted vault) set

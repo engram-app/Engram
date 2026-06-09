@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 25 catalog keys" do
+    test "returns the 24 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 25
+      assert length(keys) == 24
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -39,7 +39,6 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "returns :boolean for feature flags" do
-      assert LimitKeys.type(:realtime_sync_enabled) == :boolean
       assert LimitKeys.type(:reranker_enabled) == :boolean
       assert LimitKeys.type(:api_write_enabled) == :boolean
     end
@@ -58,7 +57,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 1
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
-      assert LimitKeys.default_for(:realtime_sync_enabled, :free) == false
       assert LimitKeys.default_for(:ai_conversations_per_day, :free) == 5
       assert LimitKeys.default_for(:ai_queries_per_conversation, :free) == 50
       assert LimitKeys.default_for(:ai_queries_per_day, :free) == nil
@@ -76,7 +74,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 3_221_225_472
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
-      assert LimitKeys.default_for(:realtime_sync_enabled, :starter) == true
       assert LimitKeys.default_for(:ai_queries_per_day, :starter) == 500
       assert LimitKeys.default_for(:api_rps_cap, :starter) == 10
     end
@@ -101,9 +98,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 75 tuples (25 keys × 3 tiers)" do
+    test "emits 72 tuples (24 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 75
+      assert length(tuples) == 72
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
