@@ -69,7 +69,7 @@ async function dcrRegister(clientName) {
       grant_types: ['authorization_code'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: 'mcp.access',
+      scope: 'mcp',
     }),
   });
   if (!res.ok) throw new Error(`DCR failed: ${res.status} ${await res.text()}`);
@@ -93,7 +93,7 @@ async function startConnect(label) {
     url.searchParams.set('code_challenge', challenge);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('state', state);
-    url.searchParams.set('scope', 'mcp.access');
+    url.searchParams.set('scope', 'mcp');
     log(`Redirecting to /oauth/authorize as ${label}…`);
     window.location.href = url.toString();
   } catch (err) {

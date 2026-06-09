@@ -10,6 +10,8 @@ export type LimitReason =
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
   | "realtime_disabled"
+  | "mcp_connections_exceeded"
+  | "obsidian_connections_exceeded"
   | "account_suspended"
   | "no_tier"
 
@@ -59,6 +61,14 @@ const TABLE: Record<LimitReason, LimitCopy> = {
   realtime_disabled: {
     title: "Realtime sync is a Pro feature",
     body: "Upgrade for live sync.",
+  },
+  mcp_connections_exceeded: {
+    title: "MCP connection limit reached",
+    body: "Your Free plan includes 1 active MCP connection (Claude Desktop, Claude Code, Cursor, etc.). Disconnect the existing one in Settings → Connections, or upgrade for unlimited connections.",
+  },
+  obsidian_connections_exceeded: {
+    title: "Obsidian connection limit reached",
+    body: "Your Free plan includes 1 active Obsidian vault connection. Disconnect the existing one in Settings → Connections, or upgrade to connect more vaults.",
   },
   account_suspended: {
     title: "Account suspended",

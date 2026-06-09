@@ -84,6 +84,11 @@ export const router = createBrowserRouter(
         // Sits OUTSIDE the OnboardingGate to dodge the redirect-to-/onboard.
         { path: ROUTES.DEVICE_LINK, element: <DeviceLinkPage /> },
 
+        // OAuth consent — reachable mid-onboarding so an MCP client (e.g.
+        // Claude Desktop) initiating a connection during signup can complete
+        // the OAuth dance without being bounced to /onboard.
+        { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
+
         // Dashboard tree — gated by OnboardingGate.
         {
           element: <OnboardingGate />,
@@ -136,7 +141,6 @@ export const router = createBrowserRouter(
                 },
               ],
             },
-            { path: ROUTES.OAUTH_CONSENT, element: <OAuthAuthorizePage /> },
           ],
         },
       ],
