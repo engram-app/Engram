@@ -58,7 +58,11 @@ function folderLoaderItem(deps: LoaderDeps, id: number): LoaderItem | undefined 
 }
 
 function noteLoaderItem(deps: LoaderDeps, id: number): LoaderItem | undefined {
-  // Note may live in any cached folder-notes-by-id list. Search them.
+  // Root notes live in deps.rootNotes (the by-id endpoint requires a
+  // non-null folder id, so root uses the path-keyed hook upstream).
+  const rootHit = deps.rootNotes.find(n => n.id === id)
+  if (rootHit) return { itemId: formatItemId({ kind: 'note', id }), item: noteToTreeItem(rootHit), isFolder: false }
+  // Otherwise the note lives in some cached folder-notes-by-id list.
   for (const [, list] of deps.qc.getQueriesData<NoteSummary[]>({ queryKey: ['folder-notes-by-id'] })) {
     const hit = list?.find(n => n.id === id)
     if (hit) return { itemId: formatItemId({ kind: 'note', id }), item: noteToTreeItem(hit), isFolder: false }
