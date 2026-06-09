@@ -124,6 +124,61 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:user_id] == nil
   end
 
+  test "captures x-amzn-mtls-clientcert-subject header into metadata when ALB injects it" do
+    # ALB in passthrough or verify mode injects this header on successful
+    # mTLS handshake with a CF-presented per-hostname AOP cert. The
+    # value is the leaf cert's subject DN. Logging it lets us confirm
+    # CF→ALB mTLS is intact from the backend side without poking the
+    # ALB directly.
+    subject = "CN=cloudflare-origin-pull.engram.page,O=Engram,OU=Origin-Auth"
+
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/health",
+      query_string: "",
+      status: 200,
+      assigns: %{},
+      req_headers: [{"x-amzn-mtls-clientcert-subject", subject}]
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :endpoint, :stop],
+          %{duration: 100_000},
+          %{conn: conn}
+        )
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:mtls_clientcert_subject] == subject
+  end
+
+  test "metadata mtls_clientcert_subject is nil when no ALB header present (dev/test/AOP off)" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/health",
+      query_string: "",
+      status: 200,
+      assigns: %{},
+      req_headers: []
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :endpoint, :stop],
+          %{duration: 100_000},
+          %{conn: conn}
+        )
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:mtls_clientcert_subject] == nil
+  end
+
   defp find_request_event(events) do
     Enum.find(events, fn e ->
       msg = render_msg(e.msg)
