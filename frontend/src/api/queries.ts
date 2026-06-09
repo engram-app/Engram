@@ -129,6 +129,25 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
   return query
 }
 
+// Headless-tree consumers key folder nodes by id and fetch their note
+// children via the by-id endpoint (Task 6). Path-keyed `useFolderNotes`
+// stays in place for legacy consumers; new tree code uses this hook so
+// rename / move events don't invalidate by stale path keys.
+export function useFolderNotesById(
+  folderId: number | null,
+  opts: { enabled?: boolean } = {},
+) {
+  const vaultId = useActiveVaultId()
+  return useQuery({
+    queryKey: ['folder-notes-by-id', vaultId, folderId],
+    queryFn: () =>
+      api
+        .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
+        .then((r) => r.notes),
+    enabled: folderId != null && (opts.enabled ?? true),
+  })
+}
+
 export function useNote(id: number | null) {
   const vaultId = useActiveVaultId()
   return useQuery({

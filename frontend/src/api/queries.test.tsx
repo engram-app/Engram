@@ -44,6 +44,7 @@ import {
   useDeleteFolder,
   useDeleteNote,
   useDuplicateNote,
+  useFolderNotesById,
   useFolders,
   useNote,
   usePlanChangePreview,
@@ -654,6 +655,41 @@ describe('optimistic rename folder — rewrites cached notes under old prefix', 
 // Folder type and the parsed query data must surface both fields
 // verbatim. `name` continues to carry the FULL folder path — that
 // shape is load-bearing for existing consumers and stays.
+
+describe('useFolderNotesById', () => {
+  it('fetches notes for the given folder id', async () => {
+    get.mockResolvedValue({
+      notes: [
+        {
+          id: 100,
+          path: 'foo/a.md',
+          title: 'A',
+          folder: 'foo',
+          tags: [],
+          version: 1,
+          mtime: 's',
+          created_at: 's',
+          updated_at: 's',
+        },
+      ],
+    })
+
+    const { result } = renderHook(() => useFolderNotesById(42), { wrapper })
+    await waitFor(() => expect(result.current.data).toBeDefined())
+
+    expect(get).toHaveBeenCalledWith('/folders/by-id/42/notes')
+    expect(result.current.data?.[0]).toMatchObject({
+      id: expect.any(Number),
+      path: expect.any(String),
+    })
+  })
+
+  it('disabled when folderId is null', () => {
+    const { result } = renderHook(() => useFolderNotesById(null), { wrapper })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(get).not.toHaveBeenCalled()
+  })
+})
 
 describe('Folder type', () => {
   it('exposes id (number), parent_id (number | null), name (string), count (number)', () => {
