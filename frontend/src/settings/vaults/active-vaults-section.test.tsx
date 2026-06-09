@@ -21,7 +21,10 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 import { ActiveVaultsSection } from './active-vaults-section'
 
 describe('ActiveVaultsSection', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    billingState.current = { caps: { vaults: null } }
+  })
 
   it('lists vaults with counts and marks the default', () => {
     render(<ActiveVaultsSection />)
@@ -46,5 +49,24 @@ describe('ActiveVaultsSection', () => {
     render(<ActiveVaultsSection />)
     fireEvent.click(screen.getByRole('button', { name: /set .*personal.* as default/i }))
     expect(updateMutate).toHaveBeenCalledWith({ id: 2, is_default: true }, expect.anything())
+  })
+
+  it('shows the upgrade banner and hides New vault when at Free cap', () => {
+    // 2 vaults in setup; pin Free cap=1 so we're over.
+    billingState.current = { caps: { vaults: 1 } }
+    render(<ActiveVaultsSection />)
+    expect(screen.queryByRole('button', { name: /new vault/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/Free plan allows 1 vault/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /upgrade/i })).toBeInTheDocument()
+    // Counter in the section title surfaces N / cap.
+    expect(screen.getByText(/Vaults \(2 \/ 1\)/i)).toBeInTheDocument()
+  })
+
+  it('keeps New vault enabled when below cap', () => {
+    billingState.current = { caps: { vaults: 5 } }
+    render(<ActiveVaultsSection />)
+    expect(screen.getByRole('button', { name: /new vault/i })).toBeInTheDocument()
+    expect(screen.queryByText(/Free plan allows/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Vaults \(2 \/ 5\)/i)).toBeInTheDocument()
   })
 })
