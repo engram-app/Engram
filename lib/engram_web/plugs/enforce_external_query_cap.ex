@@ -14,8 +14,6 @@ defmodule EngramWeb.Plugs.EnforceExternalQueryCap do
   surface routes it the same way every other 402 cap rejection does.
   """
 
-  import Plug.Conn
-
   alias Engram.Billing
   alias EngramWeb.{LimitResponse, RateLimiter}
 
