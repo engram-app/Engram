@@ -7,6 +7,21 @@ defmodule Engram.Embedders.Voyage do
   bulk indexing burst cannot starve synchronous user search. Callers should
   pass `purpose: :query` for search/RAG paths; everything else (EmbedNote
   worker, parity validation, future batch jobs) is treated as `:index`.
+
+  ## Telemetry
+
+    * `[:engram, :voyage, :embed, :start | :stop | :exception]` — request
+      span. Stop metadata: `%{status: ..., purpose: ...}`.
+    * `[:engram, :voyage, :embed, :tokens]` — emitted on a successful 200
+      response when the Voyage payload includes `usage.total_tokens`.
+      Measurements: `%{total_tokens: pos_integer()}`. Metadata:
+      `%{purpose: :index | :query}`. Drives the
+      `engram_prom_ex_voyage_embed_tokens_total` sum metric used by the
+      Grafana cost / tokens-per-minute panels. Voyage publishes no usage
+      API, so this is the only telemetry path for billing reconciliation.
+    * `[:engram, :embed, :client_rate_limited]` — synthetic-429s emitted
+      when the in-process Hammer throttle fast-fails a request before
+      reaching Voyage.
   """
 
   @behaviour Engram.Embedder
@@ -87,8 +102,9 @@ defmodule Engram.Embedders.Voyage do
       )
 
     case result do
-      {:ok, %{status: 200, body: %{"data" => data}}} ->
+      {:ok, %{status: 200, body: %{"data" => data} = body}} ->
         vectors = Enum.map(data, & &1["embedding"])
+        emit_token_telemetry(body, Keyword.get(opts, :purpose, :index))
         {:ok, vectors}
 
       {:ok, %{status: status, body: body}} ->
@@ -98,6 +114,23 @@ defmodule Engram.Embedders.Voyage do
         {:error, reason}
     end
   end
+
+  # Voyage's `/v1/embeddings` 200 response always carries a `usage` object
+  # with `total_tokens`. The field is the only billing-relevant signal — no
+  # public usage API exists — so we lift it into a telemetry event for the
+  # PromEx `tokens_total` sum metric. Absence-of-event is the contract when
+  # the field is missing: a future endpoint shape change should not surface
+  # as silently-zero tokens.
+  defp emit_token_telemetry(%{"usage" => %{"total_tokens" => total}}, purpose)
+       when is_integer(total) do
+    :telemetry.execute(
+      [:engram, :voyage, :embed, :tokens],
+      %{total_tokens: total},
+      %{purpose: purpose}
+    )
+  end
+
+  defp emit_token_telemetry(_body, _purpose), do: :ok
 
   # Client-side rate limit. Enabled when `:voyage_rpm` is set (env: VOYAGE_RPM).
   # When the bucket is empty we synthesize the same `{:error, {429, body}}`
