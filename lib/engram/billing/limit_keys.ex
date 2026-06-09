@@ -29,7 +29,7 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: 20_000_000, starter: nil, pro: nil}
     },
     concurrent_devices: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
-    device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 12, starter: 0, pro: 0}},
+    device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     realtime_sync_enabled: %{
       type: :boolean,
       defaults: %{free: false, starter: true, pro: true}

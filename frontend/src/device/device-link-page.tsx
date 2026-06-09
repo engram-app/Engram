@@ -193,7 +193,30 @@ export default function DeviceLinkPage() {
           {step === 'pick-vault' ? 'Choose a vault to sync' : 'Link Obsidian Vault'}
         </h1>
 
-        {capCheck.atCap && existingObsidian && step !== 'success' && (
+        {capCheck.atCap && capCheck.swapCooldownHours != null && step !== 'success' ? (
+          // Cooldown banner takes priority over the "linking will disconnect"
+          // warning: if we let the user click Sync we'd disconnect the
+          // existing device FIRST and then trip the 402 on authorize,
+          // leaving them with 0 connections. Block the action instead.
+          <div
+            role="alert"
+            className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+          >
+            You recently swapped devices. Your Free plan allows 1 swap every
+            24 hours — you can swap again in {capCheck.swapCooldownHours}h.{' '}
+            <a
+              className="underline underline-offset-4"
+              onClick={(e) => {
+                e.preventDefault()
+                navigate('/settings/billing')
+              }}
+              href="/settings/billing"
+            >
+              Upgrade
+            </a>{' '}
+            to swap any time.
+          </div>
+        ) : capCheck.atCap && existingObsidian && step !== 'success' ? (
           <div
             role="status"
             className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
@@ -214,7 +237,7 @@ export default function DeviceLinkPage() {
             </a>{' '}
             to keep both connected.
           </div>
-        )}
+        ) : null}
 
         {step === 'enter-code' && (
           <div className="flex flex-col gap-3">
@@ -254,7 +277,7 @@ export default function DeviceLinkPage() {
             <Button
               type="button"
               onClick={handleAuthorize}
-              disabled={loading || !canAuthorize}
+              disabled={loading || !canAuthorize || capCheck.swapCooldownHours != null}
               className="w-full"
             >
               {loading ? 'Syncing…' : 'Sync'}

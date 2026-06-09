@@ -106,11 +106,11 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
         value: %{"v" => 1}
       )
 
-      # Cooldown of 12h; revoke happened 2h ago → 10h remaining.
+      # Cooldown of 24h; revoke happened 2h ago → 22h remaining.
       insert(:user_limit_override,
         user: user,
         key: "device_swap_cooldown_hours",
-        value: %{"v" => 12}
+        value: %{"v" => 24}
       )
 
       revoked_at =
@@ -132,9 +132,9 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       assert body["error"] == "limit_exceeded"
       assert body["reason"] == "device_swap_cooldown"
       assert body["limit_key"] == "device_swap_cooldown_hours"
-      assert body["limit"] == 12
-      # Should be roughly 10 hours remaining (allow tiny clock skew).
-      assert body["current"] in [10, 11]
+      assert body["limit"] == 24
+      # Should be roughly 22 hours remaining (allow tiny clock skew).
+      assert body["current"] in [22, 23]
       assert body["upgrade_url"] == "https://app.engram.page/settings/billing"
     end
 

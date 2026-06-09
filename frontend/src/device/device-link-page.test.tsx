@@ -22,11 +22,13 @@ vi.mock('../theme/theme-toggle', () => ({
 type FakeBilling = {
   caps: { obsidian_connections: number | null; mcp_connections: number | null; api_write_enabled: boolean }
   current_connections: { obsidian: number; mcp: number }
+  device_swap_cooldown_remaining_hours: number | null
 }
 const billingState = vi.hoisted(() => ({
   current: {
     caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
     current_connections: { obsidian: 0, mcp: 0 },
+    device_swap_cooldown_remaining_hours: null,
   } as FakeBilling,
 }))
 vi.mock('../api/queries', async (importOriginal) => {
@@ -80,6 +82,7 @@ afterEach(() => {
   billingState.current = {
     caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
     current_connections: { obsidian: 0, mcp: 0 },
+    device_swap_cooldown_remaining_hours: null,
   }
 })
 
@@ -144,10 +147,38 @@ describe('DeviceLinkPage', () => {
     billingState.current = {
       caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
       current_connections: { obsidian: 1, mcp: 0 },
+      device_swap_cooldown_remaining_hours: null,
     }
     renderPage()
     expect(screen.getByRole('status')).toHaveTextContent(/heads up/i)
     expect(screen.getByRole('status')).toHaveTextContent(/will disconnect/i)
     expect(screen.getByPlaceholderText(/XXXX-XXXX/i)).toBeInTheDocument()
+  })
+
+  it('shows a cooldown banner and disables Sync when atCap and a swap cooldown is active', async () => {
+    // Free-tier user just swapped: they're at the obsidian cap AND inside the
+    // 24h swap-cooldown window. The implicit-swap UX would disconnect the
+    // existing device and then trip the 402 on authorize, leaving them at 0
+    // connections — so we block the action and surface the wait time instead.
+    billingState.current = {
+      caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
+      current_connections: { obsidian: 1, mcp: 0 },
+      device_swap_cooldown_remaining_hours: 17,
+    }
+    get.mockResolvedValue({ vaults: [{ id: 7, name: 'Personal', note_count: 12 }] })
+    renderPage()
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(/recently swapped devices/i)
+    expect(alert).toHaveTextContent(/swap again in 17h/i)
+    // The normal "linking will disconnect" heads-up should NOT render when the
+    // cooldown banner is up.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    // Walk through to the pick-vault step so the Sync button is on screen.
+    fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/i), { target: { value: 'ENGR7X4K' } })
+    fireEvent.click(screen.getByRole('button', { name: /verify/i }))
+    const sync = await screen.findByRole('button', { name: /^sync$/i })
+    expect(sync).toBeDisabled()
   })
 })

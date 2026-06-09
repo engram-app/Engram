@@ -326,6 +326,10 @@ export interface BillingStatus {
     obsidian: number
     mcp: number
   }
+  // Hours remaining on the Free-tier device-swap cooldown after a recent
+  // device revoke; `null` when no cooldown is in effect. Lets /link render
+  // a cooldown banner + disable Authorize BEFORE the user trips the 402.
+  device_swap_cooldown_remaining_hours: number | null
 }
 
 // Billing hooks

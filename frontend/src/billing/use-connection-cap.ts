@@ -5,6 +5,11 @@ export interface ConnectionCapState {
   atCap: boolean
   limit: number | null
   current: number
+  // Hours remaining on the Free-tier device-swap cooldown after a recent
+  // device revoke; `null` when no cooldown is in effect. /link uses this
+  // to render a cooldown-specific banner + disable Authorize so the user
+  // doesn't trip the 402 mid-flow.
+  swapCooldownHours: number | null
 }
 
 /**
@@ -17,7 +22,14 @@ export interface ConnectionCapState {
  */
 export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
   const { data: billing } = useBillingStatus()
-  if (!billing) return { isLoading: true, atCap: false, limit: null, current: 0 }
+  if (!billing)
+    return {
+      isLoading: true,
+      atCap: false,
+      limit: null,
+      current: 0,
+      swapCooldownHours: null,
+    }
 
   const limit =
     kind === "obsidian"
@@ -26,5 +38,11 @@ export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
   const current = billing.current_connections?.[kind] ?? 0
   const atCap = typeof limit === "number" && limit > 0 && current >= limit
 
-  return { isLoading: false, atCap, limit, current }
+  return {
+    isLoading: false,
+    atCap,
+    limit,
+    current,
+    swapCooldownHours: billing.device_swap_cooldown_remaining_hours ?? null,
+  }
 }

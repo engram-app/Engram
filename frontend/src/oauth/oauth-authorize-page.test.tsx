@@ -16,11 +16,13 @@ vi.mock('../api/oauth', () => ({ fetchOAuthClient, postOAuthConsent }))
 type FakeBilling = {
   caps: { obsidian_connections: number | null; mcp_connections: number | null; api_write_enabled: boolean }
   current_connections: { obsidian: number; mcp: number }
+  device_swap_cooldown_remaining_hours: number | null
 }
 const billingState = vi.hoisted(() => ({
   current: {
     caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
     current_connections: { obsidian: 0, mcp: 0 },
+    device_swap_cooldown_remaining_hours: null,
   } as FakeBilling,
 }))
 
@@ -83,6 +85,7 @@ afterEach(() => {
   billingState.current = {
     caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
     current_connections: { obsidian: 0, mcp: 0 },
+    device_swap_cooldown_remaining_hours: null,
   }
 })
 
@@ -131,6 +134,7 @@ describe('OAuthAuthorizePage', () => {
     billingState.current = {
       caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
       current_connections: { obsidian: 0, mcp: 1 },
+      device_swap_cooldown_remaining_hours: null,
     }
     fetchOAuthClient.mockResolvedValue({ client_id: 'cli', client_name: 'Claude Desktop', kind: 'mcp' })
 

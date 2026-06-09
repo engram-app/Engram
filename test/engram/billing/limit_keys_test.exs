@@ -57,7 +57,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 1
-      assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 12
+      assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
       assert LimitKeys.default_for(:realtime_sync_enabled, :free) == false
       assert LimitKeys.default_for(:ai_conversations_per_day, :free) == 5
       assert LimitKeys.default_for(:ai_queries_per_conversation, :free) == 50
