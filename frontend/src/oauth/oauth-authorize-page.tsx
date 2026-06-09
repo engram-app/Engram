@@ -354,14 +354,17 @@ export default function OAuthAuthorizePage() {
                 , which will stop having access to your Engram.
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter>
+            <DialogFooter className="sm:flex-col sm:justify-stretch sm:gap-2">
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => setShowSwapConfirm(false)}
+                onClick={async () => {
+                  setShowSwapConfirm(false)
+                  await runSubmit(true)
+                }}
                 disabled={submitting}
+                className="w-full"
               >
-                Cancel
+                {submitting ? 'Connecting…' : `Disconnect & connect ${clientName}`}
               </Button>
               <Button
                 type="button"
@@ -371,18 +374,9 @@ export default function OAuthAuthorizePage() {
                   navigate('/settings/billing')
                 }}
                 disabled={submitting}
+                className="w-full"
               >
                 Upgrade instead
-              </Button>
-              <Button
-                type="button"
-                onClick={async () => {
-                  setShowSwapConfirm(false)
-                  await runSubmit(true)
-                }}
-                disabled={submitting}
-              >
-                {submitting ? 'Connecting…' : `Disconnect & connect ${clientName}`}
               </Button>
             </DialogFooter>
           </DialogContent>
