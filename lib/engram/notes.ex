@@ -733,9 +733,6 @@ defmodule Engram.Notes do
         case delete_note_by_id(user, vault, id) do
           :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
           {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-          # Defensive: delete_note_by_id/3's @spec returns only :ok |
-          # {:error, :not_found} today. Kept for forward-compat.
-          {:error, reason} -> {:halt, {:rollback, reason}}
         end
       end)
       |> case do
@@ -788,9 +785,11 @@ defmodule Engram.Notes do
         |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
           case move_note_into_folder(user, vault, id, target_folder) do
             {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            # move_note_into_folder wraps the conflict error as
+            # {:error, {:conflict, id}}; the bare :not_found from the inner
+            # get_note_by_id propagates through `with`.
             {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
             {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
           end
         end)
         |> case do
