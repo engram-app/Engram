@@ -12,7 +12,7 @@ defmodule Engram.Idempotency do
 
   @impl true
   def init(_opts) do
-    :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
+    _ = :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
     {:ok, %{}}
   end
 
