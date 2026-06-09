@@ -235,7 +235,7 @@ export default function DeviceLinkPage() {
             >
               Upgrade
             </a>{' '}
-            to swap any time.
+            to connect as many devices as you like.
           </div>
         ) : capCheck.atCap && existingObsidian && step !== 'success' ? (
           <div
