@@ -20,7 +20,12 @@ vi.mock('../api/client', () => ({
 // /billing/status drives the proactive cap UI; default to unlimited so the
 // existing tests still exercise the regular consent flow.
 type FakeBilling = {
-  caps: { obsidian_connections: number | null; mcp_connections: number | null; api_write_enabled: boolean }
+  caps: {
+    obsidian_connections: number | null
+    mcp_connections: number | null
+    api_write_enabled: boolean
+    vaults: number | null
+  }
   current_connections: { obsidian: number; mcp: number }
   device_swap_cooldown_remaining_hours: number | null
 }
@@ -176,9 +181,11 @@ fireEvent.click(approve)
         expect.objectContaining({ client_id: 'cli' }),
       ),
     )
-    expect(apiDel.mock.invocationCallOrder[0]).toBeLessThan(
-      postOAuthConsent.mock.invocationCallOrder[0],
-    )
+    const delOrder = apiDel.mock.invocationCallOrder[0]
+    const consentOrder = postOAuthConsent.mock.invocationCallOrder[0]
+    expect(delOrder).toBeDefined()
+    expect(consentOrder).toBeDefined()
+    expect(delOrder!).toBeLessThan(consentOrder!)
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://app/cb?code=ok'))
   })
 
