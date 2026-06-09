@@ -840,6 +840,7 @@ defmodule Engram.Notes do
         note = decrypt_or_raise!(note, user)
 
         %{
+          id: note.id,
           path: note.path,
           title: note.title,
           folder: note.folder,

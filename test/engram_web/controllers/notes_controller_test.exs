@@ -285,6 +285,21 @@ defmodule EngramWeb.NotesControllerTest do
       assert Enum.any?(changes, &(&1["path"] == "Test/Recent.md"))
     end
 
+    test "change payload includes note id", %{conn: conn} do
+      post_conn =
+        post(conn, "/api/notes", %{path: "Test/IdShape.md", content: "# Id", mtime: 1_000.0})
+
+      assert %{"note" => %{"id" => note_id}} = json_response(post_conn, 200)
+      assert is_integer(note_id)
+
+      conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
+      assert %{"changes" => changes} = json_response(conn, 200)
+
+      change = Enum.find(changes, &(&1["path"] == "Test/IdShape.md"))
+      assert change["id"] == note_id
+      assert is_integer(change["id"])
+    end
+
     test "includes deleted notes with deleted=true flag", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Deleted.md", content: "# Del", mtime: 1_000.0})
       delete(conn, "/api/notes/Test/Deleted.md")

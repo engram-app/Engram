@@ -285,6 +285,7 @@ defmodule EngramWeb.NotesController do
 
   defp change_json(change) do
     %{
+      id: change.id,
       path: change.path,
       title: change.title,
       folder: change.folder || "",
