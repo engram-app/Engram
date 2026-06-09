@@ -30,15 +30,15 @@ defmodule EngramWeb.BillingControllerTest do
 
   describe "GET /api/billing/status" do
     test "returns free-tier status for new user with no subscription", %{conn: conn} do
-      # `Billing.active?/1` (Phase 1 Task 1.3) returns true unless the user is
-      # suspended — un-onboarded users with no subscription resolve to
-      # `tier=:free` and `active=true`. The onboarding wizard is what bounces
-      # them back to `:billing` via the tightened `subscription_ok` predicate
-      # (which requires `free_tier_accepted_at`), not this status endpoint.
+      # `active` here means "has a paid (Starter/Pro) subscription" — drives the
+      # frontend's `needsSubscription = !billing.active` plan-picker render.
+      # Suspension is gated upstream by RequireActiveSubscription; this endpoint
+      # only tells the UI whether to show "you're on Free / upgrade" vs the paid
+      # billing dashboard.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["tier"] == "free"
-      assert body["active"] == true
+      assert body["active"] == false
       assert body["trial_days_remaining"] == 0
       assert body["subscription"] == nil
     end

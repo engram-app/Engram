@@ -12,7 +12,7 @@ defmodule EngramWeb.BillingController do
 
     json(conn, %{
       tier: to_string(Billing.tier(user)),
-      active: Billing.active?(user),
+      active: Billing.tier(user) in [:starter, :pro],
       trial_days_remaining: Billing.trial_days_remaining(user),
       subscription:
         if sub do
