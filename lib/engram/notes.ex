@@ -838,6 +838,72 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns hydrated folder marker rows (kind="folder", non-deleted) for the
+  user/vault, with `.folder` decrypted. Used by Materialization to compute
+  the existing-marker set and by callers that need full marker structs
+  (vs. `list_explicit_folders/2` which only returns sorted names).
+  """
+  @spec list_folder_markers(map(), map()) :: [Note.t()]
+  def list_folder_markers(user, vault) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      {:ok, markers} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(n in Note,
+              where:
+                n.user_id == ^user.id and n.vault_id == ^vault.id and
+                  is_nil(n.deleted_at) and n.kind == "folder"
+            )
+          )
+        end)
+
+      Enum.map(markers, &hydrate_folder_marker(&1, dek))
+    else
+      {:error, :no_dek} -> []
+    end
+  end
+
+  @doc """
+  Returns the distinct set of cleartext folder paths for non-folder
+  notes (kind="note") in this vault. Root ("") is excluded — only
+  non-root parents are returned.
+
+  Folder paths are encrypted at rest (Phase B.3), so this enumerates the
+  distinct ciphertext rows and decrypts each. Batch-grade — intended for
+  backfill workflows (`Notes.Materialization`), not per-request paths.
+  """
+  @spec list_all_note_folders(map(), map()) :: [String.t()]
+  def list_all_note_folders(user, vault) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        {:ok, dek} = Crypto.get_dek(user)
+        empty_hmac = Crypto.hmac_field(filter_key, "")
+
+        {:ok, rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at) and n.kind == "note" and
+                    not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
+                distinct: n.folder_hmac,
+                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
+              )
+            )
+          end)
+
+        Enum.map(rows, fn {id, dv, ct, nonce} ->
+          decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
+        end)
+
+      {:error, :no_dek} ->
+        []
+    end
+  end
+
+  @doc """
   Returns tags with counts across all non-deleted notes for a user.
 
   Phase B.3: tags are envelope-encrypted per note. Decrypts each note's
