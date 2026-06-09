@@ -1,5 +1,5 @@
 import React from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -36,6 +36,7 @@ vi.mock('./client', async () => {
 
 import { ApiError } from './client'
 import {
+  type Folder,
   type Note,
   useAcceptTerms,
   useCancelSubscription,
@@ -43,6 +44,7 @@ import {
   useDeleteFolder,
   useDeleteNote,
   useDuplicateNote,
+  useFolders,
   useNote,
   usePlanChangePreview,
   useRenameFolder,
@@ -641,5 +643,55 @@ describe('optimistic rename folder — rewrites cached notes under old prefix', 
     expect(qc.getQueryData<Note>(['note', 42, 10])?.folder).toBe('src')
     expect(qc.getQueryData<Note>(['note', 42, 11])?.path).toBe('src/sub/b.md')
     expect(qc.getQueryData<Note>(['note', 42, 11])?.folder).toBe('src/sub')
+  })
+})
+
+// ── useFolders surfaces id + parent_id (Headless Tree Task 17) ────
+//
+// Backend `GET /api/folders` returns `{folders: [{id, name, count,
+// parent_id}, ...]}` (commit 935b7bbf). The headless-tree consumer
+// keys nodes by id and discovers tree shape via parent_id, so the
+// Folder type and the parsed query data must surface both fields
+// verbatim. `name` continues to carry the FULL folder path — that
+// shape is load-bearing for existing consumers and stays.
+
+describe('Folder type', () => {
+  it('exposes id (number), parent_id (number | null), name (string), count (number)', () => {
+    expectTypeOf<Folder>().toMatchTypeOf<{
+      id: number
+      parent_id: number | null
+      name: string
+      count: number
+    }>()
+  })
+})
+
+describe('useFolders', () => {
+  it('passes through id + parent_id from the backend response', async () => {
+    get.mockResolvedValue({
+      folders: [
+        { id: 7, parent_id: null, name: 'top', count: 2 },
+        { id: 8, parent_id: 7, name: 'top/sub', count: 1 },
+      ],
+    })
+
+    const { result } = renderHook(() => useFolders(), { wrapper })
+    await waitFor(() => expect(result.current.data).toBeDefined())
+
+    expect(get).toHaveBeenCalledWith('/folders')
+    const folders = result.current.data ?? []
+    expect(folders).toHaveLength(2)
+    expect(folders[0]).toMatchObject({
+      id: 7,
+      parent_id: null,
+      name: 'top',
+      count: 2,
+    })
+    expect(folders[1]).toMatchObject({
+      id: 8,
+      parent_id: 7,
+      name: 'top/sub',
+      count: 1,
+    })
   })
 })

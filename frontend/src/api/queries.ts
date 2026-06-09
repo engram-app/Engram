@@ -14,7 +14,14 @@ function encodePathSegments(path: string): string {
 }
 
 // Types matching backend JSON responses
+//
+// `name` carries the FULL folder path (e.g. `'top/sub'`) — load-bearing
+// for legacy path-keyed consumers. `id` + `parent_id` were added by
+// backend commit 935b7bbf so headless-tree can key nodes by id and
+// discover tree shape via parent_id without parsing path strings.
 export interface Folder {
+  id: number
+  parent_id: number | null
   name: string
   count: number
 }
@@ -67,10 +74,21 @@ export function useFolders() {
     enabled: !demo?.active,
   })
   if (demo?.active) {
-    const data: Folder[] = demo.folders.map((f) => ({
-      name: f.path,
-      count: demo.notes.filter((n) => n.folder_id === f.id).length,
-    }))
+    // Demo folders use string ids; synthesize stable negative numeric
+    // ids (1-based index) so the Folder contract is satisfied and ids
+    // don't collide with real backend ids. parent_id is derived from
+    // the path prefix — root-level demo folders report `parent_id: null`.
+    const pathToId = new Map(demo.folders.map((f, i) => [f.path, -(i + 1)]))
+    const data: Folder[] = demo.folders.map((f, i) => {
+      const slash = f.path.lastIndexOf('/')
+      const parentPath = slash < 0 ? null : f.path.slice(0, slash)
+      return {
+        id: -(i + 1),
+        parent_id: parentPath === null ? null : pathToId.get(parentPath) ?? null,
+        name: f.path,
+        count: demo.notes.filter((n) => n.folder_id === f.id).length,
+      }
+    })
     return { ...query, data, isLoading: false, isFetching: false, error: null }
   }
   return query
@@ -1002,7 +1020,15 @@ export function useRenameNote() {
               f.name === newFolder ? { ...f, count: f.count + 1 } : f,
             )
           } else if (newFolder !== '') {
-            next = [...next, { name: newFolder, count: 1 }]
+            // Optimistic placeholder — real backend id + parent_id land
+            // when `onSettled` refetches the folders list. The negative
+            // id is a sentinel that won't collide with real ids; the
+            // null parent_id is benign because the refetch reconciles
+            // before any consumer can rely on tree shape here.
+            next = [
+              ...next,
+              { id: -Date.now(), parent_id: null, name: newFolder, count: 1 },
+            ]
           } else {
             // Root files don't get a synthetic '' entry — folders() filters
             // those out anyway; the note shows up via RootFiles.
