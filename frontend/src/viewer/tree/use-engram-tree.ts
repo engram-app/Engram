@@ -26,6 +26,7 @@ interface Deps {
   scrollParentRef: React.RefObject<HTMLDivElement | null>
   onRenameCommit: (itemId: string, newName: string) => void
   onMove: (sourceIds: string[], targetItemId: string) => void
+  fetchFolderNotes?: (folderId: number) => Promise<NoteSummary[]>
 }
 
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
@@ -39,8 +40,9 @@ export function useEngramTree(deps: Deps) {
       vaultId: deps.vaultId,
       sort: deps.sort,
       rootNotes: deps.rootNotes,
+      fetchFolderNotes: deps.fetchFolderNotes,
     }),
-    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.rootNotes],
+    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.rootNotes, deps.fetchFolderNotes],
   )
 
   // Bridge our LoaderItem-returning loader to HT's TreeDataLoader<T> shape

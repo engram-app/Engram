@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   type Note,
+  type NoteSummary,
   useFolders,
   useFolderNotes,
   useBatchDeleteNotes,
@@ -14,6 +15,7 @@ import {
   useRenameFolder,
   useDuplicateNote,
 } from '../api/queries'
+import { api } from '../api/client'
 import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
 import { useEngramTree } from './tree/use-engram-tree'
@@ -102,6 +104,17 @@ export default function FolderTree() {
     if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
   }
 
+  // The loader fires this on cache-miss when a folder is expanded. Mirrors
+  // the queryFn inside `useFolderNotesById` so react-query treats both as
+  // the same query (cache key + fetcher shape).
+  const fetchFolderNotes = useCallback(
+    (folderId: number) =>
+      api
+        .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
+        .then((r) => r.notes),
+    [],
+  )
+
   const { tree, virtualizer, items } = useEngramTree({
     folders: folders ?? [],
     rootNotes,
@@ -111,6 +124,7 @@ export default function FolderTree() {
     scrollParentRef: scrollRef,
     onRenameCommit,
     onMove,
+    fetchFolderNotes,
   })
 
   // Auto-expand the chain leading to the active note so users can see

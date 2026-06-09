@@ -14,6 +14,7 @@ interface LoaderDeps {
   vaultId: string | number
   sort: SortKey
   rootNotes: NoteSummary[]
+  fetchFolderNotes?: (folderId: number) => Promise<NoteSummary[]>
 }
 
 export interface LoaderItem {
@@ -101,10 +102,17 @@ function folderChildren(deps: LoaderDeps, folderId: number): LoaderItem[] {
 
   const cached = deps.qc.getQueryData<NoteSummary[]>(['folder-notes-by-id', deps.vaultId, folderId])
   if (!cached) {
-    deps.qc.prefetchQuery({
-      queryKey: ['folder-notes-by-id', deps.vaultId, folderId],
-      queryFn: () => Promise.resolve([]),  // real queryFn lives in useFolderNotesById; prefetch arms it
-    })
+    if (deps.fetchFolderNotes) {
+      // Fire-and-forget: react-query updates the cache on resolve and the
+      // tree re-renders. `fetchQuery` (not `prefetchQuery`) is what actually
+      // executes the queryFn — prefetchQuery short-circuits if a query with
+      // the same key has already been registered (e.g. by a mounted hook).
+      const fetcher = deps.fetchFolderNotes
+      deps.qc.fetchQuery({
+        queryKey: ['folder-notes-by-id', deps.vaultId, folderId],
+        queryFn: () => fetcher(folderId),
+      })
+    }
     return childFolders
   }
 

@@ -57,18 +57,40 @@ describe('buildLoader', () => {
     expect(children.map(c => c.itemId)).toEqual(['f:2', 'n:100'])
   })
 
-  it('cache miss returns [] and triggers prefetch', () => {
+  it('cache miss returns [] and triggers fetch via real fetcher', () => {
     const qc = new QueryClient()
     qc.setQueryData(['folder-notes-by-id', 'v', 1], notesByFolder[1])
     // No data for folder id 2.
-    const prefetchSpy = vi.spyOn(qc, 'prefetchQuery')
-    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+    const fetchFolderNotes = vi.fn(() => Promise.resolve<NoteSummary[]>([]))
+    const fetchSpy = vi.spyOn(qc, 'fetchQuery')
+    const loader = buildLoader({
+      folders,
+      qc,
+      vaultId: 'v',
+      sort: 'name-asc' as SortKey,
+      rootNotes: [],
+      fetchFolderNotes,
+    })
     const children = loader.getChildren('f:2')
     // Child folders for f:2 = none in fixture; notes not cached → returns []
     expect(children).toEqual([])
-    expect(prefetchSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(fetchSpy).toHaveBeenCalledWith(expect.objectContaining({
       queryKey: ['folder-notes-by-id', 'v', 2],
     }))
+    // The queryFn passed to fetchQuery must invoke our real fetcher with
+    // the folder id — guards against regressing back to a dummy queryFn.
+    const call = fetchSpy.mock.calls[0]?.[0] as unknown as { queryFn: (ctx?: unknown) => Promise<NoteSummary[]> }
+    void call.queryFn()
+    expect(fetchFolderNotes).toHaveBeenCalledWith(2)
+  })
+
+  it('cache miss without fetcher returns [] and does not fetch', () => {
+    const qc = new QueryClient()
+    const fetchSpy = vi.spyOn(qc, 'fetchQuery')
+    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+    const children = loader.getChildren('f:2')
+    expect(children).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('getItem returns shaped TreeItem for a folder id', () => {
