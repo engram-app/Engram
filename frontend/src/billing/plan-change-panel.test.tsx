@@ -50,6 +50,7 @@ function billing(overrides: Partial<BillingStatus> = {}): BillingStatus {
     trial_days_remaining: 0,
     subscription: { status: 'active', tier: 'starter', current_period_end: '2026-07-01' },
     caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
+    current_connections: { obsidian: 0, mcp: 0 },
     ...overrides,
   }
 }

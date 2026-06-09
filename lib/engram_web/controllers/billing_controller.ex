@@ -3,6 +3,7 @@ defmodule EngramWeb.BillingController do
 
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
+  alias Engram.Connections
 
   require Logger
 
@@ -26,6 +27,13 @@ defmodule EngramWeb.BillingController do
         obsidian_connections: cap_json(Billing.effective_limit(user, :obsidian_connections_cap)),
         mcp_connections: cap_json(Billing.effective_limit(user, :mcp_connections_cap)),
         api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled))
+      },
+      # Bundled into /billing/status so the proactive cap UI on /link and
+      # /oauth/consent only needs ONE fetch to decide whether to render the
+      # disconnect panel vs the normal flow.
+      current_connections: %{
+        obsidian: Connections.count_active(user.id, :obsidian),
+        mcp: Connections.count_active(user.id, :mcp)
       }
     })
   end

@@ -17,6 +17,52 @@ vi.mock('../theme/theme-toggle', () => ({
   default: () => <button type="button">theme</button>,
 }))
 
+// The /link page now reads /billing/status to drive the proactive cap UI.
+// Default: unlimited (atCap=false) so existing tests still see the normal flow.
+type FakeBilling = {
+  caps: { obsidian_connections: number | null; mcp_connections: number | null; api_write_enabled: boolean }
+  current_connections: { obsidian: number; mcp: number }
+}
+const billingState = vi.hoisted(() => ({
+  current: {
+    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
+    current_connections: { obsidian: 0, mcp: 0 },
+  } as FakeBilling,
+}))
+vi.mock('../api/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/queries')>()
+  return {
+    ...actual,
+    useBillingStatus: () => ({ data: billingState.current }),
+    useMe: () => ({ data: { id: 1, email: 'me@example.com' } }),
+    // The cap panel reads this — keep it deterministic across tests so we
+    // don't trigger real network fetches via the partial-mock pass-through.
+    useConnections: () => ({
+      data: [
+        {
+          kind: 'obsidian',
+          client_id: null,
+          key_id: 42,
+          name: 'Old laptop',
+          software_id: null,
+          software_version: null,
+          verified: false,
+          logo: null,
+          vault_id: 1,
+          vault_name: 'Personal',
+          scope: null,
+          last_used_at: null,
+          connected_at: null,
+          first_user_agent: null,
+          first_ip: null,
+          redirect_uris: [],
+        },
+      ],
+      isLoading: false,
+    }),
+  }
+})
+
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -31,6 +77,10 @@ function renderPage() {
 afterEach(() => {
   vi.clearAllMocks()
   authState.current = { isSignedIn: true }
+  billingState.current = {
+    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
+    current_connections: { obsidian: 0, mcp: 0 },
+  }
 })
 
 describe('DeviceLinkPage', () => {
@@ -85,5 +135,21 @@ describe('DeviceLinkPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^sync$/i }))
 
     await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(9))
+  })
+
+  it('shows the proactive cap panel (not the code input) when at the Obsidian cap', () => {
+    // Free-tier user already syncing one Obsidian device — landing on /link
+    // should see the disconnect-or-upgrade UI BEFORE typing a code.
+    billingState.current = {
+      caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
+      current_connections: { obsidian: 1, mcp: 0 },
+    }
+    renderPage()
+    expect(screen.getByRole('heading', { name: /device sync limit reached/i })).toBeInTheDocument()
+    expect(screen.getByText(/currently connected/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /upgrade for unlimited devices/i })).toBeInTheDocument()
+    // Code field MUST be hidden — the whole point of "proactive" is to spare
+    // the user from typing a code that the backend will then 402 on.
+    expect(screen.queryByPlaceholderText(/XXXX-XXXX/i)).not.toBeInTheDocument()
   })
 })

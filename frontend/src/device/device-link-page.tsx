@@ -12,6 +12,9 @@ import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-c
 import { useMe } from '../api/queries'
 import { SyncStatusPill } from '../onboarding/sync-status-pill'
 import { useVaultReadyEvents } from '../onboarding/use-vault-ready-events'
+import { useConnectionCap } from '../billing/use-connection-cap'
+import { ExistingConnectionsPanel } from '../billing/existing-connections-panel'
+import { copyFor } from '../billing/limit-copy'
 
 type Vault = { id: number; name: string; note_count: number }
 
@@ -40,6 +43,12 @@ export default function DeviceLinkPage() {
   const [linkedVaultId, setLinkedVaultId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Proactive cap check — if the user is already at their Obsidian-connection
+  // cap, show a disconnect panel BEFORE they spend effort typing the code or
+  // picking a vault. Falls through to the normal flow once they free up a
+  // slot (billing/status invalidates → atCap flips false → this re-renders
+  // with the regular UI mounted).
+  const capCheck = useConnectionCap('obsidian')
 
   if (!isSignedIn) {
     return (
@@ -150,10 +159,33 @@ export default function DeviceLinkPage() {
         )}
       >
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          {step === 'pick-vault' ? 'Choose a vault to sync' : 'Link Obsidian Vault'}
+          {capCheck.atCap
+            ? 'Device sync limit reached'
+            : step === 'pick-vault'
+              ? 'Choose a vault to sync'
+              : 'Link Obsidian Vault'}
         </h1>
 
-        {step === 'enter-code' && (
+        {capCheck.atCap && (
+          <section className="flex flex-col gap-3">
+            <p className="text-sm text-foreground">
+              {copyFor('concurrent_devices_exceeded').body}
+            </p>
+            <ExistingConnectionsPanel
+              kind="obsidian"
+              onChanged={() => qc.invalidateQueries({ queryKey: ['billing', 'status'] })}
+            />
+            <Button
+              variant="outline"
+              onClick={() => navigate('/settings/billing')}
+              className="self-start"
+            >
+              Upgrade for unlimited devices
+            </Button>
+          </section>
+        )}
+
+        {!capCheck.atCap && step === 'enter-code' && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               Enter the code shown in your Obsidian plugin:
@@ -173,7 +205,7 @@ export default function DeviceLinkPage() {
           </div>
         )}
 
-        {step === 'pick-vault' && (
+        {!capCheck.atCap && step === 'pick-vault' && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               Pick an existing one, or create a new vault for these notes.
@@ -199,14 +231,14 @@ export default function DeviceLinkPage() {
           </div>
         )}
 
-        {step === 'success' && (
+        {!capCheck.atCap && step === 'success' && (
           <SuccessStep
             linkedVaultId={linkedVaultId}
             onForward={() => navigate('/')}
           />
         )}
 
-        {error && (
+        {!capCheck.atCap && error && (
           <p
             role="alert"
             className={cn(destructiveAlert, 'p-3 text-foreground')}

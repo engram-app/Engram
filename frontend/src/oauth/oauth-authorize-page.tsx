@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useNavigate, useSearchParams } from 'react-router'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchOAuthClient,
   postOAuthConsent,
@@ -12,6 +12,9 @@ import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
+import { useConnectionCap } from '../billing/use-connection-cap'
+import { ExistingConnectionsPanel } from '../billing/existing-connections-panel'
+import { copyFor } from '../billing/limit-copy'
 
 const REQUIRED_PARAMS = [
   'client_id',
@@ -63,6 +66,15 @@ export default function OAuthAuthorizePage() {
 
   const meQuery = useMe()
   const vaultsQuery = useVaults()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+
+  // Proactive cap check — kind comes from the OAuth client metadata so we
+  // pick the right cap key (mcp vs obsidian). Default to "mcp" until the
+  // client query resolves; this only matters for the loading transition,
+  // since the cap panel is gated on `!isLoadingShell` too.
+  const clientKind: 'mcp' | 'obsidian' = clientQuery.data?.kind ?? 'mcp'
+  const capCheck = useConnectionCap(clientKind)
 
   const [vaultChoice, setVaultChoice] = useState<string>('vault:*')
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -182,6 +194,37 @@ export default function OAuthAuthorizePage() {
 
         {isLoadingShell ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : capCheck.atCap ? (
+          <section className="flex flex-col gap-3">
+            <p className="text-sm text-foreground">
+              {copyFor(
+                clientKind === 'obsidian'
+                  ? 'obsidian_connections_exceeded'
+                  : 'mcp_connections_exceeded',
+              ).body}
+            </p>
+            <ExistingConnectionsPanel
+              kind={clientKind}
+              onChanged={() => qc.invalidateQueries({ queryKey: ['billing', 'status'] })}
+            />
+            <div className="flex gap-3">
+              <Button
+                type="button"
+                onClick={() => navigate('/settings/billing')}
+                className="flex-1"
+              >
+                Upgrade for unlimited connections
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancel}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+            </div>
+          </section>
         ) : (
           <>
             <fieldset className="flex flex-col gap-2">
