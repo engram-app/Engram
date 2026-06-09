@@ -144,17 +144,23 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   })
 
   // Mount-time cache check: if the user lands on billing with a cached
-  // onboarding status already past 'billing' (paid in another tab, browser-
-  // back, refresh), fire onActivated synchronously instead of waiting on
-  // a push event. Only meaningful in onboarding mode.
+  // onboarding status already past 'billing' AND has a paid subscription,
+  // fire onActivated synchronously instead of waiting on a push event
+  // (paid in another tab, browser-back, refresh). Only meaningful in
+  // onboarding mode. Skipped for Free users who deliberately re-visit
+  // /onboard/billing to upgrade — bouncing them back to the next step
+  // defeats the upgrade affordance.
   useEffect(() => {
     if (!onActivatedRef.current) return
+    if (!billing?.active) return
     const cached = qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])
     if (cached && cached.next_step !== 'billing' && !onActivatedFiredRef.current) {
       onActivatedFiredRef.current = true
       onActivatedRef.current(cached)
     }
     // mount-only — qc identity is stable, onActivated read via ref.
+    // billing?.active read on first paint; the page renders Loading first
+    // anyway and we only want the synchronous case (cache hit).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
