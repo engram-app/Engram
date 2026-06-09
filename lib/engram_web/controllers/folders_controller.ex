@@ -7,7 +7,39 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     {:ok, folders} = Notes.list_folders_with_counts(user, vault)
-    json(conn, %{folders: Enum.map(folders, fn f -> %{name: f.folder, count: f.count} end)})
+
+    # Headless Tree needs stable folder identity (marker id) + parent id to
+    # rebuild the hierarchy without string-path prefix matching. Look up the
+    # marker id per cleartext path; root ("") and derived (no-marker)
+    # folders return id=nil and are skipped as parent candidates.
+    markers = Notes.list_folder_markers(user, vault)
+    id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
+
+    json(conn, %{
+      folders:
+        Enum.map(folders, fn f ->
+          id = Map.get(id_by_path, f.folder)
+          parent_id = id_by_path |> Map.get(parent_path(f.folder))
+
+          %{
+            id: id,
+            name: f.folder,
+            count: f.count,
+            parent_id: parent_id
+          }
+        end)
+    })
+  end
+
+  # nil for top-level ("Projects") and root (""). Joined parent path for
+  # nested ("Projects/Engram" -> "Projects").
+  defp parent_path(""), do: nil
+
+  defp parent_path(folder) do
+    case folder |> String.split("/") |> Enum.drop(-1) do
+      [] -> nil
+      segments -> Enum.join(segments, "/")
+    end
   end
 
   def explicit(conn, _params) do
