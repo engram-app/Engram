@@ -31,9 +31,9 @@ function ShellInner({ children }: { children: ReactNode }) {
     if (reachedEnd) ob.record('tour_completed')
     setTourActive(false)
     demo.deactivate()
-    // The tour walks through `/note/Welcome/Start here.md` (a demo path
-    // that doesn't exist in the real backend). Bounce back to the
-    // dashboard so useNote doesn't 404 once the demo wrap drops.
+    // The tour walks through a demo note (`/note/<id>`) that doesn't exist
+    // in the real backend. Bounce back to the dashboard so useNote doesn't
+    // 404 once the demo wrap drops.
     navigate('/', { replace: true })
     // Tour CTA promised "Create my vault" — fulfill it. Spin up a default
     // vault so the user lands on a real dashboard, not a blocking modal.
