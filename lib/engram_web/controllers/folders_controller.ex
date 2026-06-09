@@ -160,25 +160,27 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:ok, ids} <- parse_int_list(ids) do
-      case Notes.batch_delete_folders(user, vault, ids) do
-        {:ok, %{deleted: n}} ->
-          body = %{deleted: n}
-          Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
-          broadcast_batch(user, vault, %{op: "delete", ids: ids})
-          json(conn, body)
+    case parse_int_list(ids) do
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
-        {:error, {:not_found, id}} ->
-          conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+      {:ok, ids} ->
+        case Notes.batch_delete_folders(user, vault, ids) do
+          {:ok, %{deleted: n}} ->
+            body = %{deleted: n}
+            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+            broadcast_batch(user, vault, %{op: "delete", ids: ids})
+            json(conn, body)
 
-        {:error, {:conflict, id}} ->
-          conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+          {:error, {:not_found, id}} ->
+            conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
 
-        {:error, _reason} ->
-          conn |> put_status(500) |> json(%{error: "internal"})
-      end
-    else
-      :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
+          {:error, {:conflict, id}} ->
+            conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+          {:error, _reason} ->
+            conn |> put_status(500) |> json(%{error: "internal"})
+        end
     end
   end
 

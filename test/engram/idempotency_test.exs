@@ -6,11 +6,16 @@ defmodule Engram.IdempotencyTest do
     # Use a fresh table per test so we don't fight start_link/already_started across tests.
     # The Idempotency GenServer is started in the supervision tree at app start
     # for normal runs; in tests we want to verify the basic put/get behavior.
-    on_exit(fn -> if :ets.whereis(:engram_idempotency) != :undefined, do: :ets.delete_all_objects(:engram_idempotency) end)
+    on_exit(fn ->
+      if :ets.whereis(:engram_idempotency) != :undefined,
+        do: :ets.delete_all_objects(:engram_idempotency)
+    end)
+
     case Idempotency.start_link([]) do
       {:ok, _} -> :ok
       {:error, {:already_started, _}} -> :ok
     end
+
     :ok
   end
 

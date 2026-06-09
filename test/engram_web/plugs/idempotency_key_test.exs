@@ -7,6 +7,7 @@ defmodule EngramWeb.Plugs.IdempotencyKeyTest do
       {:ok, _} -> :ok
       {:error, {:already_started, _}} -> :ok
     end
+
     :ok
   end
 

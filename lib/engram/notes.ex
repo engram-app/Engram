@@ -453,43 +453,48 @@ defmodule Engram.Notes do
   def note_ids_for_paths(_user, _vault, []), do: %{}
 
   def note_ids_for_paths(user, vault, paths) when is_list(paths) do
-    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      hmac_to_path =
-        paths
-        |> Enum.uniq()
-        |> Map.new(fn p -> {Crypto.hmac_field(filter_key, p), p} end)
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        do_note_ids_for_paths(user, vault, paths, filter_key)
 
-      hmacs = Map.keys(hmac_to_path)
-
-      query =
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at),
-          select: {n.path_hmac, n.id}
-        )
-
-      query =
-        case vault do
-          %{id: vault_id} -> from(n in query, where: n.vault_id == ^vault_id)
-          _ -> query
-        end
-
-      rows =
-        case Repo.with_tenant(user.id, fn -> Repo.all(query) end) do
-          {:ok, rows} when is_list(rows) -> rows
-          rows when is_list(rows) -> rows
-          _ -> []
-        end
-
-      Enum.reduce(rows, %{}, fn {hmac, id}, acc ->
-        case Map.fetch(hmac_to_path, hmac) do
-          {:ok, path} -> Map.put(acc, path, id)
-          :error -> acc
-        end
-      end)
-    else
-      _ -> %{}
+      _ ->
+        %{}
     end
+  end
+
+  defp do_note_ids_for_paths(user, vault, paths, filter_key) do
+    hmac_to_path =
+      paths
+      |> Enum.uniq()
+      |> Map.new(fn p -> {Crypto.hmac_field(filter_key, p), p} end)
+
+    hmacs = Map.keys(hmac_to_path)
+
+    query =
+      from(n in Note,
+        where: n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at),
+        select: {n.path_hmac, n.id}
+      )
+
+    query =
+      case vault do
+        %{id: vault_id} -> from(n in query, where: n.vault_id == ^vault_id)
+        _ -> query
+      end
+
+    rows =
+      case Repo.with_tenant(user.id, fn -> Repo.all(query) end) do
+        {:ok, rows} when is_list(rows) -> rows
+        rows when is_list(rows) -> rows
+        _ -> []
+      end
+
+    Enum.reduce(rows, %{}, fn {hmac, id}, acc ->
+      case Map.fetch(hmac_to_path, hmac) do
+        {:ok, path} -> Map.put(acc, path, id)
+        :error -> acc
+      end
+    end)
   end
 
   @doc """
@@ -721,7 +726,8 @@ defmodule Engram.Notes do
         case delete_note_by_id(user, vault, id) do
           :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
           {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-          # Defensive: delete_note_by_id/3's @spec returns only :ok | {:error, :not_found} today. Kept for forward-compat.
+          # Defensive: delete_note_by_id/3's @spec returns only :ok |
+          # {:error, :not_found} today. Kept for forward-compat.
           {:error, reason} -> {:halt, {:rollback, reason}}
         end
       end)

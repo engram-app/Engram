@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Engram.MaterializeFolders do
+  @shortdoc "Backfill folder_marker rows for virtual folders"
+
   @moduledoc """
   Materializes folder_marker rows for every virtual folder across all
   (user, vault) pairs. Idempotent. Safe to re-run.
@@ -10,11 +12,11 @@ defmodule Mix.Tasks.Engram.MaterializeFolders do
   In a release:
       bin/engram rpc 'Engram.Notes.Materialization.run_all()'
   """
-  use Mix.Task
-  alias Engram.Notes.Materialization
-  alias Engram.{Accounts, Vaults}
 
-  @shortdoc "Backfill folder_marker rows for virtual folders"
+  use Mix.Task
+
+  alias Engram.{Accounts, Vaults}
+  alias Engram.Notes.Materialization
 
   @impl Mix.Task
   def run(args) do
