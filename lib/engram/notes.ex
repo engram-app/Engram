@@ -699,6 +699,16 @@ defmodule Engram.Notes do
   during the rolled-back transaction are still inserted via Oban's
   `Repo.insert`, but only become visible after commit; on rollback they
   vanish with the transaction).
+
+  Note: `delete_note/3` fires a `note_changed` event via `Phoenix.PubSub`
+  during each per-id iteration. PubSub broadcasts are NOT transactional —
+  subscribers may receive events for items that ultimately get rolled back
+  when a later id in the batch fails. This is consistent with the
+  single-target delete behavior and acceptable because the typical batch
+  caller (the same client that initiated the batch) sees the synchronous
+  `{:error, _}` return value and can reconcile. The systemic fix
+  (after-commit hooks so broadcasts only fire post-commit) is tracked as a
+  follow-up issue and will land before more batch ops are added.
   """
   @spec batch_delete_notes(map(), map(), [integer()]) ::
           {:ok, %{deleted: non_neg_integer()}}
@@ -711,6 +721,7 @@ defmodule Engram.Notes do
         case delete_note_by_id(user, vault, id) do
           :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
           {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+          # Defensive: delete_note_by_id/3's @spec returns only :ok | {:error, :not_found} today. Kept for forward-compat.
           {:error, reason} -> {:halt, {:rollback, reason}}
         end
       end)
