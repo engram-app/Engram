@@ -13,9 +13,10 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    # Free-tier launch §4.5 — attachments_enabled defaults to false for Free.
-    # Existing happy-path coverage represents a paid user, so seed an active
-    # Pro subscription before any upload runs through the controller gate.
+    # Free-tier launch §4.5 — Free gets text-only uploads. Existing happy-
+    # path coverage exercises non-text MIMEs (PNG, PDF) that Free can't
+    # upload, so seed an active Pro subscription before any upload runs
+    # through the controller gate.
     insert(:subscription, user: user, tier: "pro", status: "active")
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
@@ -260,10 +261,13 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["limit"] == 1_048_576
     end
 
-    test "Free user gets 402 attachments_disabled before any S3 work", %{conn: conn, user: user} do
+    test "Free user gets 402 attachment_must_be_text when uploading non-text MIME", %{
+      conn: conn,
+      user: user
+    } do
       # Demote the setup-Pro user back to Free by deleting the subscription.
-      # `tier/1` resolves to :free with no subscription row, and
-      # `attachments_enabled` defaults to false for Free per LimitKeys.
+      # `tier/1` resolves to :free with no subscription row, which lights up
+      # the `attachments_text_only` flag per LimitKeys.
       sub =
         Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
           skip_tenant_check: true
@@ -280,13 +284,31 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       body = json_response(conn, 402)
       assert body["error"] == "limit_exceeded"
-      assert body["reason"] == "attachments_disabled"
-      assert body["limit_key"] == "attachments_enabled"
+      assert body["reason"] == "attachment_must_be_text"
+      assert body["limit_key"] == "attachments_text_only"
       assert body["tier"] == "free"
-      assert body["limit"] == false
-      # `upgrade_url` is set from config — surface presence, not exact value
-      # (config may be nil in test env, which is still a valid response shape).
+      assert body["limit"] == true
       assert Map.has_key?(body, "upgrade_url")
+    end
+
+    test "Free user CAN upload a text/markdown attachment", %{conn: conn, user: user} do
+      sub =
+        Engram.Repo.get_by(Engram.Billing.Subscription, [user_id: user.id],
+          skip_tenant_check: true
+        )
+
+      Engram.Repo.delete!(sub, skip_tenant_check: true)
+
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "notes/readme.md",
+          content_base64: Base.encode64("# Free can attach text"),
+          mtime: 1.0
+        })
+
+      assert %{"attachment" => att} = json_response(conn, 200)
+      assert att["path"] == "notes/readme.md"
+      assert att["mime_type"] == "text/markdown"
     end
 
     test "returns 401 without auth", %{conn: conn} do

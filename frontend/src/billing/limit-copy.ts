@@ -10,6 +10,7 @@ export type LimitReason =
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
   | "external_queries_per_day_exceeded"
+  | "attachment_must_be_text"
   | "mcp_connections_exceeded"
   | "obsidian_connections_exceeded"
   | "account_suspended"
@@ -61,6 +62,10 @@ const TABLE: Record<LimitReason, LimitCopy> = {
   external_queries_per_day_exceeded: {
     title: "Daily external-query limit reached",
     body: "Your Free plan caps programmatic reads from external tools (MCP clients, the Obsidian plugin, API-key scripts). Upgrade for unlimited.",
+  },
+  attachment_must_be_text: {
+    title: "Free plan: text attachments only",
+    body: "Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.",
   },
   mcp_connections_exceeded: {
     title: "External connection limit reached",

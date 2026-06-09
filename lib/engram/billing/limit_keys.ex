@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 75 tuples (25 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 78 tuples (26 keys × 3 tiers)
   """
 
   @catalog %{
@@ -19,7 +19,15 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 1_073_741_824, starter: 3_221_225_472, pro: 16_106_127_360}
     },
-    attachments_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
+    attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
+    # Free is restricted to text/* uploads only; Starter+ get the full
+    # MimeWhitelist surface (images, audio, video, PDFs, office docs).
+    # `true` means "Free-style restriction is ON" so the gate matches
+    # the pattern of every other paid-feature boolean.
+    attachments_text_only: %{
+      type: :boolean,
+      defaults: %{free: true, starter: false, pro: false}
+    },
     max_file_bytes: %{
       type: :integer,
       defaults: %{free: 10_485_760, starter: 209_715_200, pro: 524_288_000}

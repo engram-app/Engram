@@ -33,21 +33,42 @@ defmodule EngramWeb.AttachmentsController do
     explicit_mime = params["mime_type"] || params[:mime_type]
     effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
-    case MimeWhitelist.check(effective_mime, path) do
-      {:error, {:mime_not_allowed, mime}} ->
-        conn
-        |> put_status(415)
-        |> json(%{error: "mime_not_allowed", mime_type: mime})
+    cond do
+      text_only?(user) and not text_mime?(effective_mime) ->
+        # Free's text-only attachment gate — sits AHEAD of the generic
+        # MimeWhitelist so we surface the upgrade path (402) instead of
+        # the "this file is rejected globally" shape (415). Paid users
+        # skip this branch entirely.
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "attachment_must_be_text",
+          :attachments_text_only,
+          true,
+          nil
+        )
 
-      {:error, {:extension_not_allowed, ext}} ->
-        conn
-        |> put_status(415)
-        |> json(%{error: "extension_not_allowed", extension: ext})
+      true ->
+        case MimeWhitelist.check(effective_mime, path) do
+          {:error, {:mime_not_allowed, mime}} ->
+            conn
+            |> put_status(415)
+            |> json(%{error: "mime_not_allowed", mime_type: mime})
 
-      :ok ->
-        do_upload(conn, user, vault, params)
+          {:error, {:extension_not_allowed, ext}} ->
+            conn
+            |> put_status(415)
+            |> json(%{error: "extension_not_allowed", extension: ext})
+
+          :ok ->
+            do_upload(conn, user, vault, params)
+        end
     end
   end
+
+  defp text_only?(user), do: Billing.effective_limit(user, :attachments_text_only) == true
+
+  defp text_mime?(nil), do: false
+  defp text_mime?(mime) when is_binary(mime), do: String.starts_with?(String.downcase(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
