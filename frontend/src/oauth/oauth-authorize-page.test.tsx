@@ -159,7 +159,13 @@ describe('OAuthAuthorizePage', () => {
     const approve = screen.getByRole('button', { name: /approve/i })
     expect(approve).toBeInTheDocument()
 
-    fireEvent.click(approve)
+fireEvent.click(approve)
+
+    // Approve opens a confirm modal first; click the confirm button there.
+    const confirm = await screen.findByRole('button', {
+      name: /disconnect & connect Claude Desktop/i,
+    })
+    fireEvent.click(confirm)
 
     // Disconnect runs first, then consent.
     await waitFor(() =>

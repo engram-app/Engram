@@ -11,6 +11,14 @@ import { api } from '../api/client'
 import AuthShell from '../layout/auth-shell'
 import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 import { useConnectionCap } from '../billing/use-connection-cap'
@@ -85,6 +93,9 @@ export default function OAuthAuthorizePage() {
   const [vaultChoice, setVaultChoice] = useState<string>('vault:*')
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // At-cap users get a confirm modal before the implicit swap so they see
+  // EXACTLY what's about to be disconnected, not just an inline banner.
+  const [showSwapConfirm, setShowSwapConfirm] = useState(false)
 
   useEffect(() => {
     if (vaultChoice === 'vault:*' || !vaultsQuery.data) return
@@ -145,6 +156,17 @@ export default function OAuthAuthorizePage() {
   }
 
   const handleApprove = async () => {
+    // At cap with a known peer: open the confirm modal first so the user
+    // sees the exact disconnect that's about to happen. Confirm there runs
+    // the actual swap via `runSubmit(true)`.
+    if (capCheck.atCap && existingPeer) {
+      setShowSwapConfirm(true)
+      return
+    }
+    await runSubmit(false)
+  }
+
+  const runSubmit = async (isSwap: boolean) => {
     setSubmitting(true)
     setSubmitError(null)
 
@@ -160,12 +182,12 @@ export default function OAuthAuthorizePage() {
     }
     if (resource) body.resource = resource
 
-    // If at cap, swap: disconnect the existing connection of the same kind
+    // If swapping, disconnect the existing connection of the same kind
     // first so the consent call doesn't 402. Mirrors the /link page swap
-    // shape — the banner already warned the user this would happen.
+    // shape — the confirm modal already named what's about to disconnect.
     let swappedFromName: string | null = null
     try {
-      if (capCheck.atCap && existingPeer) {
+      if (isSwap && existingPeer) {
         const existingId = oauthConnectionId(existingPeer)
         if (existingId) {
           swappedFromName = existingPeer.name ?? 'previous connection'
@@ -302,9 +324,6 @@ export default function OAuthAuthorizePage() {
             )}
 
             <div className="flex gap-3">
-              <Button type="button" onClick={handleApprove} disabled={submitting} className="flex-1">
-                {submitting ? 'Approving…' : 'Approve'}
-              </Button>
               <Button
                 type="button"
                 variant="outline"
@@ -314,9 +333,60 @@ export default function OAuthAuthorizePage() {
               >
                 Cancel
               </Button>
+              <Button type="button" onClick={handleApprove} disabled={submitting} className="flex-1">
+                {submitting ? 'Approving…' : 'Approve'}
+              </Button>
             </div>
           </>
         )}
+
+        <Dialog open={showSwapConfirm} onOpenChange={setShowSwapConfirm}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                Disconnect {existingPeer?.name ?? 'your existing connection'}?
+              </DialogTitle>
+              <DialogDescription>
+                Your Free plan allows 1 active{' '}
+                {clientKind === 'obsidian' ? 'device' : 'external connection'}.
+                Connecting <strong>{clientName}</strong> will disconnect{' '}
+                <strong>{existingPeer?.name ?? 'your existing connection'}</strong>
+                , which will stop having access to your Engram.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowSwapConfirm(false)}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowSwapConfirm(false)
+                  navigate('/settings/billing')
+                }}
+                disabled={submitting}
+              >
+                Upgrade instead
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  setShowSwapConfirm(false)
+                  await runSubmit(true)
+                }}
+                disabled={submitting}
+              >
+                {submitting ? 'Connecting…' : `Disconnect & connect ${clientName}`}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </AuthPanel>
     </AuthShell>
   )
