@@ -65,6 +65,20 @@ defmodule Engram.Notes.Materialization do
     end)
   end
 
+  @doc """
+  Convenience entry-point for running materialization across every
+  `(user, vault)` pair. Inline-safe for `bin/engram rpc` (Mix is
+  unavailable in releases).
+  """
+  @spec run_all() :: :ok
+  def run_all do
+    Engram.Accounts.list_users()
+    |> Enum.each(fn user ->
+      Engram.Vaults.list_vaults(user)
+      |> Enum.each(fn vault -> run(user, vault) end)
+    end)
+  end
+
   defp collect_implied_folder_paths(user, vault) do
     {:ok, folders} = Notes.list_folders_implied_by_notes(user, vault)
 
