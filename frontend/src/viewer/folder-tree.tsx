@@ -280,7 +280,7 @@ function FolderNode({ node, depth, selectedNoteId, selectedFolder, folders }: Fo
       {rowActions.showMove && (
         <MoveDialog
           folders={folders.map((f) => ({ name: f.name }))}
-          node={{ kind: 'folder', path: node.fullPath }}
+          nodes={[{ kind: 'folder', path: node.fullPath }]}
           onPick={rowActions.commitMove}
           onCancel={rowActions.cancelMove}
         />
@@ -476,7 +476,7 @@ function NoteLeaf({
       {rowActions.showMove && (
         <MoveDialog
           folders={folders.map((f) => ({ name: f.name }))}
-          node={{ kind: 'file', path: note.path }}
+          nodes={[{ kind: 'file', path: note.path }]}
           onPick={rowActions.commitMove}
           onCancel={rowActions.cancelMove}
         />
