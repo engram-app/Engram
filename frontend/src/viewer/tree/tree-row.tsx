@@ -10,9 +10,10 @@ interface Props {
   instance: ItemInstance<LoaderItem>
   onContextMenu?: (itemId: string, x: number, y: number) => void
   onLongPress?: (itemId: string) => void
+  onFolderHover?: (folderId: number) => void
 }
 
-export function TreeRow({ instance, onContextMenu, onLongPress }: Props) {
+export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }: Props) {
   const itemId = instance.getId()
   const longPressHandlers = useLongPress({
     onLongPress: () => onLongPress?.(itemId),
@@ -60,12 +61,17 @@ export function TreeRow({ instance, onContextMenu, onLongPress }: Props) {
   }
 
   if (item.kind === 'folder') {
+    const hoverPrefetch = onFolderHover
+      ? () => onFolderHover(item.id)
+      : undefined
     return (
       <button
         type="button"
         {...instance.getProps()}
         {...longPressProps}
         onContextMenu={contextMenuHandler}
+        onPointerEnter={hoverPrefetch}
+        onFocus={hoverPrefetch}
         aria-expanded={instance.isExpanded()}
         aria-selected={instance.isSelected()}
         className={rowClass(instance)}

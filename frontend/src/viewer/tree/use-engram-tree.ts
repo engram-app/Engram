@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useTree } from '@headless-tree/react'
 import {
   syncDataLoaderFeature,
@@ -33,6 +33,7 @@ interface Deps {
 type Data = LoaderItem
 
 export function useEngramTree(deps: Deps) {
+  const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null)
   const inner = useMemo(
     () => buildLoader({
       folders: deps.folders,
@@ -41,6 +42,13 @@ export function useEngramTree(deps: Deps) {
       sort: deps.sort,
       rootNotes: deps.rootNotes,
       fetchFolderNotes: deps.fetchFolderNotes,
+      onChildrenLoaded: (folderId) => {
+        const t = treeRef.current
+        if (!t) return
+        const inst = t.getItemInstance(`f:${folderId}`)
+        // invalidateChildrenIds returns a promise but we don't need to await
+        inst?.invalidateChildrenIds()
+      },
     }),
     [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.rootNotes, deps.fetchFolderNotes],
   )
@@ -83,6 +91,11 @@ export function useEngramTree(deps: Deps) {
 
   const tree = useTree<Data>({
     rootItemId: ROOT_ID,
+    // Without expanding root, HT renders no items — its `getItems()` walks the
+    // expanded set, and an unexpanded root means the top-level folders never
+    // become visible. Seed expandedItems with the root id so its direct
+    // children render on first mount.
+    initialState: { expandedItems: [ROOT_ID] },
     dataLoader,
     getItemName: (item: ItemInstance<Data>) => {
       const d = item.getItemData()
@@ -115,6 +128,24 @@ export function useEngramTree(deps: Deps) {
       expandAllFeature,
     ],
   })
+
+  treeRef.current = tree
+
+  // HT only computes its flat-item list on mount + on expandedItems change.
+  // When our `useFolders` query lands after mount, the dataLoader returns new
+  // ids but HT keeps its cached (empty) item list. Force a rebuild when the
+  // data shape changes — keyed on stable structural fingerprints so we never
+  // re-trigger from spurious identity churn (rebuildTree → setState → render
+  // would otherwise spin into a max-update-depth loop).
+  const folderKey = deps.folders.map(f => f.id).join('|')
+  const rootKey = deps.rootNotes.map(n => n.id).join('|')
+  const lastKey = useRef('')
+  useEffect(() => {
+    const key = `${folderKey}::${rootKey}::${deps.sort}`
+    if (lastKey.current === key) return
+    lastKey.current = key
+    tree.rebuildTree()
+  }, [tree, folderKey, rootKey, deps.sort])
 
   const items = tree.getItems()
 

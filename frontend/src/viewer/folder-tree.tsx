@@ -3,6 +3,8 @@ import { useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  type Folder,
+  FOLDER_NOTES_STALE_MS,
   type Note,
   type NoteSummary,
   useFolders,
@@ -37,6 +39,11 @@ type DeleteRow =
 type MoveRow =
   | { kind: 'file'; path: string }
   | { kind: 'folder'; path: string }
+
+// Module-level stable empty array — passing `folders ?? []` creates a new
+// reference each render while the query is loading, which spins up an
+// infinite re-render loop in useEngramTree's rebuildTree effect.
+const EMPTY_FOLDERS: Folder[] = []
 
 type DialogState =
   | { kind: 'none' }
@@ -115,8 +122,34 @@ export default function FolderTree() {
     [],
   )
 
+  // Prefetch on hover — by the time the user clicks, the notes are usually
+  // already cached, so expansion is instant. Uses the same key as the loader
+  // so we don't fetch twice if the user clicks before the hover resolves.
+  const prefetchFolderNotes = useCallback(
+    (folderId: number) => {
+      void qc.prefetchQuery({
+        queryKey: ['folder-notes-by-id', vaultId, folderId],
+        queryFn: () => fetchFolderNotes(folderId),
+        staleTime: FOLDER_NOTES_STALE_MS,
+      })
+    },
+    [qc, vaultId, fetchFolderNotes],
+  )
+
+  // Bulk prefetch every folder's notes once after `useFolders` lands. Trades
+  // a small burst of parallel requests at startup for zero-latency folder
+  // expansion thereafter. Skipped on every render — gated on folders length
+  // becoming non-zero — and `staleTime` keeps it idempotent on remount.
+  const bulkPrefetchedRef = useRef(false)
+  useEffect(() => {
+    if (bulkPrefetchedRef.current) return
+    if (!folders || folders.length === 0) return
+    bulkPrefetchedRef.current = true
+    for (const f of folders) prefetchFolderNotes(f.id)
+  }, [folders, prefetchFolderNotes])
+
   const { tree, virtualizer, items } = useEngramTree({
-    folders: folders ?? [],
+    folders: folders ?? EMPTY_FOLDERS,
     rootNotes,
     qc,
     vaultId: vaultId ?? '',
@@ -362,6 +395,7 @@ export default function FolderTree() {
               items={items}
               onContextMenu={handleContextMenu}
               onLongPress={handleLongPress}
+              onFolderHover={prefetchFolderNotes}
             />
           ))}
         </div>

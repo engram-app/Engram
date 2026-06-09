@@ -9,6 +9,7 @@ interface Props {
   instanceFor?: (itemId: string) => ItemInstance<LoaderItem> | undefined
   onContextMenu?: (itemId: string, x: number, y: number) => void
   onLongPress?: (itemId: string) => void
+  onFolderHover?: (folderId: number) => void
 }
 
 export function TreeRowVirtualized({
@@ -17,6 +18,7 @@ export function TreeRowVirtualized({
   instanceFor,
   onContextMenu,
   onLongPress,
+  onFolderHover,
 }: Props) {
   const fallback = items[virtualItem.index]
   if (!fallback) return null
@@ -33,7 +35,12 @@ export function TreeRowVirtualized({
         transform: `translateY(${virtualItem.start}px)`,
       }}
     >
-      <TreeRow instance={instance} onContextMenu={onContextMenu} onLongPress={onLongPress} />
+      <TreeRow
+        instance={instance}
+        onContextMenu={onContextMenu}
+        onLongPress={onLongPress}
+        onFolderHover={onFolderHover}
+      />
     </div>
   )
 }

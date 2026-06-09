@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import type { Folder, NoteSummary } from '../../api/queries'
+import { FOLDER_NOTES_STALE_MS, type Folder, type NoteSummary } from '../../api/queries'
 import type { TreeItem } from './types'
 import { ROOT_ID, formatItemId, parseItemId } from './types'
 
@@ -15,6 +15,7 @@ interface LoaderDeps {
   sort: SortKey
   rootNotes: NoteSummary[]
   fetchFolderNotes?: (folderId: number) => Promise<NoteSummary[]>
+  onChildrenLoaded?: (folderId: number) => void
 }
 
 export interface LoaderItem {
@@ -103,15 +104,17 @@ function folderChildren(deps: LoaderDeps, folderId: number): LoaderItem[] {
   const cached = deps.qc.getQueryData<NoteSummary[]>(['folder-notes-by-id', deps.vaultId, folderId])
   if (!cached) {
     if (deps.fetchFolderNotes) {
-      // Fire-and-forget: react-query updates the cache on resolve and the
-      // tree re-renders. `fetchQuery` (not `prefetchQuery`) is what actually
-      // executes the queryFn — prefetchQuery short-circuits if a query with
-      // the same key has already been registered (e.g. by a mounted hook).
       const fetcher = deps.fetchFolderNotes
-      deps.qc.fetchQuery({
-        queryKey: ['folder-notes-by-id', deps.vaultId, folderId],
-        queryFn: () => fetcher(folderId),
-      })
+      deps.qc
+        .fetchQuery({
+          queryKey: ['folder-notes-by-id', deps.vaultId, folderId],
+          queryFn: () => fetcher(folderId),
+          staleTime: FOLDER_NOTES_STALE_MS,
+        })
+        // The notes are now in the cache, but HT cached the empty children
+        // list when it first asked. Tell it to refetch this branch.
+        .then(() => deps.onChildrenLoaded?.(folderId))
+        .catch(() => {})
     }
     return childFolders
   }

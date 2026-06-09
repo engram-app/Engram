@@ -64,13 +64,24 @@ export interface User {
 
 // Query hooks
 
+// Hoisted so React Query treats the select identity as stable; otherwise an
+// inline arrow re-runs every render and returns a fresh array, breaking
+// memoized consumers (e.g. useEngramTree's rebuild useEffect).
+const selectFolders = (data: { folders: Array<Folder & { id: number | null }> }) =>
+  data.folders.filter((f): f is Folder => f.id != null && f.name !== '')
+
 export function useFolders() {
   const vaultId = useActiveVaultId()
   const demo = useDemoVaultOptional()
   const query = useQuery({
     queryKey: ['folders', vaultId],
-    queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
-    select: (data) => data.folders,
+    // Backend echoes a synthetic root row (`name === ""`, `id === null`) to
+    // expose the count of root-level notes. The tree owns root notes via
+    // `useFolderNotes('')`; drop the synthetic row so consumers only see real
+    // folder markers + the `Folder.id: number` contract holds.
+    queryFn: () =>
+      api.get<{ folders: Array<Folder & { id: number | null }> }>('/folders'),
+    select: selectFolders,
     enabled: !demo?.active,
   })
   if (demo?.active) {
@@ -94,6 +105,8 @@ export function useFolders() {
   return query
 }
 
+const selectNotes = (data: { notes: NoteSummary[] }) => data.notes
+
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
   const vaultId = useActiveVaultId()
   const demo = useDemoVaultOptional()
@@ -101,7 +114,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
     queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
-    select: (data) => data.notes,
+    select: selectNotes,
     enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
   })
   if (demo?.active) {
@@ -133,6 +146,10 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 // children via the by-id endpoint (Task 6). Path-keyed `useFolderNotes`
 // stays in place for legacy consumers; new tree code uses this hook so
 // rename / move events don't invalidate by stale path keys.
+// 60s of staleness keeps re-expansions instant while a `notes.batch` channel
+// event (or any single-note mutation) still invalidates the key and refetches.
+export const FOLDER_NOTES_STALE_MS = 60_000
+
 export function useFolderNotesById(
   folderId: number | null,
   opts: { enabled?: boolean } = {},
@@ -145,6 +162,7 @@ export function useFolderNotesById(
         .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
         .then((r) => r.notes),
     enabled: folderId != null && (opts.enabled ?? true),
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
 }
 
