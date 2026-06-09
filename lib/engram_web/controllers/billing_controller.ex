@@ -26,7 +26,8 @@ defmodule EngramWeb.BillingController do
       caps: %{
         obsidian_connections: cap_json(Billing.effective_limit(user, :obsidian_connections_cap)),
         mcp_connections: cap_json(Billing.effective_limit(user, :mcp_connections_cap)),
-        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled))
+        api_write_enabled: bool_json(Billing.effective_limit(user, :api_write_enabled)),
+        vaults: cap_json(Billing.effective_limit(user, :vaults_cap))
       },
       # Bundled into /billing/status so the proactive cap UI on /link and
       # /oauth/consent only needs ONE fetch to decide whether to render the

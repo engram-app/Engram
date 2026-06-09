@@ -9,7 +9,7 @@ import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-classes'
-import { useConnections, useMe, type Connection } from '../api/queries'
+import { useBillingStatus, useConnections, useMe, type Connection } from '../api/queries'
 import { SyncStatusPill } from '../onboarding/sync-status-pill'
 import { useVaultReadyEvents } from '../onboarding/use-vault-ready-events'
 import { useConnectionCap } from '../billing/use-connection-cap'
@@ -52,6 +52,13 @@ export default function DeviceLinkPage() {
   const existingObsidian = (connections.data ?? []).find(
     (c): c is Connection => c.kind === 'obsidian',
   )
+  // Vault cap awareness for the picker — Free has vaults_cap=1, so once the
+  // user has any vault, the "create new" options would 402 on submit. Disable
+  // them proactively and force a link-into-existing choice.
+  const { data: billing } = useBillingStatus()
+  const vaultsCap = billing?.caps.vaults ?? null
+  const atVaultCap =
+    typeof vaultsCap === 'number' && vaultsCap > 0 && vaults.length >= vaultsCap
 
   if (!isSignedIn) {
     return (
@@ -93,7 +100,21 @@ export default function DeviceLinkPage() {
       const existing = suggested
         ? (data.vaults ?? []).find((v) => v.name === suggested)
         : undefined
-      setSelection(existing ? String(existing.id) : suggested ? 'matched' : 'custom')
+      // If the user is at the Free vault cap, default to the first existing
+      // vault (create-new rows are about to be disabled below).
+      const fallbackExisting =
+        (data.vaults ?? []).length >= (vaultsCap ?? Infinity)
+          ? (data.vaults?.[0] ?? null)
+          : null
+      setSelection(
+        existing
+          ? String(existing.id)
+          : fallbackExisting
+            ? String(fallbackExisting.id)
+            : suggested
+              ? 'matched'
+              : 'custom',
+      )
       setStep('pick-vault')
     } catch {
       setError('Failed to load vaults. Please try again.')
@@ -272,7 +293,25 @@ export default function DeviceLinkPage() {
               onSelect={setSelection}
               customName={customName}
               onCustomChange={setCustomName}
+              atVaultCap={atVaultCap}
             />
+            {atVaultCap && (
+              <p className="text-xs text-muted-foreground">
+                Your Free plan includes 1 vault — link into the existing one
+                above, or{' '}
+                <a
+                  className="underline underline-offset-4"
+                  href="/settings/billing"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigate('/settings/billing')
+                  }}
+                >
+                  upgrade
+                </a>{' '}
+                to create more.
+              </p>
+            )}
 
             <Button
               type="button"
@@ -360,6 +399,7 @@ interface VaultPickerFieldsetProps {
   onSelect: (next: string) => void
   customName: string
   onCustomChange: (next: string) => void
+  atVaultCap: boolean
 }
 
 // Stacked-radio picker for the /link consent page. Three row variants:
@@ -377,6 +417,7 @@ function VaultPickerFieldset({
   onSelect,
   customName,
   onCustomChange,
+  atVaultCap,
 }: VaultPickerFieldsetProps) {
   const matchedExisting = suggestedName
     ? vaults.find((v) => v.name === suggestedName)
@@ -408,7 +449,8 @@ function VaultPickerFieldset({
           </span>
         </label>
       ) : (
-        suggestedName && (
+        suggestedName &&
+        !atVaultCap && (
           <label className={selectableRow(isMatched)}>
             <input
               type="radio"
@@ -448,32 +490,34 @@ function VaultPickerFieldset({
         )
       })}
 
-      <label className={selectableRow(isCustom)}>
-        <input
-          type="radio"
-          name="vault-target"
-          checked={isCustom}
-          onChange={() => onSelect('custom')}
-          className="accent-primary"
-        />
-        <span className="flex flex-1 flex-col gap-2">
-          <span className="text-sm font-medium text-foreground">
-            Create a vault with a custom name
-          </span>
+      {!atVaultCap && (
+        <label className={selectableRow(isCustom)}>
           <input
-            type="text"
-            value={customName}
-            onChange={(e) => {
-              onCustomChange(e.target.value)
-              if (!isCustom) onSelect('custom')
-            }}
-            onFocus={() => onSelect('custom')}
-            placeholder="choose a new name"
-            maxLength={100}
-            className={fieldInput}
+            type="radio"
+            name="vault-target"
+            checked={isCustom}
+            onChange={() => onSelect('custom')}
+            className="accent-primary"
           />
-        </span>
-      </label>
+          <span className="flex flex-1 flex-col gap-2">
+            <span className="text-sm font-medium text-foreground">
+              Create a vault with a custom name
+            </span>
+            <input
+              type="text"
+              value={customName}
+              onChange={(e) => {
+                onCustomChange(e.target.value)
+                if (!isCustom) onSelect('custom')
+              }}
+              onFocus={() => onSelect('custom')}
+              placeholder="choose a new name"
+              maxLength={100}
+              className={fieldInput}
+            />
+          </span>
+        </label>
+      )}
     </fieldset>
   )
 }

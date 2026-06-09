@@ -20,7 +20,7 @@ type FakeBilling = {
 }
 const billingState = vi.hoisted(() => ({
   current: {
-    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
+    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true, vaults: null },
     current_connections: { obsidian: 0, mcp: 0 },
     device_swap_cooldown_remaining_hours: null,
   } as FakeBilling,
@@ -83,7 +83,7 @@ function renderAt(qs: string) {
 afterEach(() => {
   vi.clearAllMocks()
   billingState.current = {
-    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
+    caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true, vaults: null },
     current_connections: { obsidian: 0, mcp: 0 },
     device_swap_cooldown_remaining_hours: null,
   }
@@ -132,7 +132,7 @@ describe('OAuthAuthorizePage', () => {
     // for a new MCP client should see the disconnect-or-upgrade UI in place of
     // the vault picker + Approve button.
     billingState.current = {
-      caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
+      caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true, vaults: null },
       current_connections: { obsidian: 0, mcp: 1 },
       device_swap_cooldown_remaining_hours: null,
     }

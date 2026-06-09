@@ -318,6 +318,7 @@ export interface BillingStatus {
     obsidian_connections: number | null
     mcp_connections: number | null
     api_write_enabled: boolean
+    vaults: number | null
   }
   // Bundled into /billing/status so the proactive cap UI (on /link and
   // /oauth/consent) can decide atCap from a single fetch — no separate
