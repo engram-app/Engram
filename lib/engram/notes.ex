@@ -791,7 +791,6 @@ defmodule Engram.Notes do
             {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
             {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
             {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
-            {:error, reason} -> {:halt, {:rollback, reason}}
           end
         end)
         |> case do

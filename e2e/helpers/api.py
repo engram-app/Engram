@@ -200,7 +200,7 @@ class ApiClient:
         """POST /folders/rename. Returns HTTP status code."""
         resp = self.session.post(
             f"{self.base_url}/folders/rename",
-            json={"old_folder": old_folder, "new_folder": new_folder},
+            json={"old_path": old_folder, "new_path": new_folder},
             timeout=10,
         )
         return resp.status_code
