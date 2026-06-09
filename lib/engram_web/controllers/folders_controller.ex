@@ -64,6 +64,21 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(400) |> json(%{error: "folder parameter is required"})
   end
 
+  def list_notes(conn, %{"id" => id_str}) do
+    with {id, ""} <- Integer.parse(id_str),
+         {:ok, notes} <-
+           Notes.list_folder_notes_by_id(
+             conn.assigns.current_user,
+             conn.assigns.current_vault,
+             id
+           ) do
+      json(conn, %{notes: Enum.map(notes, &note_summary/1)})
+    else
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not_found"})
+      _ -> conn |> put_status(400) |> json(%{error: "bad_id"})
+    end
+  end
+
   def create(conn, %{"folder" => folder}) when is_binary(folder) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault

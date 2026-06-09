@@ -301,6 +301,7 @@ defmodule EngramWeb.Router do
     get "/tags", TagsController, :index
     get "/folders/explicit", FoldersController, :explicit
     get "/folders/list", FoldersController, :list
+    get "/folders/by-id/:id/notes", FoldersController, :list_notes
     post "/folders/rename", FoldersController, :rename
     post "/folders", FoldersController, :create
     get "/folders", FoldersController, :index
