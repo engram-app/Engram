@@ -1402,4 +1402,134 @@ defmodule Engram.NotesTest do
       assert Enum.map(notes, & &1.path) == ["Projects/a.md"]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # delete_folder/3 (cascading)
+  # ---------------------------------------------------------------------------
+
+  describe "delete_folder/3" do
+    test "soft-deletes an empty folder marker", %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Empty")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      refute "Empty" in Enum.map(folders, & &1.folder)
+    end
+
+    test "cascades through folder marker and direct child notes", %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Doomed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Doomed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 2}} = Notes.delete_folder(user, vault, "Doomed")
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Doomed/a.md")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      refute "Doomed" in Enum.map(folders, & &1.folder)
+    end
+
+    test "cascades through nested subfolders (marker + sub-marker + nested note)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "a")
+      {:ok, _} = Notes.create_folder_marker(user, vault, "a/b")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a/b/c.md",
+          "content" => "c",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 3}} = Notes.delete_folder(user, vault, "a")
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "a/b/c.md")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      refute "a" in names
+      refute "a/b" in names
+    end
+
+    test "does not delete sibling-prefix folders (no false-positive matches)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Proj")
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Projects")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/keep.md",
+          "content" => "keep",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Proj")
+
+      # Projects/keep.md must still be readable.
+      assert {:ok, %{path: "Projects/keep.md"}} =
+               Notes.get_note(user, vault, "Projects/keep.md")
+    end
+
+    test "idempotent: re-deleting an already-deleted folder returns {:ok, %{deleted: 0}}",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Once")
+      {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Once")
+
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Once")
+    end
+
+    test "returns {:ok, %{deleted: 0}} for nonexistent folder", %{user: user, vault: vault} do
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Nope")
+    end
+
+    test "does not affect other user's folder with the same name", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(other_user, other_vault, %{
+          "path" => "Shared/keep.md",
+          "content" => "keep",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Shared")
+
+      assert {:ok, _} = Notes.get_note(other_user, other_vault, "Shared/keep.md")
+    end
+
+    test "broadcasts per-note delete event for each descendant note", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Watched")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Watched/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      # Drain the upsert broadcast emitted by upsert_note/3.
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
+
+      assert {:ok, %{deleted: 2}} = Notes.delete_folder(user, vault, "Watched")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Watched/a.md"}
+      }
+    end
+  end
 end

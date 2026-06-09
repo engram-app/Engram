@@ -1474,6 +1474,246 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Soft-deletes a folder and every descendant (sub-markers and real notes).
+  Mirrors `rename_folder/4`'s cascade shape: decrypts all live rows,
+  filters by exact-match-or-prefix on `folder`, then bulk-updates
+  `deleted_at` in one `update_all`.
+
+  Returns `{:ok, %{deleted: count}}` where count includes the folder
+  marker (if present) plus every descendant note and sub-marker. A folder
+  that doesn't exist (no marker AND no notes underneath) returns
+  `{:ok, %{deleted: 0}}` — same idempotency contract as `rename_folder/4`,
+  which returns `{:ok, 0}` for an empty target.
+
+  Side effects per real note (skipped for markers, matching `rename_folder`):
+  - Decrement usage meter.
+  - Enqueue `DeleteNoteIndex` worker to clean up Qdrant points.
+  - Broadcast `note_changed` with `event_type: "delete"`.
+
+  PubSub disclosure: broadcasts are not transactional. A batch caller that
+  composes this on top of `Repo.transaction` (see `batch_delete_folders/2`)
+  will leak per-note delete events for cascades that get rolled back. Same
+  caveat as `batch_delete_notes/3` — the systemic fix (after-commit hooks)
+  is tracked as a follow-up.
+  """
+  @spec delete_folder(map(), map(), String.t()) ::
+          {:ok, %{deleted: non_neg_integer()}} | {:error, term()}
+  def delete_folder(user, vault, folder) when is_binary(folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      do_delete_folder(user, vault, folder)
+    end
+  end
+
+  defp do_delete_folder(user, vault, folder) do
+    prefix = folder <> "/"
+
+    # Phase B.3 mirror of do_rename_folder/5: plaintext `folder` is gone,
+    # so we cannot prefix-filter in SQL. Load all live rows, decrypt the
+    # folder envelope, then filter in Elixir.
+    {:ok, all_rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in Note,
+            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
+            select: n
+          )
+        )
+      end)
+
+    {:ok, dek} = Crypto.get_dek(user)
+
+    decrypted =
+      Enum.map(all_rows, fn row ->
+        case row.kind do
+          "folder" -> hydrate_folder_marker(row, dek)
+          _ -> decrypt_or_raise!(row, user)
+        end
+      end)
+
+    matches =
+      Enum.filter(decrypted, fn r ->
+        r.folder == folder or String.starts_with?(r.folder || "", prefix)
+      end)
+
+    if matches == [] do
+      {:ok, %{deleted: 0}}
+    else
+      now = DateTime.utc_now()
+      ids = Enum.map(matches, & &1.id)
+
+      {real_notes, _markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
+
+      Repo.with_tenant(user.id, fn ->
+        {updated, _} =
+          from(n in Note,
+            where: n.id in ^ids and is_nil(n.deleted_at)
+          )
+          |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+
+        # Decrement only real notes — markers don't count against the meter.
+        # `updated` may include both kinds; recompute live-real-note count from
+        # the matched set so the meter delta lines up with notes_count semantics.
+        real_count = length(real_notes)
+        if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
+        updated
+      end)
+
+      # Side effects outside the transaction context — Qdrant cleanup + broadcasts.
+      # Markers carry no embedding and no path, so skip them.
+      Enum.each(real_notes, fn note ->
+        _ =
+          Enqueue.enqueue(
+            DeleteNoteIndex.new(%{
+              note_id: note.id,
+              user_id: user.id,
+              vault_id: vault.id,
+              path_hmac: Base.encode64(note.path_hmac)
+            }),
+            "delete_note_index"
+          )
+
+        :ok = broadcast_change(user.id, vault.id, "delete", note.path)
+      end)
+
+      {:ok, %{deleted: length(matches)}}
+    end
+  end
+
+  @doc """
+  Atomic batch cascading delete for folder markers identified by id.
+
+  For each id in `marker_ids`: resolves the folder marker (ownership-checked),
+  decrypts its folder name, then runs `delete_folder/3` to soft-delete the
+  marker plus every descendant. All-or-nothing: any missing/cross-vault id
+  rolls the entire transaction back.
+
+  Returns `{:ok, %{deleted: total}}` where `total` is the SUM of per-folder
+  cascade counts (markers + real notes) across the batch. Returns
+  `{:error, {:not_found, id}}` for the first missing or cross-vault id.
+
+  Empty list short-circuits to `{:ok, %{deleted: 0}}` without opening a
+  transaction.
+
+  PubSub disclosure (same caveat as `batch_delete_notes/3`): `delete_folder/3`
+  fires `note_changed` broadcasts per affected real note inside the transaction.
+  Subscribers may receive delete events for cascades that get rolled back when
+  a later id in the batch fails. After-commit hooks are tracked as a follow-up.
+  """
+  @spec batch_delete_folders(map(), map(), [integer()]) ::
+          {:ok, %{deleted: non_neg_integer()}}
+          | {:error, {:not_found, integer()} | term()}
+  def batch_delete_folders(_user, _vault, []), do: {:ok, %{deleted: 0}}
+
+  def batch_delete_folders(user, vault, marker_ids) when is_list(marker_ids) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        marker_ids
+        |> Enum.reduce_while(%{deleted: 0}, fn id, acc ->
+          case get_folder_marker_by_id(user, vault, id) do
+            {:ok, marker} ->
+              folder = hydrate_folder_marker(marker, dek).folder
+              # do_delete_folder/3 returns {:ok, %{deleted: n}} only — Crypto.ensure_user_dek
+              # already ran above so the error path is unreachable here.
+              {:ok, %{deleted: n}} = do_delete_folder(user, vault, folder)
+              {:cont, Map.update!(acc, :deleted, &(&1 + n))}
+
+            {:error, :not_found} ->
+              {:halt, {:rollback, {:not_found, id}}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc """
+  Atomic batch folder move. Each source folder marker in `marker_ids` is
+  moved into the folder identified by `target_folder_id` (another marker's id).
+
+  For each source: resolves the marker, computes the new folder path as
+  `target_folder <> "/" <> Path.basename(source_folder)`, then delegates to
+  `rename_folder/4` — which already cascades through descendants and
+  re-encrypts path/folder/tags.
+
+  All-or-nothing. Returns `{:ok, %{moved: n}}` on success (n = `length(marker_ids)`).
+  Returns `{:error, {:not_found, id}}` for a missing/cross-vault source or for a
+  missing target marker (with `id == target_folder_id`). Returns
+  `{:error, {:conflict, id}}` when `rename_folder/4` rejects the destination
+  (rows already present at the immediate target folder).
+
+  Empty list short-circuits to `{:ok, %{moved: 0}}` without opening a
+  transaction or resolving the target.
+
+  PubSub disclosure: same caveat as `batch_move_notes/4`. `rename_folder/4`
+  fires per-note broadcasts inside the transaction; rolled-back batches may
+  leak events.
+  """
+  @spec batch_move_folders(map(), map(), [integer()], integer()) ::
+          {:ok, %{moved: non_neg_integer()}}
+          | {:error, {:not_found | :conflict, integer()} | term()}
+  def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_folders(user, vault, marker_ids, target_folder_id)
+      when is_list(marker_ids) and is_integer(target_folder_id) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        target_folder = hydrate_folder_marker(target_marker, dek).folder
+
+        marker_ids
+        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+          case move_folder_into(user, vault, id, target_folder, dek) do
+            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, reason} -> {:halt, {:rollback, reason}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, :not_found} -> Repo.rollback({:not_found, target_folder_id})
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Resolve source marker → compute new folder under target → delegate to
+  # rename_folder/4 (which cascades through descendants). Mirrors
+  # move_note_into_folder/4's contract: returns {:ok, _} or {:error, atom}.
+  defp move_folder_into(user, vault, id, target_folder, dek) do
+    case get_folder_marker_by_id(user, vault, id) do
+      {:ok, marker} ->
+        source_folder = hydrate_folder_marker(marker, dek).folder
+        leaf = Path.basename(source_folder)
+
+        new_folder =
+          case target_folder do
+            "" -> leaf
+            tf -> tf <> "/" <> leaf
+          end
+
+        case rename_folder(user, vault, source_folder, new_folder) do
+          {:ok, _count} -> {:ok, new_folder}
+          {:error, :conflict} -> {:error, :conflict}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
