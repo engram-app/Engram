@@ -6,15 +6,15 @@ import {
   postOAuthConsent,
   type OAuthConsentParams,
 } from '../api/oauth'
-import { useVaults, useMe } from '../api/queries'
+import { useVaults, useMe, useConnections, type Connection } from '../api/queries'
+import { api } from '../api/client'
 import AuthShell from '../layout/auth-shell'
 import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { heading, destructiveAlert, selectableRow } from '@/lib/ui-classes'
 import { useConnectionCap } from '../billing/use-connection-cap'
-import { ExistingConnectionsPanel } from '../billing/existing-connections-panel'
-import { copyFor } from '../billing/limit-copy'
+import { connectionId as oauthConnectionId } from '../billing/existing-connections-panel'
 
 const REQUIRED_PARAMS = [
   'client_id',
@@ -75,6 +75,12 @@ export default function OAuthAuthorizePage() {
   // since the cap panel is gated on `!isLoadingShell` too.
   const clientKind: 'mcp' | 'obsidian' = clientQuery.data?.kind ?? 'mcp'
   const capCheck = useConnectionCap(clientKind)
+  // Only need the existing-connection details when at cap (for the heads-up
+  // banner + the implicit disconnect on Approve).
+  const connections = useConnections({ enabled: capCheck.atCap })
+  const existingPeer = (connections.data ?? []).find(
+    (c): c is Connection => c.kind === clientKind,
+  )
 
   const [vaultChoice, setVaultChoice] = useState<string>('vault:*')
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -154,13 +160,41 @@ export default function OAuthAuthorizePage() {
     }
     if (resource) body.resource = resource
 
+    // If at cap, swap: disconnect the existing connection of the same kind
+    // first so the consent call doesn't 402. Mirrors the /link page swap
+    // shape — the banner already warned the user this would happen.
+    let swappedFromName: string | null = null
     try {
+      if (capCheck.atCap && existingPeer) {
+        const existingId = oauthConnectionId(existingPeer)
+        if (existingId) {
+          swappedFromName = existingPeer.name ?? 'previous connection'
+          const path =
+            existingPeer.kind === 'obsidian'
+              ? `/connections/device/${existingId}`
+              : `/connections/oauth/${existingId}`
+          await api.del(path)
+          await qc.invalidateQueries({ queryKey: ['connections'] })
+          await qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+        }
+      }
+
       const { redirect_uri } = await postOAuthConsent(body)
       window.location.assign(redirect_uri)
     } catch (e: unknown) {
-      // LimitExceededError is already surfaced by UpgradeDialogProvider
-      // (it's a 402 — the dialog opens and offers Disconnect / Upgrade).
-      // Don't double-render its raw message as an inline error.
+      if (swappedFromName) {
+        // Disconnect succeeded but consent did not — user is now at 0
+        // connections instead of 1. Make that visible.
+        setSubmitError(
+          `Disconnected '${swappedFromName}' but authorizing the new connection failed. ` +
+            `Re-run the request from ${clientName} — no connections of this kind are currently active.`,
+        )
+        setSubmitting(false)
+        return
+      }
+      // LimitExceededError fallback is no longer expected on the at-cap path
+      // (we pre-disconnected). Keep the guard for the rare race where the
+      // cap re-trips between disconnect + consent.
       if (e instanceof Error && e.name === 'LimitExceededError') {
         setSubmitting(false)
         return
@@ -194,42 +228,31 @@ export default function OAuthAuthorizePage() {
 
         {isLoadingShell ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : capCheck.atCap ? (
-          <section className="flex flex-col gap-3">
-            <div
-              role="status"
-              className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
-            >
-              {copyFor(
-                clientKind === 'obsidian'
-                  ? 'obsidian_connections_exceeded'
-                  : 'mcp_connections_exceeded',
-              ).body}
-            </div>
-            <ExistingConnectionsPanel
-              kind={clientKind}
-              onChanged={() => qc.invalidateQueries({ queryKey: ['billing', 'status'] })}
-            />
-            <div className="flex gap-3">
-              <Button
-                type="button"
-                onClick={() => navigate('/settings/billing')}
-                className="flex-1"
-              >
-                Upgrade for unlimited connections
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleCancel}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-            </div>
-          </section>
         ) : (
           <>
+            {capCheck.atCap && existingPeer && (
+              <div
+                role="status"
+                className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+              >
+                Heads up — your Free plan allows 1 active{' '}
+                {clientKind === 'obsidian' ? 'device' : 'external connection'}.
+                Approving will disconnect{' '}
+                <strong>{existingPeer.name ?? 'your existing connection'}</strong>
+                , which will stop having access.{' '}
+                <a
+                  className="underline underline-offset-4"
+                  href="/settings/billing"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigate('/settings/billing')
+                  }}
+                >
+                  Upgrade
+                </a>{' '}
+                to keep both connected.
+              </div>
+            )}
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-sm font-medium text-foreground">
                 Which vault?
