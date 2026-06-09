@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { Plug } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -102,14 +103,26 @@ function ExistingConnectionsPanel({
           const id = connectionId(c)
           return (
             <li key={id ?? c.name ?? Math.random()} className="flex items-center justify-between gap-3">
-              <span className="text-foreground">
-                {c.name ?? "(unnamed)"}
-                {c.connected_at ? (
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    since {new Date(c.connected_at).toLocaleDateString()}
-                  </span>
-                ) : null}
-              </span>
+              <div className="flex min-w-0 items-center gap-2">
+                {c.logo ? (
+                  <img src={c.logo} alt="" className="size-6 shrink-0 rounded" />
+                ) : (
+                  <div
+                    className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+                    aria-hidden
+                  >
+                    <Plug className="size-3.5" />
+                  </div>
+                )}
+                <span className="truncate text-foreground">
+                  {c.name ?? "(unnamed)"}
+                  {c.connected_at ? (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      since {new Date(c.connected_at).toLocaleDateString()}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
               {id ? (
                 <Button
                   type="button"
