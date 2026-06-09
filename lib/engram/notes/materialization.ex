@@ -79,6 +79,19 @@ defmodule Engram.Notes.Materialization do
     end)
   end
 
+  @doc """
+  Returns the list of implied folder paths that do NOT yet have a
+  matching `folder_marker` row for this `(user, vault)`. Empty list
+  means materialization is up-to-date. Used by the CI gate test.
+  """
+  @spec orphans(map(), map()) :: [String.t()]
+  def orphans(user, vault) do
+    existing = MapSet.new(Notes.list_folder_markers(user, vault), & &1.folder)
+
+    collect_implied_folder_paths(user, vault)
+    |> Enum.reject(&MapSet.member?(existing, &1))
+  end
+
   defp collect_implied_folder_paths(user, vault) do
     {:ok, folders} = Notes.list_folders_implied_by_notes(user, vault)
 
