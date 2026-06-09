@@ -1,7 +1,17 @@
 defmodule EngramWeb.Plugs.RequireActiveSubscriptionTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false because the suspended-branch assertion checks the
+  # configured :upgrade_url and limit_response_test mutates that same
+  # global env mid-flight — a race that crashes us with `nil =~ ...`.
+  use EngramWeb.ConnCase, async: false
 
   alias EngramWeb.Plugs.RequireActiveSubscription
+
+  setup do
+    prev = Application.get_env(:engram, :upgrade_url)
+    Application.put_env(:engram, :upgrade_url, "https://app.engram.page/settings/billing")
+    on_exit(fn -> Application.put_env(:engram, :upgrade_url, prev) end)
+    :ok
+  end
 
   describe "call/2" do
     test "passes Free user (no subscription, not suspended)" do
