@@ -101,7 +101,7 @@ export function ExistingConnectionsPanel({
   )
 }
 
-function connectionId(c: Connection): string | null {
+export function connectionId(c: Connection): string | null {
   if (c.kind === "obsidian") return c.key_id != null ? String(c.key_id) : null
   return c.client_id
 }

@@ -9,12 +9,11 @@ import AuthPanel from '../layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { heading, fieldInput, destructiveAlert, selectableRow } from '@/lib/ui-classes'
-import { useMe } from '../api/queries'
+import { useConnections, useMe, type Connection } from '../api/queries'
 import { SyncStatusPill } from '../onboarding/sync-status-pill'
 import { useVaultReadyEvents } from '../onboarding/use-vault-ready-events'
 import { useConnectionCap } from '../billing/use-connection-cap'
-import { ExistingConnectionsPanel } from '../billing/existing-connections-panel'
-import { copyFor } from '../billing/limit-copy'
+import { connectionId as obsidianConnectionId } from '../billing/existing-connections-panel'
 
 type Vault = { id: number; name: string; note_count: number }
 
@@ -43,12 +42,16 @@ export default function DeviceLinkPage() {
   const [linkedVaultId, setLinkedVaultId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  // Proactive cap check — if the user is already at their Obsidian-connection
-  // cap, show a disconnect panel BEFORE they spend effort typing the code or
-  // picking a vault. Falls through to the normal flow once they free up a
-  // slot (billing/status invalidates → atCap flips false → this re-renders
-  // with the regular UI mounted).
+  // Device-flow is "I'm moving in" not "I want a 4th tab" — when at cap, we
+  // DON'T block the flow. We warn the user the existing device will stop
+  // syncing, and on Authorize we disconnect it first and then link this one.
   const capCheck = useConnectionCap('obsidian')
+  // Only need the existing-connection details when at cap (for the heads-up
+  // banner + the implicit disconnect on Authorize).
+  const connections = useConnections({ enabled: capCheck.atCap })
+  const existingObsidian = (connections.data ?? []).find(
+    (c): c is Connection => c.kind === 'obsidian',
+  )
 
   if (!isSignedIn) {
     return (
@@ -112,22 +115,50 @@ export default function DeviceLinkPage() {
     setLoading(true)
     setError('')
     try {
+      // If user is at cap, swap: disconnect the existing device first so the
+      // authorize call doesn't 402. If the disconnect succeeds but authorize
+      // fails, the user is left with 0 connections — surface that explicitly
+      // instead of leaving them stranded silently.
+      let swappedFromName: string | null = null
+      if (capCheck.atCap && existingObsidian) {
+        const existingId = obsidianConnectionId(existingObsidian)
+        if (existingId) {
+          swappedFromName = existingObsidian.name ?? 'previous device'
+          await api.del(`/connections/device/${existingId}`)
+          await qc.invalidateQueries({ queryKey: ['connections'] })
+          await qc.invalidateQueries({ queryKey: ['billing', 'status'] })
+        }
+      }
+
       const body = createNew
         ? { user_code: userCode, vault_id: 'new', vault_name: effectiveNewName }
         : { user_code: userCode, vault_id: Number(selection) }
 
-      const { vault_id } = await api.post<{ ok: boolean; vault_id: number }>(
-        '/auth/device/authorize',
-        body,
-      )
+      try {
+        const { vault_id } = await api.post<{ ok: boolean; vault_id: number }>(
+          '/auth/device/authorize',
+          body,
+        )
       // Stash the linked vault as active so subsequent navigations land in
       // the right one. We DON'T auto-navigate immediately — the plugin still
       // owes the first sync from inside Obsidian. The success step listens
       // for the `vault_populated` broadcast and forwards then.
-      setActiveVaultId(vault_id)
-      setLinkedVaultId(vault_id)
-      qc.invalidateQueries({ queryKey: ['vaults'] })
-      setStep('success')
+        setActiveVaultId(vault_id)
+        setLinkedVaultId(vault_id)
+        qc.invalidateQueries({ queryKey: ['vaults'] })
+        setStep('success')
+      } catch (authErr) {
+        if (swappedFromName) {
+          // Disconnect succeeded but authorize did not — user is now at 0
+          // connections instead of 1. Make that visible.
+          setError(
+            `Disconnected '${swappedFromName}' but linking the new device failed. ` +
+              `Re-link from Obsidian — no devices are currently synced.`,
+          )
+          return
+        }
+        throw authErr
+      }
     } catch (e: unknown) {
       // LimitExceededError is surfaced by UpgradeDialogProvider (the cap
       // dialog opens with Disconnect + Upgrade). Don't double-render its
@@ -159,33 +190,26 @@ export default function DeviceLinkPage() {
         )}
       >
         <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          {capCheck.atCap
-            ? 'Device sync limit reached'
-            : step === 'pick-vault'
-              ? 'Choose a vault to sync'
-              : 'Link Obsidian Vault'}
+          {step === 'pick-vault' ? 'Choose a vault to sync' : 'Link Obsidian Vault'}
         </h1>
 
-        {capCheck.atCap && (
-          <section className="flex flex-col gap-3">
-            <p className="text-sm text-foreground">
-              {copyFor('concurrent_devices_exceeded').body}
-            </p>
-            <ExistingConnectionsPanel
-              kind="obsidian"
-              onChanged={() => qc.invalidateQueries({ queryKey: ['billing', 'status'] })}
-            />
-            <Button
-              variant="outline"
-              onClick={() => navigate('/settings/billing')}
-              className="self-start"
-            >
-              Upgrade for unlimited devices
-            </Button>
-          </section>
+        {capCheck.atCap && existingObsidian && step !== 'success' && (
+          <div
+            role="status"
+            className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+          >
+            Heads up — your Free plan syncs files between 1 device at a time.
+            Linking this device will disconnect{' '}
+            <strong>{existingObsidian.name ?? 'your previous device'}</strong>, which
+            will stop receiving sync changes. <a
+              className="underline underline-offset-4"
+              onClick={(e) => { e.preventDefault(); navigate('/settings/billing') }}
+              href="/settings/billing"
+            >Upgrade</a> to keep both connected.
+          </div>
         )}
 
-        {!capCheck.atCap && step === 'enter-code' && (
+        {step === 'enter-code' && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               Enter the code shown in your Obsidian plugin:
@@ -205,7 +229,7 @@ export default function DeviceLinkPage() {
           </div>
         )}
 
-        {!capCheck.atCap && step === 'pick-vault' && (
+        {step === 'pick-vault' && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               Pick an existing one, or create a new vault for these notes.
@@ -231,14 +255,14 @@ export default function DeviceLinkPage() {
           </div>
         )}
 
-        {!capCheck.atCap && step === 'success' && (
+        {step === 'success' && (
           <SuccessStep
             linkedVaultId={linkedVaultId}
             onForward={() => navigate('/')}
           />
         )}
 
-        {!capCheck.atCap && error && (
+        {error && (
           <p
             role="alert"
             className={cn(destructiveAlert, 'p-3 text-foreground')}

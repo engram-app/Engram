@@ -137,19 +137,17 @@ describe('DeviceLinkPage', () => {
     await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(9))
   })
 
-  it('shows the proactive cap panel (not the code input) when at the Obsidian cap', () => {
+  it('shows the heads-up banner (but keeps the code input) when at the Obsidian cap', () => {
     // Free-tier user already syncing one Obsidian device — landing on /link
-    // should see the disconnect-or-upgrade UI BEFORE typing a code.
+    // shows a banner explaining the swap (this device will replace the existing
+    // one), but the code input stays visible so they can still proceed.
     billingState.current = {
       caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
       current_connections: { obsidian: 1, mcp: 0 },
     }
     renderPage()
-    expect(screen.getByRole('heading', { name: /device sync limit reached/i })).toBeInTheDocument()
-    expect(screen.getByText(/currently connected/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /upgrade for unlimited devices/i })).toBeInTheDocument()
-    // Code field MUST be hidden — the whole point of "proactive" is to spare
-    // the user from typing a code that the backend will then 402 on.
-    expect(screen.queryByPlaceholderText(/XXXX-XXXX/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/heads up/i)
+    expect(screen.getByRole('status')).toHaveTextContent(/will disconnect/i)
+    expect(screen.getByPlaceholderText(/XXXX-XXXX/i)).toBeInTheDocument()
   })
 })
