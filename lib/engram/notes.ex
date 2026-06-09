@@ -733,6 +733,91 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Atomic batch move. Each note in `ids` is moved into the folder identified
+  by `target_folder_id` (a folder-marker row's id, scoped to the caller's
+  user + vault).
+
+  Semantics:
+
+  - All-or-nothing transaction. On any failure (missing/cross-vault note id,
+    missing target marker, destination path collision), every prior move in
+    the batch rolls back.
+  - Returns `{:ok, %{moved: n}}` on success (n = `length(ids)`).
+  - Returns `{:error, {:not_found, id}}` for a missing or cross-vault note id,
+    or for a missing target folder marker (with `id == target_folder_id`).
+  - Returns `{:error, {:conflict, id}}` when the destination path is already
+    taken by another note in the same vault.
+
+  Empty list short-circuits to `{:ok, %{moved: 0}}` without opening a
+  transaction or resolving the marker.
+
+  PubSub disclosure (same caveat as `batch_delete_notes/3`): `rename_note/4`
+  fires `note_changed` broadcasts per id during the transaction. PubSub is
+  NOT transactional — subscribers may receive events for moves that get
+  rolled back when a later id in the batch fails. The systemic fix
+  (after-commit hooks so broadcasts only fire post-commit) is tracked as a
+  follow-up and will land before more batch ops are added.
+  """
+  @spec batch_move_notes(map(), map(), [integer()], integer()) ::
+          {:ok, %{moved: non_neg_integer()}}
+          | {:error, {:not_found | :conflict, integer()} | term()}
+  def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_notes(user, vault, ids, target_folder_id)
+      when is_list(ids) and is_integer(target_folder_id) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        target_folder = hydrate_folder_marker(marker, dek).folder
+
+        ids
+        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+          case move_note_into_folder(user, vault, id, target_folder) do
+            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, reason} -> {:halt, {:rollback, reason}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, :not_found} -> Repo.rollback({:not_found, target_folder_id})
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Resolve the note by id (ownership + cross-vault check) and delegate to
+  # rename_note/4 with the recomposed path. rename_note takes the OLD path
+  # string, sanitizes the new path, and pre-checks the unique
+  # (user, vault, path_hmac) constraint, surfacing {:error, :conflict}
+  # instead of crashing on a Postgrex unique_violation.
+  defp move_note_into_folder(user, vault, id, target_folder) do
+    case get_note_by_id(user, vault, id) do
+      {:ok, note} ->
+        new_path =
+          case target_folder do
+            "" -> Path.basename(note.path)
+            folder -> Path.join(folder, Path.basename(note.path))
+          end
+
+        case rename_note(user, vault, note.path, new_path) do
+          {:ok, updated} -> {:ok, updated}
+          {:error, :conflict} -> {:error, {:conflict, id}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :not_found} ->
+        {:error, {:not_found, id}}
+    end
+  end
+
+  @doc """
   Returns notes changed (upserted or deleted) since the given datetime.
   Deleted notes are included with deleted: true.
   """
