@@ -384,6 +384,47 @@ defmodule EngramWeb.SyncChannelTest do
       ref = push(socket, "pull_changes", %{})
       assert_reply ref, :error, %{"reason" => _}
     end
+
+    test "carries note id in each change", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/WithId.md",
+          "content" => "# WithId",
+          "mtime" => 1_000.0
+        })
+
+      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
+      assert_reply ref, :ok, %{"changes" => changes}
+
+      change = Enum.find(changes, &(&1["path"] == "Test/WithId.md"))
+      assert change["id"] == note.id
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Batch broadcasts (notes.batch / folders.batch) pass through unintercepted
+  # ---------------------------------------------------------------------------
+
+  describe "batch broadcasts pass through" do
+    test "notes.batch reaches subscribed client", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.broadcast!(
+        "sync:#{user.id}:#{vault.id}",
+        "notes.batch",
+        %{op: "delete", ids: [1, 2, 3]}
+      )
+
+      assert_push "notes.batch", %{op: "delete", ids: [1, 2, 3]}
+    end
+
+    test "folders.batch reaches subscribed client", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.broadcast!(
+        "sync:#{user.id}:#{vault.id}",
+        "folders.batch",
+        %{op: "move", ids: [42], target_parent_id: 99}
+      )
+
+      assert_push "folders.batch", %{op: "move", ids: [42], target_parent_id: 99}
+    end
   end
 
   # ---------------------------------------------------------------------------
