@@ -25,4 +25,24 @@ describe('ActionDrawer', () => {
     expect(onPick).toHaveBeenCalledWith('delete')
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('shows Select-more entry when callback provided', async () => {
+    const onSelectMore = vi.fn()
+    render(
+      <ActionDrawer
+        title="Some folder"
+        actions={[]}
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+        onSelectMore={onSelectMore}
+      />,
+    )
+    await fireEvent.click(screen.getByRole('button', { name: /Select more/i }))
+    expect(onSelectMore).toHaveBeenCalled()
+  })
+
+  it('omits Select-more entry when callback absent (backwards compatible)', () => {
+    render(<ActionDrawer title="Some folder" actions={[]} onPick={vi.fn()} onClose={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /Select more/i })).not.toBeInTheDocument()
+  })
 })

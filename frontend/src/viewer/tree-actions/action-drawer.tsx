@@ -5,9 +5,10 @@ interface Props {
   actions: readonly Action[]
   onPick: (id: ActionId) => void
   onClose: () => void
+  onSelectMore?: () => void
 }
 
-export function ActionDrawer({ title, actions, onPick, onClose }: Props) {
+export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: Props) {
   return (
     <>
       <div
@@ -37,6 +38,18 @@ export function ActionDrawer({ title, actions, onPick, onClose }: Props) {
             {a.label}
           </button>
         ))}
+        {onSelectMore && (
+          <button
+            type="button"
+            onClick={() => {
+              onSelectMore()
+              onClose()
+            }}
+            className="flex w-full border-t border-gray-200 px-4 py-3 text-left text-base text-gray-800 dark:border-gray-700 dark:text-gray-100"
+          >
+            Select more
+          </button>
+        )}
       </div>
     </>
   )
