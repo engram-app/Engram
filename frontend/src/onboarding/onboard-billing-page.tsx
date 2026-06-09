@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '../api/client'
 import type { OnboardingStatus } from '../api/queries'
@@ -7,6 +8,7 @@ import BillingPage from '../billing/billing-page'
 
 export default function OnboardBillingPage() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [freeLoading, setFreeLoading] = useState(false)
 
   const onActivated = useCallback(
@@ -20,14 +22,16 @@ export default function OnboardBillingPage() {
   const handleContinueFree = useCallback(async () => {
     setFreeLoading(true)
     try {
-      await api.post('/onboarding/accept_free_tier')
-      navigate('/onboard/vault', { replace: true })
+      const status = await api.post<OnboardingStatus>('/onboarding/accept_free_tier')
+      qc.setQueryData(['onboarding', 'status'], status)
+      const next = status.next_step === 'done' ? '/' : `/onboard/${status.next_step}`
+      navigate(next, { replace: true })
     } catch {
       toast.error('Could not continue. Please try again.')
     } finally {
       setFreeLoading(false)
     }
-  }, [navigate])
+  }, [navigate, qc])
 
   return (
     <section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pb-[14vh] pt-8">
