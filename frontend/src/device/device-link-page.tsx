@@ -22,7 +22,13 @@ export default function DeviceLinkPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [step, setStep] = useState<Step>('enter-code')
-  const [userCode, setUserCode] = useState('')
+  // RFC 8628 verification_uri_complete: if the plugin sends the user to
+  // /link?code=ENGR-7X4K, prefill the field instead of forcing a re-type.
+  const [userCode, setUserCode] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    const raw = new URLSearchParams(window.location.search).get('code') ?? ''
+    return raw.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8)
+  })
   const [vaults, setVaults] = useState<Vault[]>([])
   // `selection` is the radio-row value: 'matched' (create new with the
   // plugin-suggested name), 'custom' (create new with the input below), or
