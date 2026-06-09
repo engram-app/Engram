@@ -88,7 +88,6 @@ defmodule EngramWeb.SyncChannelTest do
       assert {:error, %{reason: "invalid_topic"}} =
                subscribe_and_join(socket, EngramWeb.SyncChannel, "sync:#{user.id}")
     end
-
   end
 
   # ---------------------------------------------------------------------------
