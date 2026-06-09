@@ -114,7 +114,7 @@ function ExistingConnectionsPanel({
                 <Button
                   type="button"
                   size="sm"
-                  variant="outline"
+                  variant="destructive"
                   disabled={busyId === id}
                   onClick={() => disconnect(c)}
                 >
