@@ -973,6 +973,49 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns all non-deleted notes living directly under the folder identified
+  by `marker_id` (a folder-marker row's id). Id-keyed counterpart to
+  `list_notes_in_folder/3` — used by tree data loaders that already hold a
+  marker id and shouldn't have to round-trip cleartext folder paths.
+
+  Returns `{:error, :not_found}` when the id doesn't resolve to a live
+  folder marker owned by `user`/`vault`.
+  """
+  @spec list_folder_notes_by_id(map(), map(), integer()) ::
+          {:ok, [Note.t()]} | {:error, :not_found}
+  def list_folder_notes_by_id(user, vault, marker_id) when is_integer(marker_id) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, marker} <- get_folder_marker_by_id(user, vault, marker_id),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      hydrated = hydrate_folder_marker(marker, dek)
+      list_notes_in_folder(user, vault, hydrated.folder)
+    end
+  end
+
+  @spec get_folder_marker_by_id(map(), map(), integer()) ::
+          {:ok, Note.t()} | {:error, :not_found}
+  defp get_folder_marker_by_id(user, vault, id) when is_integer(id) do
+    {:ok, result} =
+      Repo.with_tenant(user.id, fn ->
+        case Repo.one(
+               from(n in Note,
+                 where:
+                   n.id == ^id and
+                     n.user_id == ^user.id and
+                     n.vault_id == ^vault.id and
+                     n.kind == "folder" and
+                     is_nil(n.deleted_at)
+               )
+             ) do
+          nil -> {:error, :not_found}
+          marker -> {:ok, marker}
+        end
+      end)
+
+    result
+  end
+
+  @doc """
   Renames a folder and all notes within it (including subfolders).
   Rewrites path, folder, and title for each affected note.
   Returns {:ok, count} with the number of notes affected.

@@ -1339,4 +1339,55 @@ defmodule Engram.NotesTest do
       assert hd(notes).path == "Mixed/a.md"
     end
   end
+
+  describe "list_folder_notes_by_id/3" do
+    test "returns notes whose folder matches the marker's folder", %{user: user, vault: vault} do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+
+      {:ok, _n1} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _n2} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/b.md",
+          "content" => "b",
+          "mtime" => 2.0
+        })
+
+      {:ok, _other} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Archive/c.md",
+          "content" => "c",
+          "mtime" => 3.0
+        })
+
+      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      paths = Enum.map(notes, & &1.path) |> Enum.sort()
+      assert paths == ["Projects/a.md", "Projects/b.md"]
+    end
+
+    test "returns {:error, :not_found} when marker doesn't exist or belongs to other vault",
+         %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.list_folder_notes_by_id(user, vault, 999_999)
+    end
+
+    test "excludes folder markers themselves", %{user: user, vault: vault} do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+      {:ok, _child_marker} = Notes.create_folder_marker(user, vault, "Projects/Sub")
+
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      assert Enum.map(notes, & &1.path) == ["Projects/a.md"]
+    end
+  end
 end
