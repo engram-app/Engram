@@ -66,7 +66,9 @@ defmodule EngramWeb.AttachmentsController do
   defp text_only?(user), do: Billing.effective_limit(user, :attachments_text_only) == true
 
   defp text_mime?(nil), do: false
-  defp text_mime?(mime) when is_binary(mime), do: String.starts_with?(String.downcase(mime), "text/")
+
+  defp text_mime?(mime) when is_binary(mime),
+    do: String.starts_with?(String.downcase(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
