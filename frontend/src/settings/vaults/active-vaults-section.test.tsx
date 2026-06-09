@@ -8,10 +8,13 @@ const vaults = [
   { id: 2, name: 'Personal', description: null, slug: 'personal', is_default: false, created_at: '', encrypted: true, encryption_status: 'none', encrypted_at: null, decrypt_requested_at: null, last_toggle_at: null, cooldown_days: null, note_count: 0, attachment_count: 0 },
 ]
 
+const billingState = { current: { caps: { vaults: null } } as { caps: { vaults: number | null } } }
+
 vi.mock('@/api/queries', () => ({
   useVaults: () => ({ data: vaults, isLoading: false }),
   useDeleteVault: () => ({ mutate: deleteMutate, isPending: false }),
   useUpdateVault: () => ({ mutate: updateMutate, isPending: false }),
+  useBillingStatus: () => ({ data: billingState.current }),
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 

@@ -528,45 +528,13 @@ export function useSetOnboardingProfile() {
   })
 }
 
-// API key types
-
-export interface ApiKey {
-  id: number
-  name: string
-  created_at: string
-  last_used: string | null
-}
+// API key result shape — created by useCreatePat below; kept as a named
+// type because the reveal modal in settings/connections-page.tsx imports it.
 
 export interface CreatedApiKey {
   id: number
   name: string
   key: string
-}
-
-// API key hooks
-
-export function useApiKeys() {
-  return useQuery({
-    queryKey: ['api-keys'],
-    queryFn: () => api.get<{ keys: ApiKey[] }>('/api-keys'),
-    select: (data) => data.keys,
-  })
-}
-
-export function useCreateApiKey() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (name: string) => api.post<CreatedApiKey>('/api-keys', { name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
-  })
-}
-
-export function useRevokeApiKey() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: number) => api.del<{ deleted: boolean }>(`/api-keys/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
-  })
 }
 
 // ── Connections ─────────────────────────────────────────────
@@ -620,7 +588,6 @@ export function useCreatePat() {
       api.post<{ key: string; id: number; name: string }>('/connections/pat', { name }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
-      qc.invalidateQueries({ queryKey: ['api-keys'] }) // legacy queries also need refresh
     },
   })
 }
@@ -647,7 +614,6 @@ export function useRevokePat() {
     mutationFn: (id: number) => api.del(`/connections/pat/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
-      qc.invalidateQueries({ queryKey: ['api-keys'] })
     },
   })
 }
