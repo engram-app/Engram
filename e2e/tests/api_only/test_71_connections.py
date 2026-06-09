@@ -400,10 +400,16 @@ async def test_free_tier_cap_blocks_second_mcp_consent(clerk_client):
             f"second MCP consent should be 402, got {resp2.status_code}: {resp2.text}"
         )
         body = resp2.json()
-        assert body["error"] == "connection_cap_reached"
-        assert body["kind"] == "mcp"
+        # Standardized 402 LimitResponse shape (spec §4.5): error is the
+        # constant "limit_exceeded", reason carries the machine key, and
+        # limit_key names the LimitKeys entry that fired. The plug no
+        # longer leaks the legacy `kind` field.
+        assert body["error"] == "limit_exceeded"
+        assert body["reason"] == "mcp_connections_exceeded"
+        assert body["limit_key"] == "mcp_connections_cap"
         assert body["current"] == 1
         assert body["limit"] == 1
+        assert body["tier"] == "free"
         # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
         # the full https://app.engram.page/settings/billing URL, self-host
         # can override. Assert the path suffix only.

@@ -1,10 +1,12 @@
-"""E2E test 73 (Free-tier launch §8.4.2): Free user attachment upload → 402,
-markdown note alongside it sails through.
+"""E2E test 73 (Free-tier launch §8.4.2): Free user non-text attachment
+upload → 402, markdown note alongside it sails through.
 
 Covers the Phase 3 backend behavior:
-  - POST /api/attachments on Free tier returns 402 with the standardized
-    LimitResponse shape ({error: "limit_reached", reason: "attachments_disabled",
-    key: "attachments_enabled", ...}) BEFORE doing any S3 work.
+  - POST /api/attachments with image/png on Free tier returns 402 with the
+    standardized LimitResponse shape ({error: "limit_exceeded", reason:
+    "attachment_must_be_text", limit_key: "attachments_text_only", ...})
+    BEFORE doing any S3 work. Free CAN upload text/* attachments; the cap
+    is "text-only", not "no attachments".
   - POST /api/notes for a plain .md note from the same Free user succeeds.
   - GET /api/notes/<path> returns the note; GET /api/attachments/<path>
     returns 404 (the upload never landed).
@@ -133,11 +135,14 @@ def test_free_attachment_blocked_note_passes():
     assert body.get("error") == "limit_exceeded", (
         f"402 body should carry error=limit_exceeded; got: {body}"
     )
-    assert body.get("reason") == "attachments_disabled", (
-        f"402 body should carry reason=attachments_disabled; got: {body}"
+    # Free's attachments_enabled flag now defaults true (Free CAN upload),
+    # but a Free user is restricted to text/* MIMEs via the
+    # `attachments_text_only` gate. PNG → 402 attachment_must_be_text.
+    assert body.get("reason") == "attachment_must_be_text", (
+        f"402 body should carry reason=attachment_must_be_text; got: {body}"
     )
-    assert body.get("limit_key") == "attachments_enabled", (
-        f"402 body should carry limit_key=attachments_enabled; got: {body}"
+    assert body.get("limit_key") == "attachments_text_only", (
+        f"402 body should carry limit_key=attachments_text_only; got: {body}"
     )
     assert body.get("tier") == "free", (
         f"402 body should carry tier=free for a Free-tier user; got: {body}"
