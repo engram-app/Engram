@@ -272,7 +272,7 @@ function FolderNode({ node, depth, selectedNoteId, selectedFolder, folders }: Fo
       )}
       {rowActions.showDelete && (
         <DeleteConfirm
-          node={{ kind: 'folder', path: node.fullPath, childCount }}
+          nodes={[{ kind: 'folder', path: node.fullPath, childCount }]}
           onConfirm={rowActions.confirmDelete}
           onCancel={rowActions.cancelDelete}
         />
@@ -468,7 +468,7 @@ function NoteLeaf({
       )}
       {rowActions.showDelete && (
         <DeleteConfirm
-          node={{ kind: 'file', path: note.path }}
+          nodes={[{ kind: 'file', path: note.path }]}
           onConfirm={rowActions.confirmDelete}
           onCancel={rowActions.cancelDelete}
         />

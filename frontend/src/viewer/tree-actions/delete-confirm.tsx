@@ -3,16 +3,22 @@ type Node =
   | { kind: 'folder'; path: string; childCount: number }
 
 interface Props {
-  node: Node
+  nodes: Node[]
   onConfirm: () => void
   onCancel: () => void
 }
 
-export function DeleteConfirm({ node, onConfirm, onCancel }: Props) {
-  const message =
-    node.kind === 'file'
-      ? `Delete ${node.path}?`
-      : `Delete ${node.path}/ and ${node.childCount} items?`
+function buildMessage(nodes: Node[]): string {
+  if (nodes.length > 1) return `Delete ${nodes.length} items?`
+  const node = nodes[0]
+  if (!node) return 'Delete?'
+  return node.kind === 'file'
+    ? `Delete ${node.path}?`
+    : `Delete ${node.path}/ and ${node.childCount} items?`
+}
+
+export function DeleteConfirm({ nodes, onConfirm, onCancel }: Props) {
+  const message = buildMessage(nodes)
 
   return (
     <dialog
