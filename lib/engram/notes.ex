@@ -1657,7 +1657,7 @@ defmodule Engram.Notes do
   """
   @spec batch_move_folders(map(), map(), [integer()], integer()) ::
           {:ok, %{moved: non_neg_integer()}}
-          | {:error, {:not_found | :conflict, integer()} | term()}
+          | {:error, {:not_found | :conflict | :cycle, integer()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
@@ -1674,6 +1674,7 @@ defmodule Engram.Notes do
             {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
             {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
             {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
             {:error, reason} -> {:halt, {:rollback, reason}}
           end
         end)
@@ -1695,18 +1696,30 @@ defmodule Engram.Notes do
     case get_folder_marker_by_id(user, vault, id) do
       {:ok, marker} ->
         source_folder = hydrate_folder_marker(marker, dek).folder
-        leaf = Path.basename(source_folder)
 
-        new_folder =
-          case target_folder do
-            "" -> leaf
-            tf -> tf <> "/" <> leaf
+        # Cycle guard: moving a folder into itself or any descendant would
+        # produce a path that's a strict suffix of the source, which both
+        # `do_rename_folder/5`'s prefix scan can't reason about and is
+        # semantically nonsense ("a" cannot live under "a/b"). Catch it
+        # before the cascade runs so the caller gets a stable `:cycle`
+        # signal instead of partial moves or a Postgrex crash.
+        if target_folder == source_folder or
+             String.starts_with?(target_folder, source_folder <> "/") do
+          {:error, :cycle}
+        else
+          leaf = Path.basename(source_folder)
+
+          new_folder =
+            case target_folder do
+              "" -> leaf
+              tf -> tf <> "/" <> leaf
+            end
+
+          case rename_folder(user, vault, source_folder, new_folder) do
+            {:ok, _count} -> {:ok, new_folder}
+            {:error, :conflict} -> {:error, :conflict}
+            {:error, reason} -> {:error, reason}
           end
-
-        case rename_folder(user, vault, source_folder, new_folder) do
-          {:ok, _count} -> {:ok, new_folder}
-          {:error, :conflict} -> {:error, :conflict}
-          {:error, reason} -> {:error, reason}
         end
 
       {:error, :not_found} ->

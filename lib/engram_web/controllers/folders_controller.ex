@@ -141,11 +141,130 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Batch ops
+  # ---------------------------------------------------------------------------
+  #
+  # Idempotency: the X-Idempotency-Key header is required (enforced by
+  # EngramWeb.Plugs.IdempotencyKey before this action runs). On success we
+  # cache the (status, body) tuple so a retry within the TTL replays the
+  # exact response without re-executing the transaction. The plug short-
+  # circuits replays before they reach us.
+  #
+  # Note: PubSub broadcast still lives in the action (post-commit). If the
+  # commit succeeds but the broadcast crashes, the cache is already set, so
+  # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
+  # follow-up (after-commit hook).
+
+  def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {:ok, ids} <- parse_int_list(ids) do
+      case Notes.batch_delete_folders(user, vault, ids) do
+        {:ok, %{deleted: n}} ->
+          body = %{deleted: n}
+          Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+          broadcast_batch(user, vault, %{op: "delete", ids: ids})
+          json(conn, body)
+
+        {:error, {:not_found, id}} ->
+          conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+
+        {:error, {:conflict, id}} ->
+          conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+        {:error, _reason} ->
+          conn |> put_status(500) |> json(%{error: "internal"})
+      end
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
+    end
+  end
+
+  def batch_delete(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required param: ids"})
+  end
+
+  def batch_move(conn, %{"ids" => ids, "target_parent_id" => tgt}) when is_list(ids) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {:ok, ids} <- parse_int_list(ids),
+         {:ok, tgt} <- parse_int(tgt) do
+      case Notes.batch_move_folders(user, vault, ids, tgt) do
+        {:ok, %{moved: n}} ->
+          body = %{moved: n}
+          Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+          broadcast_batch(user, vault, %{
+            op: "move",
+            ids: ids,
+            target_parent_id: tgt
+          })
+
+          json(conn, body)
+
+        {:error, {:not_found, id}} ->
+          conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+
+        {:error, {:conflict, id}} ->
+          conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+        {:error, {:cycle, id}} ->
+          conn |> put_status(409) |> json(%{error: "cycle", item_id: id})
+
+        {:error, _reason} ->
+          conn |> put_status(500) |> json(%{error: "internal"})
+      end
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
+    end
+  end
+
+  def batch_move(conn, _params) do
+    conn
+    |> put_status(400)
+    |> json(%{error: "missing required params: ids, target_parent_id"})
+  end
+
   # Low-cardinality error formatter for JSON responses; avoids inspect/1 leaking term shape.
   defp format_error(%{__exception__: true} = e), do: Exception.message(e)
   defp format_error(atom) when is_atom(atom), do: Atom.to_string(atom)
   defp format_error(binary) when is_binary(binary), do: binary
   defp format_error(_), do: "internal_error"
+
+  defp parse_int_list(list) when is_list(list) do
+    Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
+      case parse_int(item) do
+        {:ok, n} -> {:cont, {:ok, [n | acc]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      :error -> :error
+    end
+  end
+
+  defp parse_int(n) when is_integer(n), do: {:ok, n}
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_int(_), do: :error
+
+  defp broadcast_batch(user, vault, payload) do
+    EngramWeb.Endpoint.broadcast!(
+      "sync:#{user.id}:#{vault.id}",
+      "folders.batch",
+      payload
+    )
+  end
 
   defp note_summary(note) do
     %{
