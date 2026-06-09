@@ -240,7 +240,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
         <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
           You're on Free — 1 connection.{' '}
           <Link
-            to="/settings/billing"
+            to="/onboard/billing"
             className="font-medium text-foreground underline underline-offset-4"
           >
             Upgrade

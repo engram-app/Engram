@@ -322,14 +322,14 @@ describe('ChecklistWidget — chrome', () => {
 })
 
 describe('ChecklistWidget — Free-tier reminder', () => {
-  it('renders Free reminder with Upgrade link when tier=free', () => {
+  it('renders Free reminder with Upgrade link to /onboard/billing when tier=free', () => {
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
     billingStatusValue.data = { tier: 'free', active: false } as Partial<BillingStatus>
     render(wrap(<ChecklistWidget onStartTour={() => {}} />))
 
     expect(screen.getByText(/free.*1 connection/i)).toBeInTheDocument()
     const link = screen.getByRole('link', { name: /upgrade/i })
-    expect(link).toHaveAttribute('href', '/settings/billing')
+    expect(link).toHaveAttribute('href', '/onboard/billing')
   })
 
   it('does not render the reminder when tier=pro', () => {

@@ -70,12 +70,12 @@ beforeEach(() => {
 })
 
 describe('OnboardToolsPage — Free tier', () => {
-  it('shows the Free-tier banner with an Upgrade link to /settings/billing', () => {
+  it('shows the Free-tier banner with an Upgrade link to /onboard/billing', () => {
     render(wrap(<OnboardToolsPage />))
 
     expect(screen.getByText(/free tier.*pick 1 to start/i)).toBeInTheDocument()
     const link = screen.getByRole('link', { name: /upgrade/i })
-    expect(link).toHaveAttribute('href', '/settings/billing')
+    expect(link).toHaveAttribute('href', '/onboard/billing')
   })
 
   it('single-select: picking a second tool deselects the first', () => {

@@ -114,7 +114,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
         <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           Free tier — pick 1 to start.{' '}
           <Link
-            to="/settings/billing"
+            to="/onboard/billing"
             className="font-medium text-foreground underline underline-offset-4"
           >
             Upgrade
