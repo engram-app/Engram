@@ -27,7 +27,8 @@ export default function DeviceLinkPage() {
   const [userCode, setUserCode] = useState(() => {
     if (typeof window === 'undefined') return ''
     const raw = new URLSearchParams(window.location.search).get('code') ?? ''
-    return raw.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8)
+    const clean = raw.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8)
+    return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean
   })
   const [vaults, setVaults] = useState<Vault[]>([])
   // `selection` is the radio-row value: 'matched' (create new with the
