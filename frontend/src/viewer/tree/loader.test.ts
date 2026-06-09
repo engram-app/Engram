@@ -9,8 +9,32 @@ const folders: Folder[] = [
 ]
 
 const notesByFolder: Record<number, NoteSummary[]> = {
-  1: [{ id: 100, path: 'Projects/a.md', title: 'a', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }],
-  2: [{ id: 200, path: 'Projects/Engram/b.md', title: 'b', created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' }],
+  1: [
+    {
+      id: 100,
+      path: 'Projects/a.md',
+      title: 'a',
+      folder: 'Projects',
+      tags: [],
+      version: 1,
+      mtime: '2026-01-01T00:00:00Z',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+  ],
+  2: [
+    {
+      id: 200,
+      path: 'Projects/Engram/b.md',
+      title: 'b',
+      folder: 'Projects/Engram',
+      tags: [],
+      version: 1,
+      mtime: '2026-01-02T00:00:00Z',
+      created_at: '2026-01-02T00:00:00Z',
+      updated_at: '2026-01-02T00:00:00Z',
+    },
+  ],
 }
 
 function makeQc(): QueryClient {
