@@ -1845,6 +1845,7 @@ defmodule Engram.Notes do
     _ =
       EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
         "event_type" => "upsert",
+        "id" => note.id,
         "path" => path,
         "vault_id" => vault_id,
         "content" => note.content || "",
