@@ -43,10 +43,15 @@ export const api = {
     return res.json()
   },
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
+  async post<T>(
+    path: string,
+    body?: unknown,
+    opts?: { headers?: Record<string, string> },
+  ): Promise<T> {
     const res = await authFetch(path, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
+      headers: opts?.headers,
     })
     return res.json()
   },

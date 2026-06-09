@@ -39,6 +39,10 @@ import {
   type Folder,
   type Note,
   useAcceptTerms,
+  useBatchDeleteFolders,
+  useBatchDeleteNotes,
+  useBatchMoveFolders,
+  useBatchMoveNotes,
   useCancelSubscription,
   useConfirmPlanChange,
   useDeleteFolder,
@@ -729,5 +733,329 @@ describe('useFolders', () => {
       name: 'top/sub',
       count: 1,
     })
+  })
+})
+
+// ── Batch mutation hooks (Task 19) ────────────────────────────
+//
+// Four hooks mirroring the single-target rename/delete pattern but
+// targeting the backend's atomic /batch-{delete,move} endpoints. Each:
+//   1. Sends a UUID `X-Idempotency-Key` header (backend dedupes via the
+//      IdempotencyKey plug installed Tasks 7/8).
+//   2. Patches every affected cache slice in `onMutate` so the UI moves
+//      instantly — important for tree multi-select where the user just
+//      ctrl-clicked five rows and hit delete.
+//   3. Rolls those patches back on error.
+//   4. Invalidates `['folders']` + `['folder-notes-by-id']` on success
+//      so the server is the eventual source of truth (and so any
+//      server-side cascade we don't model client-side gets reconciled).
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function seedFolderNotesById(
+  folderId: number,
+  notes: Array<{ id: number; path?: string; folder?: string }>,
+) {
+  qc.setQueryData(
+    ['folder-notes-by-id', 42, folderId],
+    notes.map((n) => ({
+      id: n.id,
+      path: n.path ?? `f${folderId}/n${n.id}.md`,
+      title: `n${n.id}`,
+      folder: n.folder ?? `f${folderId}`,
+      tags: [],
+      version: 1,
+      mtime: '',
+      created_at: '',
+      updated_at: '',
+    })),
+  )
+}
+
+describe('useBatchDeleteNotes', () => {
+  it('POSTs ids and sends a UUID X-Idempotency-Key header', async () => {
+    post.mockResolvedValue({ deleted: 2 })
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ ids: [1, 2] })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/notes/batch-delete',
+      { ids: [1, 2] },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('optimistically removes ids from every cached folder-notes-by-id list', async () => {
+    seedFolderNotesById(5, [{ id: 1 }, { id: 2 }, { id: 3 }])
+    seedFolderNotesById(6, [{ id: 4 }])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: [1, 2, 4] })
+    })
+
+    await waitFor(() => {
+      const list5 = qc.getQueryData<Array<{ id: number }>>(['folder-notes-by-id', 42, 5])
+      expect(list5?.map((n) => n.id)).toEqual([3])
+    })
+
+    const list6 = qc.getQueryData<Array<{ id: number }>>(['folder-notes-by-id', 42, 6])
+    expect(list6?.map((n) => n.id)).toEqual([])
+
+    resolvePost({ deleted: 3 })
+  })
+
+  it('rolls back every patched list when the server rejects', async () => {
+    seedFolderNotesById(5, [{ id: 1 }, { id: 2 }, { id: 3 }])
+    post.mockRejectedValue(new ApiError(500, 'boom'))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: [1, 2] })
+      } catch {
+        // expected
+      }
+    })
+
+    const list = qc.getQueryData<Array<{ id: number }>>(['folder-notes-by-id', 42, 5])
+    expect(list?.map((n) => n.id).sort()).toEqual([1, 2, 3])
+  })
+
+  it('invalidates folders + folder-notes-by-id on success', async () => {
+    post.mockResolvedValue({ deleted: 2 })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ ids: [1, 2] })
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', 42] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folder-notes-by-id', 42] })
+  })
+})
+
+describe('useBatchMoveNotes', () => {
+  it('POSTs ids + target_folder_id with UUID idempotency header', async () => {
+    post.mockResolvedValue({ moved: 2 })
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ ids: [1, 2], target_folder_id: 9 })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/notes/batch-move',
+      { ids: [1, 2], target_folder_id: 9 },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('optimistically strips moved notes from source lists before resolution', async () => {
+    seedFolderNotesById(5, [{ id: 1 }, { id: 2 }, { id: 3 }])
+    seedFolderNotesById(9, [{ id: 4 }])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: [1, 2], target_folder_id: 9 })
+    })
+
+    await waitFor(() => {
+      const src = qc.getQueryData<Array<{ id: number }>>(['folder-notes-by-id', 42, 5])
+      expect(src?.map((n) => n.id)).toEqual([3])
+    })
+
+    resolvePost({ moved: 2 })
+  })
+
+  it('rolls back source list on server error (e.g. 409)', async () => {
+    seedFolderNotesById(5, [{ id: 1 }, { id: 2 }, { id: 3 }])
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: [1, 2], target_folder_id: 9 })
+      } catch {
+        // expected
+      }
+    })
+
+    const src = qc.getQueryData<Array<{ id: number }>>(['folder-notes-by-id', 42, 5])
+    expect(src?.map((n) => n.id).sort()).toEqual([1, 2, 3])
+  })
+})
+
+describe('useBatchDeleteFolders', () => {
+  it('POSTs ids with UUID idempotency header', async () => {
+    post.mockResolvedValue({ deleted: 2 })
+
+    const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ ids: [7, 8] })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/folders/batch-delete',
+      { ids: [7, 8] },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('optimistically removes target folders + descendants from the folders cache', async () => {
+    qc.setQueryData(['folders', 42], {
+      folders: [
+        { id: 7, parent_id: null, name: 'top', count: 0 },
+        { id: 8, parent_id: 7, name: 'top/sub', count: 0 },
+        { id: 9, parent_id: null, name: 'other', count: 0 },
+      ],
+    })
+    seedFolderNotesById(7, [{ id: 1 }])
+    seedFolderNotesById(8, [{ id: 2 }])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: [7] })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', 42])
+      expect(folders?.folders.map((f) => f.id).sort()).toEqual([9])
+    })
+
+    // by-id lists for removed folder + descendant are dropped, sibling intact
+    expect(qc.getQueryData(['folder-notes-by-id', 42, 7])).toBeUndefined()
+    expect(qc.getQueryData(['folder-notes-by-id', 42, 8])).toBeUndefined()
+
+    resolvePost({ deleted: 2 })
+  })
+
+  it('rolls back the folders cache when the server rejects', async () => {
+    qc.setQueryData(['folders', 42], {
+      folders: [
+        { id: 7, parent_id: null, name: 'top', count: 0 },
+        { id: 9, parent_id: null, name: 'other', count: 0 },
+      ],
+    })
+    post.mockRejectedValue(new ApiError(500, 'boom'))
+
+    const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: [7] })
+      } catch {
+        // expected
+      }
+    })
+
+    const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', 42])
+    expect(folders?.folders.map((f) => f.id).sort()).toEqual([7, 9])
+  })
+})
+
+describe('useBatchMoveFolders', () => {
+  it('POSTs target_parent_id (NOT target_folder_id) with UUID idempotency header', async () => {
+    post.mockResolvedValue({ moved: 1 })
+
+    const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ ids: [7], target_parent_id: 9 })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/folders/batch-move',
+      // Regression: the folders endpoint uses `target_parent_id`, NOT
+      // `target_folder_id` (notes endpoint). Don't conflate them.
+      { ids: [7], target_parent_id: 9 },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('optimistically rewrites parent_id + name prefix for moved folder + descendants', async () => {
+    qc.setQueryData(['folders', 42], {
+      folders: [
+        { id: 7, parent_id: null, name: 'src', count: 0 },
+        { id: 8, parent_id: 7, name: 'src/sub', count: 0 },
+        { id: 9, parent_id: null, name: 'dst', count: 0 },
+      ],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: [7], target_parent_id: 9 })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', 42])
+      expect(folders?.folders.find((f) => f.id === 7)?.name).toBe('dst/src')
+    })
+
+    const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', 42])
+    // Moved folder's parent flips to the target.
+    expect(folders?.folders.find((f) => f.id === 7)?.parent_id).toBe(9)
+    // Descendant's path prefix is rewritten; parent_id is unchanged
+    // (still points at id 7).
+    expect(folders?.folders.find((f) => f.id === 8)?.name).toBe('dst/src/sub')
+    expect(folders?.folders.find((f) => f.id === 8)?.parent_id).toBe(7)
+    // Unrelated folder untouched.
+    expect(folders?.folders.find((f) => f.id === 9)?.name).toBe('dst')
+
+    resolvePost({ moved: 2 })
+  })
+
+  it('rolls back on error', async () => {
+    qc.setQueryData(['folders', 42], {
+      folders: [
+        { id: 7, parent_id: null, name: 'src', count: 0 },
+        { id: 8, parent_id: 7, name: 'src/sub', count: 0 },
+      ],
+    })
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: [7], target_parent_id: 9 })
+      } catch {
+        // expected
+      }
+    })
+
+    const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', 42])
+    expect(folders?.folders.find((f) => f.id === 7)?.name).toBe('src')
+    expect(folders?.folders.find((f) => f.id === 7)?.parent_id).toBeNull()
+    expect(folders?.folders.find((f) => f.id === 8)?.name).toBe('src/sub')
   })
 })
