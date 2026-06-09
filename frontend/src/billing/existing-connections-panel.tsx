@@ -102,6 +102,10 @@ export function ExistingConnectionsPanel({
 }
 
 export function connectionId(c: Connection): string | null {
-  if (c.kind === "obsidian") return c.key_id != null ? String(c.key_id) : null
+  // For BOTH obsidian device-flow connections AND OAuth-registered connections
+  // (mcp + any obsidian-kind OAuth client), the surrogate id is `client_id`
+  // (which carries family_id for device-flow per `device_rows/1` in
+  // Engram.Connections). `key_id` is only set for PATs, which never hit this
+  // disconnect path.
   return c.client_id
 }
