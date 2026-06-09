@@ -21,6 +21,15 @@ defmodule EngramWeb.Plugs.Auth do
       {:ok, user} ->
         assign(conn, :current_user, with_billing_assoc(user))
 
+      {:ok, user, :internal_jwt} ->
+        # Device-flow / OAuth / MCP access tokens. Downstream cap plugs use
+        # `:current_auth_method` to count programmatic traffic without also
+        # gating the web SPA (which authes with a Clerk JWT and gets no
+        # marker — falls into the bare 2-tuple branch above).
+        conn
+        |> assign(:current_user, with_billing_assoc(user))
+        |> assign(:current_auth_method, :internal_jwt)
+
       {:ok, user, api_key} ->
         conn
         |> assign(:current_user, with_billing_assoc(user))

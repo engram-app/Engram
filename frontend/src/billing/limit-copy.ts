@@ -9,6 +9,7 @@ export type LimitReason =
   | "ai_conversations_per_day_exceeded"
   | "ai_queries_per_conversation_exceeded"
   | "ai_queries_per_day_exceeded"
+  | "external_queries_per_day_exceeded"
   | "mcp_connections_exceeded"
   | "obsidian_connections_exceeded"
   | "account_suspended"
@@ -56,6 +57,10 @@ const TABLE: Record<LimitReason, LimitCopy> = {
   ai_queries_per_day_exceeded: {
     title: "Daily AI query limit reached",
     body: "Upgrade for more.",
+  },
+  external_queries_per_day_exceeded: {
+    title: "Daily external-query limit reached",
+    body: "Your Free plan caps programmatic reads from external tools (MCP clients, the Obsidian plugin, API-key scripts). Upgrade for unlimited.",
   },
   mcp_connections_exceeded: {
     title: "External connection limit reached",

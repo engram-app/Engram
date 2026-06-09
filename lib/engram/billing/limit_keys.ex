@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 72 tuples (24 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> 75 tuples (25 keys × 3 tiers)
   """
 
   @catalog %{
@@ -40,6 +40,11 @@ defmodule Engram.Billing.LimitKeys do
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: true, pro: true}},
     api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 10, pro: 30}},
+    # Rolling-24h cap on programmatic ("external tooling") reads. Counts
+    # API-key + OAuth + device-flow + MCP access; web-SPA Clerk-JWT traffic
+    # is exempt. Free placeholder is intentionally generous — the hard
+    # number will be tuned after we see real traffic.
+    external_queries_per_day: %{type: :integer, defaults: %{free: 100, starter: nil, pro: nil}},
     inactivity_warn_60_days: %{
       type: :boolean,
       defaults: %{free: true, starter: false, pro: false}

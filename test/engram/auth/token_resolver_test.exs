@@ -105,7 +105,10 @@ defmodule Engram.Auth.TokenResolverTest do
     user = insert(:user)
     token = Accounts.generate_jwt(user)
 
-    assert {:ok, resolved} = TokenResolver.resolve(token)
+    # Internal-JWT path now returns a 3-tuple with `:internal_jwt` so
+    # downstream plugs can tell device-flow / OAuth / MCP access apart
+    # from Clerk-authed web-SPA traffic.
+    assert {:ok, resolved, :internal_jwt} = TokenResolver.resolve(token)
     assert resolved.id == user.id
   end
 
