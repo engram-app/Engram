@@ -35,9 +35,28 @@ defmodule EngramWeb.Plugs.HostRewrite do
     embed-status
   )
 
-  def init(opts), do: opts |> Keyword.put_new(:api_host, nil) |> Keyword.put_new(:mcp_host, nil)
+  # `init/1` normalizes opts to a keyword list with `:api_host` and
+  # `:mcp_host` keys. The endpoint mounts this plug without explicit opts,
+  # so `init([])` yields the runtime-read sentinel `:runtime`; `call/2`
+  # then looks up `Application.get_env(:engram, :host_rewrite, [])`
+  # per-request. Direct unit tests pass an explicit opts list (which
+  # always has at least one key here) and short-circuit the runtime read.
+  def init([]), do: :runtime
+  def init(:runtime), do: :runtime
 
-  def call(conn, opts) do
+  def init(opts) when is_list(opts),
+    do: opts |> Keyword.put_new(:api_host, nil) |> Keyword.put_new(:mcp_host, nil)
+
+  def call(conn, :runtime) do
+    case Application.get_env(:engram, :host_rewrite, []) do
+      # Strict no-op when unset — selfhost releases never touch the
+      # rewrite path.
+      [] -> conn
+      opts when is_list(opts) -> call(conn, init(opts))
+    end
+  end
+
+  def call(conn, opts) when is_list(opts) do
     api_host = opts[:api_host]
     mcp_host = opts[:mcp_host]
 

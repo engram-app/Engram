@@ -1,6 +1,6 @@
 defmodule EngramWeb.Plugs.HostRewriteTest do
   use ExUnit.Case, async: true
-  use Plug.Test
+  import Plug.Test
 
   alias EngramWeb.Plugs.HostRewrite
 

@@ -589,6 +589,16 @@ if config_env() == :prod do
     config :engram, :websocket_check_origin, phx_hosts.origins
   end
 
+  # Host-driven path rewrite for the dedicated `api.engram.page` and
+  # `mcp.engram.page` saas hosts. Opt-in: selfhost releases (and the
+  # current `app.engram.page` host until DNS cutover) leave this unset
+  # and the plug is a strict no-op. See EngramWeb.Plugs.HostRewrite.
+  if System.get_env("ENGRAM_HOST_REWRITE_ENABLED") == "true" do
+    config :engram, :host_rewrite,
+      api_host: System.get_env("ENGRAM_HOST_REWRITE_API_HOST", "api.engram.page"),
+      mcp_host: System.get_env("ENGRAM_HOST_REWRITE_MCP_HOST", "mcp.engram.page")
+  end
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key
