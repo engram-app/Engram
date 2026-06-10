@@ -1,5 +1,6 @@
 import { useContext, useEffect, useState } from 'react'
 import { ConfigContext } from '../config-context'
+import { getApiBase, joinApiUrl } from '../api/base'
 
 export interface Bootstrap {
   bootstrap_pending: boolean
@@ -22,7 +23,7 @@ let inflight: Promise<Bootstrap | null> | null = null
 
 function fetchBootstrap(): Promise<Bootstrap | null> {
   if (inflight) return inflight
-  inflight = fetch('/api/auth/bootstrap')
+  inflight = fetch(joinApiUrl(getApiBase(), '/api/auth/bootstrap'))
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)
     .then((b: Bootstrap | null) => {

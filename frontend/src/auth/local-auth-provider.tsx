@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AuthContext, type AuthAdapter } from './auth-context'
 import { useClearQueryCacheOnUserChange } from './use-clear-query-cache-on-user-change'
 import { setTokenGetter } from '../api/client'
+import { getApiBase, joinApiUrl } from '../api/base'
 import { queryClient } from '../api/query-client'
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
@@ -29,7 +30,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
     // first line of defense (avoids the round-trip + an extra DB rotate).
     if (refreshPromiseRef.current) return refreshPromiseRef.current
 
-    const promise = fetch('/api/auth/refresh', {
+    const promise = fetch(joinApiUrl(getApiBase(), '/api/auth/refresh'), {
       method: 'POST',
       credentials: 'include',
     })
@@ -86,7 +87,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
   useClearQueryCacheOnUserChange(queryClient, user?.email)
 
   const login = useCallback(async (email: string, password: string) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(joinApiUrl(getApiBase(), '/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -108,7 +109,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
     // arrived via `/signup?invite=…` we pass the token here so the backend
     // can atomically redeem it.
     const body = invite ? { email, password, invite } : { email, password }
-    const res = await fetch('/api/auth/register', {
+    const res = await fetch(joinApiUrl(getApiBase(), '/api/auth/register'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -126,7 +127,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
   }, [])
 
   const logout = useCallback(async () => {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch((err) => console.error('Logout request failed:', err))
+    await fetch(joinApiUrl(getApiBase(), '/api/auth/logout'), { method: 'POST', credentials: 'include' }).catch((err) => console.error('Logout request failed:', err))
     setAccessToken(null)
     setUser(null)
   }, [])

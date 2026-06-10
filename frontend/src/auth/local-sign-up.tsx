@@ -1,6 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ROUTES } from '../routes'
+import { getApiBase, joinApiUrl } from '../api/base'
 import { useAuthAdapter } from './use-auth-adapter'
 import { useBootstrap } from './use-bootstrap'
 import AuthLayout from './auth-layout'
@@ -37,7 +38,7 @@ export default function LocalSignUp() {
       setInvitePreview(null)
       return
     }
-    fetch(`/api/auth/invite/${encodeURIComponent(invite)}`)
+    fetch(joinApiUrl(getApiBase(), `/api/auth/invite/${encodeURIComponent(invite)}`))
       .then((r) => r.json())
       .then((p: InvitePreview) => setInvitePreview(p))
       .catch(() => setInvitePreview({ valid: false }))

@@ -7,6 +7,7 @@ import posthog from 'posthog-js'
 import { Toaster } from '@/components/ui/sonner'
 import { createAppRouter, installAppRouter } from './router'
 import { queryClient } from './api/query-client'
+import { setApiBase, setWsBase } from './api/base'
 import { configPromise, type EngramConfig } from './config'
 import { ConfigProvider } from './config-context'
 import { ThemeProvider } from './theme/theme-provider'
@@ -127,6 +128,12 @@ function AppShell({ config }: { config: EngramConfig }) {
 
 function BootstrapGate() {
   const config = use(configPromise)
+  // Install module-level apiBase/wsBase BEFORE any child component mounts.
+  // The singleton `api` object in src/api/client.ts and the WebSocket call
+  // sites read these via getApiBase()/getWsBase(); they need a value
+  // populated before AuthGuard fires its first fetch on mount.
+  setApiBase(config.apiBase)
+  setWsBase(config.wsBase)
   return <AppShell config={config} />
 }
 

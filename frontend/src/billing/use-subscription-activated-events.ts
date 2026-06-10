@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Socket } from 'phoenix'
 import { useAuthAdapter } from '../auth/use-auth-adapter'
+import { getWsBase, joinWsUrl } from '../api/base'
 
 export interface SubscriptionActivatedPayload {
   tier: string
@@ -40,7 +41,7 @@ export function useSubscriptionActivatedEvents({
       const token = await getToken()
       if (cancelled || !token) return
 
-      socket = new Socket('/socket', { params: { token } })
+      socket = new Socket(joinWsUrl(getWsBase(), '/socket'), { params: { token } })
       socket.connect()
 
       const channel = socket.channel(`user:${userId}`)
