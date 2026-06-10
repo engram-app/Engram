@@ -223,6 +223,7 @@ defmodule Engram.Notes do
     content = attrs["content"] || attrs[:content] || ""
     mtime = attrs["mtime"] || attrs[:mtime]
     client_version = attrs["version"] || attrs[:version]
+    client_id = attrs["id"] || attrs[:id]
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
@@ -257,7 +258,7 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              insert_new_note(base_attrs, user, sanitized_path, folder, tags)
+              insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id)
 
             existing ->
               update_existing_note(
@@ -314,7 +315,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -344,7 +345,14 @@ defmodule Engram.Notes do
         # ("notes:<column>:<id>") can be computed before INSERT. As of the
         # PG18 + UUIDv7 rework (Phase B), the id is minted app-side via
         # `mint_id/0` (v7 uuid) instead of pulled from a bigserial sequence.
-        note_id = mint_id()
+        # Phase I — accept a client-supplied uuid so the plugin / SDK can
+        # mint offline and push under a stable id. Falls back to server mint
+        # when nil or malformed.
+        note_id =
+          case client_id && Ecto.UUID.cast(client_id) do
+            {:ok, valid_uuid} -> valid_uuid
+            _ -> mint_id()
+          end
 
         with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
           phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
