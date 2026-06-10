@@ -134,9 +134,9 @@ defmodule Engram.Storage.Database do
 
     ids =
       Enum.flat_map(rows, fn [segment] ->
-        case Integer.parse(segment) do
-          {id, ""} -> [id]
-          _ -> []
+        case Ecto.UUID.cast(segment) do
+          {:ok, id} -> [id]
+          :error -> []
         end
       end)
 

@@ -42,7 +42,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   def perform(%Oban.Job{args: args}) do
     user_id = args["user_id"]
     vault_id = args["vault_id"]
-    cursor = args["cursor"] || "00000000-0000-0000-0000-000000000000"
+    cursor = normalize_cursor(args["cursor"])
     scope = args["scope"] || "notes"
 
     # T3.7 — gate DEK-accessing work during per-user rotation. The user_id
@@ -90,6 +90,13 @@ defmodule Engram.Workers.BackfillContentHashHmac do
       {:error, _} = err -> err
     end
   end
+
+  # Cursor is a UUID lower-bound for the seek loop. Accept the nil-uuid as
+  # the natural "start of table" sentinel; tolerate legacy `0` / nil from
+  # callers that haven't been updated post-PG18-UUID rework.
+  defp normalize_cursor(nil), do: "00000000-0000-0000-0000-000000000000"
+  defp normalize_cursor(0), do: "00000000-0000-0000-0000-000000000000"
+  defp normalize_cursor(cursor) when is_binary(cursor), do: cursor
 
   defp load_user(user_id) do
     case Repo.get(User, user_id) do

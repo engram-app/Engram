@@ -176,9 +176,9 @@ defmodule Engram.Storage.InMemory do
         fn {k, _}, acc ->
           case String.split(k, "/", parts: 2) do
             [user_id_str, _rest] ->
-              case Integer.parse(user_id_str) do
-                {id, ""} -> [id | acc]
-                _ -> acc
+              case Ecto.UUID.cast(user_id_str) do
+                {:ok, id} -> [id | acc]
+                :error -> acc
               end
 
             _ ->

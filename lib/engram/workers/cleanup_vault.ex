@@ -125,7 +125,7 @@ defmodule Engram.Workers.CleanupVault do
       |> where(vault_id: ^vault_id)
       |> Repo.delete_all(skip_tenant_check: true)
 
-      from(akv in "api_key_vaults", where: akv.vault_id == ^vault_id)
+      from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
       |> Repo.delete_all(skip_tenant_check: true)
 
       Repo.delete!(vault)
