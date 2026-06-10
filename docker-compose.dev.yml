@@ -3,7 +3,7 @@
 # the host. NEVER point at a remote DB; this stack is the source of truth.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4
     container_name: engram-dev-postgres
     environment:
       POSTGRES_USER: engram
@@ -12,7 +12,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - pg_dev_data:/var/lib/postgresql/data
+      - pg18_dev_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engram -d engram_dev"]
       interval: 3s
@@ -30,5 +30,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  pg_dev_data:
+  pg18_dev_data:
   qdrant_dev_data:
