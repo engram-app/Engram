@@ -68,6 +68,12 @@ defmodule EngramWeb.Endpoint do
   end
 
   plug Plug.RequestId
+  # The plug itself reads `Application.get_env(:engram, :host_rewrite, [])`
+  # at request time (NOT compile time) so the runtime env flag actually
+  # takes effect on a saas release and tests can mutate it via
+  # `Application.put_env`. When unset (default), the plug is a strict
+  # no-op — selfhost releases never touch the rewrite path.
+  plug EngramWeb.Plugs.HostRewrite
   # `log: false` suppresses Phoenix.Logger's default request log emission,
   # which interpolates conn.method + conn.request_path into the message body
   # (past the metadata-only RedactFilter). EngramWeb.RequestLogger replaces
