@@ -594,9 +594,20 @@ if config_env() == :prod do
   # current `app.engram.page` host until DNS cutover) leave this unset
   # and the plug is a strict no-op. See EngramWeb.Plugs.HostRewrite.
   if System.get_env("ENGRAM_HOST_REWRITE_ENABLED") == "true" do
+    saas_only? = System.get_env("ENGRAM_SAAS_ONLY") == "true"
+
+    extra_hosts =
+      case System.get_env("ENGRAM_ALLOWED_EXTRA_HOSTS") do
+        nil -> []
+        "" -> []
+        s -> String.split(s, ",", trim: true)
+      end
+
     config :engram, :host_rewrite,
       api_host: System.get_env("ENGRAM_HOST_REWRITE_API_HOST", "api.engram.page"),
-      mcp_host: System.get_env("ENGRAM_HOST_REWRITE_MCP_HOST", "mcp.engram.page")
+      mcp_host: System.get_env("ENGRAM_HOST_REWRITE_MCP_HOST", "mcp.engram.page"),
+      reject_unknown_hosts: saas_only?,
+      allowed_extra_hosts: extra_hosts
   end
 
   # ## SSL Support

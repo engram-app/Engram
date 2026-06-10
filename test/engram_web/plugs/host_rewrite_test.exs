@@ -144,4 +144,77 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       assert conn.status == 404
     end
   end
+
+  describe "reject_unknown_hosts" do
+    test "with reject_unknown_hosts=false (default), unknown host passes through" do
+      opts = HostRewrite.init(api_host: "api.engram.page", mcp_host: "mcp.engram.page")
+      conn = conn(:get, "/anything") |> Map.put(:host, "app.engram.page")
+      out = HostRewrite.call(conn, opts)
+
+      assert out == conn
+      refute out.halted
+    end
+
+    test "with reject_unknown_hosts=true, unknown host returns 410 Gone" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/anything") |> Map.put(:host, "app.engram.page")
+      out = HostRewrite.call(conn, opts)
+
+      assert out.halted
+      assert out.status == 410
+      body = Jason.decode!(out.resp_body)
+      assert body["error"] == "gone"
+      assert body["api_host"] == "api.engram.page"
+      assert body["message"] =~ "api.engram.page"
+    end
+
+    test "with reject_unknown_hosts=true, api_host still rewrites normally" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/notes") |> Map.put(:host, "api.engram.page")
+      out = HostRewrite.call(conn, opts)
+
+      assert out.request_path == "/api/notes"
+      refute out.halted
+    end
+
+    test "with reject_unknown_hosts=true and allowed_extra_hosts, listed host passes through" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true,
+          allowed_extra_hosts: ["health.internal", "alb-probe.local"]
+        )
+
+      conn = conn(:get, "/health") |> Map.put(:host, "health.internal")
+      out = HostRewrite.call(conn, opts)
+
+      refute out.halted
+      assert out == conn
+    end
+
+    test "with reject_unknown_hosts=true, selfhost-style empty config remains passthrough" do
+      # This proves the no-op contract: passing [] (selfhost) ignores the
+      # reject_unknown_hosts setting because api_host is nil → dispatch skips
+      # the rejection branch.
+      opts = HostRewrite.init([])
+      conn = conn(:get, "/anything") |> Map.put(:host, "engram.ax")
+      out = HostRewrite.call(conn, opts)
+
+      assert out == conn
+      refute out.halted
+    end
+  end
 end
