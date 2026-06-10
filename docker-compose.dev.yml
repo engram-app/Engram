@@ -12,7 +12,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - pg18_dev_data:/var/lib/postgresql/data
+      - pg18_dev_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engram -d engram_dev"]
       interval: 3s

@@ -25,7 +25,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pg18_elixir_data:/var/lib/postgresql/data
+      - pg18_elixir_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engram"]
       interval: 5s
