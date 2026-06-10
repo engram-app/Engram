@@ -90,6 +90,7 @@ defmodule Engram.Crypto.MasterRotation do
   def rotate_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 100)
+
     drive_loop(
       target_version,
       "00000000-0000-0000-0000-000000000000",
@@ -123,6 +124,7 @@ defmodule Engram.Crypto.MasterRotation do
   def enqueue_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 500)
+
     %{
       enqueued:
         enqueue_loop(

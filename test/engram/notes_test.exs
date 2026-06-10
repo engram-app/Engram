@@ -1372,7 +1372,8 @@ defmodule Engram.NotesTest do
 
     test "returns {:error, :not_found} when marker doesn't exist",
          %{user: user, vault: vault} do
-      assert {:error, :not_found} = Notes.list_folder_notes_by_id(user, vault, Ecto.UUID.generate())
+      assert {:error, :not_found} =
+               Notes.list_folder_notes_by_id(user, vault, Ecto.UUID.generate())
     end
 
     test "returns {:error, :not_found} when marker belongs to another vault (RLS)", %{

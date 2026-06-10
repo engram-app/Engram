@@ -111,6 +111,7 @@ defmodule Engram.Crypto.ProviderMigration do
   def enqueue_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
     batch_size = Keyword.get(opts, :batch_size, 500)
     target_name = Atom.to_string(target_provider)
+
     %{
       enqueued:
         enqueue_loop(

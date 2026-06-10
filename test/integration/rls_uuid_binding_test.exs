@@ -11,10 +11,10 @@ defmodule Engram.RlsUuidBindingTest do
 
   use Engram.DataCase, async: false
 
-  @moduletag :integration
-
   alias Engram.Repo
   alias Engram.Vaults.Vault
+
+  @moduletag :integration
 
   test "rows are visible only under matching uuid app.current_tenant" do
     user_a = insert(:user)

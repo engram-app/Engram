@@ -57,6 +57,7 @@ defmodule Engram.Crypto.AadRebind do
   @spec rebind_all(keyword()) :: counts()
   def rebind_all(opts \\ []) do
     batch_size = Keyword.get(opts, :batch_size, 100)
+
     drive_loop("00000000-0000-0000-0000-000000000000", batch_size, %{ok: 0, skipped: 0, failed: 0})
   end
 
