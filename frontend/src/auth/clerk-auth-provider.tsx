@@ -7,12 +7,10 @@ import { rememberSignupUser } from './signup-rejection'
 import { useClearQueryCacheOnUserChange } from './use-clear-query-cache-on-user-change'
 import { setTokenGetter } from '../api/client'
 import { queryClient } from '../api/query-client'
-import { config } from '../config'
-import { router } from '../router'
+import { useConfig } from '../config-context'
+import { getAppRouter } from '../router'
 import { ROUTES } from '../routes'
 import { useTheme } from '../theme/theme-provider'
-
-const clerkPubKey = config.clerkPublishableKey
 
 // Clerk passes the post-auth redirect target as an ABSOLUTE URL when it crosses
 // (or might cross) origins — including the in-origin case after an OAuth
@@ -104,6 +102,8 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 
 export default function ClerkAuthProvider({ children }: { children: React.ReactNode }) {
   const { resolved } = useTheme()
+  const config = useConfig()
+  const clerkPubKey = config.clerkPublishableKey
 
   const appearance = useMemo(
     () => ({
@@ -133,8 +133,8 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
       signUpUrl={signUpUrl}
       waitlistUrl={waitlistUrl}
       afterSignOutUrl={ROUTES.SIGN_IN}
-      routerPush={(to) => router.navigate(toRelativeUrl(to))}
-      routerReplace={(to) => router.navigate(toRelativeUrl(to), { replace: true })}
+      routerPush={(to) => getAppRouter().navigate(toRelativeUrl(to))}
+      routerReplace={(to) => getAppRouter().navigate(toRelativeUrl(to), { replace: true })}
     >
       <ClerkAdapterInner>{children}</ClerkAdapterInner>
     </ClerkProvider>

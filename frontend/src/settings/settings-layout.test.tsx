@@ -4,30 +4,40 @@ import { MemoryRouter, Routes, Route } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import SettingsLayout from './settings-layout'
 import { ThemeProvider } from '../theme/theme-provider'
+import { ConfigProvider } from '../config-context'
+import type { EngramConfig } from '../config'
 
 vi.mock('../auth/use-auth-adapter', () => ({
   useAuthAdapter: () => ({ user: { email: 'todd@example.com' }, logout: vi.fn() }),
 }))
-vi.mock('../config', () => ({
-  config: { authProvider: 'clerk', clerkPublishableKey: '', billingEnabled: true },
-}))
+
+const testConfig: EngramConfig = {
+  authProvider: 'clerk',
+  clerkPublishableKey: '',
+  billingEnabled: true,
+  clerkWaitlistMode: false,
+  apiBase: '',
+  wsBase: '',
+}
 
 function renderAt(path: string) {
   // SettingsLayout now calls useMe(); give it a query client with retry off so
   // an unmocked /api/me fetch fails fast rather than retrying through the test.
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <QueryClientProvider client={client}>
-      <ThemeProvider>
-        <MemoryRouter initialEntries={[path]}>
-          <Routes>
-            <Route path="/settings" element={<SettingsLayout />}>
-              <Route path="api-keys" element={<p>api keys body</p>} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </ThemeProvider>
-    </QueryClientProvider>,
+    <ConfigProvider config={testConfig}>
+      <QueryClientProvider client={client}>
+        <ThemeProvider>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route path="/settings" element={<SettingsLayout />}>
+                <Route path="api-keys" element={<p>api keys body</p>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ConfigProvider>,
   )
 }
 

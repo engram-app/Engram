@@ -24,7 +24,7 @@ describe('loadConfig', () => {
   })
 
   it('fetches /config.json when window injection absent', async () => {
-    const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue(
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         JSON.stringify({
           authProvider: 'clerk',
@@ -45,7 +45,7 @@ describe('loadConfig', () => {
   })
 
   it('falls back to local defaults when both window + /config.json fail', async () => {
-    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('network'))
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network'))
 
     const config = await loadConfig()
     expect(config.authProvider).toBe('local')

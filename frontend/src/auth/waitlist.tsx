@@ -1,25 +1,22 @@
 import { lazy, Suspense } from 'react'
 import { Navigate } from 'react-router'
-import { config } from '../config'
+import { useConfig } from '../config-context'
 import { ROUTES } from '../routes'
 import AuthLayout from './auth-layout'
 
-const isClerk = config.authProvider === 'clerk'
-
-const ClerkWaitlistPage = isClerk
-  ? lazy(() =>
-      import('@clerk/react').then((mod) => ({
-        default: () => (
-          <AuthLayout>
-            <mod.Waitlist signInUrl={ROUTES.SIGN_IN} />
-          </AuthLayout>
-        ),
-      })),
-    )
-  : null
+const ClerkWaitlistPage = lazy(() =>
+  import('@clerk/react').then((mod) => ({
+    default: () => (
+      <AuthLayout>
+        <mod.Waitlist signInUrl={ROUTES.SIGN_IN} />
+      </AuthLayout>
+    ),
+  })),
+)
 
 export default function WaitlistPage() {
-  if (!ClerkWaitlistPage || !config.clerkWaitlistMode) {
+  const config = useConfig()
+  if (config.authProvider !== 'clerk' || !config.clerkWaitlistMode) {
     return <Navigate to={ROUTES.SIGN_UP} replace />
   }
 
