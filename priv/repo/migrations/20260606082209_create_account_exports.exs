@@ -12,8 +12,9 @@ defmodule Engram.Repo.Migrations.CreateAccountExports do
   # per-tenant concurrency boundary.
 
   def change do
-    create table(:account_exports) do
-      add :user_id, references(:users, on_delete: :delete_all), null: false
+    create table(:account_exports, primary_key: false) do
+      add :id, :uuid, primary_key: true, default: fragment("uuidv7()")
+      add :user_id, references(:users, type: :uuid, on_delete: :delete_all), null: false
       add :status, :string, null: false
       add :s3_keys, {:array, :map}, default: []
       add :s3_upload_ids, {:array, :map}, default: []
@@ -38,11 +39,6 @@ defmodule Engram.Repo.Migrations.CreateAccountExports do
     execute(
       "GRANT SELECT, INSERT, UPDATE, DELETE ON account_exports TO engram_app",
       "REVOKE ALL ON account_exports FROM engram_app"
-    )
-
-    execute(
-      "GRANT USAGE, SELECT ON SEQUENCE account_exports_id_seq TO engram_app",
-      "REVOKE USAGE, SELECT ON SEQUENCE account_exports_id_seq FROM engram_app"
     )
   end
 end

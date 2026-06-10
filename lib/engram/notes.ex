@@ -121,7 +121,7 @@ defmodule Engram.Notes do
   end
 
   defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
-    marker_id = Crypto.next_row_id(:notes)
+    marker_id = mint_id()
     now = DateTime.utc_now()
     folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
     {folder_ct, folder_nonce} = Envelope.encrypt(folder, dek, folder_aad)
@@ -1461,7 +1461,7 @@ defmodule Engram.Notes do
           # written with empty content/title/tags but the row-id-bound AAD
           # still applies — keeps tombstones decryptable and indistinguishable
           # from any other AAD-bound row at read time.
-          tomb_id = Crypto.next_row_id(:notes)
+          tomb_id = mint_id()
           old_path_folder = Helpers.extract_folder(old_path)
 
           full_kw =

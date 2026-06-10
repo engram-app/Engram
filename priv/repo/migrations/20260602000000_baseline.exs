@@ -57,8 +57,26 @@ defmodule Engram.Repo.Migrations.Baseline do
   defp strip_comments_and_trim(chunk) do
     chunk
     |> String.split("\n")
-    |> Enum.reject(&String.starts_with?(String.trim(&1), "--"))
+    |> Enum.reject(fn line ->
+      trimmed = String.trim(line)
+      # `--` SQL comments + PG18 pg_dump psql metacommands `\restrict` / `\unrestrict`
+      # (security additions in PG18; not valid SQL — psql-only).
+      String.starts_with?(trimmed, "--") or String.starts_with?(trimmed, "\\")
+    end)
     |> Enum.join("\n")
     |> String.trim()
+    |> drop_pg18_search_path_reset()
+  end
+
+  # PG18 pg_dump emits `SELECT pg_catalog.set_config('search_path', '', false);`
+  # to prevent search_path injection during restore. We replay the dump inside
+  # the migrator's existing connection, so wiping search_path here breaks the
+  # ecto schema_migrations bookkeeping that runs immediately after this
+  # migration. The dump uses fully-qualified `public.` everywhere anyway,
+  # so the protection is redundant here. Drop the statement.
+  defp drop_pg18_search_path_reset(stmt) do
+    if stmt =~ ~r/^SELECT\s+pg_catalog\.set_config\('search_path'/i,
+      do: "",
+      else: stmt
   end
 end
