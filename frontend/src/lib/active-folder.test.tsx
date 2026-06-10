@@ -7,7 +7,7 @@ import { useActiveFolder } from './active-folder'
 
 // Mock useActiveVaultId to a fixed value
 vi.mock('../api/active-vault', () => ({
-  useActiveVaultId: () => 1,
+  useActiveVaultId: () => '1',
 }))
 
 function wrap(qc: QueryClient, initialPath: string) {
@@ -26,7 +26,7 @@ function wrap(qc: QueryClient, initialPath: string) {
 describe('useActiveFolder', () => {
   it('returns the folder of the cached note', () => {
     const qc = new QueryClient()
-    qc.setQueryData(['note', 1, 42], { id: 42, folder: 'src', path: 'src/a.md' })
+    qc.setQueryData(['note', '1', '42'], { id: '42', folder: 'src', path: 'src/a.md' })
     const { result } = renderHook(() => useActiveFolder(), { wrapper: wrap(qc, '/note/42') })
     expect(result.current).toBe('src')
   })

@@ -6,9 +6,9 @@ import { TreeRow } from './tree-row'
 import type { TreeItem } from './types'
 import type { LoaderItem } from './loader'
 
-const folderItem: TreeItem = { kind: 'folder', id: 1, path: 'Projects', name: 'Projects', count: 3 }
-const noteItem: TreeItem = { kind: 'note', id: 100, path: 'Projects/a.md', title: 'a', ext: 'md' }
-const orgNote: TreeItem = { kind: 'note', id: 101, path: 'Projects/b.org', title: 'b', ext: 'org' }
+const folderItem: TreeItem = { kind: 'folder', id: '1', path: 'Projects', name: 'Projects', count: 3 }
+const noteItem: TreeItem = { kind: 'note', id: '100', path: 'Projects/a.md', title: 'a', ext: 'md' }
+const orgNote: TreeItem = { kind: 'note', id: '101', path: 'Projects/b.org', title: 'b', ext: 'org' }
 
 interface InstanceOverrides {
   data?: TreeItem

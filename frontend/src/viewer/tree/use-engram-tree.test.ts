@@ -5,7 +5,7 @@ import { useEngramTree } from './use-engram-tree'
 import type { Folder, NoteSummary } from '../../api/queries'
 
 describe('useEngramTree', () => {
-  const folders: Folder[] = [{ id: 1, parent_id: null, name: 'Projects', count: 1 }]
+  const folders: Folder[] = [{ id: '1', parent_id: null, name: 'Projects', count: 1 }]
   const rootNotes: NoteSummary[] = []
   const scrollRef = { current: null as HTMLDivElement | null }
   const baseDeps = {

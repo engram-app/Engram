@@ -47,7 +47,7 @@ const baseObs: import('../api/queries').Connection = {
   software_version: null,
   verified: true,
   logo: '/x.svg',
-  vault_id: 1,
+  vault_id: '1',
   vault_name: null,
   scope: null,
   last_used_at: null,
@@ -60,7 +60,7 @@ const baseObs: import('../api/queries').Connection = {
 const basePat: import('../api/queries').Connection = {
   kind: 'pat',
   client_id: null,
-  key_id: 7,
+  key_id: '7',
   name: 'ci-bot',
   software_id: null,
   software_version: null,
@@ -191,7 +191,7 @@ describe('ConnectionsPage', () => {
   it('falls back to #<id> when vault_name is missing', () => {
     mockConnections.splice(0, mockConnections.length, {
       ...baseObs,
-      vault_id: 42,
+      vault_id: '42',
       vault_name: null,
     })
     mockTier = 'starter'

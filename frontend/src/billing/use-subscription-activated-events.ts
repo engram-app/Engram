@@ -10,7 +10,7 @@ export interface SubscriptionActivatedPayload {
 }
 
 interface Options {
-  userId: number | null | undefined
+  userId: string | null | undefined
   enabled: boolean
   onActivated: (payload: SubscriptionActivatedPayload) => void
 }

@@ -6,8 +6,8 @@ let socket: Socket | null = null
 let channel: Channel | null = null
 
 interface ConnectOptions {
-  userId: number
-  vaultId: number
+  userId: string
+  vaultId: string
   getToken: () => Promise<string | null>
   queryClient: QueryClient
 }
@@ -15,10 +15,10 @@ interface ConnectOptions {
 export interface NoteChangedPayload {
   event_type: string
   path: string
-  vault_id: number
+  vault_id: string
   // Present since backend change_json adds note id. Always invalidate by id
   // when available — useNote keys by id since the URL-by-id refactor.
-  id?: number
+  id?: string
   content?: string
   title?: string
   folder?: string
@@ -41,7 +41,7 @@ export function subscribeToNoteChanges(listener: NoteChangedListener): () => voi
 export function handleNoteChanged(
   payload: NoteChangedPayload,
   queryClient: QueryClient,
-  activeVaultId: number,
+  activeVaultId: string,
 ): void {
   // Server broadcasts on the vault topic; this guard protects against
   // an unrelated vault's payload reaching the wrong queryClient (e.g.

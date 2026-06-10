@@ -71,7 +71,7 @@ describe('useSubscriptionActivatedEvents', () => {
   it('connects to user:{userId} and subscribes to subscription_activated', async () => {
     const onActivated = vi.fn()
     renderHook(
-      () => useSubscriptionActivatedEvents({ userId: 42, enabled: true, onActivated }),
+      () => useSubscriptionActivatedEvents({ userId: '42', enabled: true, onActivated }),
       { wrapper: wrap },
     )
     await act(async () => {
@@ -86,7 +86,7 @@ describe('useSubscriptionActivatedEvents', () => {
   it('invokes onActivated when the channel fires subscription_activated', async () => {
     const onActivated = vi.fn()
     renderHook(
-      () => useSubscriptionActivatedEvents({ userId: 42, enabled: true, onActivated }),
+      () => useSubscriptionActivatedEvents({ userId: '42', enabled: true, onActivated }),
       { wrapper: wrap },
     )
     await act(async () => {
@@ -113,7 +113,7 @@ describe('useSubscriptionActivatedEvents', () => {
     renderHook(
       () =>
         useSubscriptionActivatedEvents({
-          userId: 42,
+          userId: '42',
           enabled: false,
           onActivated: vi.fn(),
         }),
@@ -145,7 +145,7 @@ describe('useSubscriptionActivatedEvents', () => {
     const { unmount } = renderHook(
       () =>
         useSubscriptionActivatedEvents({
-          userId: 42,
+          userId: '42',
           enabled: true,
           onActivated: vi.fn(),
         }),

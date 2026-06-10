@@ -32,8 +32,8 @@ vi.mock('../api/queries', async () => {
     ...actual,
     useFolders: () => ({
       data: [
-        { id: 1, parent_id: null, name: 'Projects', count: 1 },
-        { id: 2, parent_id: null, name: 'archive', count: 0 },
+        { id: '1', parent_id: null, name: 'Projects', count: 1 },
+        { id: '2', parent_id: null, name: 'archive', count: 0 },
       ],
       isLoading: false,
       isError: false,
@@ -44,7 +44,7 @@ vi.mock('../api/queries', async () => {
         return {
           data: [
             {
-              id: 42,
+              id: '42',
               path: 'a.md',
               title: 'a',
               folder: '',
@@ -60,12 +60,12 @@ vi.mock('../api/queries', async () => {
       }
       return { data: [], isLoading: false }
     },
-    useFolderNotesById: (folderId: number | null) => {
-      if (folderId === 1) {
+    useFolderNotesById: (folderId: string | null) => {
+      if (folderId === '1') {
         return {
           data: [
             {
-              id: 99,
+              id: '99',
               path: 'Projects/spec.md',
               title: 'spec',
               folder: 'Projects',

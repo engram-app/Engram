@@ -62,7 +62,7 @@ export default function FolderTree() {
   const vaultId = useActiveVaultId()
   const qc = useQueryClient()
   const params = useParams()
-  const selectedNoteId = params.id ? Number(params.id) : null
+  const selectedNoteId = params.id ?? null
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [dialog, setDialog] = useState<DialogState>({ kind: 'none' })
@@ -82,7 +82,7 @@ export default function FolderTree() {
     const p = parseItemId(itemId)
     if (p.kind === 'note') {
       const item = qc.getQueryCache().findAll({ queryKey: ['folder-notes-by-id', vaultId] })
-        .flatMap((q) => (q.state.data as Array<{ id: number; path: string }> | undefined) ?? [])
+        .flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? [])
         .find((n) => n.id === p.id)
       if (!item) return
       const parts = item.path.split('/')
@@ -105,8 +105,8 @@ export default function FolderTree() {
     const target = parseItemId(targetItemId)
     if (target.kind !== 'folder') return
     const parsed = sourceIds.map(parseItemId)
-    const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: number }).id)
-    const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: number }).id)
+    const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
+    const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
     if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
     if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
   }
@@ -115,7 +115,7 @@ export default function FolderTree() {
   // the queryFn inside `useFolderNotesById` so react-query treats both as
   // the same query (cache key + fetcher shape).
   const fetchFolderNotes = useCallback(
-    (folderId: number) =>
+    (folderId: string) =>
       api
         .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
         .then((r) => r.notes),
@@ -126,7 +126,7 @@ export default function FolderTree() {
   // already cached, so expansion is instant. Uses the same key as the loader
   // so we don't fetch twice if the user clicks before the hover resolves.
   const prefetchFolderNotes = useCallback(
-    (folderId: number) => {
+    (folderId: string) => {
       void qc.prefetchQuery({
         queryKey: ['folder-notes-by-id', vaultId, folderId],
         queryFn: () => fetchFolderNotes(folderId),
@@ -228,11 +228,11 @@ export default function FolderTree() {
     return []
   }
 
-  function lookupNote(id: number): { id: number; path: string; title?: string } | undefined {
+  function lookupNote(id: string): { id: string; path: string; title?: string } | undefined {
     const cached = qc
       .getQueryCache()
       .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
-      .flatMap((q) => (q.state.data as Array<{ id: number; path: string; title?: string }> | undefined) ?? [])
+      .flatMap((q) => (q.state.data as Array<{ id: string; path: string; title?: string }> | undefined) ?? [])
       .find((n) => n.id === id)
     if (cached) return cached
     return rootNotes.find((n) => n.id === id)
@@ -322,9 +322,9 @@ export default function FolderTree() {
     }
   }
 
-  function partition(itemIds: string[]): { noteIds: number[]; folderIds: number[] } {
-    const noteIds: number[] = []
-    const folderIds: number[] = []
+  function partition(itemIds: string[]): { noteIds: string[]; folderIds: string[] } {
+    const noteIds: string[] = []
+    const folderIds: string[] = []
     for (const id of itemIds) {
       const p = parseItemId(id)
       if (p.kind === 'note') noteIds.push(p.id)

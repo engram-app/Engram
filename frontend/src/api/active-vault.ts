@@ -2,34 +2,33 @@ import { useSyncExternalStore } from 'react'
 
 const STORAGE_KEY = 'engram.activeVaultId'
 
-let activeVaultId: number | null = readStored()
+let activeVaultId: string | null = readStored()
 const listeners = new Set<() => void>()
 
-function readStored(): number | null {
+function readStored(): string | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const n = Number(raw)
-    return Number.isFinite(n) && n > 0 ? n : null
+    return raw.length > 0 ? raw : null
   } catch {
     return null
   }
 }
 
-function writeStored(id: number | null) {
+function writeStored(id: string | null) {
   try {
     if (id == null) localStorage.removeItem(STORAGE_KEY)
-    else localStorage.setItem(STORAGE_KEY, String(id))
+    else localStorage.setItem(STORAGE_KEY, id)
   } catch {
     // ignore — private browsing, etc.
   }
 }
 
-export function getActiveVaultId(): number | null {
+export function getActiveVaultId(): string | null {
   return activeVaultId
 }
 
-export function setActiveVaultId(id: number | null) {
+export function setActiveVaultId(id: string | null) {
   if (activeVaultId === id) return
   activeVaultId = id
   writeStored(id)
@@ -43,6 +42,6 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
-export function useActiveVaultId(): number | null {
+export function useActiveVaultId(): string | null {
   return useSyncExternalStore(subscribe, getActiveVaultId, getActiveVaultId)
 }

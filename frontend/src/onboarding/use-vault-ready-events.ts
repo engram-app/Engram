@@ -6,13 +6,13 @@ import { getWsBase, joinWsUrl } from '../api/base'
 interface State {
   vaultCreated: boolean
   vaultPopulated: boolean
-  vaultId: number | null
+  vaultId: string | null
 }
 
 const INITIAL: State = { vaultCreated: false, vaultPopulated: false, vaultId: null }
 
 interface Options {
-  userId: number | null | undefined
+  userId: string | null | undefined
   enabled: boolean
 }
 
@@ -46,7 +46,7 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
 
       const channel = socket.channel(`user:${userId}`)
 
-      channel.on('vault_created', (payload: { vault_id: number }) => {
+      channel.on('vault_created', (payload: { vault_id: string }) => {
         setState((prev) => ({
           ...prev,
           vaultCreated: true,
@@ -54,7 +54,7 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
         }))
       })
 
-      channel.on('vault_populated', (payload: { vault_id: number }) => {
+      channel.on('vault_populated', (payload: { vault_id: string }) => {
         setState((prev) => ({
           ...prev,
           vaultCreated: true,

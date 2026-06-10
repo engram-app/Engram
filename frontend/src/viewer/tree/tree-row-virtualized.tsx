@@ -9,7 +9,7 @@ interface Props {
   instanceFor?: (itemId: string) => ItemInstance<LoaderItem> | undefined
   onContextMenu?: (itemId: string, x: number, y: number) => void
   onLongPress?: (itemId: string) => void
-  onFolderHover?: (folderId: number) => void
+  onFolderHover?: (folderId: string) => void
 }
 
 export function TreeRowVirtualized({
