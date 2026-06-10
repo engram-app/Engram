@@ -217,4 +217,27 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       refute out.halted
     end
   end
+
+  describe "router/@api_top_segments coherence" do
+    test "@api_top_segments covers every router-registered /api top segment" do
+      # Walk the router and confirm every distinct /api/<seg> top-level
+      # segment is present in @api_top_segments. A missing entry would
+      # silently 404 on api.engram.page in prod — this test fails loudly
+      # the moment a new /api scope is added without updating the plug.
+      router_segments =
+        EngramWeb.Router.__routes__()
+        |> Enum.filter(&String.starts_with?(&1.path, "/api/"))
+        |> Enum.map(&(&1.path |> String.split("/", trim: true) |> Enum.at(1)))
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+
+      plug_segments = MapSet.new(HostRewrite.__api_top_segments__())
+
+      missing = MapSet.difference(router_segments, plug_segments)
+
+      assert MapSet.size(missing) == 0,
+             "Router has /api routes for segments [#{Enum.join(Enum.to_list(missing), ", ")}] but " <>
+               "plug @api_top_segments doesn't list them — silent 404 in prod"
+    end
+  end
 end

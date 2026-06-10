@@ -35,6 +35,12 @@ defmodule EngramWeb.Plugs.HostRewrite do
     embed-status
   )
 
+  # Test-only accessor exposing the @api_top_segments allowlist so the
+  # router-derived regression test can compare against router.__routes__/0.
+  # Underscored name signals "do not call from production code".
+  @doc false
+  def __api_top_segments__, do: @api_top_segments
+
   # `init/1` normalizes opts to a keyword list with `:api_host` and
   # `:mcp_host` keys. The endpoint mounts this plug without explicit opts,
   # so `init([])` yields the runtime-read sentinel `:runtime`; `call/2`
