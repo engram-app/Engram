@@ -26,4 +26,33 @@ defmodule EngramWeb.HostRewriteIntegrationTest do
     assert conn.status == 200
     assert Jason.decode!(conn.resp_body)["resource"]
   end
+
+  describe "saas-only mode" do
+    setup do
+      prior = Application.get_env(:engram, :host_rewrite)
+
+      Application.put_env(:engram, :host_rewrite,
+        api_host: "api.engram.page",
+        mcp_host: "mcp.engram.page",
+        reject_unknown_hosts: true,
+        allowed_extra_hosts: []
+      )
+
+      on_exit(fn -> Application.put_env(:engram, :host_rewrite, prior) end)
+      :ok
+    end
+
+    test "GET app.engram.page/anything returns 410 with api host pointer", %{conn: conn} do
+      conn = %{conn | host: "app.engram.page"} |> get("/anything")
+      assert conn.status == 410
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == "gone"
+      assert body["api_host"] == "api.engram.page"
+    end
+
+    test "GET api.engram.page/notes still rewrites under saas-only mode", %{conn: conn} do
+      conn = %{conn | host: "api.engram.page"} |> get("/notes")
+      assert conn.status in [401, 403]
+    end
+  end
 end

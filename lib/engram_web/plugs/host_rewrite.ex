@@ -44,8 +44,13 @@ defmodule EngramWeb.Plugs.HostRewrite do
   def init([]), do: :runtime
   def init(:runtime), do: :runtime
 
-  def init(opts) when is_list(opts),
-    do: opts |> Keyword.put_new(:api_host, nil) |> Keyword.put_new(:mcp_host, nil)
+  def init(opts) when is_list(opts) do
+    opts
+    |> Keyword.put_new(:api_host, nil)
+    |> Keyword.put_new(:mcp_host, nil)
+    |> Keyword.put_new(:reject_unknown_hosts, false)
+    |> Keyword.put_new(:allowed_extra_hosts, [])
+  end
 
   def call(conn, :runtime) do
     case Application.get_env(:engram, :host_rewrite, []) do
@@ -63,8 +68,35 @@ defmodule EngramWeb.Plugs.HostRewrite do
     cond do
       api_host && conn.host == api_host -> handle_api_host(conn)
       mcp_host && conn.host == mcp_host -> handle_mcp_host(conn)
-      true -> conn
+      true -> handle_unknown_host(conn, opts)
     end
+  end
+
+  # When `:reject_unknown_hosts` is true AND the request host is not on the
+  # explicit allowlist, return 410 Gone with a pointer to `api_host`. This
+  # guards saas AWS Phoenix from serving the stale bundled SPA on hosts like
+  # `app.engram.page` (which after DNS cutover should resolve to Cloudflare
+  # Pages, not the ALB). Selfhost never sets this flag — defaults to false.
+  defp handle_unknown_host(conn, opts) do
+    if opts[:reject_unknown_hosts] && conn.host not in opts[:allowed_extra_hosts] do
+      reject_unknown(conn, opts[:api_host])
+    else
+      conn
+    end
+  end
+
+  defp reject_unknown(conn, api_host) do
+    body =
+      Jason.encode!(%{
+        error: "gone",
+        message: "This host no longer serves the web app. Use #{api_host} for API access.",
+        api_host: api_host
+      })
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(410, body)
+    |> halt()
   end
 
   defp handle_api_host(conn) do
