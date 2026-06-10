@@ -30,6 +30,22 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Mints a new note primary key app-side as a v7 UUID string.
+
+  Used at the context boundary so the id is available before INSERT —
+  callers stitch it into the AAD bind string (`notes:<col>:<id>`) and the
+  `Repo.insert/2` then uses the supplied id verbatim (PK is
+  `autogenerate: false` per `Engram.Schema`).
+
+  v7 is time-ordered, so successive mints within the same process sort
+  lexically by mint time. That preserves the BTree locality benefits of
+  the prior bigserial PK without requiring a server round-trip via
+  `nextval()`.
+  """
+  @spec mint_id() :: Ecto.UUID.t()
+  def mint_id, do: UUIDv7.generate()
+
+  @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
   Idempotent: if a marker for this folder_hmac already exists, it is
@@ -325,8 +341,10 @@ defmodule Engram.Notes do
 
       :ok ->
         # T3.6 — pre-allocate the row id so the AAD bind string
-        # ("notes:<column>:<id>") can be computed before INSERT.
-        note_id = Crypto.next_row_id(:notes)
+        # ("notes:<column>:<id>") can be computed before INSERT. As of the
+        # PG18 + UUIDv7 rework (Phase B), the id is minted app-side via
+        # `mint_id/0` (v7 uuid) instead of pulled from a bigserial sequence.
+        note_id = mint_id()
 
         with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
           phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
