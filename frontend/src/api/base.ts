@@ -25,11 +25,10 @@ export function useWsUrl(): (path: string) => string {
 }
 
 // Module-level base setters — parallel the existing setTokenGetter
-// pattern in `./client`. A small <ConfigBaseInstaller> component (mounted
-// once at app root inside ConfigProvider) wires apiBase/wsBase from the
-// resolved config so non-React utilities like the singleton `api` object
-// and `connectChannel(...)` can compose URLs without dragging a hook
-// dependency into every call site.
+// pattern in `./client`. `BootstrapGate` in main.tsx wires apiBase/wsBase
+// inline from the resolved config so non-React utilities like the singleton
+// `api` object and `connectChannel(...)` can compose URLs without dragging
+// a hook dependency into every call site.
 let _apiBase = ''
 let _wsBase = ''
 
