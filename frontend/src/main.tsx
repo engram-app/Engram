@@ -1,13 +1,14 @@
-import { StrictMode, lazy, Suspense } from 'react'
+import { StrictMode, lazy, Suspense, use, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import * as Sentry from '@sentry/react'
 import posthog from 'posthog-js'
 import { Toaster } from '@/components/ui/sonner'
-import { router } from './router'
+import { createAppRouter, installAppRouter } from './router'
 import { queryClient } from './api/query-client'
-import { config } from './config'
+import { configPromise, type EngramConfig } from './config'
+import { ConfigProvider } from './config-context'
 import { ThemeProvider } from './theme/theme-provider'
 import LoadingScreen from './layout/loading-screen'
 import './main.css'
@@ -67,11 +68,10 @@ if (posthogKey) {
   })
 }
 
-const isClerk = config.authProvider === 'clerk'
-
-const AuthProvider = isClerk
-  ? lazy(() => import('./auth/clerk-auth-provider'))
-  : lazy(() => import('./auth/local-auth-provider'))
+// Both auth providers are declared lazy at module scope; only one is
+// instantiated per page load based on resolved config (BootstrapGate).
+const ClerkAuthProvider = lazy(() => import('./auth/clerk-auth-provider'))
+const LocalAuthProvider = lazy(() => import('./auth/local-auth-provider'))
 
 function ErrorFallback() {
   return (
@@ -94,9 +94,23 @@ function ErrorFallback() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(
-  <Sentry.ErrorBoundary fallback={ErrorFallback}>
-    <StrictMode>
+// Bootstrap chain: `use(configPromise)` suspends until config resolves
+// (window injection → /config.json → defaults). Once resolved, build the
+// runtime router (route shape depends on auth provider + billingEnabled)
+// and install it so module-level consumers like clerk-auth-provider can
+// imperatively navigate via `getAppRouter()`.
+function AppShell({ config }: { config: EngramConfig }) {
+  const AuthProvider = config.authProvider === 'clerk' ? ClerkAuthProvider : LocalAuthProvider
+  // Memoize so StrictMode's double-render + any future ConfigProvider
+  // updates don't blow away the router instance + its history stack.
+  const router = useMemo(() => {
+    const r = createAppRouter(config)
+    installAppRouter(r)
+    return r
+  }, [config])
+
+  return (
+    <ConfigProvider config={config}>
       <ThemeProvider>
         <Suspense fallback={<LoadingScreen />}>
           <AuthProvider>
@@ -107,6 +121,21 @@ createRoot(document.getElementById('root')!).render(
           </AuthProvider>
         </Suspense>
       </ThemeProvider>
+    </ConfigProvider>
+  )
+}
+
+function BootstrapGate() {
+  const config = use(configPromise)
+  return <AppShell config={config} />
+}
+
+createRoot(document.getElementById('root')!).render(
+  <Sentry.ErrorBoundary fallback={ErrorFallback}>
+    <StrictMode>
+      <Suspense fallback={<LoadingScreen />}>
+        <BootstrapGate />
+      </Suspense>
     </StrictMode>
   </Sentry.ErrorBoundary>,
 )

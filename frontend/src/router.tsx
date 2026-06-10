@@ -6,7 +6,7 @@ import SignUpPage from './auth/sign-up'
 import WaitlistPage from './auth/waitlist'
 import BillingPage from './billing/billing-page'
 import { UpgradeDialogProvider } from './billing/upgrade-dialog-provider'
-import { config } from './config'
+import type { EngramConfig } from './config'
 import AdminPanel from './features/admin/AdminPanel'
 import ResetPasswordPage from './features/auth/ResetPasswordPage'
 import DeviceLinkPage from './device/device-link-page'
@@ -29,14 +29,6 @@ import OnboardVaultPage from './onboarding/onboard-vault-page'
 import { OnboardingShell } from './onboarding/onboarding-shell'
 import { Outlet } from 'react-router'
 
-// Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
-// stays out of the main chunk for local self-host builds.
-const AccountPage = lazy(() =>
-  config.authProvider === 'clerk'
-    ? import('./settings/account-page')
-    : import('./settings/account-page-local'),
-)
-
 // Root layout — mounts the UpgradeDialogProvider INSIDE the router so the
 // dialog's `useNavigate` works, and so any nested API call that 402s opens
 // the modal via the module-level handler. Wrapping `RouterProvider` from
@@ -49,7 +41,36 @@ function RootLayout() {
   )
 }
 
-export const router = createBrowserRouter(
+// Router is constructed inside `createAppRouter(config)` so the auth-provider
+// and billing-enabled branches can read runtime config. Module-level
+// consumers (e.g. clerk-auth-provider's `routerPush`) read `appRouter`,
+// which BootstrapGate populates BEFORE first render via `installAppRouter`.
+type AppRouter = ReturnType<typeof createBrowserRouter>
+
+let _appRouter: AppRouter | null = null
+
+export function installAppRouter(r: AppRouter) {
+  _appRouter = r
+}
+
+// Lazy getter used by code paths that need to imperatively navigate
+// (e.g. Clerk's routerPush). Throws if invoked before BootstrapGate
+// mounted — that would be a wiring regression worth surfacing loudly.
+export function getAppRouter(): AppRouter {
+  if (!_appRouter) throw new Error('Router accessed before installAppRouter() ran')
+  return _appRouter
+}
+
+export function createAppRouter(config: EngramConfig): AppRouter {
+  // Lazy so Clerk-only code (the account page pulls in @clerk/react hooks)
+  // stays out of the main chunk for local self-host builds.
+  const AccountPage = lazy(() =>
+    config.authProvider === 'clerk'
+      ? import('./settings/account-page')
+      : import('./settings/account-page-local'),
+  )
+
+  return createBrowserRouter(
   [
     {
       element: <RootLayout />,
@@ -151,4 +172,5 @@ export const router = createBrowserRouter(
       ],
     },
   ],
-)
+  )
+}
