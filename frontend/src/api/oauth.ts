@@ -1,4 +1,5 @@
 import { api } from './client'
+import { getApiBase, joinApiUrl } from './base'
 
 export interface OAuthClientMetadata {
   client_id: string
@@ -26,7 +27,8 @@ export interface OAuthConsentResponse {
 }
 
 export async function fetchOAuthClient(clientId: string): Promise<OAuthClientMetadata> {
-  return fetch(`/api/oauth/clients/${encodeURIComponent(clientId)}`).then(async (res) => {
+  const url = joinApiUrl(getApiBase(), `/api/oauth/clients/${encodeURIComponent(clientId)}`)
+  return fetch(url).then(async (res) => {
     if (!res.ok) {
       throw new Error(`oauth client lookup failed: ${res.status}`)
     }

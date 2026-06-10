@@ -1,5 +1,6 @@
 import { Socket, Channel } from 'phoenix'
 import type { QueryClient } from '@tanstack/react-query'
+import { getWsBase, joinWsUrl } from './base'
 
 let socket: Socket | null = null
 let channel: Channel | null = null
@@ -65,7 +66,7 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 
   const token = await getToken()
 
-  socket = new Socket('/socket', {
+  socket = new Socket(joinWsUrl(getWsBase(), '/socket'), {
     params: { token: token ?? '' },
   })
 
