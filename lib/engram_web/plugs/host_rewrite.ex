@@ -59,7 +59,21 @@ defmodule EngramWeb.Plugs.HostRewrite do
     end
   end
 
-  defp handle_mcp_host(conn), do: conn
+  @mcp_wellknown_prefixes [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-authorization-server"
+  ]
+
+  defp handle_mcp_host(conn) do
+    path = conn.request_path
+
+    cond do
+      Enum.any?(@mcp_wellknown_prefixes, &String.starts_with?(path, &1)) -> conn
+      String.starts_with?(path, "/api/mcp") -> conn
+      path == "/" or path == "" -> rewrite_path(conn, "/api/mcp/")
+      true -> reject(conn)
+    end
+  end
 
   defp under_any?(path, prefixes), do: Enum.any?(prefixes, &is_under?(path, &1))
 
