@@ -217,9 +217,9 @@ defmodule Engram.Vaults do
       vault_ids
       |> Enum.uniq()
       |> Enum.flat_map(fn s ->
-        case Integer.parse(to_string(s)) do
-          {n, ""} -> [n]
-          _ -> []
+        case Ecto.UUID.cast(to_string(s)) do
+          {:ok, uuid} -> [uuid]
+          :error -> []
         end
       end)
 
