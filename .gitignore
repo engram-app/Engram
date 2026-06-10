@@ -48,3 +48,8 @@ frontend/.vite/
 frontend/test-results/
 frontend/playwright-report/
 frontend/e2e/.auth-state.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
