@@ -24,8 +24,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
 
   # Allowed top-level scopes that should pass through unmodified on
   # `api.engram.page`. Matched with `is_under?/2` (exact match OR followed
-  # by `/`) so `/api-keys` does NOT match `/api` — `/api-keys` is a deep
-  # API candidate that needs rewriting to `/api/api-keys`.
+  # by `/`) so `/api-keys` does NOT match `/api` — `/api-keys` is a known
+  # API segment that needs rewriting to `/api/api-keys`.
   @api_allowed_prefixes ~w(/api /socket /webhooks /.well-known)
   # Every top-level segment under `scope "/api", EngramWeb` in router.ex.
   # Missing entries silently 404 in prod — guarded by a regression test.
@@ -105,7 +105,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
     cond do
       path == "/" or path == "" -> reject(conn)
       under_any?(path, @api_allowed_prefixes) -> conn
-      not deep_api_candidate?(path) -> reject(conn)
+      not known_api_segment?(path) -> reject(conn)
       true -> rewrite_path(conn, "/api" <> path)
     end
   end
@@ -133,7 +133,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
   defp is_under?(path, prefix),
     do: path == prefix or String.starts_with?(path, prefix <> "/")
 
-  defp deep_api_candidate?(path) do
+  defp known_api_segment?(path) do
     case String.split(path, "/", trim: true) do
       [head | _] -> head in @api_top_segments
       _ -> false
