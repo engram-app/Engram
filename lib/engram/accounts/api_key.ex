@@ -1,4 +1,5 @@
 defmodule Engram.Accounts.ApiKey do
+  @moduledoc false
   use Engram.Schema
   import Ecto.Changeset
 

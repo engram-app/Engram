@@ -1,4 +1,5 @@
 defmodule Engram.Invites.Invite do
+  @moduledoc false
   use Engram.Schema
   import Ecto.Changeset
 

@@ -1,4 +1,5 @@
 defmodule Engram.Notes.Chunk do
+  @moduledoc false
   use Engram.Schema
   import Ecto.Changeset
 

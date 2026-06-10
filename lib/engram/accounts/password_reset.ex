@@ -12,6 +12,7 @@ defmodule Engram.Accounts.PasswordReset do
   alias Engram.Repo
 
   defmodule Token do
+    @moduledoc false
     use Engram.Schema
     import Ecto.Changeset
 

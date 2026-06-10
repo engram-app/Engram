@@ -1,4 +1,5 @@
 defmodule Engram.Billing.Subscription do
+  @moduledoc false
   use Engram.Schema
   import Ecto.Changeset
 

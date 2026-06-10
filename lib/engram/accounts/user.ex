@@ -1,4 +1,5 @@
 defmodule Engram.Accounts.User do
+  @moduledoc false
   use Engram.Schema
 
   # T3.0.5 — Allowlist serialization. Anything not listed is invisible to

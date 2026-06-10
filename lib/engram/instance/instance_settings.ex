@@ -1,4 +1,5 @@
 defmodule Engram.Instance.InstanceSettings do
+  @moduledoc false
   use Engram.Schema
   import Ecto.Changeset
 
