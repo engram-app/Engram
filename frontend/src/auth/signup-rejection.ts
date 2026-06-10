@@ -4,6 +4,8 @@
 // /sign-in with no explanation. We remember the just-created Clerk user id here
 // so the sign-in page can ask the backend why, and show a real message.
 
+import { getApiBase, joinApiUrl } from '../api/base'
+
 const KEY = 'engram:pending-signup'
 const WINDOW_MS = 2 * 60 * 1000
 
@@ -38,7 +40,9 @@ export async function fetchSignupRejection(
   clerkUserId: string,
 ): Promise<SignupRejectionReason | null> {
   try {
-    const res = await fetch(`/api/auth/signup-rejection?clerk_id=${encodeURIComponent(clerkUserId)}`)
+    const res = await fetch(
+      joinApiUrl(getApiBase(), `/api/auth/signup-rejection?clerk_id=${encodeURIComponent(clerkUserId)}`),
+    )
     if (!res.ok) return null
     const body = (await res.json()) as { reason?: SignupRejectionReason | null }
     return body.reason ?? null

@@ -1,4 +1,5 @@
 import { getActiveVaultId } from './active-vault'
+import { getApiBase, joinApiUrl } from './base'
 
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null
@@ -50,7 +51,11 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
     headers.set('X-Vault-ID', String(vaultId))
   }
 
-  const response = await fetch(`/api${path}`, { ...options, headers })
+  // joinApiUrl handles both same-origin (selfhost) and cross-origin
+  // (saas, `https://api.engram.page`). For selfhost apiBase is "" so
+  // this composes to `/api${path}` identically to the pre-eject shape.
+  const url = joinApiUrl(getApiBase(), `/api${path}`)
+  const response = await fetch(url, { ...options, headers })
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))

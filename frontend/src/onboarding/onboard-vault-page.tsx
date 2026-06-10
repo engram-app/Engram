@@ -3,7 +3,7 @@ import { Navigate, useNavigate } from 'react-router'
 import { FilePlus2 } from 'lucide-react'
 import obsidianMark from '@lobehub/icons-static-svg/icons/obsidian-color.svg?raw'
 import { setActiveVaultId } from '../api/active-vault'
-import { config } from '../config'
+import { useConfig } from '../config-context'
 import {
   useCreateVault,
   useMe,
@@ -265,6 +265,7 @@ interface ObsidianInlinePanelProps {
 }
 
 function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlinePanelProps) {
+  const config = useConfig()
   const { vaultCreated, vaultPopulated, vaultId } = useVaultReadyEvents({
     userId,
     enabled: true,

@@ -8,7 +8,9 @@
   "author": "Rasbandit Software Solutions LLC d/b/a Engram",
   "scripts": {
     "dev": "vite",
-    "build": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
+    "build": "bun run build:selfhost",
+    "build:selfhost": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
+    "build:saas": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build --outDir dist --emptyOutDir && bun scripts/write-config-json.ts dist/config.json",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

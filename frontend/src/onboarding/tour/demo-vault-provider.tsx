@@ -47,6 +47,7 @@ export function DemoVaultProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<DemoVaultData | null>(null)
 
   const activate = useCallback(async () => {
+    // Static SPA asset, not an API call — served from same origin on both selfhost and CF Pages.
     const res = await fetch('/demo-vault.json')
     if (!res.ok) throw new Error('demo fixture missing')
     const json = (await res.json()) as DemoVaultData
