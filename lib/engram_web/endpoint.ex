@@ -44,6 +44,22 @@ defmodule EngramWeb.Endpoint do
 
   defp normalize_origin(origin) when is_binary(origin), do: origin
 
+  # RequestId runs FIRST so request_id is attached to every response —
+  # including 404/410 rejections from HostRewrite — for log correlation.
+  plug Plug.RequestId
+
+  # HostRewrite runs BEFORE Plug.Static so saas-only host rejection (410
+  # Gone on app.engram.page after the saas-only cutover) covers static
+  # assets too — otherwise `app.engram.page/favicon.ico` and
+  # `app.engram.page/assets/*.js` would be served by Plug.Static and
+  # leak stale bundles past the rewrite contract. The plug itself reads
+  # `Application.get_env(:engram, :host_rewrite, [])` at request time
+  # (NOT compile time) so the runtime env flag actually takes effect on
+  # a saas release and tests can mutate it via `Application.put_env`.
+  # When unset (default), the plug is a strict no-op — selfhost releases
+  # never touch the rewrite path.
+  plug EngramWeb.Plugs.HostRewrite
+
   # Serve SPA hashed assets at "/assets/*" from priv/static/app/assets.
   # Vite outputs hashed filenames so these can be served with long-lived
   # cache headers (handled by Plug.Static's default).
@@ -67,13 +83,6 @@ defmodule EngramWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :engram
   end
 
-  plug Plug.RequestId
-  # The plug itself reads `Application.get_env(:engram, :host_rewrite, [])`
-  # at request time (NOT compile time) so the runtime env flag actually
-  # takes effect on a saas release and tests can mutate it via
-  # `Application.put_env`. When unset (default), the plug is a strict
-  # no-op — selfhost releases never touch the rewrite path.
-  plug EngramWeb.Plugs.HostRewrite
   # `log: false` suppresses Phoenix.Logger's default request log emission,
   # which interpolates conn.method + conn.request_path into the message body
   # (past the metadata-only RedactFilter). EngramWeb.RequestLogger replaces
