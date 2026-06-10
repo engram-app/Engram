@@ -42,7 +42,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert att["path"] == "photos/test.png"
       assert att["mime_type"] == "image/png"
       assert att["size_bytes"] == byte_size(@sample_content)
-      assert is_integer(att["id"])
+      assert is_binary(att["id"])
       assert is_binary(att["updated_at"])
     end
 

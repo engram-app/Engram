@@ -921,7 +921,7 @@ defmodule Engram.BillingTest do
     end
 
     test "an unknown plan id resolves to an empty limits map (falls to defaults)" do
-      missing_id = 2_000_000_000
+      missing_id = "00000000-0000-0000-0000-000020000000"
       PlanCache.invalidate(missing_id)
       assert PlanCache.limits(missing_id) == %{}
     end

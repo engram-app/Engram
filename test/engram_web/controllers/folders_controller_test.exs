@@ -24,9 +24,9 @@ defmodule EngramWeb.FoldersControllerTest do
       parent = Enum.find(body["folders"], &(&1["name"] == "Projects"))
       child = Enum.find(body["folders"], &(&1["name"] == "Projects/Engram"))
 
-      assert is_integer(parent["id"])
+      assert is_binary(parent["id"])
       assert parent["parent_id"] == nil
-      assert is_integer(child["id"])
+      assert is_binary(child["id"])
       assert child["parent_id"] == parent["id"]
     end
   end

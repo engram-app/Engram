@@ -49,7 +49,7 @@ defmodule EngramWeb.AuthControllerTest do
       assert %{"key" => key, "name" => name, "id" => id} = json_response(conn, 200)
       assert String.starts_with?(key, "engram_")
       assert name == "my-new-key"
-      assert is_integer(id)
+      assert is_binary(id)
     end
 
     test "created key can authenticate vault-scoped requests", %{conn: conn, user: user} do

@@ -99,7 +99,7 @@ defmodule EngramWeb.SyncChannelTest do
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-chan")
 
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key_record.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       socket = user_socket(user, api_key_record)
@@ -113,7 +113,7 @@ defmodule EngramWeb.SyncChannelTest do
 
       # Only grant access to vault_b — NOT the default vault
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key_record.id, vault_id: vault_b.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
       ])
 
       # Try to join the default vault (which the key does NOT have access to)

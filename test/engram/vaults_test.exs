@@ -290,6 +290,10 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Alpha"})
+      # 1.1s gap ensures distinct second-precision `created_at` timestamps so the
+      # secondary `v.id` ordering doesn't race with UUIDv7 sub-millisecond
+      # tiebreaker randomness.
+      Process.sleep(1100)
       {:ok, v2} = Vaults.create_vault(user, %{name: "Beta"})
 
       [first, second | _] = Vaults.list_vaults(user)
@@ -564,7 +568,7 @@ defmodule Engram.VaultsTest do
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
 
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       assert :ok = Vaults.check_api_key_access(api_key, vault)
@@ -580,7 +584,7 @@ defmodule Engram.VaultsTest do
 
       # Restrict to other vault only
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: other_vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(other_vault.id)}
       ])
 
       assert :forbidden = Vaults.check_api_key_access(api_key, vault)

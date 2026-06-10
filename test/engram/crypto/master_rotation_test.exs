@@ -189,7 +189,7 @@ defmodule Engram.Crypto.MasterRotationTest do
       # failures during a master-key cutover were operationally invisible:
       # operator sees `%{failed: 20}` aggregate with no user_ids, no
       # reasons. Failed users brick when `_PREVIOUS` is later removed.
-      bogus_id = -42
+      bogus_id = "00000000-0000-0000-0000-0000000000ff"
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->

@@ -40,15 +40,16 @@ defmodule EngramWeb.NotesControllerBatchTest do
 
     test "404 in batch rolls back all", %{conn: conn, user: user, vault: vault} do
       {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
+      missing_id = Ecto.UUID.generate()
 
       body =
         conn
         |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
-        |> post(~p"/api/notes/batch-delete", %{ids: [n1.id, Ecto.UUID.generate()]})
+        |> post(~p"/api/notes/batch-delete", %{ids: [n1.id, missing_id]})
         |> json_response(404)
 
       assert body["error"] == "not_found"
-      assert body["item_id"] == 999_999
+      assert body["item_id"] == missing_id
       assert {:ok, _} = Engram.Notes.get_note_by_id(user, vault, n1.id)
     end
   end
