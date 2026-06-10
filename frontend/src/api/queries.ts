@@ -14,12 +14,20 @@ function encodePathSegments(path: string): string {
 }
 
 // Types matching backend JSON responses
+//
+// `name` carries the FULL folder path (e.g. `'top/sub'`) — load-bearing
+// for legacy path-keyed consumers. `id` + `parent_id` were added by
+// backend commit 935b7bbf so headless-tree can key nodes by id and
+// discover tree shape via parent_id without parsing path strings.
 export interface Folder {
+  id: number
+  parent_id: number | null
   name: string
   count: number
 }
 
 export interface NoteSummary {
+  id: number
   path: string
   title: string
   folder: string
@@ -35,6 +43,9 @@ export interface Note extends NoteSummary {
 }
 
 export interface SearchResult {
+  // null for orphan path hits (Task 1 backend) — frontend should treat
+  // these as non-clickable since there's no id-routable target.
+  id: number | null
   path: string
   title: string
   folder: string
@@ -53,24 +64,48 @@ export interface User {
 
 // Query hooks
 
+// Hoisted so React Query treats the select identity as stable; otherwise an
+// inline arrow re-runs every render and returns a fresh array, breaking
+// memoized consumers (e.g. useEngramTree's rebuild useEffect).
+const selectFolders = (data: { folders: Array<Folder & { id: number | null }> }) =>
+  data.folders.filter((f): f is Folder => f.id != null && f.name !== '')
+
 export function useFolders() {
   const vaultId = useActiveVaultId()
   const demo = useDemoVaultOptional()
   const query = useQuery({
     queryKey: ['folders', vaultId],
-    queryFn: () => api.get<{ folders: Folder[] }>('/folders'),
-    select: (data) => data.folders,
+    // Backend echoes a synthetic root row (`name === ""`, `id === null`) to
+    // expose the count of root-level notes. The tree owns root notes via
+    // `useFolderNotes('')`; drop the synthetic row so consumers only see real
+    // folder markers + the `Folder.id: number` contract holds.
+    queryFn: () =>
+      api.get<{ folders: Array<Folder & { id: number | null }> }>('/folders'),
+    select: selectFolders,
     enabled: !demo?.active,
   })
   if (demo?.active) {
-    const data: Folder[] = demo.folders.map((f) => ({
-      name: f.path,
-      count: demo.notes.filter((n) => n.folder_id === f.id).length,
-    }))
+    // Demo folders use string ids; synthesize stable negative numeric
+    // ids (1-based index) so the Folder contract is satisfied and ids
+    // don't collide with real backend ids. parent_id is derived from
+    // the path prefix — root-level demo folders report `parent_id: null`.
+    const pathToId = new Map(demo.folders.map((f, i) => [f.path, -(i + 1)]))
+    const data: Folder[] = demo.folders.map((f, i) => {
+      const slash = f.path.lastIndexOf('/')
+      const parentPath = slash < 0 ? null : f.path.slice(0, slash)
+      return {
+        id: -(i + 1),
+        parent_id: parentPath === null ? null : pathToId.get(parentPath) ?? null,
+        name: f.path,
+        count: demo.notes.filter((n) => n.folder_id === f.id).length,
+      }
+    })
     return { ...query, data, isLoading: false, isFetching: false, error: null }
   }
   return query
 }
+
+const selectNotes = (data: { notes: NoteSummary[] }) => data.notes
 
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
   const vaultId = useActiveVaultId()
@@ -79,7 +114,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
     queryKey: ['folderNotes', vaultId, folder],
     queryFn: () =>
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
-    select: (data) => data.notes,
+    select: selectNotes,
     enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
   })
   if (demo?.active) {
@@ -87,7 +122,11 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
     const notes: NoteSummary[] = matchFolder
       ? demo.notes
           .filter((n) => n.folder_id === matchFolder.id)
-          .map((n) => ({
+          .map((n, i) => ({
+            // Demo notes have string ids; synthesize negative numeric ids
+            // so they don't collide with real backend ids and so the
+            // NoteSummary contract is satisfied (id: number).
+            id: -(i + 1),
             path: n.path,
             title: n.title,
             folder: matchFolder.path,
@@ -103,33 +142,37 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
   return query
 }
 
-export function useNote(path: string) {
+// Headless-tree consumers key folder nodes by id and fetch their note
+// children via the by-id endpoint (Task 6). Path-keyed `useFolderNotes`
+// stays in place for legacy consumers; new tree code uses this hook so
+// rename / move events don't invalidate by stale path keys.
+// 60s of staleness keeps re-expansions instant while a `notes.batch` channel
+// event (or any single-note mutation) still invalidates the key and refetches.
+export const FOLDER_NOTES_STALE_MS = 60_000
+
+export function useFolderNotesById(
+  folderId: number | null,
+  opts: { enabled?: boolean } = {},
+) {
   const vaultId = useActiveVaultId()
-  const demo = useDemoVaultOptional()
-  const query = useQuery({
-    queryKey: ['note', vaultId, path],
-    queryFn: () => api.get<Note>(`/notes/${encodePathSegments(path)}`),
-    enabled: !demo?.active && !!path,
+  return useQuery({
+    queryKey: ['folder-notes-by-id', vaultId, folderId],
+    queryFn: () =>
+      api
+        .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
+        .then((r) => r.notes),
+    enabled: folderId != null && (opts.enabled ?? true),
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
-  if (demo?.active) {
-    const hit = demo.notes.find((n) => n.path === path)
-    if (!hit) return query
-    const folder = demo.folders.find((f) => f.id === hit.folder_id)
-    const now = new Date().toISOString()
-    const data: Note = {
-      path: hit.path,
-      title: hit.title,
-      folder: folder?.path ?? '',
-      tags: [],
-      version: 1,
-      mtime: now,
-      created_at: now,
-      updated_at: now,
-      content: hit.content,
-    }
-    return { ...query, data, isLoading: false, isFetching: false, error: null }
-  }
-  return query
+}
+
+export function useNote(id: number | null) {
+  const vaultId = useActiveVaultId()
+  return useQuery({
+    queryKey: ['note', vaultId, id],
+    queryFn: () => api.get<Note>(`/notes/by-id/${id}`),
+    enabled: id != null,
+  })
 }
 
 export function useUpdateNote() {
@@ -143,15 +186,15 @@ export function useUpdateNote() {
         version,
         mtime: Date.now() / 1000,
       }),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ['note', vaultId, vars.path] })
+    onSuccess: (data) => {
+      // The note cache is keyed by id (`['note', vaultId, id]`), not
+      // path. Invalidate the specific id when the server returns it,
+      // and refresh folder listings so the title/mtime stay current.
+      const id = data?.note?.id
+      if (id != null) qc.invalidateQueries({ queryKey: ['note', vaultId, id] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
     },
   })
-}
-
-function encodePathForRouter(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/')
 }
 
 export function useCreateNote() {
@@ -159,7 +202,7 @@ export function useCreateNote() {
   const vaultId = useActiveVaultId()
   const navigate = useNavigate()
 
-  return useMutation<{ path: string }, ApiError, { folder: string }>({
+  return useMutation<{ path: string; id: number }, ApiError, { folder: string }>({
     mutationFn: async ({ folder }) => {
       const existingNotes =
         qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
@@ -175,12 +218,12 @@ export function useCreateNote() {
         const name = collideBump(existingNames, 'Untitled.md', { cap: 1000 })
         const path = folder ? `${folder}/${name}` : name
         try {
-          await api.post<{ note: Note }>('/notes', {
+          const { note } = await api.post<{ note: Note }>('/notes', {
             path,
             content: '',
             mtime: Date.now() / 1000,
           })
-          return { path }
+          return { path, id: note.id }
         } catch (err) {
           if (err instanceof ApiError && err.status === 409) {
             existingNames.add(name)
@@ -191,10 +234,10 @@ export function useCreateNote() {
       }
       throw new ApiError(500, 'useCreateNote: exceeded race retries')
     },
-    onSuccess: ({ path }, vars) => {
+    onSuccess: ({ id }, vars) => {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
-      navigate(`/note/${encodePathForRouter(path)}`)
+      navigate(`/note/${id}`)
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 402) {
@@ -814,5 +857,980 @@ export function useConfirmPlanChange() {
         target_price_id: targetPriceId,
       }),
     onSuccess: () => invalidateBilling(qc),
+  })
+}
+
+// ── Tree mutations (rename / delete / duplicate) ─────────────
+//
+// Folder/note rename + delete on the tree. Rename endpoints return 409
+// on target-exists (collision) and 404 if the source is missing — both
+// surface as ApiError to the caller via api.post / api.del.
+//
+// Each mutation runs optimistically: `onMutate` snapshots the affected
+// caches, applies the change locally so the UI updates synchronously,
+// and stashes the snapshot in the mutation context. `onError` restores
+// the snapshot and toasts the failure. `onSettled` invalidates the
+// affected query families so the server stays the source of truth and
+// out-of-band changes (Phoenix channel push, other-tab edits) get
+// reconciled.
+
+// Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
+// rule the backend uses when computing `folder` on a NoteSummary.
+function folderOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
+
+// Apply `mut` to the entry at `key` only if it is currently cached.
+// Skipping uncached keys keeps optimistic edits cheap and avoids
+// pre-seeding caches that would otherwise refetch lazily on mount.
+function updateCachedList<T>(
+  qc: QueryClient,
+  key: readonly unknown[],
+  mut: (data: { notes: T[] }) => { notes: T[] },
+) {
+  const prev = qc.getQueryData<{ notes: T[] }>(key as readonly unknown[])
+  if (!prev) return
+  qc.setQueryData(key as readonly unknown[], mut(prev))
+}
+
+// 409/404/etc → human-grade toast copy. Centralised so all four
+// mutations (and the standalone drop handler) speak the same dialect.
+function renameErrorToast(err: ApiError, kind: 'file' | 'folder') {
+  const noun = kind === 'file' ? 'note' : 'folder'
+  if (err.status === 409) toast.error(`A ${noun} with that name already exists.`)
+  else if (err.status === 404) toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`)
+  else toast.error('Rename failed.')
+}
+
+function deleteErrorToast(err: ApiError, kind: 'file' | 'folder') {
+  const noun = kind === 'file' ? 'Note' : 'Folder'
+  if (err.status === 404) toast.error(`${noun} no longer exists.`)
+  else toast.error('Delete failed.')
+}
+
+interface RenameNoteContext {
+  oldFolder: string
+  newFolder: string
+  oldFolderNotes: { notes: NoteSummary[] } | undefined
+  newFolderNotes: { notes: NoteSummary[] } | undefined
+  folders: { folders: Folder[] } | undefined
+  // The note id is stable across rename — only `path`/`folder` shift.
+  // We snapshot the previous note value so rollback restores those
+  // fields under the SAME cache key.
+  noteId: number | null
+  prevNote: Note | undefined
+}
+
+export function useRenameNote() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { renamed: boolean; old_path: string; new_path: string; note: Note },
+    ApiError,
+    { old_path: string; new_path: string },
+    RenameNoteContext
+  >({
+    mutationFn: (vars) =>
+      api.post<{ renamed: boolean; old_path: string; new_path: string; note: Note }>(
+        '/notes/rename',
+        vars,
+      ),
+    onMutate: async ({ old_path, new_path }) => {
+      const oldFolder = folderOf(old_path)
+      const newFolder = folderOf(new_path)
+      const oldListKey = ['folderNotes', vaultId, oldFolder] as const
+      const newListKey = ['folderNotes', vaultId, newFolder] as const
+      const foldersKey = ['folders', vaultId] as const
+
+      // Stop in-flight queries from clobbering the optimistic write.
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
+      await qc.cancelQueries({ queryKey: foldersKey })
+      await qc.cancelQueries({ queryKey: ['note', vaultId] })
+
+      const oldFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(oldListKey)
+      const newFolderNotes = qc.getQueryData<{ notes: NoteSummary[] }>(newListKey)
+      const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey)
+
+      // Resolve the note id from whatever cache has it. The folder
+      // list is the cheapest lookup; failing that, walk every cached
+      // `['note', vaultId, *]` entry looking for the matching path.
+      const fromList = oldFolderNotes?.notes.find((n) => n.path === old_path)
+      let noteId: number | null = fromList?.id ?? null
+      let prevNote: Note | undefined
+      if (noteId == null) {
+        const cached = qc
+          .getQueryCache()
+          .findAll({ queryKey: ['note', vaultId] })
+          .map((q) => q.state.data as Note | undefined)
+          .find((n) => n?.path === old_path)
+        if (cached) {
+          noteId = cached.id
+          prevNote = cached
+        }
+      } else {
+        prevNote = qc.getQueryData<Note>(['note', vaultId, noteId])
+      }
+
+      const ctx: RenameNoteContext = {
+        oldFolder,
+        newFolder,
+        oldFolderNotes,
+        newFolderNotes,
+        folders,
+        noteId,
+        prevNote,
+      }
+
+      // Build a renamed NoteSummary either from the existing list row
+      // or from the cached note body so the new folder list still gets
+      // a visible entry even when the old list isn't cached.
+      const renamedSummary: NoteSummary | null = fromList
+        ? { ...fromList, path: new_path, folder: newFolder }
+        : prevNote
+          ? {
+              id: prevNote.id,
+              path: new_path,
+              title: prevNote.title,
+              folder: newFolder,
+              tags: prevNote.tags,
+              version: prevNote.version,
+              mtime: prevNote.mtime,
+              created_at: prevNote.created_at,
+              updated_at: prevNote.updated_at,
+            }
+          : null
+
+      // Remove from old list (by id when we have it, by path otherwise).
+      if (oldFolderNotes) {
+        updateCachedList<NoteSummary>(qc, oldListKey, (prev) => ({
+          notes: prev.notes.filter((n) =>
+            noteId != null ? n.id !== noteId : n.path !== old_path,
+          ),
+        }))
+      }
+
+      // Drop a renamed copy into the new folder list (if cached).
+      if (renamedSummary && newFolderNotes) {
+        updateCachedList<NoteSummary>(qc, newListKey, (prev) => ({
+          notes: [
+            ...prev.notes.filter((n) =>
+              noteId != null ? n.id !== noteId : n.path !== new_path,
+            ),
+            renamedSummary,
+          ],
+        }))
+      }
+
+      // Adjust folder counts when the note crosses folder boundaries.
+      if (oldFolder !== newFolder && folders) {
+        qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+          if (!prev) return prev
+          let next = prev.folders.map((f) =>
+            f.name === oldFolder ? { ...f, count: Math.max(0, f.count - 1) } : f,
+          )
+          const hasNewEntry = next.some((f) => f.name === newFolder)
+          if (hasNewEntry) {
+            next = next.map((f) =>
+              f.name === newFolder ? { ...f, count: f.count + 1 } : f,
+            )
+          } else if (newFolder !== '') {
+            // Optimistic placeholder — real backend id + parent_id land
+            // when `onSettled` refetches the folders list. The negative
+            // id is a sentinel that won't collide with real ids; the
+            // null parent_id is benign because the refetch reconciles
+            // before any consumer can rely on tree shape here.
+            next = [
+              ...next,
+              { id: -Date.now(), parent_id: null, name: newFolder, count: 1 },
+            ]
+          } else {
+            // Root files don't get a synthetic '' entry — folders() filters
+            // those out anyway; the note shows up via RootFiles.
+          }
+          return { folders: next }
+        })
+      }
+
+      // The note id is stable across rename — only `path` and `folder`
+      // change. Update those fields in place under the SAME cache key
+      // (`['note', vaultId, id]`). No key shuffle: any subscriber to
+      // useNote(id) sees the new fields without remounting.
+      if (noteId != null && prevNote) {
+        qc.setQueryData<Note>(['note', vaultId, noteId], {
+          ...prevNote,
+          path: new_path,
+          folder: newFolder,
+        })
+      }
+
+      return ctx
+    },
+    onError: (err, _vars, ctx) => {
+      if (!ctx) return
+      const oldListKey = ['folderNotes', vaultId, ctx.oldFolder]
+      const newListKey = ['folderNotes', vaultId, ctx.newFolder]
+      const foldersKey = ['folders', vaultId]
+      if (ctx.oldFolderNotes !== undefined) qc.setQueryData(oldListKey, ctx.oldFolderNotes)
+      if (ctx.newFolderNotes !== undefined) qc.setQueryData(newListKey, ctx.newFolderNotes)
+      if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders)
+      if (ctx.noteId != null && ctx.prevNote !== undefined) {
+        qc.setQueryData(['note', vaultId, ctx.noteId], ctx.prevNote)
+      }
+      renameErrorToast(err, 'file')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['note', vaultId] })
+    },
+  })
+}
+
+interface RenameFolderContext {
+  folders: { folders: Folder[] } | undefined
+  // Snapshot of every cached folderNotes entry we touched, keyed by the
+  // joined query key. Folder rename is coarse (see below) — we DROP all
+  // child folderNotes entries to force refetch on next expand, which
+  // means rollback needs to restore them.
+  childLists: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>
+  // Notes cached by id whose `folder` was under the old prefix. We
+  // rewrite path/folder in place under the same key (id is stable);
+  // snapshots capture the pre-rename value for rollback.
+  noteSnapshots: Array<{ id: number; note: Note }>
+}
+
+export function useRenameFolder() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { renamed: boolean; old_path: string; new_path: string; count: number },
+    ApiError,
+    { old_path: string; new_path: string },
+    RenameFolderContext
+  >({
+    mutationFn: (vars) =>
+      api.post<{
+        renamed: boolean
+        old_path: string
+        new_path: string
+        count: number
+      }>('/folders/rename', vars),
+    onMutate: async ({ old_path, new_path }) => {
+      // COARSE optimistic strategy: rewrite folder names in ['folders']
+      // (the renamed folder + every descendant) and DROP every cached
+      // folderNotes entry under the old prefix. Note paths inside those
+      // lists would need full prefix-rewrite to stay coherent, and the
+      // user almost certainly isn't looking at every descendant list at
+      // once — refetching on next expand is cheap and exact. The list
+      // for the renamed folder ITSELF gets the same treatment.
+      const foldersKey = ['folders', vaultId] as const
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
+      await qc.cancelQueries({ queryKey: foldersKey })
+
+      await qc.cancelQueries({ queryKey: ['note', vaultId] })
+
+      const ctx: RenameFolderContext = {
+        folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+        childLists: [],
+        noteSnapshots: [],
+      }
+
+      // Rewrite folder names.
+      if (ctx.folders) {
+        qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
+          if (!prev) return prev
+          const oldPrefix = `${old_path}/`
+          return {
+            folders: prev.folders.map((f) => {
+              if (f.name === old_path) return { ...f, name: new_path }
+              if (f.name.startsWith(oldPrefix)) {
+                return { ...f, name: `${new_path}/${f.name.slice(oldPrefix.length)}` }
+              }
+              return f
+            }),
+          }
+        })
+      }
+
+      // Snapshot + drop every cached folderNotes entry under the old prefix.
+      const all = qc.getQueryCache().findAll({ queryKey: ['folderNotes', vaultId] })
+      for (const q of all) {
+        const folder = q.queryKey[2] as string | undefined
+        if (typeof folder !== 'string') continue
+        if (folder !== old_path && !folder.startsWith(`${old_path}/`)) continue
+        ctx.childLists.push({
+          key: q.queryKey,
+          data: qc.getQueryData<{ notes: NoteSummary[] }>(q.queryKey),
+        })
+        qc.removeQueries({ queryKey: q.queryKey })
+      }
+
+      // Rewrite every cached `['note', vaultId, id]` whose folder sits
+      // under the old prefix. The id is stable across folder rename —
+      // path + folder shift, key stays put. This keeps any open
+      // useNote(id) subscriber coherent without a remount.
+      const oldPrefix = `${old_path}/`
+      const allNotes = qc.getQueryCache().findAll({ queryKey: ['note', vaultId] })
+      for (const q of allNotes) {
+        const note = q.state.data as Note | undefined
+        if (!note) continue
+        if (note.folder !== old_path && !note.folder.startsWith(oldPrefix)) continue
+        ctx.noteSnapshots.push({ id: note.id, note })
+        const suffixFolder =
+          note.folder === old_path ? '' : note.folder.slice(oldPrefix.length)
+        const newFolder = suffixFolder ? `${new_path}/${suffixFolder}` : new_path
+        // The note path always starts with `${old_path}/` (a note can't
+        // live AT a folder key), so strip + reattach.
+        const newPath = `${new_path}/${note.path.slice(oldPrefix.length)}`
+        qc.setQueryData<Note>(['note', vaultId, note.id], {
+          ...note,
+          path: newPath,
+          folder: newFolder,
+        })
+      }
+
+      return ctx
+    },
+    onError: (err, _vars, ctx) => {
+      if (!ctx) return
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
+      for (const entry of ctx.childLists) {
+        if (entry.data !== undefined) qc.setQueryData(entry.key, entry.data)
+      }
+      for (const snap of ctx.noteSnapshots) {
+        qc.setQueryData<Note>(['note', vaultId, snap.id], snap.note)
+      }
+      renameErrorToast(err, 'folder')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['note', vaultId] })
+    },
+  })
+}
+
+interface DeleteNoteContext {
+  folder: string
+  id: number
+  folderNotes: { notes: NoteSummary[] } | undefined
+  folders: { folders: Folder[] } | undefined
+  note: Note | undefined
+}
+
+// `path` rides along so optimistic onMutate can locate the row in the
+// folderNotes cache + adjust the parent folder's count without a round
+// trip. The URL itself only needs the id.
+export function useDeleteNote() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { deleted: boolean } | void,
+    ApiError,
+    { id: number; path: string },
+    DeleteNoteContext
+  >({
+    mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
+    onMutate: async ({ id, path }) => {
+      const folder = folderOf(path)
+      const listKey = ['folderNotes', vaultId, folder] as const
+      const foldersKey = ['folders', vaultId] as const
+      const noteKey = ['note', vaultId, id] as const
+
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
+      await qc.cancelQueries({ queryKey: foldersKey })
+      await qc.cancelQueries({ queryKey: noteKey })
+
+      const ctx: DeleteNoteContext = {
+        folder,
+        id,
+        folderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
+        folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+        note: qc.getQueryData<Note>(noteKey),
+      }
+
+      if (ctx.folderNotes) {
+        updateCachedList<NoteSummary>(qc, listKey, (prev) => ({
+          notes: prev.notes.filter((n) => n.id !== id),
+        }))
+      }
+      if (ctx.folders) {
+        qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+          prev
+            ? {
+                folders: prev.folders.map((f) =>
+                  f.name === folder ? { ...f, count: Math.max(0, f.count - 1) } : f,
+                ),
+              }
+            : prev,
+        )
+      }
+      qc.removeQueries({ queryKey: noteKey })
+      return ctx
+    },
+    onError: (err, _vars, ctx) => {
+      if (!ctx) return
+      const listKey = ['folderNotes', vaultId, ctx.folder]
+      const foldersKey = ['folders', vaultId]
+      const noteKey = ['note', vaultId, ctx.id]
+      if (ctx.folderNotes !== undefined) qc.setQueryData(listKey, ctx.folderNotes)
+      if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders)
+      if (ctx.note !== undefined) qc.setQueryData(noteKey, ctx.note)
+      deleteErrorToast(err, 'file')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+interface DeleteFolderContext {
+  folders: { folders: Folder[] } | undefined
+  folderList: { notes: NoteSummary[] } | undefined
+}
+
+export function useDeleteFolder() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { deleted: boolean } | void,
+    ApiError,
+    { path: string },
+    DeleteFolderContext
+  >({
+    mutationFn: ({ path }) =>
+      api.del<{ deleted: boolean }>(`/folders/${encodePathSegments(path)}`),
+    onMutate: async ({ path }) => {
+      // Coarse: drop the folder entry + its own folderNotes cache. We
+      // don't chase descendant folderNotes entries — the user will
+      // refetch them next time they expand the (now nonexistent) child.
+      const foldersKey = ['folders', vaultId] as const
+      const listKey = ['folderNotes', vaultId, path] as const
+
+      await qc.cancelQueries({ queryKey: foldersKey })
+      await qc.cancelQueries({ queryKey: listKey })
+
+      const ctx: DeleteFolderContext = {
+        folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
+        folderList: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
+      }
+
+      if (ctx.folders) {
+        qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) =>
+          prev
+            ? {
+                folders: prev.folders.filter(
+                  (f) => f.name !== path && !f.name.startsWith(`${path}/`),
+                ),
+              }
+            : prev,
+        )
+      }
+      qc.removeQueries({ queryKey: listKey })
+      return ctx
+    },
+    onError: (err, vars, ctx) => {
+      if (!ctx) return
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
+      if (ctx.folderList !== undefined)
+        qc.setQueryData(['folderNotes', vaultId, vars.path], ctx.folderList)
+      deleteErrorToast(err, 'folder')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+// Duplicate a note: read source content, then write a fresh note at a
+// caller-chosen `new_path`. The collision-free name is computed by the
+// caller (see `viewer/tree-actions/duplicate.ts#nextCopyName`) — keeping
+// this mutation a thin GET-then-POST means tests don't need to reason
+// about siblings, and the name policy stays in one place.
+//
+// Optimistic strategy: drop a placeholder NoteSummary into the new
+// folder's list immediately so the row appears in the tree. The GET+POST
+// happens in the background; on success the placeholder is replaced
+// (via onSettled refetch); on error the placeholder is pulled.
+
+interface DuplicateNoteContext {
+  newFolder: string
+  newFolderNotes: { notes: NoteSummary[] } | undefined
+  placeholderId: number
+}
+
+export function useDuplicateNote() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { note: Note },
+    ApiError,
+    { src_path: string; new_path: string },
+    DuplicateNoteContext
+  >({
+    mutationFn: async ({ src_path, new_path }) => {
+      const src = await api.get<Note>(`/notes/${encodePathSegments(src_path)}`)
+      return api.post<{ note: Note }>('/notes', {
+        path: new_path,
+        content: src.content ?? '',
+        mtime: Date.now() / 1000,
+      })
+    },
+    onMutate: async ({ src_path, new_path }) => {
+      const newFolder = folderOf(new_path)
+      const listKey = ['folderNotes', vaultId, newFolder] as const
+      await qc.cancelQueries({ queryKey: listKey })
+
+      // Placeholder id — the real one arrives with the POST response.
+      // Negative to avoid collisions with real backend ids; onSuccess
+      // swaps it for the server-assigned id in the cached list.
+      const placeholderId = -Date.now()
+      const ctx: DuplicateNoteContext = {
+        newFolder,
+        newFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
+        placeholderId,
+      }
+
+      // Seed metadata from the source row if we have it cached — gives
+      // the placeholder a usable title/tags so the row looks real.
+      const srcRowFromOldList = qc
+        .getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folderOf(src_path)])
+        ?.notes.find((n) => n.path === src_path)
+      const now = new Date().toISOString()
+      const placeholder: NoteSummary = {
+        id: placeholderId,
+        path: new_path,
+        title: srcRowFromOldList?.title ?? '',
+        folder: newFolder,
+        tags: srcRowFromOldList?.tags ?? [],
+        version: 1,
+        mtime: now,
+        created_at: now,
+        updated_at: now,
+      }
+
+      if (ctx.newFolderNotes) {
+        updateCachedList<NoteSummary>(qc, listKey, (prev) => ({
+          notes: [...prev.notes.filter((n) => n.path !== new_path), placeholder],
+        }))
+      }
+      return ctx
+    },
+    onSuccess: (data, _vars, ctx) => {
+      if (!ctx) return
+      const real = data.note
+      if (!real?.id) return
+      // Swap the placeholder row for the real server-assigned id so
+      // any tree consumer using `n.id` as a stable key transitions
+      // smoothly. onSettled below also invalidates, but the swap
+      // avoids a momentary "missing note" flash for the placeholder.
+      const listKey = ['folderNotes', vaultId, ctx.newFolder]
+      const curr = qc.getQueryData<{ notes: NoteSummary[] }>(listKey)
+      if (!curr) return
+      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, {
+        notes: curr.notes.map((n) =>
+          n.id === ctx.placeholderId
+            ? {
+                ...n,
+                id: real.id,
+                path: real.path ?? n.path,
+                title: real.title ?? n.title,
+                folder: real.folder ?? n.folder,
+                tags: real.tags ?? n.tags,
+                version: real.version ?? n.version,
+                mtime: real.mtime ?? n.mtime,
+                created_at: real.created_at ?? n.created_at,
+                updated_at: real.updated_at ?? n.updated_at,
+              }
+            : n,
+        ),
+      })
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.newFolderNotes !== undefined) {
+        qc.setQueryData(['folderNotes', vaultId, ctx.newFolder], ctx.newFolderNotes)
+      }
+      if (err.status === 409) {
+        toast.error('A note with that name already exists.')
+      } else {
+        toast.error('Failed to duplicate.')
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+// ── Batch mutations (tree multi-select — Task 19) ─────────────
+//
+// Four hooks fronting `/api/{notes,folders}/batch-{delete,move}`. The
+// backend treats every batch atomically (all-or-nothing); the
+// `X-Idempotency-Key` header is REQUIRED by the IdempotencyKey plug
+// installed in Tasks 7/8 — a missing or replay-on-different-body header
+// produces a 4xx the user shouldn't ever see.
+//
+// Optimistic strategy mirrors the per-row mutations above: snapshot
+// affected caches on `onMutate`, patch them locally, restore on error,
+// invalidate on success so the server reconciles authoritative state
+// (folder counts, server-assigned timestamps, etc.).
+//
+// Cache keys we touch:
+//   `['folders', vaultId]`              — the folder tree (id, parent_id, name)
+//   `['folder-notes-by-id', vaultId, folderId]` — by-id note lists
+//
+// `['folderNotes', vaultId, folder]` (path-keyed) is invalidated alongside
+// for the legacy tree consumers that still read it; the batch onMutate
+// itself only patches the id-keyed list since headless-tree is the only
+// caller that issues batches.
+
+function idempotencyHeaders(): { headers: Record<string, string> } {
+  return { headers: { 'X-Idempotency-Key': crypto.randomUUID() } }
+}
+
+interface BatchNotesContext {
+  // Every by-id list we patched. We keep the snapshot map ordered by the
+  // QueryClient cache scan so rollback restores under the same key.
+  noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>
+}
+
+export function useBatchDeleteNotes() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { deleted: number },
+    ApiError,
+    { ids: number[] },
+    BatchNotesContext
+  >({
+    mutationFn: ({ ids }) =>
+      api.post<{ deleted: number }>(
+        '/notes/batch-delete',
+        { ids },
+        idempotencyHeaders(),
+      ),
+    onMutate: async ({ ids }) => {
+      await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      const idSet = new Set(ids)
+
+      const snapshots: BatchNotesContext['noteListSnapshots'] = []
+      const queries = qc
+        .getQueryCache()
+        .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+      for (const q of queries) {
+        const data = qc.getQueryData<NoteSummary[]>(q.queryKey)
+        if (!data) continue
+        snapshots.push({ key: q.queryKey, data })
+        qc.setQueryData<NoteSummary[]>(
+          q.queryKey,
+          data.filter((n) => !idSet.has(n.id)),
+        )
+      }
+
+      // Drop any cached note body for the deleted ids so a stale
+      // useNote(id) subscriber 404s on remount instead of rendering.
+      for (const id of ids) {
+        qc.removeQueries({ queryKey: ['note', vaultId, id] })
+      }
+
+      return { noteListSnapshots: snapshots }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      for (const snap of ctx.noteListSnapshots) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      toast.error('Batch delete failed.')
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+export function useBatchMoveNotes() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { moved: number },
+    ApiError,
+    { ids: number[]; target_folder_id: number },
+    BatchNotesContext
+  >({
+    mutationFn: ({ ids, target_folder_id }) =>
+      api.post<{ moved: number }>(
+        '/notes/batch-move',
+        { ids, target_folder_id },
+        idempotencyHeaders(),
+      ),
+    onMutate: async ({ ids, target_folder_id }) => {
+      await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      const idSet = new Set(ids)
+
+      // Resolve the target folder's path so we can patch `folder` /
+      // `path` fields on the moved NoteSummaries. If the folders cache
+      // isn't seeded we just skip those fields — they'll reconcile on
+      // the success invalidation.
+      const foldersCache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+      const targetFolderName =
+        foldersCache?.folders.find((f) => f.id === target_folder_id)?.name ?? null
+
+      const snapshots: BatchNotesContext['noteListSnapshots'] = []
+      const moved: NoteSummary[] = []
+      const queries = qc
+        .getQueryCache()
+        .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+
+      // First pass: strip moved notes from every source list (capture the
+      // rows so we can re-attach them to the target list).
+      for (const q of queries) {
+        const data = qc.getQueryData<NoteSummary[]>(q.queryKey)
+        if (!data) continue
+        snapshots.push({ key: q.queryKey, data })
+        const folderId = q.queryKey[2] as number | null | undefined
+        const keep: NoteSummary[] = []
+        for (const n of data) {
+          if (idSet.has(n.id) && folderId !== target_folder_id) {
+            moved.push(n)
+          } else {
+            keep.push(n)
+          }
+        }
+        qc.setQueryData<NoteSummary[]>(q.queryKey, keep)
+      }
+
+      // Second pass: append the moved rows to the target list (if
+      // cached). Rewrite `folder` + `path` so the row looks at-home.
+      const targetKey = ['folder-notes-by-id', vaultId, target_folder_id] as const
+      const targetData = qc.getQueryData<NoteSummary[]>(targetKey)
+      if (targetData && moved.length > 0) {
+        const patched = moved.map<NoteSummary>((n) => {
+          const filename = n.path.includes('/')
+            ? n.path.slice(n.path.lastIndexOf('/') + 1)
+            : n.path
+          const nextFolder = targetFolderName ?? n.folder
+          return {
+            ...n,
+            folder: nextFolder,
+            path: nextFolder ? `${nextFolder}/${filename}` : filename,
+          }
+        })
+        qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched])
+      }
+
+      // Patch the individual `['note', vaultId, id]` caches so an open
+      // viewer reflects the new folder. Path/folder shift; id stable.
+      if (targetFolderName !== null) {
+        for (const id of ids) {
+          const note = qc.getQueryData<Note>(['note', vaultId, id])
+          if (!note) continue
+          const filename = note.path.includes('/')
+            ? note.path.slice(note.path.lastIndexOf('/') + 1)
+            : note.path
+          qc.setQueryData<Note>(['note', vaultId, id], {
+            ...note,
+            folder: targetFolderName,
+            path: targetFolderName ? `${targetFolderName}/${filename}` : filename,
+          })
+        }
+      }
+
+      return { noteListSnapshots: snapshots }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      for (const snap of ctx.noteListSnapshots) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      toast.error('Batch move failed.')
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['note', vaultId] })
+    },
+  })
+}
+
+// Walk the folders cache and collect `id` plus every transitive
+// descendant by parent_id chain. Used by both batch folder mutations.
+function collectFolderDescendants(folders: Folder[], rootIds: number[]): Set<number> {
+  const result = new Set<number>(rootIds)
+  // Iterate until no new ids land in the set — folders are typically
+  // shallow, so this is cheap even with the naive scan.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const f of folders) {
+      if (f.parent_id != null && result.has(f.parent_id) && !result.has(f.id)) {
+        result.add(f.id)
+        changed = true
+      }
+    }
+  }
+  return result
+}
+
+interface BatchFoldersContext {
+  folders: { folders: Folder[] } | undefined
+  // Snapshot every by-id note list whose folder is being deleted so
+  // rollback can restore them. Move doesn't touch these lists.
+  noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>
+}
+
+export function useBatchDeleteFolders() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { deleted: number },
+    ApiError,
+    { ids: number[] },
+    BatchFoldersContext
+  >({
+    mutationFn: ({ ids }) =>
+      api.post<{ deleted: number }>(
+        '/folders/batch-delete',
+        { ids },
+        idempotencyHeaders(),
+      ),
+    onMutate: async ({ ids }) => {
+      const foldersKey = ['folders', vaultId] as const
+      await qc.cancelQueries({ queryKey: foldersKey })
+      await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+
+      const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey)
+      const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] }
+
+      // Compute the full set of ids (roots + transitive descendants)
+      // so the optimistic patch matches the server's cascade.
+      const removedIds = folders
+        ? collectFolderDescendants(folders.folders, ids)
+        : new Set<number>(ids)
+
+      if (folders) {
+        qc.setQueryData<{ folders: Folder[] }>(foldersKey, {
+          folders: folders.folders.filter((f) => !removedIds.has(f.id)),
+        })
+      }
+
+      // Drop the by-id note lists for every removed folder.
+      for (const fid of removedIds) {
+        const key = ['folder-notes-by-id', vaultId, fid] as const
+        const data = qc.getQueryData<NoteSummary[]>(key)
+        if (data !== undefined) {
+          ctx.noteListSnapshots.push({ key, data })
+          qc.removeQueries({ queryKey: key })
+        }
+      }
+
+      return ctx
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
+      for (const snap of ctx.noteListSnapshots) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      toast.error('Batch delete failed.')
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
+  })
+}
+
+export function useBatchMoveFolders() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { moved: number },
+    ApiError,
+    { ids: number[]; target_parent_id: number },
+    BatchFoldersContext
+  >({
+    mutationFn: ({ ids, target_parent_id }) =>
+      api.post<{ moved: number }>(
+        '/folders/batch-move',
+        // The folders endpoint uses `target_parent_id` — the notes
+        // endpoint uses `target_folder_id`. Don't conflate.
+        { ids, target_parent_id },
+        idempotencyHeaders(),
+      ),
+    onMutate: async ({ ids, target_parent_id }) => {
+      const foldersKey = ['folders', vaultId] as const
+      await qc.cancelQueries({ queryKey: foldersKey })
+
+      const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey)
+      const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] }
+      if (!folders) return ctx
+
+      // Resolve the target's name once. Cycle defense: if the target
+      // sits under one of the moved roots, we skip the patch and let
+      // the server reject (the backend has the authoritative cycle
+      // check). Frontend silence beats lying optimistically.
+      const targetFolder = folders.folders.find((f) => f.id === target_parent_id)
+      const targetName = targetFolder?.name ?? ''
+      const descendants = collectFolderDescendants(folders.folders, ids)
+      if (descendants.has(target_parent_id)) return ctx
+
+      // Rewrite each moved root: parent_id flips to the target,
+      // name path prefix is rebuilt as `${targetName}/${basename}`.
+      // Descendants keep their parent_id (still relative to their
+      // intra-subtree parent) but their .name prefix is rewritten so
+      // the path string stays coherent.
+      const idSet = new Set(ids)
+      const patched = folders.folders.map<Folder>((f) => {
+        if (idSet.has(f.id)) {
+          const slash = f.name.lastIndexOf('/')
+          const basename = slash < 0 ? f.name : f.name.slice(slash + 1)
+          return {
+            ...f,
+            parent_id: target_parent_id,
+            name: targetName ? `${targetName}/${basename}` : basename,
+          }
+        }
+        if (descendants.has(f.id)) {
+          // Find the ancestor in the moved set whose name is the
+          // longest prefix of `f.name` — that's the root whose path
+          // we just rewrote. Compose the descendant's new name by
+          // stripping the OLD ancestor prefix and re-attaching the NEW.
+          const oldOriginal = folders.folders.find(
+            (m) =>
+              idSet.has(m.id) &&
+              (f.name === m.name || f.name.startsWith(`${m.name}/`)),
+          )
+          if (!oldOriginal) return f
+          const slash = oldOriginal.name.lastIndexOf('/')
+          const basename = slash < 0 ? oldOriginal.name : oldOriginal.name.slice(slash + 1)
+          const newRoot = targetName ? `${targetName}/${basename}` : basename
+          const tail =
+            f.name === oldOriginal.name ? '' : f.name.slice(oldOriginal.name.length + 1)
+          return { ...f, name: tail ? `${newRoot}/${tail}` : newRoot }
+        }
+        return f
+      })
+
+      qc.setQueryData<{ folders: Folder[] }>(foldersKey, { folders: patched })
+      return ctx
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
+      toast.error('Batch move failed.')
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+    },
   })
 }

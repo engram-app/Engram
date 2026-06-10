@@ -119,6 +119,9 @@ defmodule EngramWeb.NotesController do
       {:ok, note} ->
         json(conn, %{renamed: true, old_path: old_path, new_path: new_path, note: note_json(note)})
 
+      {:error, :conflict} ->
+        conn |> put_status(409) |> json(%{error: "conflict"})
+
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "not found"})
     end
@@ -130,6 +133,34 @@ defmodule EngramWeb.NotesController do
     path = Enum.join(List.wrap(path_parts), "/")
     Notes.delete_note(user, vault, path)
     json(conn, %{deleted: true})
+  end
+
+  def show_by_id(conn, %{"id" => id_str}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {id, ""} <- Integer.parse(id_str),
+         {:ok, note} <- Notes.get_note_by_id(user, vault, id) do
+      json(conn, note_json(note))
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
+      {_, _rest} -> conn |> put_status(400) |> json(%{error: "invalid id"})
+    end
+  end
+
+  def delete_by_id(conn, %{"id" => id_str}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {id, ""} <- Integer.parse(id_str),
+         :ok <- Notes.delete_note_by_id(user, vault, id) do
+      json(conn, %{deleted: true})
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
+      {_, _rest} -> conn |> put_status(400) |> json(%{error: "invalid id"})
+    end
   end
 
   def changes(conn, %{"since" => since_str}) do
@@ -155,11 +186,98 @@ defmodule EngramWeb.NotesController do
   end
 
   # ---------------------------------------------------------------------------
+  # Batch ops
+  # ---------------------------------------------------------------------------
+  #
+  # Idempotency: the X-Idempotency-Key header is required (enforced by
+  # EngramWeb.Plugs.IdempotencyKey before this action runs). On success we
+  # cache the (status, body) tuple so a retry within the TTL replays the
+  # exact response without re-executing the transaction. The plug short-
+  # circuits replays before they reach us.
+  #
+  # Note: PubSub broadcast still lives in the action (post-commit). If the
+  # commit succeeds but the broadcast crashes, the cache is already set, so
+  # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
+  # follow-up (after-commit hook).
+
+  def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case parse_int_list(ids) do
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid_ids"})
+
+      {:ok, ids} ->
+        case Notes.batch_delete_notes(user, vault, ids) do
+          {:ok, %{deleted: n}} ->
+            body = %{deleted: n}
+            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+            broadcast_batch(user, vault, %{op: "delete", ids: ids})
+            json(conn, body)
+
+          {:error, {:not_found, id}} ->
+            conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+
+          {:error, {:conflict, id}} ->
+            conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+          {:error, _reason} ->
+            conn |> put_status(500) |> json(%{error: "internal"})
+        end
+    end
+  end
+
+  def batch_delete(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required param: ids"})
+  end
+
+  def batch_move(conn, %{"ids" => ids, "target_folder_id" => tgt}) when is_list(ids) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with {:ok, ids} <- parse_int_list(ids),
+         {:ok, tgt} <- parse_int(tgt) do
+      case Notes.batch_move_notes(user, vault, ids, tgt) do
+        {:ok, %{moved: n}} ->
+          body = %{moved: n}
+          Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+          broadcast_batch(user, vault, %{
+            op: "move",
+            ids: ids,
+            target_folder_id: tgt
+          })
+
+          json(conn, body)
+
+        {:error, {:not_found, id}} ->
+          conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+
+        {:error, {:conflict, id}} ->
+          conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+        {:error, _reason} ->
+          conn |> put_status(500) |> json(%{error: "internal"})
+      end
+    else
+      :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
+    end
+  end
+
+  def batch_move(conn, _params) do
+    conn
+    |> put_status(400)
+    |> json(%{error: "missing required params: ids, target_folder_id"})
+  end
+
+  # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
 
   defp note_json(note) do
     %{
+      id: note.id,
       path: note.path,
       title: note.title,
       folder: note.folder || "",
@@ -173,6 +291,7 @@ defmodule EngramWeb.NotesController do
 
   defp change_json(change) do
     %{
+      id: change.id,
       path: change.path,
       title: change.title,
       folder: change.folder || "",
@@ -188,4 +307,36 @@ defmodule EngramWeb.NotesController do
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
   defp classify_reason(reason) when is_atom(reason), do: reason
+
+  defp parse_int_list(list) when is_list(list) do
+    Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
+      case parse_int(item) do
+        {:ok, n} -> {:cont, {:ok, [n | acc]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      :error -> :error
+    end
+  end
+
+  defp parse_int(n) when is_integer(n), do: {:ok, n}
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_int(_), do: :error
+
+  defp broadcast_batch(user, vault, payload) do
+    EngramWeb.Endpoint.broadcast!(
+      "sync:#{user.id}:#{vault.id}",
+      "notes.batch",
+      payload
+    )
+  end
 end

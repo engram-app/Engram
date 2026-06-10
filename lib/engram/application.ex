@@ -40,6 +40,7 @@ defmodule Engram.Application do
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
+        {Engram.Idempotency, []},
         # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
         # is unset (dev, test, self-host), and Enum.reject below filters it out.
         pyroscope_child(),

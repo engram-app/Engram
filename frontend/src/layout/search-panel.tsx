@@ -97,7 +97,9 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 }
 
 function ResultRow({ result }: { result: SearchResult }) {
-  const href = `/note/${result.path.split('/').map(encodeURIComponent).join('/')}`
+  // Orphan hits (no id) are unreachable — render nothing.
+  if (result.id == null) return null
+  const href = `/note/${result.id}`
   return (
     <Link
       to={href}

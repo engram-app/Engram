@@ -79,6 +79,67 @@ defmodule EngramWeb.SearchControllerTest do
       assert hit["match_count"] == 1
     end
 
+    test "includes numeric id on a search hit when the note exists in PG", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Mirror prod: the note must exist in PG (with an id) for the search
+      # controller's path→id lookup to resolve. Qdrant chunks for orphan
+      # paths fall back to id: nil — covered separately below.
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Health/Iron Panel.md",
+          "content" => "# Iron Panel\n\nFerritin levels.",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
+          user,
+          "engram_notes",
+          "uuid-1"
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => "uuid-1",
+            "score" => 0.95,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "source_path" => "Health/Iron Panel.md",
+              "tags" => ["health"],
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      conn = post(conn, "/api/search", %{query: "iron panel"})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+      assert hit["id"] == note.id
+      assert is_integer(hit["id"])
+    end
+
     test "over-fetches chunks so grouping can return the requested number of notes",
          %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder

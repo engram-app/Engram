@@ -241,6 +241,7 @@ defmodule EngramWeb.SyncChannel do
             serialized =
               Enum.map(changes, fn c ->
                 %{
+                  "id" => c.id,
                   "path" => c.path,
                   "title" => c.title,
                   "folder" => c.folder,

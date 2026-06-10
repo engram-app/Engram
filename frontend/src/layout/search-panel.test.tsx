@@ -9,7 +9,7 @@ vi.mock('../api/queries', () => ({
   useSearch: (q: string) => ({
     data:
       q === 'hello'
-        ? [{ path: 'note.md', title: 'Note', folder: '', heading_path: '', snippet: 'hello world', match_count: 1 }]
+        ? [{ id: 7, path: 'note.md', title: 'Note', folder: '', heading_path: '', snippet: 'hello world', match_count: 1 }]
         : [],
     isLoading: false,
     error: null,

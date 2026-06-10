@@ -1,22 +1,14 @@
-/**
- * Derive the active folder from a router pathname.
- * - "/note/foo/bar.md" → "foo"
- * - "/note/A.md"       → ""    (root note)
- * - "/settings/foo"    → ""    (no note open)
- */
-export function deriveActiveFolder(pathname: string): string {
-  const PREFIX = '/note/'
-  if (!pathname.startsWith(PREFIX)) return ''
+import { useQueryClient } from '@tanstack/react-query'
+import { useParams } from 'react-router'
+import { useActiveVaultId } from '../api/active-vault'
+import type { Note } from '../api/queries'
 
-  const encoded = pathname.slice(PREFIX.length)
-  const segments = encoded.split('/').map((s) => {
-    try {
-      return decodeURIComponent(s)
-    } catch {
-      return s
-    }
-  })
-
-  if (segments.length <= 1) return ''
-  return segments.slice(0, -1).join('/')
+export function useActiveFolder(): string {
+  const params = useParams()
+  const id = params.id ? Number(params.id) : null
+  const vaultId = useActiveVaultId()
+  const qc = useQueryClient()
+  if (id == null || Number.isNaN(id)) return ''
+  const note = qc.getQueryData<Note>(['note', vaultId, id])
+  return note?.folder ?? ''
 }

@@ -3,11 +3,11 @@ defmodule EngramWeb.NotesControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   # ---------------------------------------------------------------------------
@@ -178,6 +178,20 @@ defmodule EngramWeb.NotesControllerTest do
       assert body["path"] == "Test/Readable.md"
     end
 
+    test "GET /api/notes/:path includes numeric id", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "id-check.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      conn = get(conn, "/api/notes/id-check.md")
+      body = json_response(conn, 200)
+      assert body["id"] == note.id
+      assert is_integer(body["id"])
+    end
+
     test "returns 404 for missing note", %{conn: conn} do
       conn = get(conn, "/api/notes/Nope/Missing.md")
       assert json_response(conn, 404)
@@ -205,6 +219,45 @@ defmodule EngramWeb.NotesControllerTest do
   # DELETE /notes/:path
   # ---------------------------------------------------------------------------
 
+  describe "GET /api/notes/by-id/:id" do
+    test "returns the note for the owner", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      conn = get(conn, ~p"/api/notes/by-id/#{note.id}")
+      body = json_response(conn, 200)
+      assert body["id"] == note.id
+      assert body["path"] == "a.md"
+    end
+
+    test "returns 404 for non-existent id", %{conn: conn} do
+      conn = get(conn, ~p"/api/notes/by-id/999999")
+      assert json_response(conn, 404) == %{"error" => "not found"}
+    end
+
+    test "returns 400 for non-numeric id", %{conn: conn} do
+      conn = get(conn, ~p"/api/notes/by-id/abc")
+      assert json_response(conn, 400) == %{"error" => "invalid id"}
+    end
+  end
+
+  describe "DELETE /api/notes/by-id/:id" do
+    test "deletes the note", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      conn = delete(conn, ~p"/api/notes/by-id/#{note.id}")
+      assert json_response(conn, 200) == %{"deleted" => true}
+      assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "returns 404 for non-existent id", %{conn: conn} do
+      conn = delete(conn, ~p"/api/notes/by-id/999999")
+      assert json_response(conn, 404) == %{"error" => "not found"}
+    end
+
+    test "returns 400 for non-numeric id", %{conn: conn} do
+      conn = delete(conn, ~p"/api/notes/by-id/abc")
+      assert json_response(conn, 400) == %{"error" => "invalid id"}
+    end
+  end
+
   describe "DELETE /notes/:path" do
     test "soft-deletes a note", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Bye.md", content: "# Bye", mtime: 1_000.0})
@@ -230,6 +283,21 @@ defmodule EngramWeb.NotesControllerTest do
       conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
       assert %{"changes" => changes} = json_response(conn, 200)
       assert Enum.any?(changes, &(&1["path"] == "Test/Recent.md"))
+    end
+
+    test "change payload includes note id", %{conn: conn} do
+      post_conn =
+        post(conn, "/api/notes", %{path: "Test/IdShape.md", content: "# Id", mtime: 1_000.0})
+
+      assert %{"note" => %{"id" => note_id}} = json_response(post_conn, 200)
+      assert is_integer(note_id)
+
+      conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
+      assert %{"changes" => changes} = json_response(conn, 200)
+
+      change = Enum.find(changes, &(&1["path"] == "Test/IdShape.md"))
+      assert change["id"] == note_id
+      assert is_integer(change["id"])
     end
 
     test "includes deleted notes with deleted=true flag", %{conn: conn} do
@@ -286,6 +354,29 @@ defmodule EngramWeb.NotesControllerTest do
       # Updating A is fine — only NEW notes are gated
       conn2 = post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0})
       assert %{"note" => _} = json_response(conn2, 200)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # POST /notes/rename
+  # ---------------------------------------------------------------------------
+
+  describe "POST /notes/rename" do
+    test "returns 409 when target path exists", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "a.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "b.md", content: "# B", mtime: 1_000.0})
+
+      conn2 = post(conn, "/api/notes/rename", %{old_path: "a.md", new_path: "b.md"})
+      assert json_response(conn2, 409) == %{"error" => "conflict"}
+
+      # Original still readable
+      conn3 = get(conn, "/api/notes/a.md")
+      assert %{"path" => "a.md"} = json_response(conn3, 200)
+    end
+
+    test "returns 404 when source path does not exist", %{conn: conn} do
+      conn2 = post(conn, "/api/notes/rename", %{old_path: "missing.md", new_path: "new.md"})
+      assert json_response(conn2, 404) == %{"error" => "not found"}
     end
   end
 

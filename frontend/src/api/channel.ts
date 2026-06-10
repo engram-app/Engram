@@ -15,6 +15,9 @@ export interface NoteChangedPayload {
   event_type: string
   path: string
   vault_id: number
+  // Present since backend change_json adds note id. Always invalidate by id
+  // when available — useNote keys by id since the URL-by-id refactor.
+  id?: number
   content?: string
   title?: string
   folder?: string
@@ -44,9 +47,14 @@ export function handleNoteChanged(
   // mid-vault-switch race).
   if (payload.vault_id !== activeVaultId) return
 
+  if (payload.id != null) {
+    queryClient.invalidateQueries({ queryKey: ['note', activeVaultId, payload.id] })
+  }
+  // Legacy path-keyed key still in use by some hooks; keep invalidating it.
   queryClient.invalidateQueries({ queryKey: ['note', activeVaultId, payload.path] })
   queryClient.invalidateQueries({ queryKey: ['folders', activeVaultId] })
   queryClient.invalidateQueries({ queryKey: ['folderNotes', activeVaultId] })
+  queryClient.invalidateQueries({ queryKey: ['folder-notes-by-id', activeVaultId] })
   queryClient.invalidateQueries({ queryKey: ['search', activeVaultId] })
 
   for (const listener of listeners) listener(payload)

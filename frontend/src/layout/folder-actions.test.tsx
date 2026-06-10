@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const { navigate, post, toastError } = vi.hoisted(() => ({
@@ -14,7 +14,6 @@ vi.mock('react-router', async () => {
   return {
     ...actual,
     useNavigate: () => navigate,
-    useLocation: () => ({ pathname: '/note/foo/bar.md', search: '', hash: '', state: null, key: 'default' }),
   }
 })
 
@@ -47,11 +46,15 @@ import { FolderTreeProvider } from './folder-tree-context'
 
 function renderWithProviders() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // Seed the active-note cache so useActiveFolder() resolves to "foo"
+  qc.setQueryData(['note', 1, 42], { id: 42, folder: 'foo', path: 'foo/bar.md' })
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/note/42']}>
       <QueryClientProvider client={qc}>
         <FolderTreeProvider>
-          <FolderActions />
+          <Routes>
+            <Route path="/note/:id" element={<FolderActions />} />
+          </Routes>
         </FolderTreeProvider>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -90,14 +93,14 @@ describe('FolderActions', () => {
     })
   })
 
-  it('navigates to the new note path on success', async () => {
-    post.mockResolvedValue({ note: { path: 'foo/Untitled.md' } })
+  it('navigates to the new note by id on success', async () => {
+    post.mockResolvedValue({ note: { id: 7, path: 'foo/Untitled.md' } })
     renderWithProviders()
 
     fireEvent.click(screen.getByRole('button', { name: 'New note' }))
 
     await waitFor(() => {
-      expect(navigate).toHaveBeenCalledWith('/note/foo/Untitled.md')
+      expect(navigate).toHaveBeenCalledWith('/note/7')
     })
   })
 

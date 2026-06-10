@@ -101,6 +101,15 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       body = json_response(conn, 200)
       assert body["notes"] == []
     end
+
+    test "GET folder-notes list includes id on each note", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "src/a.md", content: "# A", mtime: 1_000.0})
+
+      conn2 = get(conn, "/api/folders/list", %{folder: "src"})
+      body = json_response(conn2, 200)
+      [n | _] = body["notes"]
+      assert is_integer(n["id"])
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -114,9 +123,10 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       post(conn, "/api/notes", %{path: "Other/C.md", content: "# C", mtime: 1_000.0})
 
       conn2 =
-        post(conn, "/api/folders/rename", %{old_folder: "Old", new_folder: "New"})
+        post(conn, "/api/folders/rename", %{old_path: "Old", new_path: "New"})
 
-      assert %{"count" => 2} = json_response(conn2, 200)
+      assert %{"count" => 2, "old_path" => "Old", "new_path" => "New", "renamed" => true} =
+               json_response(conn2, 200)
 
       # Old folder should be empty
       conn3 = get(conn, "/api/folders/list", %{folder: "Old"})
@@ -132,15 +142,28 @@ defmodule EngramWeb.TagsFoldersControllerTest do
     test "renames nested subfolders", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Parent/Child/Note.md", content: "# Deep", mtime: 1_000.0})
 
-      post(conn, "/api/folders/rename", %{old_folder: "Parent", new_folder: "Renamed"})
+      post(conn, "/api/folders/rename", %{old_path: "Parent", new_path: "Renamed"})
 
       conn2 = get(conn, "/api/notes/Renamed/Child/Note.md")
       assert json_response(conn2, 200)["content"] =~ "Deep"
     end
 
     test "returns 404 for nonexistent folder", %{conn: conn} do
-      conn = post(conn, "/api/folders/rename", %{old_folder: "Ghost", new_folder: "New"})
+      conn = post(conn, "/api/folders/rename", %{old_path: "Ghost", new_path: "New"})
       assert json_response(conn, 404)
+    end
+
+    test "returns 409 when target folder has notes", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "src/a.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "dst/b.md", content: "# B", mtime: 1_000.0})
+
+      conn2 = post(conn, "/api/folders/rename", %{old_path: "src", new_path: "dst"})
+      assert json_response(conn2, 409) == %{"error" => "conflict"}
+
+      # Source folder still intact
+      conn3 = get(conn, "/api/folders/list", %{folder: "src"})
+      paths = Enum.map(json_response(conn3, 200)["notes"], & &1["path"])
+      assert "src/a.md" in paths
     end
   end
 end

@@ -107,7 +107,7 @@ export const router = createBrowserRouter(
                   element: <AppLayout />,
                   children: [
                     { path: ROUTES.HOME, element: <Dashboard /> },
-                    { path: '/note/*', element: <NotePage /> },
+                    { path: '/note/:id', element: <NotePage /> },
                     {
                       path: 'settings',
                       element: <SettingsLayout />,

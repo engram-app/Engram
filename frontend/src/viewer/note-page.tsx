@@ -14,11 +14,12 @@ import { useRemoteUpdateBanner } from './use-remote-update-banner'
 type Mode = 'preview' | 'edit'
 
 export default function NotePage() {
-  // React Router v7 uses "*" for catch-all params
   const params = useParams()
-  const path = params['*'] ?? ''
+  const idStr = params.id
+  const parsedId = idStr ? Number(idStr) : NaN
+  const validId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null
 
-  const { data: note, isLoading, error } = useNote(path)
+  const { data: note, isLoading, error } = useNote(validId)
   const update = useUpdateNote()
   const { setContent: setRightContent } = useRightSidebar()
 
@@ -64,8 +65,8 @@ export default function NotePage() {
   // change hook count between the loading/loaded states and crash React.
   const remoteUpdate = useRemoteUpdateBanner(note?.content ?? '', draft)
 
-  if (!path) {
-    return <p className="p-6 text-muted-foreground">No note selected</p>
+  if (validId === null) {
+    return <p className="p-6 text-destructive">Invalid note id.</p>
   }
   if (isLoading) {
     return <p className="p-6 text-muted-foreground">Loading note…</p>

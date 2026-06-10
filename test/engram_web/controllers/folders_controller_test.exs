@@ -1,0 +1,50 @@
+defmodule EngramWeb.FoldersControllerTest do
+  use EngramWeb.ConnCase, async: true
+
+  setup %{conn: conn} do
+    user = insert(:user)
+    vault = insert(:vault, user: user, is_default: true)
+    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
+    authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
+    %{conn: authed, user: user, vault: vault}
+  end
+
+  describe "GET /api/folders" do
+    test "response includes id and parent_id per folder marker", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _parent} = Engram.Notes.create_folder_marker(user, vault, "Projects")
+      {:ok, _child} = Engram.Notes.create_folder_marker(user, vault, "Projects/Engram")
+
+      body = conn |> get(~p"/api/folders") |> json_response(200)
+
+      parent = Enum.find(body["folders"], &(&1["name"] == "Projects"))
+      child = Enum.find(body["folders"], &(&1["name"] == "Projects/Engram"))
+
+      assert is_integer(parent["id"])
+      assert parent["parent_id"] == nil
+      assert is_integer(child["id"])
+      assert child["parent_id"] == parent["id"]
+    end
+  end
+
+  describe "GET /api/folders/by-id/:id/notes" do
+    test "returns notes inside the folder", %{conn: conn, user: user, vault: vault} do
+      {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "Projects")
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md", content: "# A"})
+
+      body = conn |> get(~p"/api/folders/by-id/#{marker.id}/notes") |> json_response(200)
+
+      assert [%{"path" => "Projects/a.md", "id" => _}] = body["notes"]
+    end
+
+    test "404 when marker doesn't belong to caller's vault", %{conn: conn} do
+      conn |> get(~p"/api/folders/by-id/9999999/notes") |> json_response(404)
+    end
+  end
+end

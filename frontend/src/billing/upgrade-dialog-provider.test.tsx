@@ -47,7 +47,8 @@ describe("UpgradeDialogProvider", () => {
       </UpgradeDialogProvider>,
     )
     fireEvent.click(screen.getByText("show"))
-    const dismiss = await screen.findByRole("button", { name: /dismiss/i })
+    // Radix Dialog provides only an X (sr-only "Close") to dismiss.
+    const dismiss = await screen.findByRole("button", { name: /close/i })
     fireEvent.click(dismiss)
     await waitFor(() =>
       expect(screen.queryByText(/note limit/i)).not.toBeInTheDocument(),
