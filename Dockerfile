@@ -65,7 +65,7 @@ COPY frontend/ ./
 # self-disables if the token is missing, so this same `bun run build`
 # line is the no-op branch for builds without the secret.
 RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN \
-    bun run build
+    bun run build:selfhost
 
 # ─── Elixir build ────────────────────────────────────────────────────────
 FROM ${BUILDER_IMAGE} AS builder
