@@ -61,6 +61,9 @@ defmodule Engram.Repo.Migrations.Baseline do
       trimmed = String.trim(line)
       # `--` SQL comments + PG18 pg_dump psql metacommands `\restrict` / `\unrestrict`
       # (security additions in PG18; not valid SQL — psql-only).
+      # Safe to filter by leading `\` because pg_dump emits these metacommands at
+      # column 0 with no leading whitespace, and never wraps a string literal
+      # across lines that begin with `\` — our structure.sql has no such payload.
       String.starts_with?(trimmed, "--") or String.starts_with?(trimmed, "\\")
     end)
     |> Enum.join("\n")

@@ -1,6 +1,6 @@
 defmodule Engram.Instance do
   @moduledoc """
-  Instance-global settings (self-host). Singleton row at id=1.
+  Instance-global settings (self-host). Singleton row identified by `@singleton_id`.
 
   * `registration_mode` controls self-registration: closed | invite_only | open.
   * `bootstrap_completed_at` records when the claim window closed — the first
@@ -13,6 +13,11 @@ defmodule Engram.Instance do
 
   @default_mode "invite_only"
 
+  # Sentinel uuid for the single instance_settings row. The schema has no DB-level
+  # CHECK constraint (would require literal-id comparison incompatible with uuidv7
+  # defaults); singleton-ness is enforced by always writing under this sentinel.
+  @singleton_id "00000000-0000-0000-0000-000000000000"
+
   @doc """
   Returns the current registration mode. Falls back to the application-configured
   default (`:default_registration_mode`, settable via the `ENGRAM_DEFAULT_REGISTRATION_MODE`
@@ -20,7 +25,7 @@ defmodule Engram.Instance do
   pin "open" without rewriting every e2e fixture; production keeps "invite_only".
   """
   def registration_mode do
-    case Repo.get(InstanceSettings, 1, skip_tenant_check: true) do
+    case Repo.get(InstanceSettings, @singleton_id, skip_tenant_check: true) do
       nil -> Application.get_env(:engram, :default_registration_mode, @default_mode)
       %InstanceSettings{registration_mode: mode} -> mode
     end
@@ -33,7 +38,7 @@ defmodule Engram.Instance do
   in `LocalAuthController.check_registration_allowed/1`.
   """
   def bootstrap_pending? do
-    case Repo.get(InstanceSettings, 1, skip_tenant_check: true) do
+    case Repo.get(InstanceSettings, @singleton_id, skip_tenant_check: true) do
       nil -> true
       %InstanceSettings{bootstrap_completed_at: nil} -> true
       _ -> false
@@ -50,7 +55,7 @@ defmodule Engram.Instance do
   def mark_bootstrap_complete(now \\ DateTime.utc_now(:second)) do
     default_mode = Application.get_env(:engram, :default_registration_mode, @default_mode)
 
-    %InstanceSettings{id: 1}
+    %InstanceSettings{id: @singleton_id}
     |> InstanceSettings.changeset(%{
       registration_mode: default_mode,
       bootstrap_completed_at: now
@@ -67,10 +72,10 @@ defmodule Engram.Instance do
     )
   end
 
-  @doc "Sets the registration mode. Upserts the singleton row at id=1."
+  @doc "Sets the registration mode. Upserts the singleton row at @singleton_id."
   def set_registration_mode(mode) when is_binary(mode) do
     if mode in InstanceSettings.modes() do
-      %InstanceSettings{id: 1}
+      %InstanceSettings{id: @singleton_id}
       |> InstanceSettings.changeset(%{registration_mode: mode})
       |> Repo.insert(
         on_conflict: [

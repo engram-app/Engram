@@ -57,11 +57,14 @@ defmodule Engram.StructureSqlRegenTest do
   end
 
   defp load_dump!(sql) do
-    tmp = Path.join(System.tmp_dir!(), "structure-regen-#{System.unique_integer([:positive])}.sql")
+    tmp =
+      Path.join(System.tmp_dir!(), "structure-regen-#{System.unique_integer([:positive])}.sql")
+
     File.write!(tmp, sql)
 
     try do
-      {_out, 0} = System.cmd("docker", ["cp", tmp, "#{@container}:/tmp/regen.sql"], env: @clean_env)
+      {_out, 0} =
+        System.cmd("docker", ["cp", tmp, "#{@container}:/tmp/regen.sql"], env: @clean_env)
 
       {out, status} =
         docker_exec([
@@ -108,7 +111,9 @@ defmodule Engram.StructureSqlRegenTest do
   defp normalize(sql) do
     sql
     |> String.split("\n")
-    |> Enum.reject(&(String.starts_with?(&1, "\\restrict") or String.starts_with?(&1, "\\unrestrict")))
+    |> Enum.reject(
+      &(String.starts_with?(&1, "\\restrict") or String.starts_with?(&1, "\\unrestrict"))
+    )
     |> Enum.join("\n")
     |> String.trim()
   end
