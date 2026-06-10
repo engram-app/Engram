@@ -1,0 +1,21 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "engram-frontend",
+	"compatibility_date": "2026-06-10",
+	// Pure static SPA — no Worker script (`main`), just edge-served assets.
+	// `bun run build:saas` emits the bundle + config.json into ./dist.
+	"workers_dev": true,
+	"assets": {
+		"directory": "./dist",
+		// Serve index.html (200) for any path that isn't a built asset, so
+		// React Router client-side routes (deep links, /settings, etc.) work.
+		"not_found_handling": "single-page-application"
+	}
+	// NOTE: the app.engram.page custom domain is intentionally NOT here yet.
+	// Until the Phase M cutover this Worker is reachable only at its
+	// *.workers.dev URL (for smoke testing); app.engram.page keeps serving
+	// from the AWS ALB (TF-managed CNAME in engram-infra). At cutover, add:
+	//   "routes": [{ "pattern": "app.engram.page", "custom_domain": true }]
+	// and remove the TF app_engram_page DNS record (they can't both own the
+	// hostname). See docs/context/frontend-eject-cloudflare-pages.md.
+}
