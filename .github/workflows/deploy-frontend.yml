@@ -14,7 +14,8 @@ name: Deploy frontend
 # Required repo config:
 #   secrets.CLOUDFLARE_API_TOKEN  — Workers Scripts:Edit on the todd-rasband acct
 #   secrets.CLOUDFLARE_ACCOUNT_ID — the Cloudflare account id
-#   vars.VITE_CLERK_PUBLISHABLE_KEY — public Clerk pk_live_… (browser-safe)
+#   secrets.VITE_CLERK_PUBLISHABLE_KEY — public Clerk pk_live_… (already set on
+#     the repo as a secret; reused here for parity with the existing CI build)
 
 on:
   push:
@@ -54,7 +55,7 @@ jobs:
           VITE_CLERK_WAITLIST_MODE: 'false'
           VITE_API_BASE: https://api.engram.page
           VITE_WS_BASE: wss://api.engram.page
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
           VITE_GIT_SHA: ${{ github.sha }}
 
       - name: Deploy (wrangler)
