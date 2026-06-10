@@ -72,6 +72,21 @@ describe('loadConfig', () => {
     expect(config.clerkWaitlistMode).toBe(false)
   })
 
+  it('coerces non-string apiBase/wsBase to empty string', async () => {
+    ;(window as { __ENGRAM_CONFIG__?: unknown }).__ENGRAM_CONFIG__ = {
+      authProvider: 'clerk',
+      clerkPublishableKey: 'pk_test_x',
+      billingEnabled: true,
+      clerkWaitlistMode: false,
+      apiBase: 123,                          // wrong type
+      wsBase: { url: 'wss://x' },            // wrong type
+    }
+
+    const config = await loadConfig()
+    expect(config.apiBase).toBe('')
+    expect(config.wsBase).toBe('')
+  })
+
   it('falls back to local provider when window has invalid authProvider', async () => {
     ;(window as { __ENGRAM_CONFIG__?: unknown }).__ENGRAM_CONFIG__ = {
       authProvider: 'rogue',

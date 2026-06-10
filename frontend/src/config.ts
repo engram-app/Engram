@@ -32,11 +32,11 @@ function normalize(raw: Record<string, unknown>): EngramConfig {
 
   return {
     authProvider: provider,
-    clerkPublishableKey: (raw.clerkPublishableKey as string) ?? '',
+    clerkPublishableKey: typeof raw.clerkPublishableKey === 'string' ? raw.clerkPublishableKey : '',
     billingEnabled: raw.billingEnabled === true,
     clerkWaitlistMode: raw.clerkWaitlistMode === true,
-    apiBase: (raw.apiBase as string) ?? '',
-    wsBase: (raw.wsBase as string) ?? '',
+    apiBase: typeof raw.apiBase === 'string' ? raw.apiBase : '',
+    wsBase: typeof raw.wsBase === 'string' ? raw.wsBase : '',
     bootstrap: raw.bootstrap as EngramConfig['bootstrap'],
   }
 }
