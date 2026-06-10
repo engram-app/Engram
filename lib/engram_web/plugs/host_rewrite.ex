@@ -147,7 +147,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
 
   defp reject(conn) do
     conn
-    |> send_resp(404, "Not Found")
+    |> put_resp_content_type("application/json")
+    |> send_resp(404, ~s({"error":"not_found"}))
     |> halt()
   end
 end
