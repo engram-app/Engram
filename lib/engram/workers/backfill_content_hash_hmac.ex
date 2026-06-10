@@ -42,7 +42,7 @@ defmodule Engram.Workers.BackfillContentHashHmac do
   def perform(%Oban.Job{args: args}) do
     user_id = args["user_id"]
     vault_id = args["vault_id"]
-    cursor = args["cursor"] || 0
+    cursor = args["cursor"] || "00000000-0000-0000-0000-000000000000"
     scope = args["scope"] || "notes"
 
     # T3.7 — gate DEK-accessing work during per-user rotation. The user_id

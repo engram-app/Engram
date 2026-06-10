@@ -41,7 +41,7 @@ defmodule Engram.Workers.RotateUserDekTest do
 
     test "discards on missing user (no retry storms)" do
       assert {:discard, :user_deleted} =
-               perform_job(RotateUserDek, %{"user_id" => 999_999_999})
+               perform_job(RotateUserDek, %{"user_id" => Ecto.UUID.generate()})
     end
 
     test "discards on malformed args" do

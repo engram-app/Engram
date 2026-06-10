@@ -400,7 +400,7 @@ defmodule Engram.Onboarding do
     record_action(user_id, Atom.to_string(action))
   end
 
-  def record_action(user_id, action) when is_integer(user_id) and is_binary(action) do
+  def record_action(user_id, action) when is_binary(user_id) and is_binary(action) do
     %Action{}
     |> Action.changeset(%{user_id: user_id, action: action})
     |> Repo.insert(
@@ -418,7 +418,7 @@ defmodule Engram.Onboarding do
   Return the set of onboarding actions recorded for `user_id` as a list of
   string action names. Empty list for unknown user.
   """
-  def list_actions(user_id) when is_integer(user_id) do
+  def list_actions(user_id) when is_binary(user_id) do
     import Ecto.Query
 
     from(a in Action, where: a.user_id == ^user_id, select: a.action)

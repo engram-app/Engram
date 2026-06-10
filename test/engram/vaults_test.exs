@@ -408,7 +408,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for unknown id", %{user: user} do
-      assert {:error, :not_found} = Vaults.get_vault(user, 0)
+      assert {:error, :not_found} = Vaults.get_vault(user, Ecto.UUID.generate())
     end
 
     test "returns {:error, :not_found} for another user's vault", %{
@@ -484,7 +484,8 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.update_vault(user, 0, %{name: "X"})
+      assert {:error, :not_found} =
+               Vaults.update_vault(user, Ecto.UUID.generate(), %{name: "X"})
     end
   end
 
@@ -526,7 +527,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.delete_vault(user, 0)
+      assert {:error, :not_found} = Vaults.delete_vault(user, Ecto.UUID.generate())
     end
 
     test "delete_vault enqueues the deletion-notice email", %{user: user} do

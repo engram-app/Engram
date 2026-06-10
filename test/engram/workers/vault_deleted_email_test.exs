@@ -57,7 +57,7 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
   end
 
   test "perform is a no-op when the vault is missing", %{user: user} do
-    job = %Oban.Job{args: %{"user_id" => user.id, "vault_id" => 999_999}}
+    job = %Oban.Job{args: %{"user_id" => user.id, "vault_id" => Ecto.UUID.generate()}}
     assert :ok = VaultDeletedEmail.perform(job)
   end
 end

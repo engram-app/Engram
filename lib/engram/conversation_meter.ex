@@ -32,15 +32,18 @@ defmodule Engram.ConversationMeter do
   @spec tick(integer()) ::
           :ok
           | {:rate_limited, :conversations_per_day | :queries_per_day | :queries_per_conversation}
-  def tick(user_id) when is_integer(user_id) do
+  def tick(user_id) when is_binary(user_id) do
     user = Accounts.get_user!(user_id)
 
     Repo.transaction(
       fn ->
+        # `pg_advisory_xact_lock(int4, int4)` requires int args; hash the uuid
+        # user_id into a stable int32 (collision risk is latency-only, identical
+        # to the attachments per-path lock pattern in attachments.ex).
         _ =
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1, $2)", [
             @advisory_lock_key,
-            user_id
+            :erlang.phash2(user_id, 2_147_483_647)
           ])
 
         do_tick(user, ensure_row(user_id))

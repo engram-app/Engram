@@ -22,7 +22,7 @@ defmodule Engram.Abuse.OriginStats do
 
     @primary_key false
     schema "client_origin_stats" do
-      field :user_id, :integer
+      field :user_id, Ecto.UUID
       field :day, :date
       field :fingerprint_class, :string
       field :request_count, :integer, default: 0
@@ -38,7 +38,7 @@ defmodule Engram.Abuse.OriginStats do
   Returns `:ok` always (best-effort instrumentation; never raises).
   """
   @spec record(integer(), String.t() | nil) :: :ok
-  def record(user_id, user_agent) when is_integer(user_id) do
+  def record(user_id, user_agent) when is_binary(user_id) do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
     today = Date.utc_today()
     now = DateTime.utc_now()
@@ -73,7 +73,7 @@ defmodule Engram.Abuse.OriginStats do
   @spec summary(integer(), pos_integer()) :: [
           %{day: Date.t(), class: String.t(), count: integer()}
         ]
-  def summary(user_id, days) when is_integer(user_id) and is_integer(days) and days > 0 do
+  def summary(user_id, days) when is_binary(user_id) and is_integer(days) and days > 0 do
     cutoff = Date.add(Date.utc_today(), -days + 1)
 
     Repo.all(

@@ -44,7 +44,7 @@ defmodule EngramWeb.NotesControllerBatchTest do
       body =
         conn
         |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
-        |> post(~p"/api/notes/batch-delete", %{ids: [n1.id, 999_999]})
+        |> post(~p"/api/notes/batch-delete", %{ids: [n1.id, Ecto.UUID.generate()]})
         |> json_response(404)
 
       assert body["error"] == "not_found"

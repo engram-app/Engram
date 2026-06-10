@@ -109,7 +109,7 @@ defmodule Engram.Workers.OrphanSweep do
         acc =
           Enum.reduce(points, acc, fn point, set ->
             case get_in(point, ["payload", "user_id"]) do
-              uid when is_integer(uid) -> MapSet.put(set, uid)
+              uid when is_binary(uid) -> MapSet.put(set, uid)
               _ -> set
             end
           end)

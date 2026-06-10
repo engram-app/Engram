@@ -39,36 +39,6 @@ defmodule Engram.Crypto do
   def row_version_legacy, do: @row_version_legacy
 
   @doc """
-  Pre-allocates a primary-key id from a table's bigserial sequence. Used
-  before AAD-bound INSERT so the row's AAD can include its eventual `row_id`.
-  Caller passes the allocated `id` into the changeset; Ecto inserts with
-  the explicit id and the sequence already advanced.
-  """
-  @spec next_row_id(atom() | String.t()) :: pos_integer()
-  def next_row_id(table) when is_atom(table), do: next_row_id(Atom.to_string(table))
-
-  def next_row_id(table) when is_binary(table) do
-    # Postgrex's typed parameter encoder cannot encode `regclass` from a
-    # text bind, so we interpolate the sequence name as a literal. The
-    # `table` argument is a fixed atom-list (callers in this codebase
-    # pass `:notes`, `:attachments`, `:vaults`) — there is no user input
-    # path that reaches this string. The strict whitelist guards the
-    # boundary in case a future caller passes something dynamic.
-    unless table in ["notes", "attachments", "vaults"] do
-      raise ArgumentError,
-            "next_row_id: unsupported table #{inspect(table)}. " <>
-              "Add to the allowlist in Engram.Crypto."
-    end
-
-    seq = table <> "_id_seq"
-
-    %Postgrex.Result{rows: [[id]]} =
-      Repo.query!("SELECT nextval('#{seq}')", [])
-
-    id
-  end
-
-  @doc """
   AAD for a relational row's column. T3.6 / H1.
 
   The PG18+UUIDv7 rework swapped all domain PKs from bigserial to UUID.
@@ -294,8 +264,8 @@ defmodule Engram.Crypto do
   `Engram.Notes.phase_b_keyword_for/4`. This helper does not touch tags —
   that's a Phase B contract.
   """
-  @spec encrypt_note_fields(map(), User.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
-  def encrypt_note_fields(attrs, %User{} = user, note_id) when is_integer(note_id) do
+  @spec encrypt_note_fields(map(), User.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def encrypt_note_fields(attrs, %User{} = user, note_id) when is_binary(note_id) do
     with {:ok, user} <- ensure_user_dek(user),
          {:ok, dek} <- get_dek(user) do
       content = Map.get(attrs, :content) || Map.get(attrs, "content") || ""

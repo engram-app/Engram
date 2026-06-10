@@ -44,7 +44,7 @@ defmodule EngramWeb.FoldersControllerTest do
     end
 
     test "404 when marker doesn't belong to caller's vault", %{conn: conn} do
-      conn |> get(~p"/api/folders/by-id/9999999/notes") |> json_response(404)
+      conn |> get(~p"/api/folders/by-id/#{Ecto.UUID.generate()}/notes") |> json_response(404)
     end
   end
 end

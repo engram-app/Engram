@@ -159,7 +159,7 @@ defmodule Engram.Workers.BackfillContentHashHmacTest do
     test "discards job when user does not exist", %{vault: vault} do
       assert {:discard, :user_deleted} =
                perform_job(BackfillContentHashHmac, %{
-                 "user_id" => 0,
+                 "user_id" => Ecto.UUID.generate(),
                  "vault_id" => vault.id,
                  "cursor" => 0,
                  "scope" => "notes"

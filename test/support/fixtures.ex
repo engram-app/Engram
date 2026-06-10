@@ -150,7 +150,7 @@ defmodule Engram.Fixtures do
 
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-    vault_id = Engram.Crypto.next_row_id(:vaults)
+    vault_id = Ecto.UUID.generate()
 
     # Legacy encrypt: empty AAD (dek_version 1 — pre-AAD-bind)
     {ct, nonce} = Envelope.encrypt(name, dek, <<>>)
@@ -250,7 +250,7 @@ defmodule Engram.Fixtures do
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     {:ok, content_key} = Engram.Crypto.dek_content_hash_key(user)
 
-    att_id = Engram.Crypto.next_row_id(:attachments)
+    att_id = Ecto.UUID.generate()
     storage_key = Engram.Storage.key(user.id, vault.id, path)
 
     # Legacy v1 encrypt: empty AAD

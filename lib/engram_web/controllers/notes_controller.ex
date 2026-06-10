@@ -139,13 +139,12 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {id, ""} <- Integer.parse(id_str),
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
          {:ok, note} <- Notes.get_note_by_id(user, vault, id) do
       json(conn, note_json(note))
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
-      {_, _rest} -> conn |> put_status(400) |> json(%{error: "invalid id"})
     end
   end
 
@@ -153,13 +152,12 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {id, ""} <- Integer.parse(id_str),
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
          :ok <- Notes.delete_note_by_id(user, vault, id) do
       json(conn, %{deleted: true})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
-      {_, _rest} -> conn |> put_status(400) |> json(%{error: "invalid id"})
     end
   end
 
@@ -321,15 +319,7 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  defp parse_int(n) when is_integer(n), do: {:ok, n}
-
-  defp parse_int(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {n, ""} -> {:ok, n}
-      _ -> :error
-    end
-  end
-
+  defp parse_int(s) when is_binary(s), do: Ecto.UUID.cast(s)
   defp parse_int(_), do: :error
 
   defp broadcast_batch(user, vault, payload) do

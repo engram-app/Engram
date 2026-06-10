@@ -36,7 +36,7 @@ defmodule Engram.UsageMeters do
   end
 
   @spec lifetime_embed_tokens(integer()) :: non_neg_integer()
-  def lifetime_embed_tokens(user_id) when is_integer(user_id) do
+  def lifetime_embed_tokens(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.lifetime_embed_tokens),
       skip_tenant_check: true
@@ -50,7 +50,7 @@ defmodule Engram.UsageMeters do
   """
   @spec add_embed_tokens(integer(), non_neg_integer()) :: non_neg_integer()
   def add_embed_tokens(user_id, count)
-      when is_integer(user_id) and is_integer(count) and count > 0 do
+      when is_binary(user_id) and is_integer(count) and count > 0 do
     now = DateTime.utc_now()
 
     {1, [%{lifetime_embed_tokens: total}]} =
@@ -85,7 +85,7 @@ defmodule Engram.UsageMeters do
 
   @doc "Returns the maintained live-note count for the user (0 if no row yet)."
   @spec notes_count(integer()) :: non_neg_integer()
-  def notes_count(user_id) when is_integer(user_id) do
+  def notes_count(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.notes_count),
       skip_tenant_check: true
@@ -99,7 +99,7 @@ defmodule Engram.UsageMeters do
   """
   @spec inc_notes_count(integer(), pos_integer()) :: :ok
   def inc_notes_count(user_id, delta)
-      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+      when is_binary(user_id) and is_integer(delta) and delta > 0 do
     now = DateTime.utc_now()
 
     {_, _} =
@@ -123,7 +123,7 @@ defmodule Engram.UsageMeters do
   def dec_notes_count(_user_id, 0), do: :ok
 
   def dec_notes_count(user_id, delta)
-      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+      when is_binary(user_id) and is_integer(delta) and delta > 0 do
     now = DateTime.utc_now()
 
     {_, _} =
@@ -150,7 +150,7 @@ defmodule Engram.UsageMeters do
   path. See `Engram.Notes.create_folder_marker/3`.
   """
   @spec recount_notes!(integer()) :: non_neg_integer()
-  def recount_notes!(user_id) when is_integer(user_id) do
+  def recount_notes!(user_id) when is_binary(user_id) do
     count =
       Repo.one(
         from(n in Engram.Notes.Note,
@@ -179,7 +179,7 @@ defmodule Engram.UsageMeters do
   # ── Activity tracking (pricing v2 §C) ─────────────────────────
 
   @spec last_active_at(integer()) :: DateTime.t() | nil
-  def last_active_at(user_id) when is_integer(user_id) do
+  def last_active_at(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.last_active_at),
       skip_tenant_check: true
@@ -191,7 +191,7 @@ defmodule Engram.UsageMeters do
   Called from the auth pipeline plug (debounced to once per hour).
   """
   @spec bump_last_active(integer()) :: :ok
-  def bump_last_active(user_id) when is_integer(user_id) do
+  def bump_last_active(user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     {_, _} =

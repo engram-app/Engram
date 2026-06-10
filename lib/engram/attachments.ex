@@ -65,7 +65,7 @@ defmodule Engram.Attachments do
 
         att_id =
           case existing do
-            nil -> Crypto.next_row_id(:attachments)
+            nil -> Ecto.UUID.generate()
             %Attachment{id: id} -> id
           end
 

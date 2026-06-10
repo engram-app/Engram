@@ -42,7 +42,7 @@ defmodule Engram.Vaults do
             is_default = current_count == 0
             name = attrs[:name] || attrs["name"] || ""
             slug = unique_slug(user.id, slugify(name))
-            vault_id = Engram.Crypto.next_row_id(:vaults)
+            vault_id = Ecto.UUID.generate()
 
             vault_attrs =
               attrs
@@ -133,7 +133,7 @@ defmodule Engram.Vaults do
                 :ok ->
                   is_default = current_count == 0
                   slug = unique_slug(user.id, slugify(name))
-                  vault_id = Engram.Crypto.next_row_id(:vaults)
+                  vault_id = Ecto.UUID.generate()
 
                   attrs = %{
                     name: name,
@@ -524,10 +524,12 @@ defmodule Engram.Vaults do
   def check_api_key_access(nil, _vault), do: :ok
 
   def check_api_key_access(api_key, vault) do
+    # Schemaless query: Ecto/Postgrex can't infer column types so we declare
+    # them explicitly. Both columns are `uuid` (Phase B of PG18+UUIDv7 rework).
     restricted_vault_ids =
       from(akv in "api_key_vaults",
-        where: akv.api_key_id == ^api_key.id,
-        select: akv.vault_id
+        where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
+        select: type(akv.vault_id, Ecto.UUID)
       )
       |> Repo.all(skip_tenant_check: true)
 

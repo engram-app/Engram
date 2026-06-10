@@ -272,12 +272,7 @@ defmodule EngramWeb.VaultsController do
     |> json(%{error: "not found"})
   end
 
-  defp parse_id(id) when is_binary(id) do
-    case Integer.parse(id) do
-      {n, ""} -> {:ok, n}
-      _ -> :error
-    end
-  end
+  defp parse_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
 
   defp format_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

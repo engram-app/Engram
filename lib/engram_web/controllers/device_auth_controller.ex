@@ -55,8 +55,14 @@ defmodule EngramWeb.DeviceAuthController do
 
   def authorize(conn, %{"user_code" => user_code, "vault_id" => vault_id}) do
     user = conn.assigns.current_user
-    vault_id = if is_binary(vault_id), do: String.to_integer(vault_id), else: vault_id
-    do_authorize(conn, user_code, user, vault_id)
+
+    case Ecto.UUID.cast(vault_id) do
+      {:ok, uuid} ->
+        do_authorize(conn, user_code, user, uuid)
+
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid_vault_id"})
+    end
   end
 
   defp do_authorize(conn, user_code, user, vault_id) do

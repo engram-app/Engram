@@ -138,7 +138,7 @@ defmodule Engram.Accounts.ExportTest do
 
     test "returns {:error, :not_found} for unknown id" do
       user = insert(:user)
-      assert {:error, :not_found} = Export.get(user, 999_999_999)
+      assert {:error, :not_found} = Export.get(user, Ecto.UUID.generate())
     end
   end
 

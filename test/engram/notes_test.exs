@@ -290,7 +290,7 @@ defmodule Engram.NotesTest do
     end
 
     test "returns :not_found for non-existent id", %{user: user, vault: vault} do
-      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, 999_999)
+      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, Ecto.UUID.generate())
     end
 
     test "returns :not_found across tenants (RLS)", %{
@@ -366,7 +366,7 @@ defmodule Engram.NotesTest do
     end
 
     test "returns :not_found for non-existent id", %{user: user, vault: vault} do
-      assert {:error, :not_found} = Notes.delete_note_by_id(user, vault, 999_999)
+      assert {:error, :not_found} = Notes.delete_note_by_id(user, vault, Ecto.UUID.generate())
     end
 
     test "RLS: cannot delete another user's note", %{
@@ -1372,7 +1372,7 @@ defmodule Engram.NotesTest do
 
     test "returns {:error, :not_found} when marker doesn't exist",
          %{user: user, vault: vault} do
-      assert {:error, :not_found} = Notes.list_folder_notes_by_id(user, vault, 999_999)
+      assert {:error, :not_found} = Notes.list_folder_notes_by_id(user, vault, Ecto.UUID.generate())
     end
 
     test "returns {:error, :not_found} when marker belongs to another vault (RLS)", %{

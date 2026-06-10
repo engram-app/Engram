@@ -75,7 +75,8 @@ defmodule Engram.Crypto.MasterRotationTest do
     end
 
     test "returns {:error, {:not_found, id}} when user_id missing" do
-      assert {:error, {:not_found, 999_999}} = MasterRotation.rotate_user(999_999, 2)
+      missing_id = Ecto.UUID.generate()
+      assert {:error, {:not_found, ^missing_id}} = MasterRotation.rotate_user(missing_id, 2)
     end
 
     test "lowering target_version below current is a no-op skip", %{user: user} do
@@ -135,7 +136,7 @@ defmodule Engram.Crypto.MasterRotationTest do
       )
 
       try do
-        assert {:error, _} = MasterRotation.rotate_user(999_999, 2)
+        assert {:error, _} = MasterRotation.rotate_user(Ecto.UUID.generate(), 2)
 
         assert_received {:rotate_event, %{duration_us: _},
                          %{status: :failed, reason_label: label}}

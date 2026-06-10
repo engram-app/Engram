@@ -17,8 +17,8 @@ defmodule Engram.OAuth.RefreshToken do
     field :token_hash, :string
     field :family_id, :binary_id
     field :client_id, :binary_id
-    field :user_id, :integer
-    field :vault_id, :integer
+    field :user_id, Ecto.UUID
+    field :vault_id, Ecto.UUID
     field :scope, :string
     field :expires_at, :utc_datetime
     field :revoked_at, :utc_datetime

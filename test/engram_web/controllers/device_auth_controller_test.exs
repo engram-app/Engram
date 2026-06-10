@@ -80,16 +80,51 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         })
 
       assert %{"ok" => true, "vault_id" => vault_id} = json_response(conn, 200)
-      assert is_integer(vault_id)
+      assert {:ok, _} = Ecto.UUID.cast(vault_id)
+    end
+
+    test "rejects non-uuid vault_id with 400", %{authed_conn: conn} do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      conn =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: "not-a-uuid"
+        })
+
+      assert %{"error" => "invalid_vault_id"} = json_response(conn, 400)
+    end
+
+    test "accepts a well-formed uuid vault_id", %{authed_conn: conn, user: user} do
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      conn =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: vault.id
+        })
+
+      assert %{"ok" => true} = json_response(conn, 200)
     end
 
     test "rejects invalid user_code", %{authed_conn: conn} do
-      conn = post(conn, "/api/auth/device/authorize", %{user_code: "XXXX-YYYY", vault_id: 1})
+      conn =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: "XXXX-YYYY",
+          vault_id: Ecto.UUID.generate()
+        })
+
       assert json_response(conn, 404)
     end
 
     test "rejects unauthenticated request", %{conn: conn} do
-      conn = post(conn, "/api/auth/device/authorize", %{user_code: "XXXX-YYYY", vault_id: 1})
+      conn =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: "XXXX-YYYY",
+          vault_id: Ecto.UUID.generate()
+        })
+
       assert json_response(conn, 401)
     end
   end

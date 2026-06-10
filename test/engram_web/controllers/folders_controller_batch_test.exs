@@ -50,7 +50,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
       body =
         conn
         |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
-        |> post(~p"/api/folders/batch-delete", %{ids: [marker.id, 999_999]})
+        |> post(~p"/api/folders/batch-delete", %{ids: [marker.id, Ecto.UUID.generate()]})
         |> json_response(404)
 
       assert body["error"] == "not_found"

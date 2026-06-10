@@ -115,9 +115,10 @@ defmodule Engram.NotesBatchTest do
 
     test "rolls back when target folder marker is missing", %{user: user, vault: vault} do
       {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      missing_id = Ecto.UUID.generate()
 
-      assert {:error, {:not_found, 999_999}} =
-               Notes.batch_move_notes(user, vault, [n1.id], 999_999)
+      assert {:error, {:not_found, ^missing_id}} =
+               Notes.batch_move_notes(user, vault, [n1.id], missing_id)
 
       {:ok, untouched} = Notes.get_note_by_id(user, vault, n1.id)
       assert untouched.path == "a.md"
@@ -241,9 +242,10 @@ defmodule Engram.NotesBatchTest do
     test "rolls back when target folder marker is missing", %{user: user, vault: vault} do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
       {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      missing_id = Ecto.UUID.generate()
 
-      assert {:error, {:not_found, 999_999}} =
-               Notes.batch_move_folders(user, vault, [m1.id], 999_999)
+      assert {:error, {:not_found, ^missing_id}} =
+               Notes.batch_move_folders(user, vault, [m1.id], missing_id)
 
       assert {:ok, %{path: "A/a.md"}} = Notes.get_note(user, vault, "A/a.md")
     end

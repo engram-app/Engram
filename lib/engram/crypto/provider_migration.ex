@@ -53,14 +53,14 @@ defmodule Engram.Crypto.ProviderMigration do
   @type counts :: %{ok: non_neg_integer(), skipped: non_neg_integer(), failed: non_neg_integer()}
 
   @doc "Migrate one user's wrapped DEK to `target_provider`."
-  @spec migrate_user(integer() | User.t(), provider_atom()) :: migrate_result()
+  @spec migrate_user(String.t() | User.t(), provider_atom()) :: migrate_result()
   def migrate_user(user_or_id, target_provider) when target_provider in [:local, :aws_kms] do
     Process.flag(:sensitive, true)
 
     user_id =
       case user_or_id do
         %User{id: id} -> id
-        id when is_integer(id) -> id
+        id when is_binary(id) -> id
       end
 
     started_at = System.monotonic_time()
@@ -95,7 +95,7 @@ defmodule Engram.Crypto.ProviderMigration do
       )
       |> Repo.one(skip_tenant_check: true)
 
-    drive_loop(target_provider, 0, batch_size, %{
+    drive_loop(target_provider, "00000000-0000-0000-0000-000000000000", batch_size, %{
       ok: 0,
       skipped: already_at_target || 0,
       failed: 0
@@ -111,7 +111,16 @@ defmodule Engram.Crypto.ProviderMigration do
   def enqueue_all(target_provider, opts \\ []) when target_provider in [:local, :aws_kms] do
     batch_size = Keyword.get(opts, :batch_size, 500)
     target_name = Atom.to_string(target_provider)
-    %{enqueued: enqueue_loop(target_provider, target_name, 0, batch_size, 0)}
+    %{
+      enqueued:
+        enqueue_loop(
+          target_provider,
+          target_name,
+          "00000000-0000-0000-0000-000000000000",
+          batch_size,
+          0
+        )
+    }
   end
 
   @doc "Provider count breakdown: `%{local: N, aws_kms: M, total: N+M}`."

@@ -415,8 +415,8 @@ defmodule Engram.Notes do
   RLS scopes the SELECT to the caller's tenant; the explicit
   `user_id`/`vault_id` predicate is belt-and-suspenders.
   """
-  @spec get_note_by_id(map(), map(), integer()) :: {:ok, Note.t()} | {:error, :not_found}
-  def get_note_by_id(user, vault, id) when is_integer(id) do
+  @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_by_id(user, vault, id) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
@@ -704,9 +704,9 @@ defmodule Engram.Notes do
   Delegates to `delete_note/3` once ownership is verified, so Qdrant cleanup +
   usage-meter decrement + `note_changed` broadcast all run as a side-effect.
   """
-  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), integer()) ::
+  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), String.t()) ::
           :ok | {:error, :not_found}
-  def delete_note_by_id(user, vault, id) when is_integer(id) do
+  def delete_note_by_id(user, vault, id) when is_binary(id) do
     case get_note_by_id(user, vault, id) do
       {:ok, note} -> delete_note(user, vault, note.path)
       {:error, :not_found} -> {:error, :not_found}
@@ -787,13 +787,13 @@ defmodule Engram.Notes do
   (after-commit hooks so broadcasts only fire post-commit) is tracked as a
   follow-up and will land before more batch ops are added.
   """
-  @spec batch_move_notes(map(), map(), [integer()], integer()) ::
+  @spec batch_move_notes(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}}
-          | {:error, {:not_found | :conflict, integer()} | term()}
+          | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
   def batch_move_notes(user, vault, ids, target_folder_id)
-      when is_list(ids) and is_integer(target_folder_id) do
+      when is_list(ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
@@ -1217,9 +1217,9 @@ defmodule Engram.Notes do
   Returns `{:error, :not_found}` when the id doesn't resolve to a live
   folder marker owned by `user`/`vault`.
   """
-  @spec list_folder_notes_by_id(map(), map(), integer()) ::
+  @spec list_folder_notes_by_id(map(), map(), String.t()) ::
           {:ok, [Note.t()]} | {:error, :not_found}
-  def list_folder_notes_by_id(user, vault, marker_id) when is_integer(marker_id) do
+  def list_folder_notes_by_id(user, vault, marker_id) when is_binary(marker_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, marker} <- get_folder_marker_by_id(user, vault, marker_id),
          {:ok, dek} <- Crypto.get_dek(user) do
@@ -1228,9 +1228,9 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec get_folder_marker_by_id(map(), map(), integer()) ::
+  @spec get_folder_marker_by_id(map(), map(), String.t()) ::
           {:ok, Note.t()} | {:error, :not_found}
-  defp get_folder_marker_by_id(user, vault, id) when is_integer(id) do
+  defp get_folder_marker_by_id(user, vault, id) when is_binary(id) do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
         case Repo.one(
@@ -1686,13 +1686,13 @@ defmodule Engram.Notes do
   fires per-note broadcasts inside the transaction; rolled-back batches may
   leak events.
   """
-  @spec batch_move_folders(map(), map(), [integer()], integer()) ::
+  @spec batch_move_folders(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}}
-          | {:error, {:not_found | :conflict | :cycle, integer()} | term()}
+          | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
-      when is_list(marker_ids) and is_integer(target_folder_id) do
+      when is_list(marker_ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),

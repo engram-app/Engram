@@ -10,35 +10,47 @@ defmodule Engram.Repo do
 
   Sets both the process-dict guard (for prepare_query) and the
   PostgreSQL `SET LOCAL app.current_tenant` (for RLS enforcement).
-  """
-  def with_tenant(tenant_id, fun) when is_integer(tenant_id) and tenant_id > 0 do
-    Process.put(:engram_tenant, tenant_id)
 
-    try do
-      transaction(fn ->
-        # SET LOCAL doesn't support $1 parameter binding — it's a utility statement.
-        # Guard clause ensures tenant_id is always a positive integer.
-        _ = query!("SET LOCAL app.current_tenant = '#{tenant_id}'")
-        # Drop to engram_app role so RLS policies are enforced.
-        # Superusers bypass RLS even with FORCE — SET LOCAL ROLE scopes to this transaction.
-        _ = query!("SET LOCAL ROLE engram_app")
-        result = fun.()
-        # In Ecto Sandbox (tests), this transaction runs as a savepoint. PostgreSQL's
-        # SET LOCAL is scoped to the full outer transaction, so RELEASE SAVEPOINT
-        # would leak `engram_app` into the sandbox transaction. Resetting the role
-        # INSIDE the transaction ensures the last SET LOCAL that persists is DEFAULT.
-        # In production this runs inside a real transaction and is harmless.
-        _ = query!("RESET ROLE")
-        result
-      end)
-    after
-      Process.delete(:engram_tenant)
+  `tenant_id` is a canonical UUID string (post PG18+UUIDv7 rework).
+  The RLS policy compares `(user_id)::text = current_setting('app.current_tenant')`,
+  so the bind value is the lower-case hyphenated UUID string.
+  """
+  def with_tenant(tenant_id, fun) when is_binary(tenant_id) do
+    case Ecto.UUID.cast(tenant_id) do
+      {:ok, uuid} ->
+        Process.put(:engram_tenant, uuid)
+
+        try do
+          transaction(fn ->
+            # SET LOCAL doesn't support $1 parameter binding — it's a utility statement.
+            # `uuid` was validated by `Ecto.UUID.cast/1` above: lower-case hex with
+            # hyphens, no quotes, no injection surface.
+            _ = query!("SET LOCAL app.current_tenant = '#{uuid}'")
+            # Drop to engram_app role so RLS policies are enforced.
+            # Superusers bypass RLS even with FORCE — SET LOCAL ROLE scopes to this transaction.
+            _ = query!("SET LOCAL ROLE engram_app")
+            result = fun.()
+            # In Ecto Sandbox (tests), this transaction runs as a savepoint. PostgreSQL's
+            # SET LOCAL is scoped to the full outer transaction, so RELEASE SAVEPOINT
+            # would leak `engram_app` into the sandbox transaction. Resetting the role
+            # INSIDE the transaction ensures the last SET LOCAL that persists is DEFAULT.
+            # In production this runs inside a real transaction and is harmless.
+            _ = query!("RESET ROLE")
+            result
+          end)
+        after
+          Process.delete(:engram_tenant)
+        end
+
+      :error ->
+        raise ArgumentError,
+              "tenant_id must be a canonical UUID string, got: #{inspect(tenant_id)}"
     end
   end
 
   def with_tenant(tenant_id, _fun) do
     raise ArgumentError,
-          "tenant_id must be a positive integer, got: #{inspect(tenant_id)}"
+          "tenant_id must be a canonical UUID string, got: #{inspect(tenant_id)}"
   end
 
   @doc """

@@ -21,7 +21,7 @@ defmodule Engram.Onboarding.Action do
   )
 
   schema "onboarding_actions" do
-    field :user_id, :integer
+    field :user_id, Ecto.UUID
     field :action, :string
     field :metadata, :map, default: %{}
 

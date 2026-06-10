@@ -229,11 +229,11 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "returns 404 for non-existent id", %{conn: conn} do
-      conn = get(conn, ~p"/api/notes/by-id/999999")
+      conn = get(conn, ~p"/api/notes/by-id/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404) == %{"error" => "not found"}
     end
 
-    test "returns 400 for non-numeric id", %{conn: conn} do
+    test "returns 400 for non-uuid id", %{conn: conn} do
       conn = get(conn, ~p"/api/notes/by-id/abc")
       assert json_response(conn, 400) == %{"error" => "invalid id"}
     end
@@ -248,11 +248,11 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "returns 404 for non-existent id", %{conn: conn} do
-      conn = delete(conn, ~p"/api/notes/by-id/999999")
+      conn = delete(conn, ~p"/api/notes/by-id/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404) == %{"error" => "not found"}
     end
 
-    test "returns 400 for non-numeric id", %{conn: conn} do
+    test "returns 400 for non-uuid id", %{conn: conn} do
       conn = delete(conn, ~p"/api/notes/by-id/abc")
       assert json_response(conn, 400) == %{"error" => "invalid id"}
     end

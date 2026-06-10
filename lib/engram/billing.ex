@@ -610,12 +610,10 @@ defmodule Engram.Billing do
 
   # ── Helpers ────────────────────────────────────────────────────
 
-  defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_integer(id), do: {:ok, id}
-
   defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_binary(id) do
-    case Integer.parse(id) do
-      {parsed, ""} -> {:ok, parsed}
-      _ -> :error
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> :error
     end
   end
 
