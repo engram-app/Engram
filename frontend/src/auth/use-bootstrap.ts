@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { config } from '../config'
+import { useContext, useEffect, useState } from 'react'
+import { ConfigContext } from '../config-context'
 
 export interface Bootstrap {
   bootstrap_pending: boolean
@@ -13,11 +13,11 @@ export interface Bootstrap {
 // resolves, avoiding the default→correct flash on every navigation.
 export type BootstrapState = Bootstrap | null | undefined
 
-// Seed from Phoenix's SSR-injected runtime config when available. In prod
-// this means useBootstrap() is synchronous on first paint — no fetch, no
-// flash. In dev (Vite serves index.html, no injection) `config.bootstrap`
-// is undefined and we fall back to fetching the public endpoint.
-let cached: Bootstrap | null | undefined = config.bootstrap
+// Module-level cache so concurrent hook callers share one fetch + result.
+// Seeded from config.bootstrap on first hook invocation (the seed is
+// stable per page load — config is resolved once during Suspense gate).
+let cached: Bootstrap | null | undefined = undefined
+let seeded = false
 let inflight: Promise<Bootstrap | null> | null = null
 
 function fetchBootstrap(): Promise<Bootstrap | null> {
@@ -33,6 +33,20 @@ function fetchBootstrap(): Promise<Bootstrap | null> {
 }
 
 export function useBootstrap(): BootstrapState {
+  // Read context directly (not via useConfig()) so test environments that
+  // mount LocalSignIn / signup flows without a ConfigProvider don't crash.
+  // Bootstrap is a soft hint — a missing config just means "no seed, fetch".
+  const config = useContext(ConfigContext)
+
+  // Seed once from the SSR-injected config (selfhost-prod fast path: no
+  // fetch on first paint). On CF Pages /config.json typically omits this
+  // block — `config.bootstrap` is undefined and we drop through to the
+  // public /api/auth/bootstrap endpoint.
+  if (!seeded) {
+    cached = config?.bootstrap
+    seeded = true
+  }
+
   const [state, setState] = useState<BootstrapState>(cached)
 
   useEffect(() => {

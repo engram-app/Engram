@@ -18,7 +18,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import { useMe } from '../api/queries'
-import { config } from '../config'
+import { useConfig } from '../config-context'
 import { buildSettingsSections, type SettingsSection } from './sections'
 
 function SettingsNavList({
@@ -52,6 +52,7 @@ function SettingsNavList({
 }
 
 export default function SettingsLayout() {
+  const config = useConfig()
   const { data: me } = useMe()
   const isAdmin = me?.role === 'admin'
   const sections = buildSettingsSections(config.authProvider, config.billingEnabled, isAdmin)
