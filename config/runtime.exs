@@ -584,9 +584,29 @@ if config_env() == :prod do
   # CORS and WebSocket origin — only lock down when PHX_HOST is explicitly set.
   # Without it (CI, local dev), defaults apply: CORS allows "*", WS allows all.
   # See Engram.HostOrigins for parsing rules (CSV, scheme expansion, dedup).
+  #
+  # ENGRAM_SAAS_FRONTEND_ORIGINS appends extra origins (comma-separated) for the
+  # Cloudflare Pages saas frontend at app.engram.page + its preview deploys at
+  # *.engram-frontend.pages.dev. Unset on selfhost (same-origin) → no-op.
   if phx_hosts do
-    config :engram, :cors_origin, phx_hosts.origins
-    config :engram, :websocket_check_origin, phx_hosts.origins
+    extra_origins =
+      case System.get_env("ENGRAM_SAAS_FRONTEND_ORIGINS") do
+        nil ->
+          []
+
+        "" ->
+          []
+
+        s ->
+          s
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+      end
+
+    cors_origins = phx_hosts.origins ++ extra_origins
+    config :engram, :cors_origin, cors_origins
+    config :engram, :websocket_check_origin, cors_origins
   end
 
   # ## SSL Support
