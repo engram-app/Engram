@@ -23,7 +23,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
   import Plug.Conn
 
   # Allowed top-level scopes that should pass through unmodified on
-  # `api.engram.page`. Matched with `is_under?/2` (exact match OR followed
+  # `api.engram.page`. Matched with `under?/2` (exact match OR followed
   # by `/`) so `/api-keys` does NOT match `/api` — `/api-keys` is a known
   # API segment that needs rewriting to `/api/api-keys`.
   @api_allowed_prefixes ~w(/api /socket /webhooks /.well-known)
@@ -132,11 +132,11 @@ defmodule EngramWeb.Plugs.HostRewrite do
     end
   end
 
-  defp under_any?(path, prefixes), do: Enum.any?(prefixes, &is_under?(path, &1))
+  defp under_any?(path, prefixes), do: Enum.any?(prefixes, &under?(path, &1))
 
   # True when `path` equals `prefix` or starts with `prefix <> "/"`.
   # Distinguishes `/api/...` (true) from `/api-keys` (false).
-  defp is_under?(path, prefix),
+  defp under?(path, prefix),
     do: path == prefix or String.starts_with?(path, prefix <> "/")
 
   defp known_api_segment?(path) do

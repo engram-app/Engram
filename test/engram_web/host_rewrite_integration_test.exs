@@ -3,7 +3,11 @@ defmodule EngramWeb.HostRewriteIntegrationTest do
 
   setup do
     prior = Application.get_env(:engram, :host_rewrite)
-    Application.put_env(:engram, :host_rewrite, api_host: "api.engram.page", mcp_host: "mcp.engram.page")
+
+    Application.put_env(:engram, :host_rewrite,
+      api_host: "api.engram.page",
+      mcp_host: "mcp.engram.page"
+    )
 
     on_exit(fn ->
       case prior do
