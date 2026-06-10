@@ -1,5 +1,5 @@
 defmodule Engram.Notes.Chunk do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "chunks" do

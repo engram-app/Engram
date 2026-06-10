@@ -1,5 +1,5 @@
 defmodule Engram.Billing.Plan do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "plans" do

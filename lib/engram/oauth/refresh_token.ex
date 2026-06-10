@@ -10,7 +10,7 @@ defmodule Engram.OAuth.RefreshToken do
       after consumption triggers family-wide revocation
     * revoked — `revoked_at` set; can never mint anything
   """
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "oauth_refresh_tokens" do

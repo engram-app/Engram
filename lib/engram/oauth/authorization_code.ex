@@ -6,7 +6,7 @@ defmodule Engram.OAuth.AuthorizationCode do
   that initiated the flow — `code_challenge` is stored at mint time, the
   client sends `code_verifier` at exchange time.
   """
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "oauth_authorization_codes" do

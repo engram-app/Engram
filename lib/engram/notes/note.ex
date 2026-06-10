@@ -1,5 +1,5 @@
 defmodule Engram.Notes.Note do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

@@ -1,5 +1,5 @@
 defmodule Engram.Auth.RefreshToken do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "refresh_tokens" do

@@ -1,5 +1,5 @@
 defmodule Engram.Invites.Invite do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "invites" do

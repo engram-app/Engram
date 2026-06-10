@@ -6,7 +6,7 @@ defmodule Engram.Onboarding.Action do
   semantics.
   """
 
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   # Default integer (bigserial) PK — matches every other per-user table.

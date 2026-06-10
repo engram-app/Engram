@@ -7,7 +7,7 @@ defmodule Engram.Billing.UserLimitOverride do
   bare integers/booleans without an object-root constraint and so
   we can extend with metadata later without re-migrating.
   """
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   alias Engram.Billing.LimitKeys

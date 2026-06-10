@@ -1,5 +1,5 @@
 defmodule Engram.Auth.DeviceAuthorization do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "device_authorizations" do

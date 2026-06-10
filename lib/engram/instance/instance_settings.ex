@@ -1,5 +1,5 @@
 defmodule Engram.Instance.InstanceSettings do
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   @modes ~w(closed invite_only open)
