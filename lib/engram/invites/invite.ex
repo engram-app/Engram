@@ -5,7 +5,7 @@ defmodule Engram.Invites.Invite do
 
   schema "invites" do
     field :token_hash, :string, redact: true
-    field :created_by, :id
+    field :created_by, Ecto.UUID
     field :label, :string
     field :max_uses, :integer, default: 1
     field :use_count, :integer, default: 0

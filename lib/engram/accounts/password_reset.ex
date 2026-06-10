@@ -17,11 +17,11 @@ defmodule Engram.Accounts.PasswordReset do
     import Ecto.Changeset
 
     schema "password_reset_tokens" do
-      field :user_id, :id
+      field :user_id, Ecto.UUID
       field :token_hash, :string, redact: true
       field :expires_at, :utc_datetime
       field :used_at, :utc_datetime
-      field :created_by, :id
+      field :created_by, Ecto.UUID
       timestamps(type: :utc_datetime, updated_at: false)
     end
 
