@@ -3055,7 +3055,13 @@ jobs:
   deploy-frontend:
     name: Deploy frontend (Cloudflare Workers)
     needs: [ci]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci.result == 'success'
+    # Auto-deploy on main push (path-guarded below); also manually triggerable
+    # via the "CI" workflow's "Run workflow" button (workflow_dispatch) for
+    # on-demand smoke / the Phase M cutover.
+    if: >-
+      always() && needs.ci.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: [self-hosted, linux, x64, isolated]
     concurrency:
       group: deploy-frontend-prod
@@ -3070,6 +3076,12 @@ jobs:
         id: guard
         run: |
           set -euo pipefail
+          # Manual runs always deploy; push runs deploy only if frontend changed.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if git diff --quiet HEAD^ HEAD -- frontend/ 2>/dev/null; then
             echo "No frontend/ changes in this merge — skipping deploy."
             echo "skip=true" >> "$GITHUB_OUTPUT"
