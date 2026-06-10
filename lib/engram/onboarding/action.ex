@@ -9,7 +9,6 @@ defmodule Engram.Onboarding.Action do
   use Engram.Schema
   import Ecto.Changeset
 
-  # Default integer (bigserial) PK — matches every other per-user table.
   @timestamps_opts [type: :utc_datetime_usec, updated_at: false]
 
   @actions ~w(
