@@ -15,7 +15,12 @@ defmodule Engram.UsageMeters do
   defmodule Meter do
     use Ecto.Schema
 
-    @primary_key {:user_id, :id, autogenerate: false}
+    # PK-as-uuid exception: this table is keyed on `user_id`, not `id`,
+    # so it can't use `Engram.Schema` (which forces id-as-PK). Mirror the
+    # macro's effect by hand: PK type is `Ecto.UUID` (app/server-supplied,
+    # no autogenerate) and FK type is `Ecto.UUID` for any future belongs_to.
+    @primary_key {:user_id, Ecto.UUID, autogenerate: false}
+    @foreign_key_type Ecto.UUID
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
       field :notes_count, :integer, default: 0
