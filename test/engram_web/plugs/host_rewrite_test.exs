@@ -52,7 +52,11 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
     end
 
     test "passes through /socket, /webhooks, /.well-known", %{opts: opts} do
-      for path <- ["/socket/websocket", "/webhooks/paddle", "/.well-known/oauth-authorization-server"] do
+      for path <- [
+            "/socket/websocket",
+            "/webhooks/paddle",
+            "/.well-known/oauth-authorization-server"
+          ] do
         conn =
           conn(:get, path)
           |> Map.put(:host, "api.engram.page")
@@ -101,9 +105,11 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
     end
 
     test "passes /.well-known/oauth-* through unchanged", %{opts: opts} do
-      for path <- ["/.well-known/oauth-protected-resource",
-                   "/.well-known/oauth-protected-resource/api/mcp",
-                   "/.well-known/oauth-authorization-server"] do
+      for path <- [
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/api/mcp",
+            "/.well-known/oauth-authorization-server"
+          ] do
         conn =
           conn(:get, path)
           |> Map.put(:host, "mcp.engram.page")
