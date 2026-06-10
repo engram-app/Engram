@@ -93,4 +93,55 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       end
     end
   end
+
+  describe "mcp.engram.page" do
+    setup do
+      opts = HostRewrite.init(api_host: "api.engram.page", mcp_host: "mcp.engram.page")
+      {:ok, opts: opts}
+    end
+
+    test "passes /.well-known/oauth-* through unchanged", %{opts: opts} do
+      for path <- ["/.well-known/oauth-protected-resource",
+                   "/.well-known/oauth-protected-resource/api/mcp",
+                   "/.well-known/oauth-authorization-server"] do
+        conn =
+          conn(:get, path)
+          |> Map.put(:host, "mcp.engram.page")
+          |> HostRewrite.call(opts)
+
+        assert conn.request_path == path
+        refute conn.halted, "#{path} should not be halted"
+      end
+    end
+
+    test "prefixes /api/mcp on bare paths", %{opts: opts} do
+      conn =
+        conn(:post, "/")
+        |> Map.put(:host, "mcp.engram.page")
+        |> HostRewrite.call(opts)
+
+      assert conn.request_path == "/api/mcp/"
+      refute conn.halted
+    end
+
+    test "passes through paths already prefixed /api/mcp", %{opts: opts} do
+      conn =
+        conn(:post, "/api/mcp/foo")
+        |> Map.put(:host, "mcp.engram.page")
+        |> HostRewrite.call(opts)
+
+      assert conn.request_path == "/api/mcp/foo"
+      refute conn.halted
+    end
+
+    test "rejects anything else with 404", %{opts: opts} do
+      conn =
+        conn(:get, "/notes")
+        |> Map.put(:host, "mcp.engram.page")
+        |> HostRewrite.call(opts)
+
+      assert conn.halted
+      assert conn.status == 404
+    end
+  end
 end
