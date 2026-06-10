@@ -55,12 +55,12 @@ TEST_USER_OVERRIDES = {
 }
 
 
-def grant_test_plan(email: str) -> int:
+def grant_test_plan(email: str) -> str:
     """Grant Pro-tier-equivalent overrides to the user with this email.
 
-    Returns the resolved user_id (useful for tests that need it for
-    follow-up SQL). Raises if the user does not exist or the docker
-    exec fails.
+    Returns the resolved user_id (uuid string, useful for tests that
+    need it for follow-up SQL). Raises if the user does not exist or
+    the docker exec fails.
     """
     values_sql = ", ".join(
         f"((SELECT id FROM users WHERE email = '{email}'), '{k}', "
@@ -94,6 +94,6 @@ def grant_test_plan(email: str) -> int:
         raise RuntimeError(
             f"grant_test_plan({email}): no user_id returned — user may not exist yet"
         )
-    user_id = int(lines[-1])
-    logger.info("Granted e2e plan overrides to user %s (id=%d)", email, user_id)
+    user_id = lines[-1].strip()
+    logger.info("Granted e2e plan overrides to user %s (id=%s)", email, user_id)
     return user_id

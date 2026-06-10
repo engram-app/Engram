@@ -95,7 +95,7 @@ def _psql(sql: str) -> str:
     return result.stdout.strip()
 
 
-def _seed_pro_subscription(user_id: int, sub_id: str) -> None:
+def _seed_pro_subscription(user_id: str, sub_id: str) -> None:
     """Insert an active Pro subscription row for this user.
 
     Mirrors the shape Billing.upsert_from_paddle_event would write on
@@ -106,7 +106,7 @@ def _seed_pro_subscription(user_id: int, sub_id: str) -> None:
         "INSERT INTO subscriptions "
         "(user_id, paddle_customer_id, paddle_subscription_id, tier, status, "
         " current_period_end, custom_data, created_at, updated_at) "
-        f"VALUES ({user_id}, 'ctm_e2e_{user_id}', '{sub_id}', 'pro', 'active', "
+        f"VALUES ('{user_id}', 'ctm_e2e_{user_id}', '{sub_id}', 'pro', 'active', "
         f"'{period_end}', '{{}}'::jsonb, NOW(), NOW()) "
         "ON CONFLICT (user_id) DO UPDATE "
         "SET paddle_subscription_id = EXCLUDED.paddle_subscription_id, "
@@ -115,7 +115,7 @@ def _seed_pro_subscription(user_id: int, sub_id: str) -> None:
     _psql(sql)
 
 
-def _set_notes_count(user_id: int, count: int) -> None:
+def _set_notes_count(user_id: str, count: int) -> None:
     """Force usage_meters.notes_count for this user.
 
     UsageMeters.notes_cap_reached?/2 reads from this column, so this is
@@ -123,7 +123,7 @@ def _set_notes_count(user_id: int, count: int) -> None:
     """
     sql = (
         "INSERT INTO usage_meters (user_id, notes_count, updated_at) "
-        f"VALUES ({user_id}, {count}, NOW()) "
+        f"VALUES ('{user_id}', {count}, NOW()) "
         "ON CONFLICT (user_id) DO UPDATE "
         f"SET notes_count = {count}, updated_at = NOW()"
     )
