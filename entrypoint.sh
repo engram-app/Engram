@@ -16,6 +16,17 @@
 # start a Phoenix node against a half-prepared cluster.
 set -e
 
+# One-shot PG18/uuidv7 cutover heal. Only fires when explicitly opted in AND
+# the schema is in the broken legacy integer-PK state (self-disabling — see
+# Engram.Release.reset_baseline/0). Used once to recover prod after the RDS
+# was upgraded PG17→PG18 in-place instead of wiped; the flag is removed from
+# the task definition afterwards. Runs before prepare_database/migrate because
+# it rebuilds the schema those then operate on.
+if [ "${ENGRAM_DB_RESET_BASELINE:-}" = "true" ]; then
+  echo "[entrypoint] ENGRAM_DB_RESET_BASELINE=true — running one-shot baseline reset"
+  /app/bin/engram eval "Engram.Release.reset_baseline()"
+fi
+
 /app/bin/engram eval "Engram.Release.prepare_database()"
 /app/bin/engram eval "Engram.Release.migrate()"
 

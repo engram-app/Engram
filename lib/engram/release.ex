@@ -25,6 +25,8 @@ defmodule Engram.Release do
   alias (`mix.exs`).
   """
 
+  require Logger
+
   @app :engram
 
   # NOINHERIT + LOGIN matches the historical baseline shape (preserved
@@ -97,6 +99,91 @@ defmodule Engram.Release do
   def rollback(repo, version) do
     _ = load_app()
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
+  end
+
+  @doc """
+  One-shot, self-guarded baseline reset for the PG18 + UUIDv7 cutover.
+
+  Background: the PG18/uuidv7 rework (#524) is a wreck-and-recreate baseline,
+  not a data migration — the uuid schema only materialises by replaying
+  `structure.sql` on an EMPTY schema. Prod's RDS was upgraded PG17→PG18
+  *in-place* (engram-infra #476, `apply_immediately`) instead of taint+recreate,
+  so it kept its legacy integer-PK tables while the baseline migration stayed
+  marked applied. The app then crash-loops loading integer ids as `Ecto.UUID`
+  (see `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`).
+
+  This drops and rebuilds the schema so the uuid baseline replays. Guarded two
+  ways so it can NEVER wipe a healthy DB:
+
+    1. The entrypoint only invokes it when `ENGRAM_DB_RESET_BASELINE=true`.
+    2. Self-disabling: it inspects `terms_versions.id`'s column type and no-ops
+       unless that type is a legacy integer. Once the schema is uuid (or the
+       table is absent), this returns `:ok` having touched nothing.
+
+  Pre-launch one-shot. Destroys all data. Runs as the connecting master role
+  (`engram_admin` on RDS), which owns `public`, so `DROP SCHEMA` succeeds.
+  After the reset, the DB state equals a fresh-DB state — exactly what CI
+  builds and validates green on every push.
+  """
+  def reset_baseline do
+    _ = load_app()
+
+    for repo <- repos() do
+      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_reset_baseline/1)
+    end
+
+    :ok
+  end
+
+  defp do_reset_baseline(repo) do
+    if legacy_integer_pk?(repo) do
+      Logger.warning(
+        "[reset_baseline] legacy integer-PK schema detected — dropping public " <>
+          "and replaying the uuid baseline (PG18/uuidv7 cutover)"
+      )
+
+      repo.query!("DROP SCHEMA public CASCADE", [])
+      repo.query!("CREATE SCHEMA public", [])
+      # Restore the schema grants a fresh cluster would have, so the subsequent
+      # prepare_database + baseline GRANTs resolve as on a first deploy.
+      repo.query!("GRANT ALL ON SCHEMA public TO CURRENT_USER", [])
+      repo.query!("GRANT ALL ON SCHEMA public TO public", [])
+
+      do_prepare_database(repo)
+      Ecto.Migrator.run(repo, :up, all: true)
+
+      Logger.warning("[reset_baseline] schema rebuilt from structure.sql (uuid PKs)")
+    else
+      Logger.info(
+        "[reset_baseline] schema is not in the legacy integer-PK state — no-op " <>
+          "(safe to leave ENGRAM_DB_RESET_BASELINE set)"
+      )
+    end
+
+    :ok
+  end
+
+  @doc """
+  True when `table`'s `id` column is a legacy integer type — i.e. the broken
+  pre-cutover state `reset_baseline/0` heals. False for a uuid `id` (healthy)
+  or an absent table (fresh DB, baseline will create it). Public for testing.
+  """
+  def legacy_integer_pk?(repo, table \\ "terms_versions") do
+    %Postgrex.Result{rows: rows} =
+      repo.query!(
+        """
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'id'
+        """,
+        [table]
+      )
+
+    case rows do
+      [["uuid"]] -> false
+      [[_integer_type]] -> true
+      [] -> false
+    end
   end
 
   defp do_prepare_database(repo) do
