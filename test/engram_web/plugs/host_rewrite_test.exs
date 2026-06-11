@@ -223,6 +223,54 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       assert out == conn
     end
 
+    # The ALB target-group HC (/api/health/deep, Host = task IP) and the ECS
+    # container HC (`curl localhost:4000/api/health`, Host = localhost) hit
+    # this plug on hosts that are neither api_host nor mcp_host. Without an
+    # exemption, reject_unknown_hosts=true would 410 them → unhealthy tasks →
+    # circuit-breaker rollback. Health probes must pass through on ANY host.
+    test "with reject_unknown_hosts=true, /api/health passes through on localhost (container HC)" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/api/health") |> Map.put(:host, "localhost")
+      out = HostRewrite.call(conn, opts)
+
+      refute out.halted
+    end
+
+    test "with reject_unknown_hosts=true, /api/health/deep passes through on a task-IP host (ALB HC)" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/api/health/deep") |> Map.put(:host, "10.0.3.41")
+      out = HostRewrite.call(conn, opts)
+
+      refute out.halted
+    end
+
+    test "with reject_unknown_hosts=true, non-health /api path on unknown host still 410s" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/api/notes") |> Map.put(:host, "10.0.3.41")
+      out = HostRewrite.call(conn, opts)
+
+      assert out.halted
+      assert out.status == 410
+    end
+
     test "with reject_unknown_hosts=true, selfhost-style empty config remains passthrough" do
       # This proves the no-op contract: passing [] (selfhost) ignores the
       # reject_unknown_hosts setting because api_host is nil → dispatch skips
