@@ -1841,7 +1841,7 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec broadcast_change(integer(), integer(), String.t(), String.t(), Note.t()) :: :ok
+  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t(), Note.t()) :: :ok
   # Emits `vault_populated` only when this insert took the vault from 0
   # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
@@ -1887,7 +1887,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  @spec broadcast_change(integer(), integer(), String.t(), String.t()) :: :ok
+  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
     _ =
       EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{

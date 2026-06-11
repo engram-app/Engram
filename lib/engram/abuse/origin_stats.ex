@@ -37,7 +37,7 @@ defmodule Engram.Abuse.OriginStats do
 
   Returns `:ok` always (best-effort instrumentation; never raises).
   """
-  @spec record(integer(), String.t() | nil) :: :ok
+  @spec record(Ecto.UUID.t(), String.t() | nil) :: :ok
   def record(user_id, user_agent) when is_binary(user_id) do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
     today = Date.utc_today()
@@ -70,7 +70,7 @@ defmodule Engram.Abuse.OriginStats do
   Returns a list of `{day, class, count}` for the user over the last `days`,
   ordered by `day` desc then `count` desc.
   """
-  @spec summary(integer(), pos_integer()) :: [
+  @spec summary(Ecto.UUID.t(), pos_integer()) :: [
           %{day: Date.t(), class: String.t(), count: integer()}
         ]
   def summary(user_id, days) when is_binary(user_id) and is_integer(days) and days > 0 do
@@ -90,7 +90,7 @@ defmodule Engram.Abuse.OriginStats do
   Returns `{total, by_class}` for a single day. `by_class` is a map of
   class-string to count.
   """
-  @spec day_totals(integer(), Date.t()) :: {integer(), %{String.t() => integer()}}
+  @spec day_totals(Ecto.UUID.t(), Date.t()) :: {integer(), %{String.t() => integer()}}
   def day_totals(user_id, %Date{} = day) do
     rows =
       Repo.all(
@@ -110,7 +110,7 @@ defmodule Engram.Abuse.OriginStats do
   Returns user_ids whose total daily request count exceeded `cap` on
   EACH of the last `consecutive` days (UTC).
   """
-  @spec users_exceeding_cap(pos_integer(), pos_integer()) :: [integer()]
+  @spec users_exceeding_cap(pos_integer(), pos_integer()) :: [Ecto.UUID.t()]
   def users_exceeding_cap(cap, consecutive)
       when is_integer(cap) and is_integer(consecutive) and consecutive > 0 do
     days = for offset <- 0..(consecutive - 1), do: Date.add(Date.utc_today(), -offset)

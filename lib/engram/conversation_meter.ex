@@ -29,7 +29,7 @@ defmodule Engram.ConversationMeter do
 
   @advisory_lock_key 2_739_201
 
-  @spec tick(integer()) ::
+  @spec tick(Ecto.UUID.t()) ::
           :ok
           | {:rate_limited, :conversations_per_day | :queries_per_day | :queries_per_conversation}
   def tick(user_id) when is_binary(user_id) do

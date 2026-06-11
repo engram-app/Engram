@@ -32,7 +32,7 @@ defmodule Engram.Crypto.RotationGate do
   alias Engram.Accounts.User
   alias Engram.Repo
 
-  @spec check(integer()) :: :ok | {:error, :rotation_in_progress | :user_not_found}
+  @spec check(Ecto.UUID.t()) :: :ok | {:error, :rotation_in_progress | :user_not_found}
   def check(user_id) when is_binary(user_id) do
     # Select `{id, locked_at}` so we can distinguish "user not found" (nil)
     # from "user found, lock nil" ({id, nil}).
