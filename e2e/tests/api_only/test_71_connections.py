@@ -467,7 +467,7 @@ def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -
     return resp.json()
 
 
-def device_authorize(jwt_token: str, user_code: str, vault_id: int) -> requests.Response:
+def device_authorize(jwt_token: str, user_code: str, vault_id: str) -> requests.Response:
     """POST /api/auth/device/authorize — confirm device from user side.
     Returns the raw Response so callers can check 402 cap responses.
     """

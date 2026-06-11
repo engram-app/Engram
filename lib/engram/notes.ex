@@ -30,6 +30,22 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Mints a new note primary key app-side as a v7 UUID string.
+
+  Used at the context boundary so the id is available before INSERT —
+  callers stitch it into the AAD bind string (`notes:<col>:<id>`) and the
+  `Repo.insert/2` then uses the supplied id verbatim (PK is
+  `autogenerate: false` per `Engram.Schema`).
+
+  v7 is time-ordered, so successive mints within the same process sort
+  lexically by mint time. That preserves the BTree locality benefits of
+  the prior bigserial PK without requiring a server round-trip via
+  `nextval()`.
+  """
+  @spec mint_id() :: Ecto.UUID.t()
+  def mint_id, do: UUIDv7.generate()
+
+  @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
   Idempotent: if a marker for this folder_hmac already exists, it is
@@ -105,7 +121,7 @@ defmodule Engram.Notes do
   end
 
   defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
-    marker_id = Crypto.next_row_id(:notes)
+    marker_id = mint_id()
     now = DateTime.utc_now()
     folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
     {folder_ct, folder_nonce} = Envelope.encrypt(folder, dek, folder_aad)
@@ -207,6 +223,7 @@ defmodule Engram.Notes do
     content = attrs["content"] || attrs[:content] || ""
     mtime = attrs["mtime"] || attrs[:mtime]
     client_version = attrs["version"] || attrs[:version]
+    client_id = attrs["id"] || attrs[:id]
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
@@ -241,7 +258,7 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              insert_new_note(base_attrs, user, sanitized_path, folder, tags)
+              insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id)
 
             existing ->
               update_existing_note(
@@ -298,7 +315,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -325,8 +342,17 @@ defmodule Engram.Notes do
 
       :ok ->
         # T3.6 — pre-allocate the row id so the AAD bind string
-        # ("notes:<column>:<id>") can be computed before INSERT.
-        note_id = Crypto.next_row_id(:notes)
+        # ("notes:<column>:<id>") can be computed before INSERT. As of the
+        # PG18 + UUIDv7 rework (Phase B), the id is minted app-side via
+        # `mint_id/0` (v7 uuid) instead of pulled from a bigserial sequence.
+        # Phase I — accept a client-supplied uuid so the plugin / SDK can
+        # mint offline and push under a stable id. Falls back to server mint
+        # when nil or malformed.
+        note_id =
+          case client_id && Ecto.UUID.cast(client_id) do
+            {:ok, valid_uuid} -> valid_uuid
+            _ -> mint_id()
+          end
 
         with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
           phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
@@ -397,8 +423,8 @@ defmodule Engram.Notes do
   RLS scopes the SELECT to the caller's tenant; the explicit
   `user_id`/`vault_id` predicate is belt-and-suspenders.
   """
-  @spec get_note_by_id(map(), map(), integer()) :: {:ok, Note.t()} | {:error, :not_found}
-  def get_note_by_id(user, vault, id) when is_integer(id) do
+  @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_by_id(user, vault, id) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
@@ -686,9 +712,9 @@ defmodule Engram.Notes do
   Delegates to `delete_note/3` once ownership is verified, so Qdrant cleanup +
   usage-meter decrement + `note_changed` broadcast all run as a side-effect.
   """
-  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), integer()) ::
+  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), String.t()) ::
           :ok | {:error, :not_found}
-  def delete_note_by_id(user, vault, id) when is_integer(id) do
+  def delete_note_by_id(user, vault, id) when is_binary(id) do
     case get_note_by_id(user, vault, id) do
       {:ok, note} -> delete_note(user, vault, note.path)
       {:error, :not_found} -> {:error, :not_found}
@@ -769,13 +795,13 @@ defmodule Engram.Notes do
   (after-commit hooks so broadcasts only fire post-commit) is tracked as a
   follow-up and will land before more batch ops are added.
   """
-  @spec batch_move_notes(map(), map(), [integer()], integer()) ::
+  @spec batch_move_notes(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}}
-          | {:error, {:not_found | :conflict, integer()} | term()}
+          | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
   def batch_move_notes(user, vault, ids, target_folder_id)
-      when is_list(ids) and is_integer(target_folder_id) do
+      when is_list(ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
@@ -1199,9 +1225,9 @@ defmodule Engram.Notes do
   Returns `{:error, :not_found}` when the id doesn't resolve to a live
   folder marker owned by `user`/`vault`.
   """
-  @spec list_folder_notes_by_id(map(), map(), integer()) ::
+  @spec list_folder_notes_by_id(map(), map(), String.t()) ::
           {:ok, [Note.t()]} | {:error, :not_found}
-  def list_folder_notes_by_id(user, vault, marker_id) when is_integer(marker_id) do
+  def list_folder_notes_by_id(user, vault, marker_id) when is_binary(marker_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, marker} <- get_folder_marker_by_id(user, vault, marker_id),
          {:ok, dek} <- Crypto.get_dek(user) do
@@ -1210,9 +1236,9 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec get_folder_marker_by_id(map(), map(), integer()) ::
+  @spec get_folder_marker_by_id(map(), map(), String.t()) ::
           {:ok, Note.t()} | {:error, :not_found}
-  defp get_folder_marker_by_id(user, vault, id) when is_integer(id) do
+  defp get_folder_marker_by_id(user, vault, id) when is_binary(id) do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
         case Repo.one(
@@ -1443,7 +1469,7 @@ defmodule Engram.Notes do
           # written with empty content/title/tags but the row-id-bound AAD
           # still applies — keeps tombstones decryptable and indistinguishable
           # from any other AAD-bound row at read time.
-          tomb_id = Crypto.next_row_id(:notes)
+          tomb_id = mint_id()
           old_path_folder = Helpers.extract_folder(old_path)
 
           full_kw =
@@ -1668,13 +1694,13 @@ defmodule Engram.Notes do
   fires per-note broadcasts inside the transaction; rolled-back batches may
   leak events.
   """
-  @spec batch_move_folders(map(), map(), [integer()], integer()) ::
+  @spec batch_move_folders(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}}
-          | {:error, {:not_found | :conflict | :cycle, integer()} | term()}
+          | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
-      when is_list(marker_ids) and is_integer(target_folder_id) do
+      when is_list(marker_ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
@@ -1815,7 +1841,7 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec broadcast_change(integer(), integer(), String.t(), String.t(), Note.t()) :: :ok
+  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t(), Note.t()) :: :ok
   # Emits `vault_populated` only when this insert took the vault from 0
   # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
@@ -1861,7 +1887,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  @spec broadcast_change(integer(), integer(), String.t(), String.t()) :: :ok
+  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
     _ =
       EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{

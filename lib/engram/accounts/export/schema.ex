@@ -6,7 +6,7 @@ defmodule Engram.Accounts.Export.Schema do
   Reasons: user_request | pre_delete | inactivity.
   """
 
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   @statuses ~w[pending running ready failed expired]a

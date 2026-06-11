@@ -51,7 +51,7 @@ defmodule Engram.UsageMeters.ActivityCache do
   # supertype. The @doc documents intent without over-constraining.
   def debounce_seconds, do: @debounce_seconds
 
-  @spec get(user_id :: integer()) :: {:ok, DateTime.t()} | :miss
+  @spec get(user_id :: Ecto.UUID.t()) :: {:ok, DateTime.t()} | :miss
   def get(user_id) do
     case Cache.backend() do
       :redis -> redis_get(user_id)
@@ -59,7 +59,7 @@ defmodule Engram.UsageMeters.ActivityCache do
     end
   end
 
-  @spec put(user_id :: integer(), last_active_at :: DateTime.t()) :: :ok
+  @spec put(user_id :: Ecto.UUID.t(), last_active_at :: DateTime.t()) :: :ok
   def put(user_id, %DateTime{} = last_active_at) do
     case Cache.backend() do
       :redis ->

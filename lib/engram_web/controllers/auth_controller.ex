@@ -37,9 +37,9 @@ defmodule EngramWeb.AuthController do
   def revoke_api_key(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    case Integer.parse(id) do
-      {int_id, ""} ->
-        case Accounts.revoke_api_key(user, int_id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} ->
+        case Accounts.revoke_api_key(user, uuid) do
           :ok ->
             json(conn, %{deleted: true})
 
@@ -47,7 +47,7 @@ defmodule EngramWeb.AuthController do
             conn |> put_status(404) |> json(%{error: "API key not found"})
         end
 
-      _ ->
+      :error ->
         conn |> put_status(400) |> json(%{error: "invalid API key id"})
     end
   end

@@ -15,7 +15,7 @@ import { useVaultReadyEvents } from '../onboarding/use-vault-ready-events'
 import { useConnectionCap } from '../billing/use-connection-cap'
 import { connectionId as obsidianConnectionId } from '../billing/existing-connections-panel'
 
-type Vault = { id: number; name: string; note_count: number }
+type Vault = { id: string; name: string; note_count: number }
 
 type Step = 'enter-code' | 'pick-vault' | 'success' | 'error'
 
@@ -39,7 +39,7 @@ export default function DeviceLinkPage() {
   const [selection, setSelection] = useState<string>('matched')
   const [suggestedName, setSuggestedName] = useState('')
   const [customName, setCustomName] = useState('')
-  const [linkedVaultId, setLinkedVaultId] = useState<number | null>(null)
+  const [linkedVaultId, setLinkedVaultId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   // Device-flow is "I'm moving in" not "I want a 4th tab" — when at cap, we
@@ -108,9 +108,9 @@ export default function DeviceLinkPage() {
           : null
       setSelection(
         existing
-          ? String(existing.id)
+          ? existing.id
           : fallbackExisting
-            ? String(fallbackExisting.id)
+            ? fallbackExisting.id
             : suggested
               ? 'matched'
               : 'custom',
@@ -153,10 +153,10 @@ export default function DeviceLinkPage() {
 
       const body = createNew
         ? { user_code: userCode, vault_id: 'new', vault_name: effectiveNewName }
-        : { user_code: userCode, vault_id: Number(selection) }
+        : { user_code: userCode, vault_id: selection }
 
       try {
-        const { vault_id } = await api.post<{ ok: boolean; vault_id: number }>(
+        const { vault_id } = await api.post<{ ok: boolean; vault_id: string }>(
           '/auth/device/authorize',
           body,
         )
@@ -345,7 +345,7 @@ export default function DeviceLinkPage() {
 }
 
 interface SuccessStepProps {
-  linkedVaultId: number | null
+  linkedVaultId: string | null
   onForward: () => void
 }
 
@@ -431,12 +431,12 @@ function VaultPickerFieldset({
   return (
     <fieldset className="flex flex-col gap-2">
       {matchedExisting ? (
-        <label className={selectableRow(selection === String(matchedExisting.id))}>
+        <label className={selectableRow(selection === matchedExisting.id)}>
           <input
             type="radio"
             name="vault-target"
-            checked={selection === String(matchedExisting.id)}
-            onChange={() => onSelect(String(matchedExisting.id))}
+            checked={selection === matchedExisting.id}
+            onChange={() => onSelect(matchedExisting.id)}
             className="accent-primary"
           />
           <span className="flex flex-col">
@@ -470,14 +470,14 @@ function VaultPickerFieldset({
       )}
 
       {otherVaults.map((v) => {
-        const active = selection === String(v.id)
+        const active = selection === v.id
         return (
           <label key={v.id} className={selectableRow(active)}>
             <input
               type="radio"
               name="vault-target"
               checked={active}
-              onChange={() => onSelect(String(v.id))}
+              onChange={() => onSelect(v.id)}
               className="accent-primary"
             />
             <span className="flex flex-col">

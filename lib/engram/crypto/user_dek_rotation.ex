@@ -44,12 +44,12 @@ defmodule Engram.Crypto.UserDekRotation do
 
   @type rotate_result :: :ok | {:error, term()}
 
-  @spec rotate_user(integer() | User.t()) :: rotate_result()
+  @spec rotate_user(String.t() | User.t()) :: rotate_result()
   def rotate_user(user_or_id) do
     user_id =
       case user_or_id do
         %User{id: id} -> id
-        id when is_integer(id) -> id
+        id when is_binary(id) -> id
       end
 
     # B5: started_at captured inside the wrapper so the telemetry emission
@@ -147,7 +147,7 @@ defmodule Engram.Crypto.UserDekRotation do
     sweep_table_loop(
       user_id,
       Engram.Notes.Note,
-      0,
+      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           notes =
@@ -200,7 +200,7 @@ defmodule Engram.Crypto.UserDekRotation do
     sweep_table_loop(
       user_id,
       Engram.Vaults.Vault,
-      0,
+      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           vaults =
@@ -328,7 +328,14 @@ defmodule Engram.Crypto.UserDekRotation do
   # the decrypt-as-discriminator logic in recrypt_blob.
 
   defp sweep_attachments(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    sweep_attachment_loop(user_id, new_dek_version, old_dek, new_dek, new_filter_key, 0)
+    sweep_attachment_loop(
+      user_id,
+      new_dek_version,
+      old_dek,
+      new_dek,
+      new_filter_key,
+      "00000000-0000-0000-0000-000000000000"
+    )
   end
 
   defp sweep_attachment_loop(user_id, new_dek_version, old_dek, new_dek, new_filter_key, last_id) do

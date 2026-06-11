@@ -157,7 +157,7 @@ defmodule Engram.Crypto.ProviderMigrationTest do
 
     test "user deleted mid-flight returns {:error, {:not_found, uid}}" do
       stub_kms_roundtrip()
-      missing_id = 99_999_999
+      missing_id = "00000000-0000-0000-0000-000099999999"
 
       assert {:error, {:not_found, ^missing_id}} =
                ProviderMigration.migrate_user(missing_id, :aws_kms)
@@ -272,7 +272,7 @@ defmodule Engram.Crypto.ProviderMigrationTest do
 
       Enum.each(jobs, fn job ->
         assert %{"target_provider" => "aws_kms", "user_id" => uid} = job.args
-        assert is_integer(uid)
+        assert is_binary(uid)
       end)
     end
   end

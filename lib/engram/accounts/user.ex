@@ -1,5 +1,6 @@
 defmodule Engram.Accounts.User do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
 
   # T3.0.5 — Allowlist serialization. Anything not listed is invisible to
   # Jason.encode!/1 even if a future controller does `json(conn, %{user: user})`.

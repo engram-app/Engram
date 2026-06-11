@@ -59,7 +59,7 @@ export default function OnboardVaultPage() {
 interface VaultStepProps {
   profileSaved: boolean
   savedUsesObsidian: boolean
-  userId: number | null
+  userId: string | null
   setProfile: ReturnType<typeof useSetOnboardingProfile>
   createVault: ReturnType<typeof useCreateVault>
   updateNote: ReturnType<typeof useUpdateNote>
@@ -156,7 +156,7 @@ function VaultStep({
 interface SourceScreenProps {
   source: Source
   onPickSource: (s: Source) => void
-  userId: number | null
+  userId: string | null
   isCommitting: boolean
   pickError: string | null
   onCommitObsidian: () => Promise<void>
@@ -259,7 +259,7 @@ function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
 // ── Obsidian inline panel ─────────────────────────────────────────────────────
 
 interface ObsidianInlinePanelProps {
-  userId: number | null
+  userId: string | null
   isCommitting: boolean
   onCommit: () => Promise<void>
 }

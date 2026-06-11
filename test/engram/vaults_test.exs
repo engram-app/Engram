@@ -290,6 +290,10 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Alpha"})
+      # 1.1s gap ensures distinct second-precision `created_at` timestamps so the
+      # secondary `v.id` ordering doesn't race with UUIDv7 sub-millisecond
+      # tiebreaker randomness.
+      Process.sleep(1100)
       {:ok, v2} = Vaults.create_vault(user, %{name: "Beta"})
 
       [first, second | _] = Vaults.list_vaults(user)
@@ -408,7 +412,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for unknown id", %{user: user} do
-      assert {:error, :not_found} = Vaults.get_vault(user, 0)
+      assert {:error, :not_found} = Vaults.get_vault(user, Ecto.UUID.generate())
     end
 
     test "returns {:error, :not_found} for another user's vault", %{
@@ -484,7 +488,8 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.update_vault(user, 0, %{name: "X"})
+      assert {:error, :not_found} =
+               Vaults.update_vault(user, Ecto.UUID.generate(), %{name: "X"})
     end
   end
 
@@ -526,7 +531,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.delete_vault(user, 0)
+      assert {:error, :not_found} = Vaults.delete_vault(user, Ecto.UUID.generate())
     end
 
     test "delete_vault enqueues the deletion-notice email", %{user: user} do
@@ -563,7 +568,7 @@ defmodule Engram.VaultsTest do
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
 
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       assert :ok = Vaults.check_api_key_access(api_key, vault)
@@ -579,7 +584,7 @@ defmodule Engram.VaultsTest do
 
       # Restrict to other vault only
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: other_vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(other_vault.id)}
       ])
 
       assert :forbidden = Vaults.check_api_key_access(api_key, vault)

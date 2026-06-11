@@ -10,7 +10,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 import { DeleteVaultDialog } from './delete-vault-dialog'
 
 const vault = {
-  id: 7,
+  id: '7',
   name: 'Work',
   description: null,
   slug: 'work',
@@ -43,6 +43,6 @@ describe('DeleteVaultDialog', () => {
     fireEvent.change(screen.getByLabelText(/type .*work.* to confirm/i), { target: { value: 'Work' } })
     expect(confirmBtn).toBeEnabled()
     fireEvent.click(confirmBtn)
-    await waitFor(() => expect(deleteMutate).toHaveBeenCalledWith(7, expect.anything()))
+    await waitFor(() => expect(deleteMutate).toHaveBeenCalledWith('7', expect.anything()))
   })
 })

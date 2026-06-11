@@ -74,9 +74,9 @@ defmodule Engram.Storage.S3 do
   end
 
   defp parse_user_id_from_prefix(prefix) do
-    case Integer.parse(String.trim_trailing(prefix, "/")) do
-      {id, ""} -> [id]
-      _ -> []
+    case Ecto.UUID.cast(String.trim_trailing(prefix, "/")) do
+      {:ok, id} -> [id]
+      :error -> []
     end
   end
 

@@ -5,7 +5,7 @@ defmodule Engram.Email.Suppression do
   `suppressed?/1` before sending and skips suppressed addresses. Addresses are
   stored normalized to lowercase.
   """
-  use Ecto.Schema
+  use Engram.Schema
 
   import Ecto.Changeset
   import Ecto.Query, only: [from: 2]

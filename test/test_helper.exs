@@ -14,12 +14,18 @@ ExUnit.configure(capture_log: true)
 #   has no distribution (:net_kernel.start fails with :nodistribution), so these
 #   real two-node :peer tests are opt-in → CLUSTER_TESTS=1 (run locally, or in a
 #   dedicated CI job that provides distribution).
+# - :integration needs a local engram-dev-postgres docker container to drive
+#   pg_dump from. CI runs against an ephemeral PG service (no docker exec
+#   target), so these are opt-in → INTEGRATION_TESTS=1 (run locally).
 qdrant_excluded =
   if System.get_env("QDRANT_INTEGRATION") == "1", do: [], else: [:qdrant_integration]
 
 cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cluster]
 
-case qdrant_excluded ++ cluster_excluded do
+integration_excluded =
+  if System.get_env("INTEGRATION_TESTS") == "1", do: [], else: [:integration]
+
+case qdrant_excluded ++ cluster_excluded ++ integration_excluded do
   [] -> :ok
   excluded -> ExUnit.configure(exclude: excluded)
 end

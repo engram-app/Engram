@@ -73,14 +73,16 @@ defmodule Engram.Storage.DatabaseTest do
   end
 
   describe "list_user_prefixes/0" do
-    test "returns distinct integer first segments" do
-      assert :ok = Database.put("1/2/a.png", @binary)
-      assert :ok = Database.put("1/3/b.png", @binary)
-      assert :ok = Database.put("2/2/c.png", @binary)
-      assert :ok = Database.put("notanint/d.png", @binary)
+    test "returns distinct uuid first segments" do
+      u1 = "00000000-0000-0000-0000-000000000001"
+      u2 = "00000000-0000-0000-0000-000000000002"
+      assert :ok = Database.put("#{u1}/2/a.png", @binary)
+      assert :ok = Database.put("#{u1}/3/b.png", @binary)
+      assert :ok = Database.put("#{u2}/2/c.png", @binary)
+      assert :ok = Database.put("notauuid/d.png", @binary)
 
       assert {:ok, ids} = Database.list_user_prefixes()
-      assert Enum.sort(ids) == [1, 2]
+      assert Enum.sort(ids) == [u1, u2]
     end
   end
 end

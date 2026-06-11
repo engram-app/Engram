@@ -137,7 +137,7 @@ defmodule EngramWeb.SearchControllerTest do
       conn = post(conn, "/api/search", %{query: "iron panel"})
       assert %{"results" => [hit]} = json_response(conn, 200)
       assert hit["id"] == note.id
-      assert is_integer(hit["id"])
+      assert is_binary(hit["id"])
     end
 
     test "over-fetches chunks so grouping can return the requested number of notes",

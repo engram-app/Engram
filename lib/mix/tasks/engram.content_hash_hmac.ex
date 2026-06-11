@@ -66,7 +66,7 @@ defmodule Mix.Tasks.Engram.ContentHashHmac do
       BackfillContentHashHmac.new(%{
         "user_id" => user_id,
         "vault_id" => vault_id,
-        "cursor" => 0,
+        "cursor" => "00000000-0000-0000-0000-000000000000",
         "scope" => scope
       })
       |> Oban.insert()

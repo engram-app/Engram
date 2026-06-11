@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
 
   ## Usage
 
-      mix engram.rotate_user_dek --user-id 42
+      mix engram.rotate_user_dek --user-id 018f4cdb-d6a7-7c92-9f2e-cf6cb7c54f10
 
   Synchronous: blocks until the user's data is fully re-encrypted under
   a new DEK. The user is read+write locked for the duration; clients
@@ -47,7 +47,7 @@ defmodule Mix.Tasks.Engram.RotateUserDek do
 
   alias Engram.Crypto.UserDekRotation
 
-  @switches [user_id: :integer]
+  @switches [user_id: :string]
 
   @impl Mix.Task
   def run(args) do

@@ -189,7 +189,7 @@ defmodule EngramWeb.NotesControllerTest do
       conn = get(conn, "/api/notes/id-check.md")
       body = json_response(conn, 200)
       assert body["id"] == note.id
-      assert is_integer(body["id"])
+      assert is_binary(body["id"])
     end
 
     test "returns 404 for missing note", %{conn: conn} do
@@ -229,11 +229,11 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "returns 404 for non-existent id", %{conn: conn} do
-      conn = get(conn, ~p"/api/notes/by-id/999999")
+      conn = get(conn, ~p"/api/notes/by-id/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404) == %{"error" => "not found"}
     end
 
-    test "returns 400 for non-numeric id", %{conn: conn} do
+    test "returns 400 for non-uuid id", %{conn: conn} do
       conn = get(conn, ~p"/api/notes/by-id/abc")
       assert json_response(conn, 400) == %{"error" => "invalid id"}
     end
@@ -248,11 +248,11 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "returns 404 for non-existent id", %{conn: conn} do
-      conn = delete(conn, ~p"/api/notes/by-id/999999")
+      conn = delete(conn, ~p"/api/notes/by-id/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404) == %{"error" => "not found"}
     end
 
-    test "returns 400 for non-numeric id", %{conn: conn} do
+    test "returns 400 for non-uuid id", %{conn: conn} do
       conn = delete(conn, ~p"/api/notes/by-id/abc")
       assert json_response(conn, 400) == %{"error" => "invalid id"}
     end
@@ -290,14 +290,14 @@ defmodule EngramWeb.NotesControllerTest do
         post(conn, "/api/notes", %{path: "Test/IdShape.md", content: "# Id", mtime: 1_000.0})
 
       assert %{"note" => %{"id" => note_id}} = json_response(post_conn, 200)
-      assert is_integer(note_id)
+      assert is_binary(note_id)
 
       conn = get(conn, "/api/notes/changes?since=2020-01-01T00:00:00Z")
       assert %{"changes" => changes} = json_response(conn, 200)
 
       change = Enum.find(changes, &(&1["path"] == "Test/IdShape.md"))
       assert change["id"] == note_id
-      assert is_integer(change["id"])
+      assert is_binary(change["id"])
     end
 
     test "includes deleted notes with deleted=true flag", %{conn: conn} do

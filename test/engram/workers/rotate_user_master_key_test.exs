@@ -40,7 +40,7 @@ defmodule Engram.Workers.RotateUserMasterKeyTest do
     test "discards on missing user (no retry storms)" do
       assert {:discard, :user_deleted} =
                perform_job(RotateUserMasterKey, %{
-                 "user_id" => 999_999,
+                 "user_id" => Ecto.UUID.generate(),
                  "target_version" => 2
                })
     end

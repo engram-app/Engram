@@ -10,7 +10,7 @@ interface Props {
   instance: ItemInstance<LoaderItem>
   onContextMenu?: (itemId: string, x: number, y: number) => void
   onLongPress?: (itemId: string) => void
-  onFolderHover?: (folderId: number) => void
+  onFolderHover?: (folderId: string) => void
 }
 
 export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }: Props) {

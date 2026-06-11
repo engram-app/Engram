@@ -50,7 +50,7 @@ export default function InvitesTab() {
     }
   }
 
-  async function revoke(id: number) {
+  async function revoke(id: string) {
     try {
       await adminApi.revokeInvite(id)
       toast.success('Invite revoked')

@@ -21,12 +21,12 @@ interface Deps {
   folders: Folder[]
   rootNotes: NoteSummary[]
   qc: QueryClient
-  vaultId: string | number
+  vaultId: string
   sort: SortKey
   scrollParentRef: React.RefObject<HTMLDivElement | null>
   onRenameCommit: (itemId: string, newName: string) => void
   onMove: (sourceIds: string[], targetItemId: string) => void
-  fetchFolderNotes?: (folderId: number) => Promise<NoteSummary[]>
+  fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>
 }
 
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
@@ -63,7 +63,7 @@ export function useEngramTree(deps: Deps) {
         if (itemId === ROOT_ID) {
           return {
             itemId: ROOT_ID,
-            item: { kind: 'folder', id: -1, path: '', name: '', count: 0 },
+            item: { kind: 'folder', id: 'root', path: '', name: '', count: 0 },
             isFolder: true,
           }
         }
@@ -77,7 +77,7 @@ export function useEngramTree(deps: Deps) {
         // Fallback placeholder so HT doesn't crash before data lands.
         return {
           itemId,
-          item: { kind: 'folder', id: -1, path: '', name: itemId, count: 0 },
+          item: { kind: 'folder', id: itemId, path: '', name: itemId, count: 0 },
           isFolder: false,
         }
       },

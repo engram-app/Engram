@@ -203,14 +203,14 @@ defmodule EngramWeb.McpController do
     requested = args["vault_id"]
 
     cond do
-      is_integer(oauth_bound) and is_nil(requested) ->
+      is_binary(oauth_bound) and is_nil(requested) ->
         Engram.Vaults.get_vault(user, oauth_bound)
 
-      is_integer(oauth_bound) and to_string(requested) != to_string(oauth_bound) ->
+      is_binary(oauth_bound) and to_string(requested) != to_string(oauth_bound) ->
         {:error,
          "OAuth token is bound to vault #{oauth_bound}; tool call requested vault #{requested}"}
 
-      is_integer(oauth_bound) ->
+      is_binary(oauth_bound) ->
         Engram.Vaults.get_vault(user, oauth_bound)
 
       is_nil(requested) ->

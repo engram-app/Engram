@@ -316,7 +316,7 @@ function PatSection({
   onRevoke: (pat: Connection) => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [newKey, setNewKey] = useState<{ key: string; id: number; name: string } | null>(null)
+  const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null)
 
   return (
     <SettingsSectionCard
@@ -479,7 +479,7 @@ function RevealKeyModal({
   createdKey,
   onClose,
 }: {
-  createdKey: { key: string; id: number; name: string }
+  createdKey: { key: string; id: string; name: string }
   onClose: () => void
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')

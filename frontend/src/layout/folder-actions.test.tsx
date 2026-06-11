@@ -36,8 +36,8 @@ vi.mock('../api/client', () => {
 })
 
 vi.mock('../api/active-vault', () => ({
-  useActiveVaultId: () => 1,
-  getActiveVaultId: () => 1,
+  useActiveVaultId: () => '1',
+  getActiveVaultId: () => '1',
   setActiveVaultId: vi.fn(),
 }))
 
@@ -47,7 +47,7 @@ import { FolderTreeProvider } from './folder-tree-context'
 function renderWithProviders() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   // Seed the active-note cache so useActiveFolder() resolves to "foo"
-  qc.setQueryData(['note', 1, 42], { id: 42, folder: 'foo', path: 'foo/bar.md' })
+  qc.setQueryData(['note', '1', '42'], { id: '42', folder: 'foo', path: 'foo/bar.md' })
   return render(
     <MemoryRouter initialEntries={['/note/42']}>
       <QueryClientProvider client={qc}>

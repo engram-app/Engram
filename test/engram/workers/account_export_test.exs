@@ -74,7 +74,7 @@ defmodule Engram.Workers.AccountExportTest do
         assert is_integer(entry["part"])
         assert is_integer(entry["of"])
         assert is_integer(entry["size_bytes"])
-        assert is_integer(entry["vault_id"])
+        assert is_binary(entry["vault_id"])
         assert is_binary(entry["vault_name"])
       end)
 
@@ -131,7 +131,8 @@ defmodule Engram.Workers.AccountExportTest do
     end
 
     test "missing export row: noop, does not crash" do
-      assert :ok = perform_job(AccountExport, %{"export_id" => 999_999_999})
+      assert :ok =
+               perform_job(AccountExport, %{"export_id" => "00000000-0000-0000-0000-000999999999"})
     end
   end
 

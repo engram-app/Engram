@@ -235,7 +235,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
   describe "perform_cleanup/2 — skip" do
     test "skips when vault doesn't exist" do
-      assert :ok = CleanupVault.perform_cleanup(999_999, 1)
+      assert :ok = CleanupVault.perform_cleanup("00000000-0000-0000-0000-000000999999", 1)
     end
 
     test "skips when vault is not soft-deleted (was restored)" do

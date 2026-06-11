@@ -48,7 +48,7 @@ defmodule Engram.Auth.TokenResolver do
 
   defp authenticate_internal_jwt(token) do
     case Accounts.verify_jwt(token) do
-      {:ok, %{"user_id" => user_id}} when is_integer(user_id) ->
+      {:ok, %{"user_id" => user_id}} when is_binary(user_id) ->
         case Accounts.get_user(user_id) do
           # `:internal_jwt` marker distinguishes device-flow / OAuth /
           # MCP access tokens (all minted via Accounts.generate_jwt) from

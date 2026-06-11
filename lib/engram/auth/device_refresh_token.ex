@@ -1,5 +1,6 @@
 defmodule Engram.Auth.DeviceRefreshToken do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "device_refresh_tokens" do

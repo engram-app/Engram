@@ -39,14 +39,14 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp resolve_vault_and_join(vault_id_str, params, socket, user) do
-    case Integer.parse(vault_id_str) do
-      {vault_id, ""} ->
+    case Ecto.UUID.cast(vault_id_str) do
+      {:ok, vault_id} ->
         case Vaults.get_vault(user, vault_id) do
           {:ok, vault} -> attach_vault_to_socket(vault, params, socket)
           {:error, _} -> {:error, %{reason: "vault_not_found"}}
         end
 
-      _ ->
+      :error ->
         {:error, %{reason: "invalid_vault_id"}}
     end
   end

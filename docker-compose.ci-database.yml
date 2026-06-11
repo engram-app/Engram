@@ -46,7 +46,7 @@ services:
     restart: "no"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4
     ports:
       - "${CI_PG_PORT:-5443}:5432"
     environment:

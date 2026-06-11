@@ -16,8 +16,10 @@ type Mode = 'preview' | 'edit'
 export default function NotePage() {
   const params = useParams()
   const idStr = params.id
-  const parsedId = idStr ? Number(idStr) : NaN
-  const validId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null
+  // Note ids are uuid strings — accept any non-empty value and let the
+  // backend reject malformed inputs with a 400. We don't pre-validate
+  // because the canonical shape (uuidv7) is opaque to the frontend.
+  const validId = idStr && idStr.length > 0 ? idStr : null
 
   const { data: note, isLoading, error } = useNote(validId)
   const update = useUpdateNote()

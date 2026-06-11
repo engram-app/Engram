@@ -480,9 +480,9 @@ defmodule Engram.OAuth do
   defp resolve_vault(_user, "vault:*"), do: {:ok, nil}
 
   defp resolve_vault(user, "vault:" <> id_str) do
-    case Integer.parse(id_str) do
-      {id, ""} -> verify_vault_ownership(user, id)
-      _ -> :error
+    case Ecto.UUID.cast(id_str) do
+      {:ok, id} -> verify_vault_ownership(user, id)
+      :error -> :error
     end
   end
 

@@ -107,7 +107,8 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
 
     test "discards job when note doesn't exist" do
-      assert {:discard, _} = perform_job(EmbedNote, %{note_id: 999_999})
+      assert {:discard, _} =
+               perform_job(EmbedNote, %{note_id: "00000000-0000-0000-0000-000000999999"})
     end
 
     # Voyage rate-limit (429) must not burn an Oban attempt. Five 429s in a

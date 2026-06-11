@@ -65,7 +65,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   def list_notes(conn, %{"id" => id_str}) do
-    with {id, ""} <- Integer.parse(id_str),
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
          {:ok, notes} <-
            Notes.list_folder_notes_by_id(
              conn.assigns.current_user,
@@ -249,15 +249,7 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
-  defp parse_int(n) when is_integer(n), do: {:ok, n}
-
-  defp parse_int(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {n, ""} -> {:ok, n}
-      _ -> :error
-    end
-  end
-
+  defp parse_int(s) when is_binary(s), do: Ecto.UUID.cast(s)
   defp parse_int(_), do: :error
 
   defp broadcast_batch(user, vault, payload) do

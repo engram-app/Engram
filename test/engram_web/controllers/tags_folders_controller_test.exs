@@ -108,7 +108,7 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       conn2 = get(conn, "/api/folders/list", %{folder: "src"})
       body = json_response(conn2, 200)
       [n | _] = body["notes"]
-      assert is_integer(n["id"])
+      assert is_binary(n["id"])
     end
   end
 

@@ -20,14 +20,14 @@ function encodePathSegments(path: string): string {
 // backend commit 935b7bbf so headless-tree can key nodes by id and
 // discover tree shape via parent_id without parsing path strings.
 export interface Folder {
-  id: number
-  parent_id: number | null
+  id: string
+  parent_id: string | null
   name: string
   count: number
 }
 
 export interface NoteSummary {
-  id: number
+  id: string
   path: string
   title: string
   folder: string
@@ -45,7 +45,7 @@ export interface Note extends NoteSummary {
 export interface SearchResult {
   // null for orphan path hits (Task 1 backend) — frontend should treat
   // these as non-clickable since there's no id-routable target.
-  id: number | null
+  id: string | null
   path: string
   title: string
   folder: string
@@ -56,7 +56,7 @@ export interface SearchResult {
 }
 
 export interface User {
-  id: number
+  id: string
   email: string
   role: 'admin' | 'member'
   display_name: string | null
@@ -67,7 +67,7 @@ export interface User {
 // Hoisted so React Query treats the select identity as stable; otherwise an
 // inline arrow re-runs every render and returns a fresh array, breaking
 // memoized consumers (e.g. useEngramTree's rebuild useEffect).
-const selectFolders = (data: { folders: Array<Folder & { id: number | null }> }) =>
+const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }) =>
   data.folders.filter((f): f is Folder => f.id != null && f.name !== '')
 
 export function useFolders() {
@@ -78,23 +78,24 @@ export function useFolders() {
     // Backend echoes a synthetic root row (`name === ""`, `id === null`) to
     // expose the count of root-level notes. The tree owns root notes via
     // `useFolderNotes('')`; drop the synthetic row so consumers only see real
-    // folder markers + the `Folder.id: number` contract holds.
+    // folder markers + the `Folder.id: string` contract holds.
     queryFn: () =>
-      api.get<{ folders: Array<Folder & { id: number | null }> }>('/folders'),
+      api.get<{ folders: Array<Folder & { id: string | null }> }>('/folders'),
     select: selectFolders,
     enabled: !demo?.active,
   })
   if (demo?.active) {
-    // Demo folders use string ids; synthesize stable negative numeric
-    // ids (1-based index) so the Folder contract is satisfied and ids
-    // don't collide with real backend ids. parent_id is derived from
-    // the path prefix — root-level demo folders report `parent_id: null`.
-    const pathToId = new Map(demo.folders.map((f, i) => [f.path, -(i + 1)]))
+    // Demo folders use string ids; synthesize stable sentinel ids
+    // (1-based index, `demo-folder-N`) so the Folder contract is
+    // satisfied and ids don't collide with real backend uuids.
+    // parent_id is derived from the path prefix — root-level demo
+    // folders report `parent_id: null`.
+    const pathToId = new Map(demo.folders.map((f, i) => [f.path, `demo-folder-${i + 1}`]))
     const data: Folder[] = demo.folders.map((f, i) => {
       const slash = f.path.lastIndexOf('/')
       const parentPath = slash < 0 ? null : f.path.slice(0, slash)
       return {
-        id: -(i + 1),
+        id: `demo-folder-${i + 1}`,
         parent_id: parentPath === null ? null : pathToId.get(parentPath) ?? null,
         name: f.path,
         count: demo.notes.filter((n) => n.folder_id === f.id).length,
@@ -123,10 +124,10 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
       ? demo.notes
           .filter((n) => n.folder_id === matchFolder.id)
           .map((n, i) => ({
-            // Demo notes have string ids; synthesize negative numeric ids
-            // so they don't collide with real backend ids and so the
-            // NoteSummary contract is satisfied (id: number).
-            id: -(i + 1),
+            // Demo notes have string ids; synthesize sentinel ids
+            // so they don't collide with real backend uuids and so the
+            // NoteSummary contract is satisfied (id: string).
+            id: `demo-note-${i + 1}`,
             path: n.path,
             title: n.title,
             folder: matchFolder.path,
@@ -151,7 +152,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 export const FOLDER_NOTES_STALE_MS = 60_000
 
 export function useFolderNotesById(
-  folderId: number | null,
+  folderId: string | null,
   opts: { enabled?: boolean } = {},
 ) {
   const vaultId = useActiveVaultId()
@@ -166,7 +167,7 @@ export function useFolderNotesById(
   })
 }
 
-export function useNote(id: number | null) {
+export function useNote(id: string | null) {
   const vaultId = useActiveVaultId()
   return useQuery({
     queryKey: ['note', vaultId, id],
@@ -202,7 +203,7 @@ export function useCreateNote() {
   const vaultId = useActiveVaultId()
   const navigate = useNavigate()
 
-  return useMutation<{ path: string; id: number }, ApiError, { folder: string }>({
+  return useMutation<{ path: string; id: string }, ApiError, { folder: string }>({
     mutationFn: async ({ folder }) => {
       const existingNotes =
         qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
@@ -394,7 +395,7 @@ export interface BillingConfig {
   }
   customer_email: string
   custom_data: {
-    user_id: number
+    user_id: string
   }
   // Maximum number of active vaults the user may have, or null for unlimited.
   vaults_cap: number | null
@@ -575,7 +576,7 @@ export function useSetOnboardingProfile() {
 // type because the reveal modal in settings/connections-page.tsx imports it.
 
 export interface CreatedApiKey {
-  id: number
+  id: string
   name: string
   key: string
 }
@@ -587,13 +588,13 @@ export type ConnectionKind = 'obsidian' | 'mcp' | 'pat'
 export interface Connection {
   kind: ConnectionKind
   client_id: string | null
-  key_id: number | null
+  key_id: string | null
   name: string | null
   software_id: string | null
   software_version: string | null
   verified: boolean
   logo: string | null
-  vault_id: number | null
+  vault_id: string | null
   vault_name: string | null
   scope: string | null
   last_used_at: string | null
@@ -628,7 +629,7 @@ export function useCreatePat() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (name: string) =>
-      api.post<{ key: string; id: number; name: string }>('/connections/pat', { name }),
+      api.post<{ key: string; id: string; name: string }>('/connections/pat', { name }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
     },
@@ -654,7 +655,7 @@ export function useRevokeDeviceConnection() {
 export function useRevokePat() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.del(`/connections/pat/${id}`),
+    mutationFn: (id: string) => api.del(`/connections/pat/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['connections'] })
     },
@@ -666,7 +667,7 @@ export function useRevokePat() {
 export type EncryptionStatus = 'none' | 'encrypting' | 'encrypted' | 'decrypt_pending'
 
 export interface Vault {
-  id: number
+  id: string
   name: string
   description: string | null
   slug: string
@@ -716,8 +717,8 @@ export function useVaults() {
     // Two fake vaults so the VaultSwitcher renders its dropdown — the tour's
     // first step is gated on a real switch between them. Notes are shared.
     const vaults: Vault[] = [
-      { ...base, id: -1, name: demo.vault.name, slug: demo.vault.id, is_default: true },
-      { ...base, id: -2, name: 'Personal', slug: `${demo.vault.id}-personal`, is_default: false },
+      { ...base, id: 'demo-vault-1', name: demo.vault.name, slug: demo.vault.id, is_default: true },
+      { ...base, id: 'demo-vault-2', name: 'Personal', slug: `${demo.vault.id}-personal`, is_default: false },
     ]
     return { ...query, data: vaults, isLoading: false, isPending: false, error: null } as typeof query
   }
@@ -727,7 +728,7 @@ export function useVaults() {
 export function useEncryptVault() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.post<{ vault: Vault }>(`/vaults/${id}/encrypt`),
+    mutationFn: (id: string) => api.post<{ vault: Vault }>(`/vaults/${id}/encrypt`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vaults'] })
       qc.invalidateQueries({ queryKey: ['encryption-progress'] })
@@ -735,7 +736,7 @@ export function useEncryptVault() {
   })
 }
 
-export function useEncryptionProgress(vaultId: number | undefined, enabled: boolean) {
+export function useEncryptionProgress(vaultId: string | undefined, enabled: boolean) {
   return useQuery({
     queryKey: ['encryption-progress', vaultId],
     queryFn: () => api.get<EncryptionProgress>(`/vaults/${vaultId}/encryption_progress`),
@@ -755,7 +756,7 @@ export function useDeletedVaults() {
 export function useDeleteVault() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
+    mutationFn: (id: string) => api.del<{ deleted: boolean }>(`/vaults/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
   })
 }
@@ -763,7 +764,7 @@ export function useDeleteVault() {
 export function useRestoreVault() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
+    mutationFn: (id: string) => api.post<{ vault: Vault }>(`/vaults/${id}/restore`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
   })
 }
@@ -771,7 +772,7 @@ export function useRestoreVault() {
 export function usePurgeVault() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
+    mutationFn: (id: string) => api.post<{ purged: boolean }>(`/vaults/${id}/purge`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
   })
 }
@@ -779,7 +780,7 @@ export function usePurgeVault() {
 export function useUpdateVault() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, ...attrs }: { id: number; name?: string; description?: string; is_default?: boolean }) =>
+    mutationFn: ({ id, ...attrs }: { id: string; name?: string; description?: string; is_default?: boolean }) =>
       api.patch<{ vault: Vault }>(`/vaults/${id}`, attrs),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vaults'] }),
   })
@@ -918,7 +919,7 @@ interface RenameNoteContext {
   // The note id is stable across rename — only `path`/`folder` shift.
   // We snapshot the previous note value so rollback restores those
   // fields under the SAME cache key.
-  noteId: number | null
+  noteId: string | null
   prevNote: Note | undefined
 }
 
@@ -956,7 +957,7 @@ export function useRenameNote() {
       // list is the cheapest lookup; failing that, walk every cached
       // `['note', vaultId, *]` entry looking for the matching path.
       const fromList = oldFolderNotes?.notes.find((n) => n.path === old_path)
-      let noteId: number | null = fromList?.id ?? null
+      let noteId: string | null = fromList?.id ?? null
       let prevNote: Note | undefined
       if (noteId == null) {
         const cached = qc
@@ -1036,13 +1037,13 @@ export function useRenameNote() {
             )
           } else if (newFolder !== '') {
             // Optimistic placeholder — real backend id + parent_id land
-            // when `onSettled` refetches the folders list. The negative
-            // id is a sentinel that won't collide with real ids; the
-            // null parent_id is benign because the refetch reconciles
-            // before any consumer can rely on tree shape here.
+            // when `onSettled` refetches the folders list. The `optimistic-`
+            // sentinel id won't collide with real uuids; the null parent_id
+            // is benign because the refetch reconciles before any consumer
+            // can rely on tree shape here.
             next = [
               ...next,
-              { id: -Date.now(), parent_id: null, name: newFolder, count: 1 },
+              { id: `optimistic-${Date.now()}`, parent_id: null, name: newFolder, count: 1 },
             ]
           } else {
             // Root files don't get a synthetic '' entry — folders() filters
@@ -1097,7 +1098,7 @@ interface RenameFolderContext {
   // Notes cached by id whose `folder` was under the old prefix. We
   // rewrite path/folder in place under the same key (id is stable);
   // snapshots capture the pre-rename value for rollback.
-  noteSnapshots: Array<{ id: number; note: Note }>
+  noteSnapshots: Array<{ id: string; note: Note }>
 }
 
 export function useRenameFolder() {
@@ -1213,7 +1214,7 @@ export function useRenameFolder() {
 
 interface DeleteNoteContext {
   folder: string
-  id: number
+  id: string
   folderNotes: { notes: NoteSummary[] } | undefined
   folders: { folders: Folder[] } | undefined
   note: Note | undefined
@@ -1228,7 +1229,7 @@ export function useDeleteNote() {
   return useMutation<
     { deleted: boolean } | void,
     ApiError,
-    { id: number; path: string },
+    { id: string; path: string },
     DeleteNoteContext
   >({
     mutationFn: ({ id }) => api.del<{ deleted: boolean }>(`/notes/by-id/${id}`),
@@ -1359,7 +1360,7 @@ export function useDeleteFolder() {
 interface DuplicateNoteContext {
   newFolder: string
   newFolderNotes: { notes: NoteSummary[] } | undefined
-  placeholderId: number
+  placeholderId: string
 }
 
 export function useDuplicateNote() {
@@ -1385,9 +1386,9 @@ export function useDuplicateNote() {
       await qc.cancelQueries({ queryKey: listKey })
 
       // Placeholder id — the real one arrives with the POST response.
-      // Negative to avoid collisions with real backend ids; onSuccess
-      // swaps it for the server-assigned id in the cached list.
-      const placeholderId = -Date.now()
+      // `optimistic-` prefix avoids collisions with real backend uuids;
+      // onSuccess swaps it for the server-assigned id in the cached list.
+      const placeholderId = `optimistic-${Date.now()}`
       const ctx: DuplicateNoteContext = {
         newFolder,
         newFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
@@ -1504,7 +1505,7 @@ export function useBatchDeleteNotes() {
   return useMutation<
     { deleted: number },
     ApiError,
-    { ids: number[] },
+    { ids: string[] },
     BatchNotesContext
   >({
     mutationFn: ({ ids }) =>
@@ -1560,7 +1561,7 @@ export function useBatchMoveNotes() {
   return useMutation<
     { moved: number },
     ApiError,
-    { ids: number[]; target_folder_id: number },
+    { ids: string[]; target_folder_id: string },
     BatchNotesContext
   >({
     mutationFn: ({ ids, target_folder_id }) =>
@@ -1593,7 +1594,7 @@ export function useBatchMoveNotes() {
         const data = qc.getQueryData<NoteSummary[]>(q.queryKey)
         if (!data) continue
         snapshots.push({ key: q.queryKey, data })
-        const folderId = q.queryKey[2] as number | null | undefined
+        const folderId = q.queryKey[2] as string | null | undefined
         const keep: NoteSummary[] = []
         for (const n of data) {
           if (idSet.has(n.id) && folderId !== target_folder_id) {
@@ -1661,8 +1662,8 @@ export function useBatchMoveNotes() {
 
 // Walk the folders cache and collect `id` plus every transitive
 // descendant by parent_id chain. Used by both batch folder mutations.
-function collectFolderDescendants(folders: Folder[], rootIds: number[]): Set<number> {
-  const result = new Set<number>(rootIds)
+function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<string> {
+  const result = new Set<string>(rootIds)
   // Iterate until no new ids land in the set — folders are typically
   // shallow, so this is cheap even with the naive scan.
   let changed = true
@@ -1691,7 +1692,7 @@ export function useBatchDeleteFolders() {
   return useMutation<
     { deleted: number },
     ApiError,
-    { ids: number[] },
+    { ids: string[] },
     BatchFoldersContext
   >({
     mutationFn: ({ ids }) =>
@@ -1712,7 +1713,7 @@ export function useBatchDeleteFolders() {
       // so the optimistic patch matches the server's cascade.
       const removedIds = folders
         ? collectFolderDescendants(folders.folders, ids)
-        : new Set<number>(ids)
+        : new Set<string>(ids)
 
       if (folders) {
         qc.setQueryData<{ folders: Folder[] }>(foldersKey, {
@@ -1754,7 +1755,7 @@ export function useBatchMoveFolders() {
   return useMutation<
     { moved: number },
     ApiError,
-    { ids: number[]; target_parent_id: number },
+    { ids: string[]; target_parent_id: string },
     BatchFoldersContext
   >({
     mutationFn: ({ ids, target_parent_id }) =>

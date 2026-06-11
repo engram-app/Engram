@@ -46,15 +46,16 @@ defmodule EngramWeb.FoldersControllerBatchTest do
     test "404 on missing id rolls back all", %{conn: conn, user: user, vault: vault} do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "X")
       {:ok, _child} = Engram.Notes.upsert_note(user, vault, %{path: "X/a.md"})
+      missing_id = Ecto.UUID.generate()
 
       body =
         conn
         |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
-        |> post(~p"/api/folders/batch-delete", %{ids: [marker.id, 999_999]})
+        |> post(~p"/api/folders/batch-delete", %{ids: [marker.id, missing_id]})
         |> json_response(404)
 
       assert body["error"] == "not_found"
-      assert body["item_id"] == 999_999
+      assert body["item_id"] == missing_id
     end
   end
 

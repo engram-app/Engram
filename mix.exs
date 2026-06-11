@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.389",
+      version: "0.5.390",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -66,7 +66,8 @@ defmodule Engram.MixProject do
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
-      {:postgrex, ">= 0.0.0"},
+      {:postgrex, "~> 0.20"},
+      {:uuidv7, "~> 1.0"},
       {:bandit, "~> 1.5"},
       {:dns_cluster, "~> 0.2.0"},
 

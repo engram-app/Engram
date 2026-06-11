@@ -176,7 +176,7 @@ defmodule EngramWeb.McpControllerTest do
     end
 
     test "with invalid vault_id returns error", %{conn: conn} do
-      conn = call_tool(conn, "set_vault", %{"vault_id" => 999_999})
+      conn = call_tool(conn, "set_vault", %{"vault_id" => "00000000-0000-0000-0000-000000999999"})
       text = tool_text(conn)
 
       assert text =~ "Error:"
@@ -586,7 +586,7 @@ defmodule EngramWeb.McpControllerTest do
 
       # Restrict key to vault_a only
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key_record.id, vault_id: vault_a.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault_a.id)}
       ])
 
       authed =

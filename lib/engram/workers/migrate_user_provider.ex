@@ -32,7 +32,7 @@ defmodule Engram.Workers.MigrateUserProvider do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "target_provider" => target}})
-      when is_integer(user_id) and target in ["local", "aws_kms"] do
+      when is_binary(user_id) and target in ["local", "aws_kms"] do
     target_atom = String.to_existing_atom(target)
 
     case ProviderMigration.migrate_user(user_id, target_atom) do

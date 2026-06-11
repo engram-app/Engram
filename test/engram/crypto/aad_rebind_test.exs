@@ -214,7 +214,7 @@ defmodule Engram.Crypto.AadRebindTest do
       # failures during a backfill drain were operationally invisible:
       # operator sees `%{failed: 7}` aggregate with no user_ids and no
       # reasons, no way to triage stuck users.
-      bogus_id = -42
+      bogus_id = "00000000-0000-0000-0000-0000000000ff"
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->

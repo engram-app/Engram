@@ -39,45 +39,46 @@ defmodule Engram.Crypto do
   def row_version_legacy, do: @row_version_legacy
 
   @doc """
-  Pre-allocates a primary-key id from a table's bigserial sequence. Used
-  before AAD-bound INSERT so the row's AAD can include its eventual `row_id`.
-  Caller passes the allocated `id` into the changeset; Ecto inserts with
-  the explicit id and the sequence already advanced.
+  AAD for a relational row's column. T3.6 / H1.
+
+  The PG18+UUIDv7 rework swapped all domain PKs from bigserial to UUID.
+  `row_id` is now a canonical UUID string ("01923a4b-cdef-7000-89ab-cdef01234567");
+  this encoder validates it and packs the 16 raw bytes into the AAD. Non-UUID
+  input raises — every legacy `Integer.to_string/1` and `to_string/1` coercion
+  at the call sites was dropped in the same wave.
+
+  Format: `<table>\\0<column>\\0<16-byte-uuid>`. Distinct from the legacy
+  `"<table>:<column>:<bigint>"` format; no migration window exists because
+  the schema swap is destructive (no in-place backfill of UUID PKs).
   """
-  @spec next_row_id(atom() | String.t()) :: pos_integer()
-  def next_row_id(table) when is_atom(table), do: next_row_id(Atom.to_string(table))
-
-  def next_row_id(table) when is_binary(table) do
-    # Postgrex's typed parameter encoder cannot encode `regclass` from a
-    # text bind, so we interpolate the sequence name as a literal. The
-    # `table` argument is a fixed atom-list (callers in this codebase
-    # pass `:notes`, `:attachments`, `:vaults`) — there is no user input
-    # path that reaches this string. The strict whitelist guards the
-    # boundary in case a future caller passes something dynamic.
-    unless table in ["notes", "attachments", "vaults"] do
-      raise ArgumentError,
-            "next_row_id: unsupported table #{inspect(table)}. " <>
-              "Add to the allowlist in Engram.Crypto."
-    end
-
-    seq = table <> "_id_seq"
-
-    %Postgrex.Result{rows: [[id]]} =
-      Repo.query!("SELECT nextval('#{seq}')", [])
-
-    id
-  end
-
-  @doc "AAD string for a relational row's column. T3.6 / H1."
-  @spec aad_for_row(atom() | binary(), atom() | binary(), term()) :: binary()
+  @spec aad_for_row(atom() | binary(), atom() | binary(), binary()) :: binary()
   def aad_for_row(table, column, row_id) when is_binary(table) and is_binary(column),
-    do: table <> ":" <> column <> ":" <> to_string(row_id)
+    do: IO.iodata_to_binary([table, 0, column, 0, encode_row_id(row_id)])
 
   def aad_for_row(table, column, row_id) when is_atom(table),
     do: aad_for_row(Atom.to_string(table), column, row_id)
 
   def aad_for_row(table, column, row_id) when is_atom(column),
     do: aad_for_row(table, Atom.to_string(column), row_id)
+
+  defp encode_row_id(row_id) when is_binary(row_id) do
+    case Ecto.UUID.dump(row_id) do
+      {:ok, raw} ->
+        raw
+
+      :error ->
+        raise ArgumentError,
+              "aad_for_row: row_id must be a canonical UUID string, got: " <>
+                inspect(row_id)
+    end
+  end
+
+  defp encode_row_id(other),
+    do:
+      raise(
+        ArgumentError,
+        "aad_for_row: row_id must be a canonical UUID string, got: " <> inspect(other)
+      )
 
   @doc "AAD string for a Qdrant payload field. Bound to point UUID, not chunk_index."
   @spec aad_for_qdrant(binary(), binary(), atom() | binary()) :: binary()
@@ -263,8 +264,8 @@ defmodule Engram.Crypto do
   `Engram.Notes.phase_b_keyword_for/4`. This helper does not touch tags —
   that's a Phase B contract.
   """
-  @spec encrypt_note_fields(map(), User.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
-  def encrypt_note_fields(attrs, %User{} = user, note_id) when is_integer(note_id) do
+  @spec encrypt_note_fields(map(), User.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def encrypt_note_fields(attrs, %User{} = user, note_id) when is_binary(note_id) do
     with {:ok, user} <- ensure_user_dek(user),
          {:ok, dek} <- get_dek(user) do
       content = Map.get(attrs, :content) || Map.get(attrs, "content") || ""

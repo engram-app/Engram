@@ -52,9 +52,9 @@ export default function VaultSwitcher() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-56">
           <DropdownMenuRadioGroup
-            value={String(active.id)}
+            value={active.id}
             onValueChange={(v) => {
-              const next = Number(v)
+              const next = v
               if (next === active.id) return
               setActiveVaultId(next)
               qc.invalidateQueries()
@@ -68,7 +68,7 @@ export default function VaultSwitcher() {
             }}
           >
             {vaults.map((v) => (
-              <DropdownMenuRadioItem key={v.id} value={String(v.id)}>
+              <DropdownMenuRadioItem key={v.id} value={v.id}>
                 {v.encrypted && <Lock className="mr-1 size-3 text-muted-foreground" />}
                 <span className="truncate">{v.name}</span>
               </DropdownMenuRadioItem>

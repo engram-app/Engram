@@ -11,11 +11,11 @@ export type SortKey =
 interface LoaderDeps {
   folders: Folder[]
   qc: QueryClient
-  vaultId: string | number
+  vaultId: string
   sort: SortKey
   rootNotes: NoteSummary[]
-  fetchFolderNotes?: (folderId: number) => Promise<NoteSummary[]>
-  onChildrenLoaded?: (folderId: number) => void
+  fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>
+  onChildrenLoaded?: (folderId: string) => void
 }
 
 export interface LoaderItem {
@@ -43,7 +43,7 @@ export function buildLoader(deps: LoaderDeps) {
   }
 }
 
-function folderLoaderItem(deps: LoaderDeps, id: number): LoaderItem | undefined {
+function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
   const f = deps.folders.find(x => x.id === id)
   if (!f) return undefined
   return {
@@ -59,7 +59,7 @@ function folderLoaderItem(deps: LoaderDeps, id: number): LoaderItem | undefined 
   }
 }
 
-function noteLoaderItem(deps: LoaderDeps, id: number): LoaderItem | undefined {
+function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
   // Root notes live in deps.rootNotes (the by-id endpoint requires a
   // non-null folder id, so root uses the path-keyed hook upstream).
   const rootHit = deps.rootNotes.find(n => n.id === id)
@@ -91,7 +91,7 @@ function rootChildren(deps: LoaderDeps): LoaderItem[] {
   return [...tops, ...noteItems]
 }
 
-function folderChildren(deps: LoaderDeps, folderId: number): LoaderItem[] {
+function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
   const childFolders = deps.folders
     .filter(f => f.parent_id === folderId)
     .sort((a, b) => folderCmp(a, b, deps.sort))

@@ -748,8 +748,8 @@ defmodule Engram.OnboardingTest do
     end
 
     test "list_actions/1 returns [] for unknown user" do
-      # Bigint that no user_fixture mints.
-      assert [] = Onboarding.list_actions(0)
+      # UUID that no user_fixture mints.
+      assert [] = Onboarding.list_actions(Ecto.UUID.generate())
     end
 
     test "lists multiple distinct actions", %{user: user} do

@@ -77,7 +77,7 @@ defmodule Engram.Workers.MigrateUserProviderTest do
   test "perform/1 returns {:discard, :user_deleted} when user is missing" do
     assert {:discard, :user_deleted} =
              perform_job(MigrateUserProvider, %{
-               "user_id" => 99_999_999,
+               "user_id" => "00000000-0000-0000-0000-000099999999",
                "target_provider" => "aws_kms"
              })
   end

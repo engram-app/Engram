@@ -28,12 +28,12 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 
 
-def _qdrant_scroll(vault_id: int, limit: int = 100) -> list[dict]:
+def _qdrant_scroll(vault_id: str, limit: int = 100) -> list[dict]:
     """POST /collections/{coll}/points/scroll with a vault_id filter."""
     resp = requests.post(
         f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
         json={
-            "filter": {"must": [{"key": "vault_id", "match": {"value": str(int(vault_id))}}]},
+            "filter": {"must": [{"key": "vault_id", "match": {"value": str(vault_id)}}]},
             "limit": limit,
             "with_payload": True,
             "with_vector": False,
@@ -44,7 +44,7 @@ def _qdrant_scroll(vault_id: int, limit: int = 100) -> list[dict]:
     return resp.json()["result"]["points"]
 
 
-def assert_qdrant_ciphertext(vault_id: int, min_chunks: int = 1) -> None:
+def assert_qdrant_ciphertext(vault_id: str, min_chunks: int = 1) -> None:
     """Assert Qdrant payload for this vault contains ciphertext, not plaintext.
     Phase 4 spec: every encrypted vault has its text/title/heading_path
     replaced with *_ciphertext + *_nonce. Plaintext keys are absent."""
@@ -80,7 +80,7 @@ def _looks_base64(s: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", s))
 
 
-def wait_for_qdrant_indexed(vault_id: int, path: str, timeout: float = 30.0) -> None:
+def wait_for_qdrant_indexed(vault_id: str, path: str, timeout: float = 30.0) -> None:
     """Poll Qdrant for a point whose source_path matches `path`. Raises TimeoutError
     on timeout. Needed before probing Qdrant ciphertext in tests because the embed
     worker is async."""
@@ -92,7 +92,7 @@ def wait_for_qdrant_indexed(vault_id: int, path: str, timeout: float = 30.0) -> 
                 json={
                     "filter": {
                         "must": [
-                            {"key": "vault_id", "match": {"value": str(int(vault_id))}},
+                            {"key": "vault_id", "match": {"value": str(vault_id)}},
                             {"key": "source_path", "match": {"value": path}},
                         ]
                     },
@@ -112,7 +112,7 @@ def wait_for_qdrant_indexed(vault_id: int, path: str, timeout: float = 30.0) -> 
     )
 
 
-def assert_attachment_ciphertext_at_rest(vault_id: int, path: str) -> None:
+def assert_attachment_ciphertext_at_rest(vault_id: str, path: str) -> None:
     """Phase B.4: stub. The plaintext-path lookup is gone. Test_19's
     assertion is currently skipped pending a release-rpc-based rebuild
     (translate path → path_hmac under user filter_key, then SELECT)."""

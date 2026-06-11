@@ -57,12 +57,84 @@ defmodule Engram.CryptoTest do
     assert {:error, :no_dek} = Crypto.get_dek(user)
   end
 
+  describe "aad_for_row/3 (uuid PK rework)" do
+    test "produces stable AAD for the same uuid row_id" do
+      uuid = "01923a4b-cdef-7000-89ab-cdef01234567"
+      aad1 = Crypto.aad_for_row(:notes, :content, uuid)
+      aad2 = Crypto.aad_for_row(:notes, :content, uuid)
+
+      assert is_binary(aad1)
+      assert aad1 == aad2
+    end
+
+    test "distinguishes between different uuids" do
+      a = "01923a4b-cdef-7000-89ab-cdef01234567"
+      b = "01923a4b-cdef-7000-89ab-cdef01234568"
+
+      refute Crypto.aad_for_row(:notes, :content, a) ==
+               Crypto.aad_for_row(:notes, :content, b)
+    end
+
+    test "distinguishes between different tables / columns" do
+      uuid = "01923a4b-cdef-7000-89ab-cdef01234567"
+
+      refute Crypto.aad_for_row(:notes, :content, uuid) ==
+               Crypto.aad_for_row(:vaults, :content, uuid)
+
+      refute Crypto.aad_for_row(:notes, :content, uuid) ==
+               Crypto.aad_for_row(:notes, :title, uuid)
+    end
+
+    test "encodes uuid as 16 raw bytes, not the string form" do
+      uuid = "01923a4b-cdef-7000-89ab-cdef01234567"
+      aad = Crypto.aad_for_row(:notes, :content, uuid)
+
+      # "notes" + 0x00 + "content" + 0x00 + 16 bytes = 5 + 1 + 7 + 1 + 16 = 30
+      assert byte_size(aad) == 30
+      # Tail is the raw 16-byte uuid binary.
+      assert binary_part(aad, byte_size(aad) - 16, 16) ==
+               elem(Ecto.UUID.dump(uuid), 1)
+    end
+
+    test "round-trips: encrypt with uuid-bound AAD decrypts with same AAD" do
+      # Pure helper round-trip — no DB user needed. Uses a raw DEK to isolate
+      # the AAD wiring from DEK provisioning (which depends on factory PKs
+      # that Phases E/F update).
+      dek = :crypto.strong_rand_bytes(32)
+
+      uuid = Ecto.UUID.generate()
+      plaintext = "secret"
+      aad = Crypto.aad_for_row(:notes, :content, uuid)
+
+      {ct, nonce} = Crypto.Envelope.encrypt(plaintext, dek, aad)
+
+      assert {:ok, ^plaintext} = Crypto.Envelope.decrypt(ct, nonce, dek, aad)
+
+      # Wrong AAD (different uuid) must fail.
+      wrong_aad = Crypto.aad_for_row(:notes, :content, Ecto.UUID.generate())
+      assert :error = Crypto.Envelope.decrypt(ct, nonce, dek, wrong_aad)
+    end
+
+    test "raises on non-uuid binary row_id" do
+      assert_raise ArgumentError, ~r/canonical UUID string/, fn ->
+        Crypto.aad_for_row(:notes, :content, "not-a-uuid")
+      end
+    end
+
+    test "raises on bigint (integer) row_id — legacy callers must drop coercion" do
+      assert_raise ArgumentError, ~r/canonical UUID string/, fn ->
+        Crypto.aad_for_row(:notes, :content, 1234)
+      end
+    end
+  end
+
   describe "encrypt_note_fields/3" do
     test "encrypts content + title with row-id-bound AAD (T3.6)", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
+      note_id = Ecto.UUID.generate()
       attrs = %{content: "secret", title: "Journal", tags: ["mood"]}
-      {:ok, out} = Crypto.encrypt_note_fields(attrs, user, 4242)
+      {:ok, out} = Crypto.encrypt_note_fields(attrs, user, note_id)
 
       refute Map.has_key?(out, :content)
       refute Map.has_key?(out, :title)
@@ -74,7 +146,7 @@ defmodule Engram.CryptoTest do
       assert byte_size(out.title_nonce) == 12
       # T3.6 — encrypt stamps the AAD-bound row version + propagates :id so
       # the caller can drop the changeset onto the pre-allocated row.
-      assert out.id == 4242
+      assert out.id == note_id
       assert out.dek_version == Crypto.row_version_aad_bound()
     end
   end
@@ -90,17 +162,19 @@ defmodule Engram.CryptoTest do
     test "decrypts when ciphertext columns are present", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 
+      note_id = Ecto.UUID.generate()
+
       {:ok, encrypted} =
-        Crypto.encrypt_note_fields(%{content: "secret", title: "T"}, user, 1234)
+        Crypto.encrypt_note_fields(%{content: "secret", title: "T"}, user, note_id)
 
       {:ok, dek} = Crypto.get_dek(user)
       tags_bin = :erlang.term_to_binary(["x"])
 
       {tags_ct, tags_n} =
-        Crypto.Envelope.encrypt(tags_bin, dek, Crypto.aad_for_row(:notes, :tags, 1234))
+        Crypto.Envelope.encrypt(tags_bin, dek, Crypto.aad_for_row(:notes, :tags, note_id))
 
       note = %Engram.Notes.Note{
-        id: 1234,
+        id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
         content_ciphertext: encrypted.content_ciphertext,
         content_nonce: encrypted.content_nonce,

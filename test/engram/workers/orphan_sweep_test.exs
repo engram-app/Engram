@@ -29,7 +29,7 @@ defmodule Engram.Workers.OrphanSweepTest do
 
   test "deletes Qdrant points for users that no longer exist", %{bypass: bypass} do
     live = insert(:user)
-    ghost_id = live.id + 9999
+    ghost_id = Ecto.UUID.generate()
 
     Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
       conn
@@ -66,7 +66,7 @@ defmodule Engram.Workers.OrphanSweepTest do
 
   test "deletes S3 prefix for users that no longer exist", %{bypass: bypass} do
     live = insert(:user)
-    ghost_id = live.id + 9999
+    ghost_id = Ecto.UUID.generate()
 
     Storage.adapter().put("#{live.id}/1/keep.bin", "live data")
     Storage.adapter().put("#{ghost_id}/1/orphan.bin", "orphan data")

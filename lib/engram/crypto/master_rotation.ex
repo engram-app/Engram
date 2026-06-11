@@ -54,13 +54,13 @@ defmodule Engram.Crypto.MasterRotation do
   Returns `:ok` on rewrap, `:skipped` if user.dek_version is already
   ≥ target, `{:error, reason}` otherwise.
   """
-  @spec rotate_user(integer() | User.t(), pos_integer()) :: rotate_result()
+  @spec rotate_user(String.t() | User.t(), pos_integer()) :: rotate_result()
   def rotate_user(user_or_id, target_version)
       when is_integer(target_version) and target_version >= 1 do
     user_id =
       case user_or_id do
         %User{id: id} -> id
-        id when is_integer(id) -> id
+        id when is_binary(id) -> id
       end
 
     started_at = System.monotonic_time()
@@ -90,7 +90,13 @@ defmodule Engram.Crypto.MasterRotation do
   def rotate_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 100)
-    drive_loop(target_version, 0, batch_size, %{ok: 0, skipped: 0, failed: 0})
+
+    drive_loop(
+      target_version,
+      "00000000-0000-0000-0000-000000000000",
+      batch_size,
+      %{ok: 0, skipped: 0, failed: 0}
+    )
   end
 
   @doc """
@@ -118,7 +124,16 @@ defmodule Engram.Crypto.MasterRotation do
   def enqueue_all(target_version, opts \\ [])
       when is_integer(target_version) and target_version >= 1 do
     batch_size = Keyword.get(opts, :batch_size, 500)
-    %{enqueued: enqueue_loop(target_version, 0, batch_size, 0)}
+
+    %{
+      enqueued:
+        enqueue_loop(
+          target_version,
+          "00000000-0000-0000-0000-000000000000",
+          batch_size,
+          0
+        )
+    }
   end
 
   defp enqueue_loop(target_version, last_id, batch_size, total) do

@@ -3,17 +3,17 @@ defmodule Engram.Repo.Migrations.CreateAccountExports do
 
   # squawk-ignore-file
   #
-  # Follows the repo-wide bigserial + varchar(255) + timestamp pattern
-  # (see priv/repo/migrations/20260603000010_create_onboarding_actions.exs for
-  # the same opt-out rationale). RLS is intentionally not enforced — this
-  # table is in @no_rls_allowlist because all access goes through
-  # Engram.Accounts.Export with an explicit user_id filter; the partial
-  # unique index on (user_id) where status IN ('pending','running') is the
-  # per-tenant concurrency boundary.
+  # Follows the post-PG18 repo-wide uuidv7 PK + varchar(255) + timestamp
+  # pattern (see priv/repo/migrations/20260603000010_create_onboarding_actions.exs).
+  # RLS is intentionally not enforced — this table is in @no_rls_allowlist
+  # because all access goes through Engram.Accounts.Export with an explicit
+  # user_id filter; the partial unique index on (user_id) where status IN
+  # ('pending','running') is the per-tenant concurrency boundary.
 
   def change do
-    create table(:account_exports) do
-      add :user_id, references(:users, on_delete: :delete_all), null: false
+    create table(:account_exports, primary_key: false) do
+      add :id, :uuid, primary_key: true, default: fragment("uuidv7()")
+      add :user_id, references(:users, type: :uuid, on_delete: :delete_all), null: false
       add :status, :string, null: false
       add :s3_keys, {:array, :map}, default: []
       add :s3_upload_ids, {:array, :map}, default: []
@@ -38,11 +38,6 @@ defmodule Engram.Repo.Migrations.CreateAccountExports do
     execute(
       "GRANT SELECT, INSERT, UPDATE, DELETE ON account_exports TO engram_app",
       "REVOKE ALL ON account_exports FROM engram_app"
-    )
-
-    execute(
-      "GRANT USAGE, SELECT ON SEQUENCE account_exports_id_seq TO engram_app",
-      "REVOKE USAGE, SELECT ON SEQUENCE account_exports_id_seq FROM engram_app"
     )
   end
 end

@@ -189,7 +189,7 @@ defmodule Engram.Accounts.Export do
   defp attachment_bytes(user) do
     Repo.one(
       from(a in "attachments",
-        where: a.user_id == ^user.id,
+        where: a.user_id == type(^user.id, Ecto.UUID),
         select: coalesce(sum(a.size_bytes), 0)
       ),
       skip_tenant_check: true
@@ -205,7 +205,7 @@ defmodule Engram.Accounts.Export do
     count =
       Repo.one(
         from(n in "notes",
-          where: n.user_id == ^user.id,
+          where: n.user_id == type(^user.id, Ecto.UUID),
           select: count(n.id)
         ),
         skip_tenant_check: true

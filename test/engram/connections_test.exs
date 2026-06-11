@@ -158,7 +158,7 @@ defmodule Engram.ConnectionsTest do
       assert [%{kind: :pat, name: "my-script", client_id: nil, key_id: kid, redirect_uris: []}] =
                Connections.list_for_user(user)
 
-      assert is_integer(kid)
+      assert is_binary(kid)
     end
 
     test "orders connections most-recently-used first" do

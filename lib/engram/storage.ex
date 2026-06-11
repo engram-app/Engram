@@ -81,7 +81,7 @@ defmodule Engram.Storage do
 
   @doc "Build a storage key from user_id, vault_id, and attachment path."
   def key(user_id, vault_id, path)
-      when is_integer(user_id) and is_integer(vault_id) and is_binary(path) and path != "" do
+      when is_binary(user_id) and is_binary(vault_id) and is_binary(path) and path != "" do
     "#{user_id}/#{vault_id}/#{path}"
   end
 end

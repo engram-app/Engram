@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CreateFirstVaultModal } from './create-first-vault-modal'
 
+const DEMO_VAULT_ID = '01923a4b-cdef-7000-89ab-cdef01234567'
+
 vi.mock('../components/vault-create-form', () => ({
-  VaultCreateForm: ({ onCreated }: { onCreated: (id: number) => void }) => (
-    <button onClick={() => onCreated(1)}>fake-create</button>
+  VaultCreateForm: ({ onCreated }: { onCreated: (id: string) => void }) => (
+    <button onClick={() => onCreated(DEMO_VAULT_ID)}>fake-create</button>
   ),
 }))
 
@@ -19,6 +21,6 @@ describe('CreateFirstVaultModal', () => {
     expect(screen.getByRole('heading', { name: /first vault/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('fake-create'))
-    expect(onCreated).toHaveBeenCalledWith(1)
+    expect(onCreated).toHaveBeenCalledWith(DEMO_VAULT_ID)
   })
 })

@@ -48,10 +48,12 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
   end
 
   describe "run/1 — missing user" do
+    @missing_user_id "00000000-0000-0000-0000-000000000099"
+
     test "exits with {:shutdown, 3} for missing user" do
       exit_result =
         catch_exit do
-          RotateUserDek.run(["--user-id", "999999999"])
+          RotateUserDek.run(["--user-id", @missing_user_id])
         end
 
       assert exit_result == {:shutdown, 3},
@@ -62,7 +64,7 @@ defmodule Mix.Tasks.Engram.RotateUserDekTest do
       output =
         capture_io(:stderr, fn ->
           catch_exit do
-            RotateUserDek.run(["--user-id", "999999999"])
+            RotateUserDek.run(["--user-id", @missing_user_id])
           end
         end)
 
