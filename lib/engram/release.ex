@@ -150,7 +150,7 @@ defmodule Engram.Release do
       repo.query!("GRANT ALL ON SCHEMA public TO public", [])
 
       do_prepare_database(repo)
-      Ecto.Migrator.run(repo, :up, all: true)
+      _ = Ecto.Migrator.run(repo, :up, all: true)
 
       Logger.warning("[reset_baseline] schema rebuilt from structure.sql (uuid PKs)")
     else
