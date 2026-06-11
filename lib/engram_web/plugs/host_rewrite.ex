@@ -127,6 +127,11 @@ defmodule EngramWeb.Plugs.HostRewrite do
     cond do
       Enum.any?(@mcp_wellknown_prefixes, &String.starts_with?(path, &1)) -> conn
       String.starts_with?(path, "/api/mcp") -> conn
+      # OAuth 2.1 + DCR endpoints (/oauth/authorize|token|register|revoke). The
+      # MCP discovery doc advertises mcp.engram.page/oauth/* as the auth server,
+      # so these must reach the backend's top-level /oauth routes unchanged —
+      # without this they 404 and no client can pair on the dedicated host.
+      String.starts_with?(path, "/oauth") -> conn
       path == "/" or path == "" -> rewrite_path(conn, "/api/mcp/")
       true -> reject(conn)
     end

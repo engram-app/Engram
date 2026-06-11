@@ -120,6 +120,18 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       end
     end
 
+    test "passes /oauth/* (DCR + authorize/token) through unchanged", %{opts: opts} do
+      for path <- ["/oauth/authorize", "/oauth/token", "/oauth/register", "/oauth/revoke"] do
+        conn =
+          conn(:get, path)
+          |> Map.put(:host, "mcp.engram.page")
+          |> HostRewrite.call(opts)
+
+        assert conn.request_path == path
+        refute conn.halted, "#{path} should not be halted"
+      end
+    end
+
     test "prefixes /api/mcp on bare paths", %{opts: opts} do
       conn =
         conn(:post, "/")
