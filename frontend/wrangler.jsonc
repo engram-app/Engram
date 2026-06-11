@@ -4,18 +4,21 @@
 	"compatibility_date": "2026-06-10",
 	// Pure static SPA — no Worker script (`main`), just edge-served assets.
 	// `bun run build:saas` emits the bundle + config.json into ./dist.
-	"workers_dev": true,
+	"workers_dev": false,
+	// CUTOVER (Phase M): serve app.engram.page from this Worker via a ROUTE,
+	// not a custom domain. A route shadows the existing proxied
+	// app.engram.page → ALB DNS record (CF runs Worker routes before the
+	// origin), so there's no DNS change, no conflict, and no outage — and
+	// reverting is just removing this route + redeploying. The TF-managed
+	// app_engram_page CNAME stays (the route needs a proxied record to exist).
+	// The deploy token carries Zone → Workers Routes:Edit on engram.page.
+	"routes": [
+		{ "pattern": "app.engram.page/*", "zone_name": "engram.page" }
+	],
 	"assets": {
 		"directory": "./dist",
 		// Serve index.html (200) for any path that isn't a built asset, so
 		// React Router client-side routes (deep links, /settings, etc.) work.
 		"not_found_handling": "single-page-application"
 	}
-	// NOTE: the app.engram.page custom domain is intentionally NOT here yet.
-	// Until the Phase M cutover this Worker is reachable only at its
-	// *.workers.dev URL (for smoke testing); app.engram.page keeps serving
-	// from the AWS ALB (TF-managed CNAME in engram-infra). At cutover, add:
-	//   "routes": [{ "pattern": "app.engram.page", "custom_domain": true }]
-	// and remove the TF app_engram_page DNS record (they can't both own the
-	// hostname). See docs/context/frontend-eject-cloudflare-pages.md.
 }
