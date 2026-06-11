@@ -630,6 +630,15 @@ if config_env() == :prod do
       allowed_extra_hosts: extra_hosts
   end
 
+  # Absolute base URL of the frontend (SPA) host. After the saas eject the SPA
+  # lives on a different origin (app.engram.page) than the backend it reaches
+  # on api./mcp.engram.page, so the OAuth /authorize flow must 302 the consent
+  # page there absolutely instead of relative. Unset on self-host (same-origin
+  # → relative redirect). See EngramWeb.OAuthAuthorizeController.redirect_to_spa.
+  if url = System.get_env("ENGRAM_FRONTEND_URL") do
+    config :engram, :frontend_base_url, url
+  end
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

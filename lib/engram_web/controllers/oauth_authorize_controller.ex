@@ -77,9 +77,23 @@ defmodule EngramWeb.OAuthAuthorizeController do
       |> Map.take(@forwarded_params)
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
 
-    location = "/oauth/consent?" <> URI.encode_query(forwarded)
+    query = URI.encode_query(forwarded)
 
-    conn |> put_status(302) |> redirect(to: location)
+    # The SPA consent page lives on the frontend host. Same-origin on self-host
+    # (relative `/oauth/consent` resolves correctly), but after the saas eject
+    # this controller is reached on api./mcp.engram.page while the SPA is on
+    # app.engram.page — a relative redirect would resolve to the wrong host and
+    # 404. When `:frontend_base_url` is configured, redirect there absolutely;
+    # otherwise stay relative (self-host / dev).
+    conn = put_status(conn, 302)
+
+    case Application.get_env(:engram, :frontend_base_url) do
+      url when is_binary(url) and url != "" ->
+        redirect(conn, external: "#{String.trim_trailing(url, "/")}/oauth/consent?#{query}")
+
+      _ ->
+        redirect(conn, to: "/oauth/consent?#{query}")
+    end
   end
 
   defp render_client_error(conn, code) do

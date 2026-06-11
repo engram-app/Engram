@@ -83,11 +83,23 @@ defmodule EngramWeb.Plugs.HostRewrite do
   # guards saas AWS Phoenix from serving the stale bundled SPA on hosts like
   # `app.engram.page` (which after DNS cutover should resolve to Cloudflare
   # Pages, not the ALB). Selfhost never sets this flag — defaults to false.
+  # Health probes hit this plug on hosts that are neither api_host nor
+  # mcp_host: the ALB target-group HC (`/api/health/deep`, Host = task IP)
+  # and the ECS container HC (`curl localhost:4000/api/health`). They MUST
+  # pass through on any host — otherwise reject_unknown_hosts=true would 410
+  # them, tasks go unhealthy, and the deployment circuit breaker rolls back.
+  @health_paths ~w(/api/health /api/health/deep)
+
   defp handle_unknown_host(conn, opts) do
-    if opts[:reject_unknown_hosts] && conn.host not in opts[:allowed_extra_hosts] do
-      reject_unknown(conn, opts[:api_host])
-    else
-      conn
+    cond do
+      conn.request_path in @health_paths ->
+        conn
+
+      opts[:reject_unknown_hosts] && conn.host not in opts[:allowed_extra_hosts] ->
+        reject_unknown(conn, opts[:api_host])
+
+      true ->
+        conn
     end
   end
 
@@ -127,6 +139,11 @@ defmodule EngramWeb.Plugs.HostRewrite do
     cond do
       Enum.any?(@mcp_wellknown_prefixes, &String.starts_with?(path, &1)) -> conn
       String.starts_with?(path, "/api/mcp") -> conn
+      # OAuth 2.1 + DCR endpoints (/oauth/authorize|token|register|revoke). The
+      # MCP discovery doc advertises mcp.engram.page/oauth/* as the auth server,
+      # so these must reach the backend's top-level /oauth routes unchanged —
+      # without this they 404 and no client can pair on the dedicated host.
+      String.starts_with?(path, "/oauth") -> conn
       path == "/" or path == "" -> rewrite_path(conn, "/api/mcp/")
       true -> reject(conn)
     end
