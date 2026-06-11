@@ -3109,7 +3109,12 @@ jobs:
           VITE_CLERK_WAITLIST_MODE: 'false'
           VITE_API_BASE: https://api.engram.page
           VITE_WS_BASE: wss://api.engram.page
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          # PROD publishable key (pk_live_…). Distinct from the repo SECRET
+          # `VITE_CLERK_PUBLISHABLE_KEY`, which is the pk_test the e2e CI uses
+          # — baking that here would point the live app at the dev Clerk
+          # instance. Set this repo VARIABLE from SOPS `clerk_pk_live`. Public
+          # by design (ships in the browser), so a variable not a secret.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
           VITE_GIT_SHA: ${{ github.sha }}
 
       - name: Deploy (wrangler)
