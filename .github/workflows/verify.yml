@@ -3054,12 +3054,18 @@ jobs:
   # secrets.CLOUDFLARE_ACCOUNT_ID + secrets.VITE_CLERK_PUBLISHABLE_KEY.
   deploy-frontend:
     name: Deploy frontend (Cloudflare Workers)
-    needs: [ci]
+    needs: [ci, fingerprint]
     # Auto-deploy on main push (path-guarded below); also manually triggerable
     # via the "CI" workflow's "Run workflow" button (workflow_dispatch) for
     # on-demand smoke / the Phase M cutover.
+    #
+    # `ci` is SKIPPED (not success) when the fingerprint cache shows this exact
+    # content already passed — so accept that case too, matching the
+    # build-and-publish-image / submit-dep-graph gate convention in this file.
     if: >-
-      always() && needs.ci.result == 'success' &&
+      always() &&
+      (needs.ci.result == 'success' ||
+       (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true')) &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: [self-hosted, linux, x64, isolated]
