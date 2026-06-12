@@ -55,6 +55,7 @@ import {
   useRenameFolder,
   useRenameNote,
   useReverseCancel,
+  useSearch,
 } from './queries'
 
 let qc: QueryClient
@@ -1057,5 +1058,39 @@ describe('useBatchMoveFolders', () => {
     expect(folders?.folders.find((f) => f.id === '7')?.name).toBe('src')
     expect(folders?.folders.find((f) => f.id === '7')?.parent_id).toBeNull()
     expect(folders?.folders.find((f) => f.id === '8')?.name).toBe('src/sub')
+  })
+})
+
+describe('useSearch', () => {
+  it('forwards an abort signal so superseded searches are cancelled', async () => {
+    post.mockResolvedValue({ results: [] })
+
+    const { result } = renderHook(() => useSearch('alpha'), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(post).toHaveBeenCalledWith(
+      '/search',
+      { query: 'alpha', limit: 20 },
+      { signal: expect.any(AbortSignal) },
+    )
+  })
+
+  it('keeps previous results visible while the next query is in flight', async () => {
+    const firstResults = [{ id: '1', path: 'a.md', title: 'A' }]
+    post.mockResolvedValueOnce({ results: firstResults })
+
+    const { result, rerender } = renderHook(({ q }) => useSearch(q), {
+      wrapper,
+      initialProps: { q: 'alpha' },
+    })
+    await waitFor(() => expect(result.current.data).toEqual(firstResults))
+
+    // Second query never resolves during the assertion window — previous
+    // results must remain rendered instead of flickering to empty.
+    post.mockImplementationOnce(() => new Promise(() => {}))
+    rerender({ q: 'alpha beta' })
+
+    expect(result.current.data).toEqual(firstResults)
+    expect(result.current.isPlaceholderData).toBe(true)
   })
 })
