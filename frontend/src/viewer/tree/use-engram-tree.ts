@@ -33,6 +33,22 @@ interface Deps {
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
 type Data = LoaderItem
 
+/**
+ * Stable structural fingerprint that drives `rebuildTree()`. Includes each
+ * folder's `count` (not just its id) so a move/create/delete — which changes
+ * counts but no folder ids — still changes the key and rebuilds the tree.
+ * Without the count, headless-tree keeps a stale per-folder child list after a
+ * move until the user manually collapses/expands the folder.
+ */
+export function treeStructureKey(
+  folders: Pick<Folder, 'id' | 'count'>[],
+  rootNoteIds: string[],
+  sort: SortKey,
+): string {
+  const folderKey = folders.map((f) => `${f.id}:${f.count}`).join('|')
+  return `${folderKey}::${rootNoteIds.join('|')}::${sort}`
+}
+
 export function useEngramTree(deps: Deps) {
   const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null)
   const inner = useMemo(
@@ -142,15 +158,17 @@ export function useEngramTree(deps: Deps) {
   // data shape changes — keyed on stable structural fingerprints so we never
   // re-trigger from spurious identity churn (rebuildTree → setState → render
   // would otherwise spin into a max-update-depth loop).
-  const folderKey = deps.folders.map(f => f.id).join('|')
-  const rootKey = deps.rootNotes.map(n => n.id).join('|')
+  const structureKey = treeStructureKey(
+    deps.folders,
+    deps.rootNotes.map((n) => n.id),
+    deps.sort,
+  )
   const lastKey = useRef('')
   useEffect(() => {
-    const key = `${folderKey}::${rootKey}::${deps.sort}`
-    if (lastKey.current === key) return
-    lastKey.current = key
+    if (lastKey.current === structureKey) return
+    lastKey.current = structureKey
     tree.rebuildTree()
-  }, [tree, folderKey, rootKey, deps.sort])
+  }, [tree, structureKey])
 
   const items = tree.getItems()
 
