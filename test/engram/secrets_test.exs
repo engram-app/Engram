@@ -13,6 +13,7 @@ defmodule Engram.SecretsTest do
 
   test "an individually-set env var wins and is excluded" do
     blob = ~s({"A":"1","B":"2"})
+
     getenv = fn
       "A" -> "override"
       _ -> nil
@@ -49,6 +50,7 @@ defmodule Engram.SecretsTest do
 
   test "an individually-set empty-string env var still wins (excluded)" do
     blob = ~s({"A":"1"})
+
     getenv = fn
       "A" -> ""
       _ -> nil
