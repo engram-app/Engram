@@ -32,6 +32,14 @@ defmodule Engram.VaultsTest do
       assert vault.is_default == true
     end
 
+    test "ignores unknown string keys instead of crashing", %{user: user} do
+      # Controller feeds raw params straight in; an attacker-supplied key that
+      # is not an existing atom must not raise (String.to_existing_atom).
+      attrs = %{"name" => "Notes", "__definitely_not_a_field__" => "x"}
+      assert {:ok, vault} = Vaults.create_vault(user, attrs)
+      assert vault.name == "Notes"
+    end
+
     test "second vault is not default", %{user: user} do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
