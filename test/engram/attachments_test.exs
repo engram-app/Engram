@@ -7,6 +7,8 @@ defmodule Engram.AttachmentsTest do
 
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
+  alias Engram.Crypto
+  alias Engram.Storage.InMemory
 
   @path "photos/test.png"
   @valid_content Base.encode64("test image content")
@@ -77,14 +79,14 @@ defmodule Engram.AttachmentsTest do
       # that the surviving row id differs from the AAD baked into the
       # uploaded blob and re-encrypt + re-PUT under the lock (T3-audit H1
       # invariant: surviving blob AAD == surviving row id).
-      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      path_hmac = Engram.Crypto.hmac_field(filter_key, @path)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      path_hmac = Crypto.hmac_field(filter_key, @path)
       competing_id = Ecto.UUID.generate()
 
       {:ok, raced} = Agent.start_link(fn -> false end)
 
-      stub(Engram.MockStorage, :get, &Engram.Storage.InMemory.get/1)
+      stub(Engram.MockStorage, :get, &InMemory.get/1)
 
       expect(Engram.MockStorage, :put, 2, fn key, binary, opts ->
         # First PUT happens in the pre-lock window — simulate a concurrent
@@ -98,7 +100,7 @@ defmodule Engram.AttachmentsTest do
           )
         end
 
-        Engram.Storage.InMemory.put(key, binary, opts)
+        InMemory.put(key, binary, opts)
       end)
 
       {:ok, att} =
@@ -204,7 +206,7 @@ defmodule Engram.AttachmentsTest do
 
       # Ensure user has DEK before calling upsert_attachment
       user = user |> Engram.Repo.reload!()
-      {:ok, _} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, _} = Crypto.ensure_user_dek(user)
       user = user |> Engram.Repo.reload!()
 
       {:ok, att} =
@@ -213,8 +215,8 @@ defmodule Engram.AttachmentsTest do
           "content_base64" => Base.encode64("img bytes")
         })
 
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      expected_hmac = Engram.Crypto.hmac_field(filter_key, "photos/test.png")
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      expected_hmac = Crypto.hmac_field(filter_key, "photos/test.png")
 
       assert att.path_hmac == expected_hmac
       assert is_binary(att.path_ciphertext)
@@ -372,7 +374,7 @@ defmodule Engram.AttachmentsTest do
 
       # Delete the underlying object directly to simulate storage corruption
       # while leaving the DB row live.
-      Engram.Storage.InMemory.delete("#{user.id}/#{vault.id}/#{path}")
+      InMemory.delete("#{user.id}/#{vault.id}/#{path}")
 
       log =
         capture_log(fn ->
