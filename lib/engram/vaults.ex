@@ -439,6 +439,12 @@ defmodule Engram.Vaults do
       end
     end)
     |> unwrap_transaction()
+    |> tap(fn
+      # Deleting the last vault can flip the onboarding gate back to
+      # failing — drop the cached pass verdict so it re-derives.
+      {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
+      _ -> :ok
+    end)
   end
 
   # ── Restore (soft-delete reversal) ──────────────────────────────────────────

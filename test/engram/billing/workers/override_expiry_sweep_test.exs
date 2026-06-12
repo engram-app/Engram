@@ -96,6 +96,34 @@ defmodule Engram.Billing.Workers.OverrideExpirySweepTest do
       assert Repo.get(UserLimitOverride, survivor.id)
     end
 
+    test "flushes the override cache when it deletes rows" do
+      # Cache a miss for one user, then grant them an override. The sweep
+      # deleting any expired row (another user's here) must evict_all so
+      # grants/deletions become visible without waiting out the TTL.
+      user = insert(:user)
+      on_exit(fn -> Engram.Billing.OverrideCache.evict_all() end)
+
+      default = Engram.Billing.effective_limit(user, :notes_cap)
+
+      Repo.insert!(%UserLimitOverride{
+        user_id: user.id,
+        key: "notes_cap",
+        value: %{"v" => 123_456},
+        reason: "test",
+        set_by: "test"
+      })
+
+      # Miss is cached — still the default.
+      assert Engram.Billing.effective_limit(user, :notes_cap) == default
+
+      past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+      insert_override(insert(:user), past)
+
+      assert :ok = perform_job(OverrideExpirySweep, %{})
+
+      assert Engram.Billing.effective_limit(user, :notes_cap) == 123_456
+    end
+
     test "handles mixed past + future + NULL in a single sweep" do
       now = DateTime.utc_now(:second)
       past = DateTime.add(now, -3600, :second)

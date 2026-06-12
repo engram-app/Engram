@@ -16,6 +16,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   import Plug.Conn
 
   alias Engram.Onboarding
+  alias Engram.Onboarding.GateCache
 
   def init(opts), do: opts
 
@@ -28,11 +29,23 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
         |> halt()
 
       user ->
-        gate(conn, Onboarding.status(user))
+        # Deriving status costs ~3 DB round-trips (profile re-read +
+        # has_vault? in its own RLS transaction) on EVERY vault-scoped
+        # request. The verdict is cached on pass; failing users always
+        # take the authoritative slow path. Eviction contract lives in
+        # the GateCache moduledoc.
+        if GateCache.passed?(user.id) do
+          conn
+        else
+          gate(conn, Onboarding.status(user), user)
+        end
     end
   end
 
-  defp gate(conn, %{next_step: :done}), do: conn
+  defp gate(conn, %{next_step: :done}, user) do
+    :ok = GateCache.mark_passed(user.id)
+    conn
+  end
 
   defp gate(
          conn,
@@ -41,7 +54,8 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
            subscription_ok: sub_ok,
            profile_complete: profile_ok,
            next_step: next_step
-         } = status
+         } = status,
+         user
        ) do
     has_vault = Map.get(status, :has_vault, true)
     # uses_obsidian users bypass the vault gate (plugin creates vault later).
@@ -61,6 +75,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
       # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
       # Runtime traffic permission and wizard state are intentionally
       # decoupled — see `Engram.Onboarding.next_step/5`.
+      :ok = GateCache.mark_passed(user.id)
       conn
     else
       body = %{error: "onboarding_required", missing: missing, next_step: next_step}
