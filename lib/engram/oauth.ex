@@ -224,10 +224,22 @@ defmodule Engram.OAuth do
   defp do_rotate(rt, ip) do
     now = DateTime.utc_now(:second)
 
-    rt
-    |> Ecto.Changeset.change(%{consumed_at: now})
-    |> Repo.update!(skip_tenant_check: true)
+    # Atomic compare-and-set: only one concurrent rotation may consume this
+    # token. A 0-row result means another request already rotated it — that is
+    # a replay of a now-consumed token, so revoke the whole family
+    # (RFC 6749 §10.4) and reject, mirroring rotate_existing/3's replay branch.
+    case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
+         |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
+      {0, _} ->
+        revoke_family(rt.family_id)
+        {:error, :invalid_grant}
 
+      {1, _} ->
+        mint_rotation_successor(rt, ip)
+    end
+  end
+
+  defp mint_rotation_successor(rt, ip) do
     {:ok, refresh_raw, refresh_row} =
       insert_refresh_token(%{
         family_id: rt.family_id,
@@ -301,15 +313,17 @@ defmodule Engram.OAuth do
 
   defp check_pkce_verifier(_, _), do: {:error, :invalid_grant}
 
-  defp consume_code(%AuthorizationCode{} = code) do
-    code
-    |> Ecto.Changeset.change(%{
-      consumed_at: DateTime.utc_now(:second)
-    })
-    |> Repo.update(skip_tenant_check: true)
+  # Single-use enforcement (OAuth 2.1 §4.1.3): the conditional UPDATE is the
+  # sole guarantee against an authorization-code double-spend race. The
+  # app-level consumed_at==nil check in find_unconsumed_code/1 is a TOCTOU and
+  # cannot serialize concurrent exchanges; only `WHERE consumed_at IS NULL` in
+  # the UPDATE can. A 0-row result means another request already consumed it.
+  defp consume_code(%AuthorizationCode{id: id}) do
+    from(ac in AuthorizationCode, where: ac.id == ^id and is_nil(ac.consumed_at))
+    |> Repo.update_all([set: [consumed_at: DateTime.utc_now(:second)]], skip_tenant_check: true)
     |> case do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, :server_error}
+      {1, _} -> :ok
+      {0, _} -> {:error, :invalid_grant}
     end
   end
 
