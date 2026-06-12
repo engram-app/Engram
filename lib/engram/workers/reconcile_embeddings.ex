@@ -28,39 +28,34 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   require Logger
 
-  @batch_size 100
+  @batch_size 500
 
   # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    vaults =
-      Vault
-      |> where([v], is_nil(v.deleted_at))
+    # One global query with a global cap. The previous shape loaded EVERY
+    # vault and ran one stale-notes query per vault each cron tick —
+    # O(total vaults) queries at scale for a worker that only needs ids.
+    # Per-vault fairness isn't needed: EmbedNote is uniq-deduped, and the
+    # oldest-first order drains any backlog across ticks.
+    note_ids =
+      Note
+      |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
+      |> where([n], n.kind == "note")
+      |> where([n], is_nil(n.deleted_at))
+      |> where([n], is_nil(n.embed_hash) or n.embed_hash != n.content_hash)
+      |> order_by([n], asc: n.updated_at)
+      |> limit(@batch_size)
+      |> select([n], n.id)
       |> Repo.all(skip_tenant_check: true)
 
-    Enum.each(vaults, fn vault ->
-      note_ids =
-        Note
-        |> where([n], n.vault_id == ^vault.id)
-        |> where([n], n.kind == "note")
-        |> where([n], is_nil(n.deleted_at))
-        |> where([n], is_nil(n.embed_hash) or n.embed_hash != n.content_hash)
-        |> order_by([n], asc: n.updated_at)
-        |> limit(@batch_size)
-        |> select([n], n.id)
-        |> Repo.all(skip_tenant_check: true)
-
+    _ =
       if note_ids != [] do
-        Logger.info(
-          "reconcile_embeddings: vault=#{vault.id} queueing #{length(note_ids)} stale notes"
-        )
-
-        jobs = Enum.map(note_ids, &EmbedNote.new_debounced/1)
-        Oban.insert_all(jobs)
+        Logger.info("reconcile_embeddings: queueing #{length(note_ids)} stale notes")
+        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced/1))
       end
-    end)
 
     :ok
   end

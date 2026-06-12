@@ -1,6 +1,7 @@
 defmodule Engram.CacheTest do
   use ExUnit.Case, async: false
   alias Engram.Cache
+  alias Engram.Cache.Redix, as: CacheRedix
 
   # Returns a Redix-style {:error, _} carrying a URL-bearing tuple, so we can
   # prove the bounded reason classifier never forwards the raw (secret-bearing)
@@ -97,29 +98,62 @@ defmodule Engram.CacheTest do
   end
 
   describe "Engram.Cache.Redix child_spec" do
-    test "omits :socket_opts for plain-tcp redis:// URLs" do
-      # `customize_hostname_check` is `:ssl`-only. Redix passes
-      # `:socket_opts` to `:gen_tcp.connect/4` for `redis://` which barfs
-      # ArgumentError → boot-loop. MUST be omitted entirely on plain-tcp.
-      spec = Engram.Cache.Redix.child_spec(url: "redis://localhost:6379")
-      assert {Redix, :start_link, [_url, opts]} = spec.start
-      assert opts == [name: :engram_cache_redix, sync_connect: false]
+    test "starts a pool of connections, no :socket_opts for plain-tcp redis:// URLs" do
+      # One Redix connection was a per-node serialization point: every
+      # cache round trip funneled through a single process + socket, and
+      # under load the 250ms timeout flipped the façade to fail-open.
+      # `customize_hostname_check` is `:ssl`-only — MUST stay omitted on
+      # plain-tcp (gen_tcp rejects it → boot-loop).
+      spec = CacheRedix.child_spec(url: "redis://localhost:6379")
+      assert spec.type == :supervisor
+      assert {Supervisor, :start_link, [children, [strategy: :one_for_one]]} = spec.start
+      assert length(children) == 8
+
+      names =
+        for %{start: {Redix, :start_link, [_url, opts]}} <- children do
+          assert opts[:sync_connect] == false
+          refute Keyword.has_key?(opts, :socket_opts)
+          opts[:name]
+        end
+
+      assert names == CacheRedix.pool_conn_names()
     end
 
-    test "appends the :https-shape hostname match_fun via :socket_opts for rediss:// URLs" do
+    test "appends the :https-shape hostname match_fun to EVERY pooled conn for rediss://" do
       # AWS ElastiCache/Valkey wildcard certs (`*.cluster.cache.amazonaws.com`)
       # fail Erlang's default strict literal hostname check on leftmost-label
       # hosts. The `:https`-shape match_fun applies RFC 6125 wildcard rules.
-      spec = Engram.Cache.Redix.child_spec(url: "rediss://master.example:6379")
-      assert {Redix, :start_link, [_url, opts]} = spec.start
+      spec = CacheRedix.child_spec(url: "rediss://master.example:6379")
+      assert {Supervisor, :start_link, [children, _opts]} = spec.start
+      assert length(children) == 8
 
-      assert [
-               name: :engram_cache_redix,
-               sync_connect: false,
-               socket_opts: [customize_hostname_check: [match_fun: match_fun]]
-             ] = opts
+      for %{start: {Redix, :start_link, [_url, opts]}} <- children do
+        assert [customize_hostname_check: [match_fun: match_fun]] = opts[:socket_opts]
+        assert is_function(match_fun)
+      end
+    end
 
-      assert is_function(match_fun)
+    test "command routing spreads callers across the pool deterministically" do
+      parent = self()
+
+      for _ <- 1..200 do
+        spawn(fn -> send(parent, {:conn, CacheRedix.pool_conn_name()}) end)
+      end
+
+      names =
+        for _ <- 1..200 do
+          receive do
+            {:conn, n} -> n
+          after
+            1_000 -> flunk("missing conn name message")
+          end
+        end
+
+      valid = MapSet.new(CacheRedix.pool_conn_names())
+      assert Enum.all?(names, &MapSet.member?(valid, &1))
+      # Same pid always maps to the same conn; distinct pids spread out.
+      assert names |> Enum.uniq() |> length() > 1
+      assert CacheRedix.pool_conn_name() == CacheRedix.pool_conn_name()
     end
   end
 
