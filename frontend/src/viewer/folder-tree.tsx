@@ -165,9 +165,9 @@ export default function FolderTree() {
   })
 
   // Register the scroll container with BOTH the virtualizer (scrollRef) and
-  // headless-tree (so getDragLineStyle's coordinates have the right origin).
-  // Depends only on the stable `tree` instance — avoids ref churn from the
-  // new-object-every-render returned by getContainerProps.
+  // headless-tree, whose getContainerProps supplies the empty-space drop handler
+  // (drops not on a row resolve to the vault root). Depends only on the stable
+  // `tree` instance — avoids ref churn from the new-object-every-render props.
   const containerProps = tree.getContainerProps('Files')
   const setContainerEl = useCallback(
     (el: HTMLDivElement | null) => {
@@ -404,11 +404,6 @@ export default function FolderTree() {
             />
           ))}
         </div>
-        <div
-          aria-hidden
-          style={tree.getDragLineStyle()}
-          className="z-10 h-0.5 rounded bg-blue-500"
-        />
       </nav>
 
       {dialog.kind === 'delete' && (

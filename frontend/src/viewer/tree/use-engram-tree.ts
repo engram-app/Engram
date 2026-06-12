@@ -124,7 +124,12 @@ export function useEngramTree(deps: Deps) {
       const d = item.getItemData()
       return d?.isFolder ?? false
     },
-    canReorder: true,
+    // Reparent-only: drops go INTO the hovered folder (or, in empty space, to
+    // root). canReorder:true would surface a between-items line whose target is
+    // the row's PARENT — dropping on a top-level folder's edge would silently
+    // land at root. We have no persisted order, so the destination-folder
+    // highlight (isDragTarget) is the right affordance, not a reorder line.
+    canReorder: false,
     onRename: (item: ItemInstance<Data>, value: string) =>
       deps.onRenameCommit(item.getId(), value),
     onDrop: (items: ItemInstance<Data>[], target: DragTarget<Data>) => {
