@@ -59,6 +59,9 @@ defmodule Engram.OAuth.Client do
     |> coerce_kind()
     |> apply_defaults()
     |> ensure_redirect_uris_present()
+    # Attacker-controlled on a public, unauthenticated endpoint; bound the
+    # array size so registration can't be used to store an unbounded blob.
+    |> validate_length(:redirect_uris, max: 10)
     |> validate_redirect_uris()
     |> validate_subset(:grant_types, @valid_grant_types,
       message: "contains an unsupported grant_type"
@@ -154,6 +157,10 @@ defmodule Engram.OAuth.Client do
         true -> uris |> Enum.flat_map(&check_uri/1) |> Enum.uniq()
       end
     end)
+  end
+
+  defp check_uri(uri) when is_binary(uri) and byte_size(uri) > 2048 do
+    [redirect_uris: "redirect_uri too long"]
   end
 
   defp check_uri(uri) when is_binary(uri) do
