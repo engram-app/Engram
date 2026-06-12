@@ -83,5 +83,24 @@ defmodule EngramWeb.NotesControllerBatchTest do
       assert body["error"] == "conflict"
       assert body["item_id"] == n1.id
     end
+
+    test "moves notes to the vault root via target_folder_id \"root\"", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "Archive")
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/notes/batch-move", %{ids: [n1.id], target_folder_id: "root"})
+        |> json_response(200)
+
+      assert body == %{"moved" => 1}
+      {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, n1.id)
+      assert moved.path == "a.md"
+    end
   end
 end

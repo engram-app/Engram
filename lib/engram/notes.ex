@@ -800,6 +800,29 @@ defmodule Engram.Notes do
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
+  def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
+    Repo.transaction(fn ->
+      case Crypto.ensure_user_dek(user) do
+        {:ok, user} ->
+          ids
+          |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+            case move_note_into_folder(user, vault, id, "") do
+              {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+              {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+              {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            end
+          end)
+          |> case do
+            {:rollback, reason} -> Repo.rollback(reason)
+            acc -> acc
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
   def batch_move_notes(user, vault, ids, target_folder_id)
       when is_list(ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
@@ -1745,6 +1768,30 @@ defmodule Engram.Notes do
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        marker_ids
+        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+          case move_folder_into(user, vault, id, "", dek) do
+            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
+            {:error, reason} -> {:halt, {:rollback, reason}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
       when is_list(marker_ids) and is_binary(target_folder_id) do

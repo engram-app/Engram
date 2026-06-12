@@ -94,5 +94,25 @@ defmodule EngramWeb.FoldersControllerBatchTest do
       assert body["error"] == "cycle"
       assert body["item_id"] == parent.id
     end
+
+    test "moves a nested folder to the vault root via target_parent_id \"root\"", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _parent} = Engram.Notes.create_folder_marker(user, vault, "a")
+      {:ok, child} = Engram.Notes.create_folder_marker(user, vault, "a/b")
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a/b/x.md"})
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/folders/batch-move", %{ids: [child.id], target_parent_id: "root"})
+        |> json_response(200)
+
+      assert body == %{"moved" => 1}
+      {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, note.id)
+      assert moved.path == "b/x.md"
+    end
   end
 end
