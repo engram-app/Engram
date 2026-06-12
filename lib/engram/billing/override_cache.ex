@@ -24,8 +24,11 @@ defmodule Engram.Billing.OverrideCache do
 
   alias Engram.Cluster.CacheSync
 
+  require Logger
+
   @table :engram_billing_override_cache
   @ttl_ms 60_000
+  @pg_channel "user_limit_overrides_changed"
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
@@ -109,10 +112,38 @@ defmodule Engram.Billing.OverrideCache do
       ])
 
     :ok = CacheSync.subscribe()
+    listen_pg()
     {:ok, %{}}
   end
 
+  # LISTEN on the channel fired by the user_limit_overrides AFTER-write
+  # trigger (migration 20260612100000). This is what makes raw-SQL writers
+  # (support-runbook grants, e2e helpers) coherent: every node hears the
+  # NOTIFY directly from Postgres and evicts within milliseconds, no app
+  # API involved. Failure to listen is non-fatal — the TTL still bounds
+  # staleness — so log and continue.
+  defp listen_pg do
+    case Process.whereis(Engram.PgNotifications) do
+      nil ->
+        Logger.warning("OverrideCache: PG notifications process not running; TTL-only eviction")
+
+      _pid ->
+        {:ok, _ref} = Postgrex.Notifications.listen(Engram.PgNotifications, @pg_channel)
+    end
+  catch
+    kind, reason ->
+      Logger.warning(
+        "OverrideCache: failed to LISTEN #{@pg_channel} (#{kind}: #{inspect(reason)}); " <>
+          "TTL-only eviction"
+      )
+  end
+
   @impl true
+  def handle_info({:notification, _pid, _ref, @pg_channel, user_id}, state) do
+    _ = delete_local(user_id)
+    {:noreply, state}
+  end
+
   def handle_info({:cache_sync, {:billing_override_evict, user_id}}, state) do
     _ = delete_local(user_id)
     {:noreply, state}
