@@ -29,8 +29,15 @@ describe('resolveDropMove', () => {
     ).toEqual({ dest: 'f:projects', ids: ['n:2'] })
   })
 
-  it('is a no-op when the destination is the vault root (backend cannot move to root)', () => {
-    expect(resolveDropMove([{ id: 'n:1', parentId: 'f:a' }], ROOT, ROOT)).toBeNull()
+  it('moves a source out of a folder to the vault root', () => {
+    expect(resolveDropMove([{ id: 'n:1', parentId: 'f:a' }], ROOT, ROOT)).toEqual({
+      dest: ROOT,
+      ids: ['n:1'],
+    })
+  })
+
+  it('is a no-op when the source is already at root', () => {
+    expect(resolveDropMove([{ id: 'n:1', parentId: ROOT }], ROOT, ROOT)).toBeNull()
   })
 
   it('is a no-op when the destination is undefined', () => {
