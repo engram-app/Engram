@@ -14,16 +14,35 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }))
 
+const DEFAULT_FOLDERS = [
+  { id: '1', parent_id: null, name: 'Projects', count: 1 },
+  { id: '2', parent_id: null, name: 'archive', count: 0 },
+]
+const DEFAULT_ROOT_NOTE = {
+  id: '42',
+  path: 'a.md',
+  title: 'a',
+  folder: '',
+  tags: [],
+  version: 1,
+  mtime: '',
+  created_at: '',
+  updated_at: '',
+}
+
 const {
   batchDeleteNotesMutate,
   batchMoveNotesMutate,
   batchDeleteFoldersMutate,
   batchMoveFoldersMutate,
+  mock,
 } = vi.hoisted(() => ({
   batchDeleteNotesMutate: vi.fn(),
   batchMoveNotesMutate: vi.fn(),
   batchDeleteFoldersMutate: vi.fn(),
   batchMoveFoldersMutate: vi.fn(),
+  // Mutable per-test fixtures (folders + root notes), set in beforeEach.
+  mock: { folders: [] as unknown[], rootNotes: [] as unknown[] },
 }))
 
 vi.mock('../api/queries', async () => {
@@ -31,32 +50,14 @@ vi.mock('../api/queries', async () => {
   return {
     ...actual,
     useFolders: () => ({
-      data: [
-        { id: '1', parent_id: null, name: 'Projects', count: 1 },
-        { id: '2', parent_id: null, name: 'archive', count: 0 },
-      ],
+      data: mock.folders,
       isLoading: false,
       isError: false,
     }),
     // Root notes for the by-id loader (legacy useFolderNotes('') compat)
     useFolderNotes: (folder: string) => {
       if (folder === '') {
-        return {
-          data: [
-            {
-              id: '42',
-              path: 'a.md',
-              title: 'a',
-              folder: '',
-              tags: [],
-              version: 1,
-              mtime: '',
-              created_at: '',
-              updated_at: '',
-            },
-          ],
-          isLoading: false,
-        }
+        return { data: mock.rootNotes, isLoading: false }
       }
       return { data: [], isLoading: false }
     },
@@ -109,6 +110,8 @@ beforeEach(() => {
   batchMoveNotesMutate.mockReset()
   batchDeleteFoldersMutate.mockReset()
   batchMoveFoldersMutate.mockReset()
+  mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }))
+  mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
 })
 
 describe('FolderTree (HT)', () => {
@@ -131,6 +134,22 @@ describe('FolderTree (HT)', () => {
     renderTree()
     const link = await screen.findByRole('treeitem', { name: 'a' })
     expect(link).toHaveAttribute('href', '/note/42')
+  })
+
+  it('shows root notes even when there are zero folders (new doc at root)', async () => {
+    mock.folders = []
+    mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
+    renderTree()
+    // Must NOT short-circuit to the empty state — the root note is present.
+    expect(screen.queryByText('No notes yet.')).toBeNull()
+    expect(await screen.findByRole('treeitem', { name: 'a' })).toHaveAttribute('href', '/note/42')
+  })
+
+  it('shows the empty state only when there are no folders AND no root notes', async () => {
+    mock.folders = []
+    mock.rootNotes = []
+    renderTree()
+    expect(await screen.findByText('No notes yet.')).toBeInTheDocument()
   })
 
   it('right-click on a folder row opens the ContextMenu', async () => {
