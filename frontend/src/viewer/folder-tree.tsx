@@ -175,6 +175,17 @@ export default function FolderTree() {
     [tree],
   )
 
+  const [rootDragOver, setRootDragOver] = useState(false)
+  const onContainerDragOver = (e: React.DragEvent) => {
+    ;(containerProps.onDragOver as ((ev: React.DragEvent) => void) | undefined)?.(e)
+    setRootDragOver(true)
+  }
+  const onContainerDragLeave = () => setRootDragOver(false)
+  const onContainerDrop = (e: React.DragEvent) => {
+    setRootDragOver(false)
+    ;(containerProps.onDrop as ((ev: React.DragEvent) => void) | undefined)?.(e)
+  }
+
   // Auto-expand the chain leading to the active note so users can see
   // where they are after navigation. Mirrors the old recursive
   // `containsSelected` behaviour but driven by HT's expand API.
@@ -368,10 +379,17 @@ export default function FolderTree() {
       <nav
         {...containerProps}
         ref={setContainerEl}
+        onDragOver={onContainerDragOver}
+        onDragLeave={onContainerDragLeave}
+        onDrop={onContainerDrop}
         data-testid="folder-tree-root"
-        className="relative flex-1 overflow-auto py-2 text-base"
+        className={`relative flex-1 overflow-auto py-2 text-base ${
+          rootDragOver ? 'ring-1 ring-inset ring-blue-400 bg-blue-50/40 dark:bg-blue-950/30' : ''
+        }`}
       >
-        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {/* minHeight ensures blank, droppable space below the rows even for a
+            short tree, so there's always a place to drop "to root". */}
+        <div style={{ height: virtualizer.getTotalSize(), minHeight: '100%', position: 'relative' }}>
           {virtualizer.getVirtualItems().map((v) => (
             <TreeRowVirtualized
               key={items[v.index]?.getId() ?? v.index}
