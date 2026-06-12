@@ -1013,21 +1013,34 @@ defmodule Engram.Notes do
 
   @doc """
   Returns hydrated folder marker rows (kind="folder", non-deleted) for the
-  user/vault, with `.folder` decrypted. Used by Materialization to compute
-  the existing-marker set and by callers that need full marker structs
-  (vs. `list_explicit_folders/2` which only returns sorted names).
+  user/vault, with `.folder` decrypted. Structs are sparsely loaded — only
+  `.id`, `.folder` and `.folder_hmac` are populated (plus the decrypt
+  inputs); callers needing other columns must fetch the row themselves. Used by
+  Materialization to compute the existing-marker set and by the folders
+  index for the path→id map (vs. `list_explicit_folders/2` which only
+  returns sorted names).
   """
   @spec list_folder_markers(map(), map()) :: [Note.t()]
   def list_folder_markers(user, vault) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
+      # Callers only consume `.id` + `.folder` (hydrated below) — project
+      # just the decrypt inputs instead of full rows so a marker-heavy
+      # vault doesn't pay for ~20 unused columns per row.
       {:ok, markers} =
         Repo.with_tenant(user.id, fn ->
           Repo.all(
             from(n in Note,
               where:
                 n.user_id == ^user.id and n.vault_id == ^vault.id and
-                  is_nil(n.deleted_at) and n.kind == "folder"
+                  is_nil(n.deleted_at) and n.kind == "folder",
+              select: %Note{
+                id: n.id,
+                dek_version: n.dek_version,
+                folder_ciphertext: n.folder_ciphertext,
+                folder_nonce: n.folder_nonce,
+                folder_hmac: n.folder_hmac
+              }
             )
           )
         end)
