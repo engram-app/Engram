@@ -274,6 +274,24 @@ defmodule Engram.CryptoTest do
                Crypto.decrypt_notes_batch([good, bad], user)
     end
 
+    test "large batch decrypts in order with errors contained (parallel path)", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      notes = for i <- 1..40, do: build_encrypted_note(user, "c#{i}", "t#{i}")
+      corrupt = %{Enum.at(notes, 17) | content_ciphertext: :crypto.strong_rand_bytes(32)}
+      notes = List.replace_at(notes, 17, corrupt)
+
+      results = Crypto.decrypt_notes_batch(notes, user)
+
+      assert length(results) == 40
+      assert {:error, :decrypt_failed} = Enum.at(results, 17)
+
+      for {result, i} <- Enum.with_index(results), i != 17 do
+        assert {:ok, %{content: content}} = result
+        assert content == "c#{i + 1}"
+      end
+    end
+
     test "empty list returns empty without telemetry noise", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)
 

@@ -58,6 +58,10 @@ defmodule EngramWeb.SyncController do
         )
       end)
 
+    # Path-sized payloads decrypt in ~4µs each — measured 10k sequential at
+    # ~43ms while chunked parallel came out *slower* (result copy-back to the
+    # caller's heap rivals the AES-GCM work). Keep these loops sequential;
+    # the batch telemetry tells us if a real-world vault disagrees.
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
         Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->

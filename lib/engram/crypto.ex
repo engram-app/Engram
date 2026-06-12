@@ -388,7 +388,48 @@ defmodule Engram.Crypto do
     _ = get_dek(user)
 
     measure_decrypt_batch(:notes, length(notes), fn ->
-      Enum.map(notes, &maybe_decrypt_note_fields(&1, user))
+      parallel_map(notes, &maybe_decrypt_note_fields(&1, user))
+    end)
+  end
+
+  # Below this size the per-task spawn/copy overhead rivals the AES-GCM
+  # work itself (path-sized payloads decrypt in ~µs), so small batches
+  # stay inline on the caller.
+  @parallel_map_threshold 32
+
+  @doc """
+  Chunked parallel map for CPU-bound crypto batches. Splits `items` into
+  one chunk per scheduler and decrypts chunks concurrently, preserving
+  input order. Batches at or below #{@parallel_map_threshold} items run
+  inline — task overhead beats the win there.
+
+  Ciphertext binaries are refc (heap-shared), so fan-out does not copy
+  payload bytes. Workers touching the DEK mark themselves `:sensitive`
+  via `get_dek/1` exactly like the caller (T3.3 / M9).
+
+  A worker exit (timeout, raise inside `fun`) re-raises in the caller,
+  matching the sequential behavior where the exception propagates.
+  """
+  @spec parallel_map([item], (item -> result)) :: [result]
+        when item: var, result: var
+  def parallel_map(items, fun) when length(items) <= @parallel_map_threshold do
+    Enum.map(items, fun)
+  end
+
+  def parallel_map(items, fun) do
+    schedulers = System.schedulers_online()
+    chunk_size = items |> length() |> Kernel./(schedulers) |> ceil() |> max(1)
+
+    items
+    |> Enum.chunk_every(chunk_size)
+    |> Task.async_stream(fn chunk -> Enum.map(chunk, fun) end,
+      max_concurrency: schedulers,
+      ordered: true,
+      timeout: :timer.seconds(60)
+    )
+    |> Enum.flat_map(fn
+      {:ok, results} -> results
+      {:exit, reason} -> exit(reason)
     end)
   end
 
