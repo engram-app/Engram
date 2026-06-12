@@ -132,6 +132,12 @@ defmodule Engram.Factory do
     }
   end
 
+  # Override lookups are cached (Engram.Billing.OverrideCache, 60s TTL,
+  # misses included). Inserting an override AFTER the same user's limits
+  # have already been resolved in the test requires an explicit
+  # `OverrideCache.evict(user.id)` — same idiom as PlanCache.invalidate
+  # after mid-test plan edits. Inserts in setup (before any limit check)
+  # need nothing.
   def user_limit_override_factory do
     %Engram.Billing.UserLimitOverride{
       id: Ecto.UUID.generate(),

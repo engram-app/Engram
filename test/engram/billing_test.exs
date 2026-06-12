@@ -981,7 +981,6 @@ defmodule Engram.BillingTest do
       :ok = OverrideCache.evict(user.id)
       assert Billing.effective_limit(user, :vaults_cap) == 33
     end
-
   end
 
   defp with_subscription_query_count(fun), do: with_query_count("subscriptions", fun)
