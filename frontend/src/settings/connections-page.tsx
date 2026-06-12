@@ -11,6 +11,7 @@ import {
   useRevokePat,
 } from '../api/queries'
 import { ApiError } from '../api/client'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,7 +32,7 @@ import { SettingsSectionCard } from '@/settings/account/section-card'
 function useTierCaps() {
   const { data } = useBillingStatus()
   const tier = data?.tier ?? 'free'
-  const isFree = tier === 'free' || tier === 'none'
+  const isFree = useIsFreeTier()
   const caps = data?.caps
   return {
     tier,
