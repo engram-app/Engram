@@ -112,7 +112,7 @@ defmodule Engram.Billing.OverrideCache do
       ])
 
     :ok = CacheSync.subscribe()
-    listen_pg()
+    :ok = listen_pg()
     {:ok, %{}}
   end
 
@@ -129,6 +129,7 @@ defmodule Engram.Billing.OverrideCache do
 
       _pid ->
         {:ok, _ref} = Postgrex.Notifications.listen(Engram.PgNotifications, @pg_channel)
+        :ok
     end
   catch
     kind, reason ->
