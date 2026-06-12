@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -22,9 +22,7 @@ import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
 import { useEngramTree } from './tree/use-engram-tree'
 import { TreeRowVirtualized } from './tree/tree-row-virtualized'
-import { SelectionBar } from './tree/selection-bar'
 import { parseItemId } from './tree/types'
-import type { LoaderItem } from './tree/loader'
 import { DeleteConfirm } from './tree-actions/delete-confirm'
 import { MoveDialog } from './tree-actions/move-dialog'
 import { ContextMenu } from './tree-actions/context-menu'
@@ -191,33 +189,6 @@ export default function FolderTree() {
     }
   }, [selectedNoteId, folders, vaultId, qc, tree])
 
-  // Selection helpers — drive SelectionBar + bulk action handlers.
-  const selectedItems = tree.getSelectedItems()
-  const selectionCount = selectedItems.length
-
-  const itemsToRows = useMemo(
-    () => (kind: 'delete' | 'move'): DeleteRow[] | MoveRow[] => {
-      const rows: Array<DeleteRow & MoveRow> = []
-      for (const inst of selectedItems) {
-        const data = inst.getItemData() as LoaderItem | undefined
-        if (!data) continue
-        const item = data.item
-        if (item.kind === 'note') {
-          rows.push({ kind: 'file', path: item.path, childCount: 0 } as DeleteRow & MoveRow)
-        } else {
-          const folder = folders?.find((f) => f.id === item.id)
-          const direct = folder?.count ?? 0
-          const descendants = folders
-            ?.filter((f) => folder && f.name.startsWith(`${folder.name}/`))
-            .reduce((sum, f) => sum + f.count, 0) ?? 0
-          rows.push({ kind: 'folder', path: item.path, childCount: direct + descendants } as DeleteRow & MoveRow)
-        }
-      }
-      return kind === 'delete' ? (rows as DeleteRow[]) : (rows as MoveRow[])
-    },
-    [selectedItems, folders],
-  )
-
   // Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
   function rowsFor(itemId: string, mode: 'delete' | 'move'): DeleteRow[] | MoveRow[] {
     const p = parseItemId(itemId)
@@ -269,20 +240,14 @@ export default function FolderTree() {
     return ''
   }
 
-  function openDelete(itemIds?: string[]) {
-    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
-    const nodes = itemIds
-      ? (itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[])
-      : (itemsToRows('delete') as DeleteRow[])
-    setDialog({ kind: 'delete', nodes, itemIds: ids })
+  function openDelete(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[]
+    setDialog({ kind: 'delete', nodes, itemIds })
   }
 
-  function openMove(itemIds?: string[]) {
-    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
-    const nodes = itemIds
-      ? (itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[])
-      : (itemsToRows('move') as MoveRow[])
-    setDialog({ kind: 'move', nodes, itemIds: ids })
+  function openMove(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[]
+    setDialog({ kind: 'move', nodes, itemIds })
   }
 
   function handleContextMenu(itemId: string, x: number, y: number) {
@@ -421,13 +386,6 @@ export default function FolderTree() {
         />
       </nav>
 
-      <SelectionBar
-        count={selectionCount}
-        onMove={() => openMove()}
-        onDelete={() => openDelete()}
-        onCancel={() => tree.setSelectedItems([])}
-      />
-
       {dialog.kind === 'delete' && (
         <DeleteConfirm
           nodes={dialog.nodes}
@@ -457,10 +415,6 @@ export default function FolderTree() {
           actions={actionsFor({ kind: kindOf(dialog.itemId) })}
           onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
           onClose={() => setDialog({ kind: 'none' })}
-          onSelectMore={() => {
-            tree.setSelectedItems([dialog.itemId])
-            setDialog({ kind: 'none' })
-          }}
         />
       )}
     </>

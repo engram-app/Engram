@@ -6,9 +6,9 @@ import FolderTree from './folder-tree'
 import { FolderTreeProvider } from '../layout/folder-tree-context'
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
-// primitives (loader, useEngramTree, TreeRow, SelectionBar, dialogs).
-// These integration tests cover the top-level renders + smoke that the
-// hooks/mutations are wired — full coverage lives in the primitives.
+// primitives (loader, useEngramTree, TreeRow, dialogs). These integration
+// tests cover the top-level renders + smoke that the hooks/mutations are
+// wired — full coverage lives in the primitives.
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -167,20 +167,15 @@ describe('FolderTree (HT)', () => {
     })
   })
 
-  it('long-press on a row opens the ActionDrawer; Select more enters selection mode', async () => {
+  it('long-press (touch) on a row opens the ActionDrawer', async () => {
     renderTree()
     const projects = await screen.findByRole('treeitem', { name: 'Projects' })
-    // Long-press: pointerDown then wait the configured 500ms
-    fireEvent.pointerDown(projects, { clientX: 5, clientY: 5 })
+    // Long-press is touch/pen only — mouse uses right-click. Fire a touch press
+    // and wait the configured 500ms.
+    fireEvent.pointerDown(projects, { pointerType: 'touch', clientX: 5, clientY: 5 })
     await new Promise((resolve) => setTimeout(resolve, 600))
-    // Drawer renders Select more
-    const selectMore = await screen.findByRole('button', { name: 'Select more' })
-    expect(selectMore).toBeInTheDocument()
-    fireEvent.click(selectMore)
-    // SelectionBar appears with 1 selected
-    await waitFor(() => {
-      expect(screen.getByText(/1 selected/i)).toBeInTheDocument()
-    })
+    // The ActionDrawer (with its backdrop) is shown for the long-pressed row.
+    expect(await screen.findByTestId('action-drawer-backdrop')).toBeInTheDocument()
   })
 
   it('shows loading state', () => {
