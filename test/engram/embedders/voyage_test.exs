@@ -55,6 +55,40 @@ defmodule Engram.Embedders.VoyageTest do
       end)
     end
 
+    test "query purpose defaults to fast-fail request options" do
+      # Interactive search holds a request process for the full embed call.
+      # With the index defaults (30s timeout x 4 attempts) a Voyage brownout
+      # pins searches for up to ~2 minutes each. Queries fail fast instead;
+      # callers can still override per call.
+      defaults = Voyage.request_defaults(:query)
+      assert defaults[:receive_timeout] == 5_000
+      assert defaults[:retry] == false
+    end
+
+    test "index purpose keeps patient retry defaults" do
+      defaults = Voyage.request_defaults(:index)
+      assert defaults[:receive_timeout] == 30_000
+      assert defaults[:retry] == :transient
+      assert defaults[:max_retries] == 3
+    end
+
+    test "query purpose does not retry against a failing upstream", %{bypass: bypass} do
+      # Behavior pin: with purpose: :query and no caller overrides, a 500
+      # gets exactly ONE request (retry: false), not 4.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Plug.Conn.send_resp(conn, 500, ~s({"error": "boom"}))
+      end)
+
+      capture_log(fn ->
+        assert {:error, {500, _}} = Voyage.embed_texts(["hello"], purpose: :query)
+      end)
+
+      assert Agent.get(counter, & &1) == 1
+    end
+
     test "sends correct model in request body", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)

@@ -85,12 +85,13 @@ export const api = {
   async post<T>(
     path: string,
     body?: unknown,
-    opts?: { headers?: Record<string, string> },
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
   ): Promise<T> {
     const res = await authFetch(path, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
       headers: opts?.headers,
+      signal: opts?.signal,
     })
     return res.json()
   },

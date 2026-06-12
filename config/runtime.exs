@@ -1,5 +1,16 @@
 import Config
 
+# Prod delivers all app secrets as one SSM SecureString (1 KMS decrypt
+# instead of one per secret). Expand it into the process env BEFORE the
+# System.get_env/1 reads below so they resolve unchanged. Self-host/dev set
+# individual env vars and never set APP_SECRETS_JSON, so this is a no-op.
+# Malformed JSON raises here → boot fails loud rather than starting with
+# missing secrets.
+if blob = System.get_env("APP_SECRETS_JSON") do
+  Engram.Secrets.unpack(blob, &System.get_env/1)
+  |> Enum.each(fn {k, v} -> System.put_env(k, v) end)
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
