@@ -15,6 +15,19 @@ const mobileSafeTheme = EditorView.theme({
   '.cm-scroller': { fontFamily: 'inherit' },
 })
 
+// Module scope: react-codemirror reconfigures the editor whenever the
+// extensions prop identity changes — an inline array re-instantiated the
+// markdown language package on every keystroke.
+const extensions = [markdown(), EditorView.lineWrapping, mobileSafeTheme]
+
+const basicSetup = {
+  lineNumbers: false,
+  foldGutter: false,
+  highlightActiveLine: false,
+  highlightActiveLineGutter: false,
+  autocompletion: false,
+}
+
 export default function NoteEditor({ value, onChange }: NoteEditorProps) {
   const { resolved } = useTheme()
 
@@ -23,14 +36,8 @@ export default function NoteEditor({ value, onChange }: NoteEditorProps) {
       value={value}
       onChange={onChange}
       theme={resolved}
-      extensions={[markdown(), EditorView.lineWrapping, mobileSafeTheme]}
-      basicSetup={{
-        lineNumbers: false,
-        foldGutter: false,
-        highlightActiveLine: false,
-        highlightActiveLineGutter: false,
-        autocompletion: false,
-      }}
+      extensions={extensions}
+      basicSetup={basicSetup}
       className="min-h-[70vh] rounded-md border border-border bg-muted/30"
     />
   )
