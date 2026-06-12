@@ -275,5 +275,19 @@ defmodule Engram.NotesBatchTest do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Parent")
       assert {:ok, %{moved: 0}} = Notes.batch_move_folders(user, vault, [], target_marker.id)
     end
+
+    test "moves a nested folder to the vault root via the \"root\" sentinel", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _parent} = Notes.create_folder_marker(user, vault, "A")
+      {:ok, child} = Notes.create_folder_marker(user, vault, "A/B")
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "A/B/x.md"})
+
+      assert {:ok, %{moved: 1}} = Notes.batch_move_folders(user, vault, [child.id], "root")
+
+      {:ok, moved} = Notes.get_note_by_id(user, vault, note.id)
+      assert moved.path == "B/x.md"
+    end
   end
 end
