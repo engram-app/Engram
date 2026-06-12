@@ -11,6 +11,8 @@ let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: b
   data: { tier: 'free', active: false } as Partial<BillingStatus>,
   isLoading: false,
 }
+// SaaS by default; self-host flips false (no billing → no free-tier footer).
+let billingEnabled = true
 
 vi.mock('../auth/use-auth-adapter', () => ({
   useAuthAdapter: () => ({ user: { email: 'test@example.com', imageUrl: null }, logout: vi.fn() }),
@@ -21,6 +23,13 @@ vi.mock('../api/queries', async () => {
     ...actual,
     useSearch: () => ({ data: [], isLoading: false, error: null }),
     useBillingStatus: () => billingStatusValue,
+  }
+})
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    useConfig: () => ({ billingEnabled }) as ReturnType<typeof actual.useConfig>,
   }
 })
 
@@ -64,7 +73,10 @@ describe('AppSidebar', () => {
 })
 
 describe('AppSidebar — Free-tier footer', () => {
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    billingEnabled = true
+  })
 
   it('renders the Free footer with an Upgrade link when tier=free', () => {
     billingStatusValue = {
@@ -91,6 +103,18 @@ describe('AppSidebar — Free-tier footer', () => {
 
   it('does not render the footer while billing status is loading', () => {
     billingStatusValue = { data: undefined, isLoading: true }
+    renderSidebar()
+
+    expect(screen.queryByText(/free tier.*1 connection/i)).toBeNull()
+    expect(screen.queryByRole('link', { name: /upgrade/i })).toBeNull()
+  })
+
+  it('does not render the footer on self-host (billing disabled) even when tier=free', () => {
+    billingEnabled = false
+    billingStatusValue = {
+      data: { tier: 'free', active: false } as Partial<BillingStatus>,
+      isLoading: false,
+    }
     renderSidebar()
 
     expect(screen.queryByText(/free tier.*1 connection/i)).toBeNull()

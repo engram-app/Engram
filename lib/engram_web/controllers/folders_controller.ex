@@ -193,7 +193,7 @@ defmodule EngramWeb.FoldersController do
     vault = conn.assigns.current_vault
 
     with {:ok, ids} <- parse_int_list(ids),
-         {:ok, tgt} <- parse_int(tgt) do
+         {:ok, tgt} <- parse_move_target(tgt) do
       case Notes.batch_move_folders(user, vault, ids, tgt) do
         {:ok, %{moved: n}} ->
           body = %{moved: n}
@@ -251,6 +251,12 @@ defmodule EngramWeb.FoldersController do
 
   defp parse_int(s) when is_binary(s), do: Ecto.UUID.cast(s)
   defp parse_int(_), do: :error
+
+  # Move target is either a folder-marker UUID or the literal "root" sentinel
+  # (top level — no parent marker). "root" must bypass the UUID cast.
+  defp parse_move_target("root"), do: {:ok, "root"}
+  defp parse_move_target(s) when is_binary(s), do: parse_int(s)
+  defp parse_move_target(_), do: :error
 
   defp broadcast_batch(user, vault, payload) do
     EngramWeb.Endpoint.broadcast!(

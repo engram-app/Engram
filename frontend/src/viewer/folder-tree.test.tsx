@@ -6,24 +6,43 @@ import FolderTree from './folder-tree'
 import { FolderTreeProvider } from '../layout/folder-tree-context'
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
-// primitives (loader, useEngramTree, TreeRow, SelectionBar, dialogs).
-// These integration tests cover the top-level renders + smoke that the
-// hooks/mutations are wired — full coverage lives in the primitives.
+// primitives (loader, useEngramTree, TreeRow, dialogs). These integration
+// tests cover the top-level renders + smoke that the hooks/mutations are
+// wired — full coverage lives in the primitives.
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }))
+
+const DEFAULT_FOLDERS = [
+  { id: '1', parent_id: null, name: 'Projects', count: 1 },
+  { id: '2', parent_id: null, name: 'archive', count: 0 },
+]
+const DEFAULT_ROOT_NOTE = {
+  id: '42',
+  path: 'a.md',
+  title: 'a',
+  folder: '',
+  tags: [],
+  version: 1,
+  mtime: '',
+  created_at: '',
+  updated_at: '',
+}
 
 const {
   batchDeleteNotesMutate,
   batchMoveNotesMutate,
   batchDeleteFoldersMutate,
   batchMoveFoldersMutate,
+  mock,
 } = vi.hoisted(() => ({
   batchDeleteNotesMutate: vi.fn(),
   batchMoveNotesMutate: vi.fn(),
   batchDeleteFoldersMutate: vi.fn(),
   batchMoveFoldersMutate: vi.fn(),
+  // Mutable per-test fixtures (folders + root notes + loading flag), set in beforeEach.
+  mock: { folders: [] as unknown[], rootNotes: [] as unknown[], loading: false },
 }))
 
 vi.mock('../api/queries', async () => {
@@ -31,32 +50,14 @@ vi.mock('../api/queries', async () => {
   return {
     ...actual,
     useFolders: () => ({
-      data: [
-        { id: '1', parent_id: null, name: 'Projects', count: 1 },
-        { id: '2', parent_id: null, name: 'archive', count: 0 },
-      ],
-      isLoading: false,
+      data: mock.loading ? undefined : mock.folders,
+      isLoading: mock.loading,
       isError: false,
     }),
     // Root notes for the by-id loader (legacy useFolderNotes('') compat)
     useFolderNotes: (folder: string) => {
       if (folder === '') {
-        return {
-          data: [
-            {
-              id: '42',
-              path: 'a.md',
-              title: 'a',
-              folder: '',
-              tags: [],
-              version: 1,
-              mtime: '',
-              created_at: '',
-              updated_at: '',
-            },
-          ],
-          isLoading: false,
-        }
+        return { data: mock.rootNotes, isLoading: false }
       }
       return { data: [], isLoading: false }
     },
@@ -109,6 +110,9 @@ beforeEach(() => {
   batchMoveNotesMutate.mockReset()
   batchDeleteFoldersMutate.mockReset()
   batchMoveFoldersMutate.mockReset()
+  mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }))
+  mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
+  mock.loading = false
 })
 
 describe('FolderTree (HT)', () => {
@@ -133,6 +137,22 @@ describe('FolderTree (HT)', () => {
     expect(link).toHaveAttribute('href', '/note/42')
   })
 
+  it('shows root notes even when there are zero folders (new doc at root)', async () => {
+    mock.folders = []
+    mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
+    renderTree()
+    // Must NOT short-circuit to the empty state — the root note is present.
+    expect(screen.queryByText('No notes yet.')).toBeNull()
+    expect(await screen.findByRole('treeitem', { name: 'a' })).toHaveAttribute('href', '/note/42')
+  })
+
+  it('shows the empty state only when there are no folders AND no root notes', async () => {
+    mock.folders = []
+    mock.rootNotes = []
+    renderTree()
+    expect(await screen.findByText('No notes yet.')).toBeInTheDocument()
+  })
+
   it('right-click on a folder row opens the ContextMenu', async () => {
     renderTree()
     const projects = await screen.findByRole('treeitem', { name: 'Projects' })
@@ -147,20 +167,15 @@ describe('FolderTree (HT)', () => {
     })
   })
 
-  it('long-press on a row opens the ActionDrawer; Select more enters selection mode', async () => {
+  it('long-press (touch) on a row opens the ActionDrawer', async () => {
     renderTree()
     const projects = await screen.findByRole('treeitem', { name: 'Projects' })
-    // Long-press: pointerDown then wait the configured 500ms
-    fireEvent.pointerDown(projects, { clientX: 5, clientY: 5 })
+    // Long-press is touch/pen only — mouse uses right-click. Fire a touch press
+    // and wait the configured 500ms.
+    fireEvent.pointerDown(projects, { pointerType: 'touch', clientX: 5, clientY: 5 })
     await new Promise((resolve) => setTimeout(resolve, 600))
-    // Drawer renders Select more
-    const selectMore = await screen.findByRole('button', { name: 'Select more' })
-    expect(selectMore).toBeInTheDocument()
-    fireEvent.click(selectMore)
-    // SelectionBar appears with 1 selected
-    await waitFor(() => {
-      expect(screen.getByText(/1 selected/i)).toBeInTheDocument()
-    })
+    // The ActionDrawer (with its backdrop) is shown for the long-pressed row.
+    expect(await screen.findByTestId('action-drawer-backdrop')).toBeInTheDocument()
   })
 
   it('shows loading state', () => {
@@ -169,5 +184,31 @@ describe('FolderTree (HT)', () => {
     // We just smoke that the loading branch isn't visible in the happy path.
     renderTree()
     expect(screen.queryByText(/Loading/i)).not.toBeInTheDocument()
+  })
+
+  it('does not crash on loading→loaded transition (hook-count regression)', async () => {
+    // Start in loading state — renders the "Loading…" early-return branch.
+    mock.loading = true
+    const { rerender } = renderTree()
+    expect(screen.getByText('Loading…')).toBeInTheDocument()
+
+    // Flip to loaded — if useCallback were placed after the early returns,
+    // React would throw "Rendered more hooks than during the previous render".
+    mock.loading = false
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <FolderTreeProvider>
+            <FolderTree />
+          </FolderTreeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    // Tree root must be present — no crash, no "Loading…" text.
+    await waitFor(() => {
+      expect(screen.getByTestId('folder-tree-root')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
   })
 })

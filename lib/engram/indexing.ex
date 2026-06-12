@@ -91,7 +91,18 @@ defmodule Engram.Indexing do
 
       _ = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
 
-      case Qdrant.upsert_points(collection(), qdrant_points) do
+      # Bounded upsert bodies: thousands of 1024-dim float vectors as one
+      # JSON PUT is tens of MB; Qdrant handles batches fine but the single
+      # request does not.
+      qdrant_points
+      |> Enum.chunk_every(256)
+      |> Enum.reduce_while(:ok, fn batch, :ok ->
+        case Qdrant.upsert_points(collection(), batch) do
+          :ok -> {:cont, :ok}
+          other -> {:halt, other}
+        end
+      end)
+      |> case do
         :ok -> {:ok, length(chunk_rows)}
         other -> other
       end
@@ -137,7 +148,31 @@ defmodule Engram.Indexing do
 
   defp doc_embed_model, do: Application.get_env(:engram, :doc_embed_model)
 
+  # Voyage caps inputs per request (1,000 texts / token budget); a large
+  # note's chunks in ONE call is a guaranteed 4xx no retry can fix — the
+  # job then churns through ReconcileEmbeddings forever. 128 matches the
+  # documented batch sweet spot and stays far below every API limit.
+  @embed_batch_size 128
+
   defp embed_for_indexing(texts) do
+    texts
+    |> Enum.chunk_every(@embed_batch_size)
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
+      case do_embed_batch(batch) do
+        {:ok, vectors} -> {:cont, {:ok, [vectors | acc]}}
+        other -> {:halt, other}
+      end
+    end)
+    |> case do
+      {:ok, reversed_batches} ->
+        {:ok, reversed_batches |> Enum.reverse() |> Enum.concat()}
+
+      other ->
+        other
+    end
+  end
+
+  defp do_embed_batch(texts) do
     case doc_embed_model() do
       nil -> embedder().embed_texts(texts)
       model -> embedder().embed_texts(texts, model: model)

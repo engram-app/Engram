@@ -9,7 +9,7 @@ import remarkCallouts from '@portaljs/remark-callouts'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import remarkWikiLink from 'remark-wiki-link'
-import { useBillingStatus } from '../api/queries'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { AttachmentFallback } from './attachment-fallback'
 import AttachmentImg from './attachment-img'
 import MermaidBlock from './mermaid-block'
@@ -61,8 +61,7 @@ const TEXT_EMBED = /\.(md|canvas)$/i
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
 function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
-  const { data: billing } = useBillingStatus()
-  const tier = billing?.tier
+  const isFreeTier = useIsFreeTier()
   const { frontmatter, body } = useMemo(() => {
     try {
       const parsed = matter(content)
@@ -133,7 +132,7 @@ function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
                 // Free tier: gate any non-text attachment (images, pdfs, etc).
                 // `.md` / `.canvas` embeds remain free-tier-allowed because
                 // they're first-class note types, not stored attachments.
-                if (tier === 'free' && !TEXT_EMBED.test(path)) {
+                if (isFreeTier && !TEXT_EMBED.test(path)) {
                   return <AttachmentFallback filename={path} />
                 }
                 return <AttachmentImg path={path} alt={alt} />
