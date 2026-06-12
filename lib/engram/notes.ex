@@ -802,21 +802,23 @@ defmodule Engram.Notes do
 
   def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
     Repo.transaction(fn ->
-      with {:ok, user} <- Crypto.ensure_user_dek(user) do
-        ids
-        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-          case move_note_into_folder(user, vault, id, "") do
-            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-            {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
-            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+      case Crypto.ensure_user_dek(user) do
+        {:ok, user} ->
+          ids
+          |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+            case move_note_into_folder(user, vault, id, "") do
+              {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+              {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+              {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            end
+          end)
+          |> case do
+            {:rollback, reason} -> Repo.rollback(reason)
+            acc -> acc
           end
-        end)
-        |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
-        end
-      else
-        {:error, reason} -> Repo.rollback(reason)
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     end)
   end
