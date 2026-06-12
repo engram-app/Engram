@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router'
-import {
-  useBillingStatus,
-  useOnboardingStatus,
-  useSetOnboardingProfile,
-} from '../api/queries'
+import { useOnboardingStatus, useSetOnboardingProfile } from '../api/queries'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { Checkbox } from '@/components/ui/checkbox'
 import AuthPanel from '@/layout/auth-panel'
 import LoadingScreen from '../layout/loading-screen'
@@ -21,8 +18,7 @@ export default function OnboardToolsPage() {
   const navigate = useNavigate()
   const { data: status, isLoading } = useOnboardingStatus()
   const setProfile = useSetOnboardingProfile()
-  const billing = useBillingStatus()
-  const isFree = billing.data?.tier === 'free'
+  const isFree = useIsFreeTier()
 
   if (isLoading || !status) {
     return <LoadingScreen />

@@ -36,6 +36,15 @@ vi.mock('../api/queries', async () => {
   }
 })
 
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    // SaaS context — free-tier cap fallbacks under test depend on this.
+    useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
+  }
+})
+
 // ── Fixture data ──────────────────────────────────────────────
 
 const baseObs: import('../api/queries').Connection = {

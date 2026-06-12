@@ -800,6 +800,29 @@ defmodule Engram.Notes do
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
+  def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
+    Repo.transaction(fn ->
+      case Crypto.ensure_user_dek(user) do
+        {:ok, user} ->
+          ids
+          |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+            case move_note_into_folder(user, vault, id, "") do
+              {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+              {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+              {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            end
+          end)
+          |> case do
+            {:rollback, reason} -> Repo.rollback(reason)
+            acc -> acc
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
   def batch_move_notes(user, vault, ids, target_folder_id)
       when is_list(ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
@@ -1394,36 +1417,36 @@ defmodule Engram.Notes do
     exists?
   end
 
-  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
-    # Phase B.3: plaintext `folder` column is gone — can't `WHERE folder LIKE
-    # 'prefix/%'` in SQL. Load all non-deleted notes, decrypt path+folder,
-    # then filter by prefix in Elixir. Single decrypt per row, then bulk
-    # updates use the already-decrypted plaintext.
-    {:ok, all_notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: n
-          )
-        )
-      end)
+  # Fetch + decrypt every live row in the vault for a folder-cascade scan
+  # (Phase B.3: plaintext `folder` is gone, so prefix filtering happens in
+  # Elixir over decrypted rows). Markers hydrate their single folder
+  # envelope; real notes go through the parallel batch decryptor instead
+  # of one-at-a-time. `:meta` skips the content column entirely for flows
+  # that never rewrite content (delete cascades).
+  defp fetch_decrypted_live_rows(user, vault, fields) do
+    base =
+      from(n in Note,
+        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at)
+      )
 
-    # Marker rows have nil path_ciphertext, so the standard decrypt path
-    # short-circuits before unwrapping the folder envelope (gated on
-    # path_ciphertext != nil). Branch on kind so markers go through the
-    # dedicated hydrate path Task 4 introduced — they still carry a
-    # folder, so the prefix-match filter below catches them alongside
-    # real notes.
+    query =
+      case fields do
+        :meta -> from(n in base, select: struct(n, @note_meta_fields))
+        :all -> base
+      end
+
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
 
-    decrypted =
-      Enum.map(all_notes, fn note ->
-        case note.kind do
-          "folder" -> hydrate_folder_marker(note, dek)
-          _ -> decrypt_or_raise!(note, user)
-        end
-      end)
+    # Marker rows have nil path_ciphertext, so the standard decrypt path
+    # short-circuits before unwrapping the folder envelope — they go
+    # through the dedicated hydrate path instead.
+    {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
+    Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
+  end
+
+  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
+    decrypted = fetch_decrypted_live_rows(user, vault, :all)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -1602,35 +1625,21 @@ defmodule Engram.Notes do
     end
   end
 
-  defp do_delete_folder(user, vault, folder) do
-    prefix = folder <> "/"
+  defp do_delete_folder(user, vault, folder), do: do_delete_folders(user, vault, [folder])
 
-    # Phase B.3 mirror of do_rename_folder/5: plaintext `folder` is gone,
-    # so we cannot prefix-filter in SQL. Load all live rows, decrypt the
-    # folder envelope, then filter in Elixir.
-    {:ok, all_rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: n
-          )
-        )
-      end)
-
-    {:ok, dek} = Crypto.get_dek(user)
-
-    decrypted =
-      Enum.map(all_rows, fn row ->
-        case row.kind do
-          "folder" -> hydrate_folder_marker(row, dek)
-          _ -> decrypt_or_raise!(row, user)
-        end
-      end)
+  # Shared-scan cascade delete for one or more folders: ONE vault fetch
+  # (metadata projection — deletes never touch content) + one parallel
+  # batch decrypt + one update_all, regardless of how many folders the
+  # batch names. Overlapping folders (parent + child in the same batch)
+  # naturally dedupe through the union filter.
+  defp do_delete_folders(user, vault, folders) do
+    prefixes = Enum.map(folders, &(&1 <> "/"))
+    decrypted = fetch_decrypted_live_rows(user, vault, :meta)
 
     matches =
       Enum.filter(decrypted, fn r ->
-        r.folder == folder or String.starts_with?(r.folder || "", prefix)
+        f = r.folder || ""
+        f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
       end)
 
     if matches == [] do
@@ -1706,23 +1715,26 @@ defmodule Engram.Notes do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, dek} <- Crypto.get_dek(user) do
+        # Resolve every marker first (cheap indexed lookups), then run ONE
+        # shared-scan cascade for all folders — the old per-id shape
+        # re-fetched and re-decrypted the entire vault once per marker.
         marker_ids
-        |> Enum.reduce_while(%{deleted: 0}, fn id, acc ->
+        |> Enum.reduce_while([], fn id, acc ->
           case get_folder_marker_by_id(user, vault, id) do
             {:ok, marker} ->
-              folder = hydrate_folder_marker(marker, dek).folder
-              # do_delete_folder/3 returns {:ok, %{deleted: n}} only — Crypto.ensure_user_dek
-              # already ran above so the error path is unreachable here.
-              {:ok, %{deleted: n}} = do_delete_folder(user, vault, folder)
-              {:cont, Map.update!(acc, :deleted, &(&1 + n))}
+              {:cont, [hydrate_folder_marker(marker, dek).folder | acc]}
 
             {:error, :not_found} ->
               {:halt, {:rollback, {:not_found, id}}}
           end
         end)
         |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
+          {:rollback, reason} ->
+            Repo.rollback(reason)
+
+          folders ->
+            {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
+            %{deleted: n}
         end
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -1756,6 +1768,30 @@ defmodule Engram.Notes do
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        marker_ids
+        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+          case move_folder_into(user, vault, id, "", dek) do
+            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
+            {:error, reason} -> {:halt, {:rollback, reason}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
       when is_list(marker_ids) and is_binary(target_folder_id) do

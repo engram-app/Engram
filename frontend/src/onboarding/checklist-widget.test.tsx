@@ -63,6 +63,15 @@ vi.mock('../api/queries', async () => {
   }
 })
 
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    // SaaS context — free-tier footer logic under test depends on this.
+    useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
+  }
+})
+
 let activeQc: QueryClient | null = null
 
 function wrap(ui: ReactNode) {

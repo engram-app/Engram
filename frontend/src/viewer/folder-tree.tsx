@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -22,9 +22,7 @@ import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
 import { useEngramTree } from './tree/use-engram-tree'
 import { TreeRowVirtualized } from './tree/tree-row-virtualized'
-import { SelectionBar } from './tree/selection-bar'
 import { parseItemId } from './tree/types'
-import type { LoaderItem } from './tree/loader'
 import { DeleteConfirm } from './tree-actions/delete-confirm'
 import { MoveDialog } from './tree-actions/move-dialog'
 import { ContextMenu } from './tree-actions/context-menu'
@@ -100,15 +98,21 @@ export default function FolderTree() {
   }
 
   // Drag-and-drop move — partition sources by kind, dispatch to the
-  // matching batch hook. Drop target must be a folder.
+  // matching batch hook. Drop target must be a folder or the vault root.
   const onMove = (sourceIds: string[], targetItemId: string) => {
     const target = parseItemId(targetItemId)
-    if (target.kind !== 'folder') return
+    if (target.kind === 'note') return
     const parsed = sourceIds.map(parseItemId)
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
     const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
-    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
-    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
+    // 'root' is the backend sentinel for the vault root; a folder target uses
+    // its marker id. Note→root has no optimistic patch (root notes live under a
+    // different cache key than the by-id folder lists), so a moved note briefly
+    // disappears until useBatchMoveNotes' onSuccess invalidation + the
+    // count-keyed rebuildTree reconcile it at root — an accepted trade-off.
+    const dest = target.kind === 'root' ? 'root' : target.id
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: dest })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
   }
 
   // The loader fires this on cache-miss when a folder is expanded. Mirrors
@@ -160,6 +164,30 @@ export default function FolderTree() {
     fetchFolderNotes,
   })
 
+  // Register the scroll container with BOTH the virtualizer (scrollRef) and
+  // headless-tree, whose getContainerProps supplies the empty-space drop handler
+  // (drops not on a row resolve to the vault root). Depends only on the stable
+  // `tree` instance — avoids ref churn from the new-object-every-render props.
+  const containerProps = tree.getContainerProps('Files')
+  const setContainerEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el
+      tree.registerElement(el)
+    },
+    [tree],
+  )
+
+  const [rootDragOver, setRootDragOver] = useState(false)
+  const onContainerDragOver = (e: React.DragEvent) => {
+    ;(containerProps.onDragOver as ((ev: React.DragEvent) => void) | undefined)?.(e)
+    setRootDragOver(true)
+  }
+  const onContainerDragLeave = () => setRootDragOver(false)
+  const onContainerDrop = (e: React.DragEvent) => {
+    setRootDragOver(false)
+    ;(containerProps.onDrop as ((ev: React.DragEvent) => void) | undefined)?.(e)
+  }
+
   // Auto-expand the chain leading to the active note so users can see
   // where they are after navigation. Mirrors the old recursive
   // `containsSelected` behaviour but driven by HT's expand API.
@@ -177,33 +205,6 @@ export default function FolderTree() {
       }
     }
   }, [selectedNoteId, folders, vaultId, qc, tree])
-
-  // Selection helpers — drive SelectionBar + bulk action handlers.
-  const selectedItems = tree.getSelectedItems()
-  const selectionCount = selectedItems.length
-
-  const itemsToRows = useMemo(
-    () => (kind: 'delete' | 'move'): DeleteRow[] | MoveRow[] => {
-      const rows: Array<DeleteRow & MoveRow> = []
-      for (const inst of selectedItems) {
-        const data = inst.getItemData() as LoaderItem | undefined
-        if (!data) continue
-        const item = data.item
-        if (item.kind === 'note') {
-          rows.push({ kind: 'file', path: item.path, childCount: 0 } as DeleteRow & MoveRow)
-        } else {
-          const folder = folders?.find((f) => f.id === item.id)
-          const direct = folder?.count ?? 0
-          const descendants = folders
-            ?.filter((f) => folder && f.name.startsWith(`${folder.name}/`))
-            .reduce((sum, f) => sum + f.count, 0) ?? 0
-          rows.push({ kind: 'folder', path: item.path, childCount: direct + descendants } as DeleteRow & MoveRow)
-        }
-      }
-      return kind === 'delete' ? (rows as DeleteRow[]) : (rows as MoveRow[])
-    },
-    [selectedItems, folders],
-  )
 
   // Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
   function rowsFor(itemId: string, mode: 'delete' | 'move'): DeleteRow[] | MoveRow[] {
@@ -256,20 +257,14 @@ export default function FolderTree() {
     return ''
   }
 
-  function openDelete(itemIds?: string[]) {
-    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
-    const nodes = itemIds
-      ? (itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[])
-      : (itemsToRows('delete') as DeleteRow[])
-    setDialog({ kind: 'delete', nodes, itemIds: ids })
+  function openDelete(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[]
+    setDialog({ kind: 'delete', nodes, itemIds })
   }
 
-  function openMove(itemIds?: string[]) {
-    const ids = itemIds ?? selectedItems.map((inst) => inst.getId())
-    const nodes = itemIds
-      ? (itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[])
-      : (itemsToRows('move') as MoveRow[])
-    setDialog({ kind: 'move', nodes, itemIds: ids })
+  function openMove(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[]
+    setDialog({ kind: 'move', nodes, itemIds })
   }
 
   function handleContextMenu(itemId: string, x: number, y: number) {
@@ -370,7 +365,10 @@ export default function FolderTree() {
       </p>
     )
   }
-  if (!folders || folders.length === 0) {
+  // Empty only when there are neither folders nor root-level notes. A vault
+  // with root notes but no folders (e.g. a freshly created "Untitled" at root)
+  // must still render the tree — the loader stitches rootNotes under ROOT.
+  if (!folders || (folders.length === 0 && rootNotes.length === 0)) {
     return (
       <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
         No notes yet.
@@ -381,13 +379,20 @@ export default function FolderTree() {
   return (
     <>
       <nav
-        ref={scrollRef}
-        role="tree"
-        aria-label="Files"
+        {...containerProps}
+        ref={setContainerEl}
+        onDragOver={onContainerDragOver}
+        onDragLeave={onContainerDragLeave}
+        onDrop={onContainerDrop}
         data-testid="folder-tree-root"
-        className="flex-1 overflow-auto py-2 text-base"
+        data-tour="folder-tree"
+        className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
+          rootDragOver ? 'ring-1 ring-inset ring-blue-400 bg-blue-50/40 dark:bg-blue-950/30' : ''
+        }`}
       >
-        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {/* minHeight ensures blank, droppable space below the rows even for a
+            short tree, so there's always a place to drop "to root". */}
+        <div style={{ height: virtualizer.getTotalSize(), minHeight: '100%', position: 'relative' }}>
           {virtualizer.getVirtualItems().map((v) => (
             <TreeRowVirtualized
               key={items[v.index]?.getId() ?? v.index}
@@ -400,13 +405,6 @@ export default function FolderTree() {
           ))}
         </div>
       </nav>
-
-      <SelectionBar
-        count={selectionCount}
-        onMove={() => openMove()}
-        onDelete={() => openDelete()}
-        onCancel={() => tree.setSelectedItems([])}
-      />
 
       {dialog.kind === 'delete' && (
         <DeleteConfirm
@@ -437,10 +435,6 @@ export default function FolderTree() {
           actions={actionsFor({ kind: kindOf(dialog.itemId) })}
           onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
           onClose={() => setDialog({ kind: 'none' })}
-          onSelectMore={() => {
-            tree.setSelectedItems([dialog.itemId])
-            setDialog({ kind: 'none' })
-          }}
         />
       )}
     </>
