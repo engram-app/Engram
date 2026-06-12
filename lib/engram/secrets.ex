@@ -24,7 +24,10 @@ defmodule Engram.Secrets do
       map when is_map(map) ->
         map
         |> Enum.reject(fn {k, _v} -> getenv.(k) != nil end)
-        |> Map.new(fn {k, v} -> {k, to_string(v)} end)
+        |> Map.new(fn
+          {k, v} when is_binary(v) or is_number(v) or is_boolean(v) -> {k, to_string(v)}
+          {k, _v} -> raise ArgumentError, "APP_SECRETS_JSON[#{k}] must be a scalar value"
+        end)
 
       other ->
         raise ArgumentError,

@@ -33,4 +33,27 @@ defmodule Engram.SecretsTest do
   test "non-object JSON raises ArgumentError" do
     assert_raise ArgumentError, fn -> Secrets.unpack("[1,2,3]", fn _ -> nil end) end
   end
+
+  test "a nested-object value raises ArgumentError without leaking the value" do
+    blob = ~s({"GOOD":"x","NESTED":{"secret":"leak"}})
+    err = assert_raise ArgumentError, fn -> Secrets.unpack(blob, fn _ -> nil end) end
+    refute err.message =~ "leak"
+    assert err.message =~ "NESTED"
+  end
+
+  test "a null value raises ArgumentError" do
+    assert_raise ArgumentError, fn ->
+      Secrets.unpack(~s({"A":null}), fn _ -> nil end)
+    end
+  end
+
+  test "an individually-set empty-string env var still wins (excluded)" do
+    blob = ~s({"A":"1"})
+    getenv = fn
+      "A" -> ""
+      _ -> nil
+    end
+
+    assert Secrets.unpack(blob, getenv) == %{}
+  end
 end
