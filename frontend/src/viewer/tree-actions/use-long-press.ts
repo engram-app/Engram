@@ -32,6 +32,12 @@ export function useLongPress({
   return {
     onPointerDown(e: React.PointerEvent) {
       cancel()
+      // Long-press is a touch/pen affordance only. Mouse uses right-click
+      // (onContextMenu) for the same actions; arming a timer for the mouse
+      // makes a click-and-drag trip the action drawer — and once a native
+      // mouse drag starts the browser stops emitting pointermove, so the
+      // move-threshold can't cancel it. pointerType is the mouse/touch signal.
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
       start.current = { x: e.clientX, y: e.clientY }
       timer.current = setTimeout(() => {
         fired.current = true

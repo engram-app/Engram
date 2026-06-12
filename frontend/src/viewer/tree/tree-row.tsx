@@ -84,12 +84,25 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
     )
   }
 
+  const htProps = instance.getProps()
+  const handleNoteDragStart = (e: React.DragEvent) => {
+    // Run HT's own drag init first (it tracks the drag via internal state).
+    ;(htProps.onDragStart as ((ev: React.DragEvent) => void) | undefined)?.(e)
+    // Then strip the <a href> link payload the browser auto-adds, so Chrome/Edge
+    // don't offer a split view / "open in new tab" while dragging the note within
+    // the tree. HT's move reads internal state, not dataTransfer, so this is safe.
+    e.dataTransfer.clearData('text/uri-list')
+    e.dataTransfer.clearData('text/plain')
+    e.dataTransfer.clearData('text/html')
+  }
+
   return (
     <Link
       to={`/note/${item.id}`}
-      {...instance.getProps()}
+      {...htProps}
       {...longPressProps}
       onContextMenu={contextMenuHandler}
+      onDragStart={handleNoteDragStart}
       aria-selected={instance.isSelected()}
       className={rowClass(instance)}
       style={{ paddingLeft: `${notePad}px` }}
@@ -104,11 +117,16 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 }
 
 function rowClass(instance: ItemInstance<LoaderItem>): string {
+  // `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
+  // rendered without it (tests).
+  const dragOver =
+    (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false
   return [
     'flex items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left',
     instance.isSelected()
       ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
       : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800',
+    dragOver ? 'ring-1 ring-inset ring-blue-400 bg-blue-100/60 dark:bg-blue-900/40' : '',
   ].join(' ')
 }
 

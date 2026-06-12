@@ -128,6 +128,27 @@ defmodule Engram.NotesBatchTest do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Archive")
       assert {:ok, %{moved: 0}} = Notes.batch_move_notes(user, vault, [], target_marker.id)
     end
+
+    test "moves a note in a folder to the vault root via the \"root\" sentinel", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Archive")
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+
+      assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], "root")
+
+      {:ok, moved} = Notes.get_note_by_id(user, vault, n1.id)
+      assert moved.path == "a.md"
+      assert moved.folder in ["", nil]
+    end
+
+    test "moving a root note to root is a no-op move (still ok)", %{user: user, vault: vault} do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], "root")
+      {:ok, moved} = Notes.get_note_by_id(user, vault, n1.id)
+      assert moved.path == "a.md"
+    end
   end
 
   describe "batch_delete_folders/2" do
@@ -280,6 +301,20 @@ defmodule Engram.NotesBatchTest do
     test "empty list → {:ok, %{moved: 0}}", %{user: user, vault: vault} do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Parent")
       assert {:ok, %{moved: 0}} = Notes.batch_move_folders(user, vault, [], target_marker.id)
+    end
+
+    test "moves a nested folder to the vault root via the \"root\" sentinel", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _parent} = Notes.create_folder_marker(user, vault, "A")
+      {:ok, child} = Notes.create_folder_marker(user, vault, "A/B")
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "A/B/x.md"})
+
+      assert {:ok, %{moved: 1}} = Notes.batch_move_folders(user, vault, [child.id], "root")
+
+      {:ok, moved} = Notes.get_note_by_id(user, vault, note.id)
+      assert moved.path == "B/x.md"
     end
   end
 

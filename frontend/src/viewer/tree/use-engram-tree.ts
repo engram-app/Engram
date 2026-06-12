@@ -15,6 +15,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { QueryClient } from '@tanstack/react-query'
 import { buildLoader, type SortKey, type LoaderItem } from './loader'
 import { ROOT_ID } from './types'
+import { resolveDropMove } from './drop-redirect'
 import type { Folder, NoteSummary } from '../../api/queries'
 
 interface Deps {
@@ -31,6 +32,22 @@ interface Deps {
 
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
 type Data = LoaderItem
+
+/**
+ * Stable structural fingerprint that drives `rebuildTree()`. Includes each
+ * folder's `count` (not just its id) so a move/create/delete — which changes
+ * counts but no folder ids — still changes the key and rebuilds the tree.
+ * Without the count, headless-tree keeps a stale per-folder child list after a
+ * move until the user manually collapses/expands the folder.
+ */
+export function treeStructureKey(
+  folders: Pick<Folder, 'id' | 'count'>[],
+  rootNoteIds: string[],
+  sort: SortKey,
+): string {
+  const folderKey = folders.map((f) => `${f.id}:${f.count}`).join('|')
+  return `${folderKey}::${rootNoteIds.join('|')}::${sort}`
+}
 
 export function useEngramTree(deps: Deps) {
   const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null)
@@ -107,16 +124,25 @@ export function useEngramTree(deps: Deps) {
       const d = item.getItemData()
       return d?.isFolder ?? false
     },
+    // Reparent-only: drops go INTO the hovered folder (or, in empty space, to
+    // root). canReorder:true would surface a between-items line whose target is
+    // the row's PARENT — dropping on a top-level folder's edge would silently
+    // land at root. We have no persisted order, so the destination-folder
+    // highlight (isDragTarget) is the right affordance, not a reorder line.
     canReorder: false,
     onRename: (item: ItemInstance<Data>, value: string) =>
       deps.onRenameCommit(item.getId(), value),
     onDrop: (items: ItemInstance<Data>[], target: DragTarget<Data>) => {
-      const sourceIds = items.map(i => i.getId())
-      // target shape varies (item vs between-items); fall back to item id of
-      // whichever container the drop lands on.
-      const targetItem = (target as { item?: ItemInstance<Data> }).item
-      const targetId = targetItem ? targetItem.getId() : ROOT_ID
-      deps.onMove(sourceIds, targetId)
+      // HT normalizes `target.item` to the destination container (the parent
+      // folder for between-siblings, or the folder dropped onto). We ignore the
+      // insertion index and reparent into it. See drop-redirect.ts.
+      const destId = (target as { item?: ItemInstance<Data> }).item?.getId()
+      const sources = items.map((i) => ({
+        id: i.getId(),
+        parentId: i.getParent()?.getId(),
+      }))
+      const move = resolveDropMove(sources, destId)
+      if (move) deps.onMove(move.ids, move.dest)
     },
     features: [
       syncDataLoaderFeature,
@@ -137,15 +163,17 @@ export function useEngramTree(deps: Deps) {
   // data shape changes — keyed on stable structural fingerprints so we never
   // re-trigger from spurious identity churn (rebuildTree → setState → render
   // would otherwise spin into a max-update-depth loop).
-  const folderKey = deps.folders.map(f => f.id).join('|')
-  const rootKey = deps.rootNotes.map(n => n.id).join('|')
+  const structureKey = treeStructureKey(
+    deps.folders,
+    deps.rootNotes.map((n) => n.id),
+    deps.sort,
+  )
   const lastKey = useRef('')
   useEffect(() => {
-    const key = `${folderKey}::${rootKey}::${deps.sort}`
-    if (lastKey.current === key) return
-    lastKey.current = key
+    if (lastKey.current === structureKey) return
+    lastKey.current = structureKey
     tree.rebuildTree()
-  }, [tree, folderKey, rootKey, deps.sort])
+  }, [tree, structureKey])
 
   const items = tree.getItems()
 
