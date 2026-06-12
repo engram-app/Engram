@@ -224,4 +224,24 @@ describe('TreeRow', () => {
     expect(btn).toHaveAttribute('data-ht', 'yes')
     expect(btn).toHaveAttribute('tabindex', '-1')
   })
+
+  it('strips the native link payload on a note dragstart (no browser split/new-tab offer) while preserving HT drag init', () => {
+    const htDragStart = vi.fn()
+    const instance = mockInstance({ data: noteItem, props: { onDragStart: htDragStart } })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} />
+      </MemoryRouter>,
+    )
+    const link = screen.getByRole('link')
+    const clearData = vi.fn()
+    fireEvent.dragStart(link, {
+      dataTransfer: { clearData, setData: vi.fn(), types: [] },
+    })
+    // HT's own drag initialization must still run.
+    expect(htDragStart).toHaveBeenCalledOnce()
+    // The <a href> link payload Chrome uses for split-view must be cleared.
+    expect(clearData).toHaveBeenCalledWith('text/uri-list')
+    expect(clearData).toHaveBeenCalledWith('text/plain')
+  })
 })

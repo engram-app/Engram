@@ -84,12 +84,25 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
     )
   }
 
+  const htProps = instance.getProps()
+  const handleNoteDragStart = (e: React.DragEvent) => {
+    // Run HT's own drag init first (it tracks the drag via internal state).
+    ;(htProps.onDragStart as ((ev: React.DragEvent) => void) | undefined)?.(e)
+    // Then strip the <a href> link payload the browser auto-adds, so Chrome/Edge
+    // don't offer a split view / "open in new tab" while dragging the note within
+    // the tree. HT's move reads internal state, not dataTransfer, so this is safe.
+    e.dataTransfer.clearData('text/uri-list')
+    e.dataTransfer.clearData('text/plain')
+    e.dataTransfer.clearData('text/html')
+  }
+
   return (
     <Link
       to={`/note/${item.id}`}
-      {...instance.getProps()}
+      {...htProps}
       {...longPressProps}
       onContextMenu={contextMenuHandler}
+      onDragStart={handleNoteDragStart}
       aria-selected={instance.isSelected()}
       className={rowClass(instance)}
       style={{ paddingLeft: `${notePad}px` }}
