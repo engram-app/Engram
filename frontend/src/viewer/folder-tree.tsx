@@ -385,7 +385,8 @@ export default function FolderTree() {
         onDragLeave={onContainerDragLeave}
         onDrop={onContainerDrop}
         data-testid="folder-tree-root"
-        className={`relative flex-1 overflow-auto py-2 text-base ${
+        data-tour="folder-tree"
+        className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
           rootDragOver ? 'ring-1 ring-inset ring-blue-400 bg-blue-50/40 dark:bg-blue-950/30' : ''
         }`}
       >
