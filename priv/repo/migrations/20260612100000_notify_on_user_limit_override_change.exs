@@ -18,7 +18,10 @@ defmodule Engram.Repo.Migrations.NotifyOnUserLimitOverrideChange do
       );
       RETURN COALESCE(NEW, OLD);
     END;
-    $$ LANGUAGE plpgsql;
+    $$ LANGUAGE plpgsql
+    -- Pinned search_path (splinter: function_search_path_mutable). The body
+    -- only touches pg_catalog builtins, so empty is correct.
+    SET search_path = '';
     """)
 
     execute("""
