@@ -283,9 +283,23 @@ defmodule Engram.Auth.DeviceFlow do
     :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
   end
 
+  # User codes are typed by a human to authorize a device, so a predictable
+  # PRNG (Enum.random/:rand) is a brute-force/guessing weakness. Draw each
+  # character from a CSPRNG with rejection sampling to avoid modulo bias.
   defp generate_user_code do
-    part1 = for(_ <- 1..4, into: "", do: <<Enum.random(@user_code_chars)>>)
-    part2 = for(_ <- 1..4, into: "", do: <<Enum.random(@user_code_chars)>>)
-    "#{part1}-#{part2}"
+    "#{random_code_part(4)}-#{random_code_part(4)}"
+  end
+
+  defp random_code_part(length) do
+    for _ <- 1..length, into: "", do: <<Enum.at(@user_code_chars, random_index())>>
+  end
+
+  defp random_index do
+    n = length(@user_code_chars)
+    # Reject the high bytes that would skew the modulo distribution.
+    max = 256 - rem(256, n)
+    byte = :crypto.strong_rand_bytes(1) |> :binary.first()
+
+    if byte < max, do: rem(byte, n), else: random_index()
   end
 end
