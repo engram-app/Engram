@@ -163,6 +163,24 @@ defmodule EngramWeb.Telemetry do
         tags: [:status, :reason_label],
         description: "Boot canary outcomes — `:failed` halts boot via BootCanaryGuard"
       ),
+      # Read-path crypto cost (perf wave 2026-06-12). dek_cache hit/miss is
+      # the leading indicator of unwrap cost (a miss pairs with a provider
+      # unwrap — network RPC under AwsKms); decrypt_batch sizes the
+      # per-request decrypt fan-out on list endpoints + sync manifest.
+      counter("engram.crypto.dek_cache.count",
+        tags: [:outcome],
+        description: "DekCache lookups by outcome (:hit | :miss)"
+      ),
+      summary("engram.crypto.decrypt_batch.duration_us",
+        tags: [:kind],
+        description:
+          "Batch decrypt wall-time in µs per kind (:notes | :manifest_notes | :manifest_attachments)"
+      ),
+      summary("engram.crypto.decrypt_batch.count",
+        measurement: :count,
+        tags: [:kind],
+        description: "Rows decrypted per batch, per kind"
+      ),
       counter("engram.search.decrypt_failed.count",
         description:
           "Search candidate decrypt failures — non-zero rate is an alarm signal (key drift, tampering)"

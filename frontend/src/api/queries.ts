@@ -1,4 +1,10 @@
-import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api, ApiError } from './client'
@@ -83,6 +89,11 @@ export function useFolders() {
       api.get<{ folders: Array<Folder & { id: string | null }> }>('/folders'),
     select: selectFolders,
     enabled: !demo?.active,
+    // Folder listing decrypts every marker row server-side; without a
+    // staleTime each remount/window-focus refetches it. Mutations and the
+    // sync channel (channel.ts) invalidate this key, so 60s of staleness
+    // only spans gaps nothing else would catch anyway.
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
   if (demo?.active) {
     // Demo folders use string ids; synthesize stable sentinel ids
@@ -117,6 +128,9 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: selectNotes,
     enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
+    // Same contract as useFolderNotesById: mutations + channel events
+    // invalidate; staleness only spans gaps those already don't cover.
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
   if (demo?.active) {
     const matchFolder = demo.folders.find((f) => f.path === folder)
@@ -306,9 +320,14 @@ export function useSearch(query: string) {
   const vaultId = useActiveVaultId()
   return useQuery({
     queryKey: ['search', vaultId, query],
-    queryFn: () => api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }),
+    // Each search costs a Voyage embedding + Qdrant round trip server-side:
+    // abort superseded requests, and keep the previous results rendered
+    // while the next key loads so the panel doesn't flicker empty.
+    queryFn: ({ signal }) =>
+      api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }, { signal }),
     select: (data) => data.results,
     enabled: query.length > 0,
+    placeholderData: keepPreviousData,
   })
 }
 

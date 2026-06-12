@@ -79,6 +79,19 @@ defmodule Engram.Embedders.Voyage do
   defp status_label({:error, {status, _}}) when is_integer(status), do: :client_error
   defp status_label({:error, _}), do: :error
 
+  @doc """
+  Default Req options per embed purpose.
+
+  `:query` backs synchronous user search — the request process is pinned
+  for the whole call, so a Voyage brownout must fail fast (one attempt,
+  short timeout) instead of holding searches for up to ~2 minutes.
+  `:index` runs in Oban workers where patient retries are the right call.
+  Explicit caller opts always win over these defaults.
+  """
+  @spec request_defaults(atom()) :: keyword()
+  def request_defaults(:query), do: [receive_timeout: 5_000, retry: false]
+  def request_defaults(_purpose), do: [receive_timeout: 30_000, retry: :transient, max_retries: 3]
+
   defp do_embed_texts(texts, opts) do
     url = Application.get_env(:engram, :voyage_url, @default_url)
     model = Keyword.get(opts, :model, Application.get_env(:engram, :embed_model, @default_model))
@@ -88,17 +101,15 @@ defmodule Engram.Embedders.Voyage do
         raise "VOYAGE_API_KEY not configured (set VOYAGE_API_KEY env var)"
 
     {req_opts, _} = Keyword.split(opts, [:retry, :max_retries, :receive_timeout])
+    purpose = Keyword.get(opts, :purpose, :index)
 
     result =
       Req.post(
         "#{url}/v1/embeddings",
         [
           json: %{input: texts, model: model},
-          headers: [{"authorization", "Bearer #{api_key}"}],
-          receive_timeout: 30_000,
-          retry: :transient,
-          max_retries: 3
-        ] ++ req_opts
+          headers: [{"authorization", "Bearer #{api_key}"}]
+        ] ++ Keyword.merge(request_defaults(purpose), req_opts)
       )
 
     case result do

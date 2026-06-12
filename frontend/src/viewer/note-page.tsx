@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { toast } from 'sonner'
 import { useNote, useUpdateNote } from '../api/queries'
@@ -6,10 +6,13 @@ import { useRightSidebar } from '../layout/right-sidebar-context'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import NoteEditor from './note-editor'
 import NoteToc from './note-toc'
 import NoteView from './note-view'
 import { useRemoteUpdateBanner } from './use-remote-update-banner'
+
+// CodeMirror (language pkg + view) only loads when the user first opens
+// the Edit tab — most note views never do.
+const NoteEditor = lazy(() => import('./note-editor'))
 
 type Mode = 'preview' | 'edit'
 
@@ -27,6 +30,14 @@ export default function NotePage() {
 
   const [mode, setMode] = useState<Mode>('preview')
   const [draft, setDraft] = useState('')
+  // Latch: the edit pane is forceMounted to preserve editor state across
+  // tab switches, but the (lazy) editor itself shouldn't mount — or its
+  // chunk download — until the user first enters edit mode.
+  const [editorTouched, setEditorTouched] = useState(false)
+
+  useEffect(() => {
+    if (mode === 'edit') setEditorTouched(true)
+  }, [mode])
 
   // Sync draft only when the user navigates to a different note. Re-syncing
   // on every `note.content` change would clobber in-progress edits whenever
@@ -164,7 +175,11 @@ export default function NotePage() {
         )}
         <ScrollArea className="h-full">
           <div className="px-6 py-6 lg:px-8 lg:py-8" data-tour="note-editor">
-            <NoteEditor value={draft} onChange={setDraft} />
+            {editorTouched && (
+              <Suspense fallback={<p className="text-muted-foreground">Loading editor…</p>}>
+                <NoteEditor value={draft} onChange={setDraft} />
+              </Suspense>
+            )}
           </div>
         </ScrollArea>
       </TabsContent>

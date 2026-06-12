@@ -55,6 +55,23 @@ defmodule EngramWeb.SyncControllerTest do
       assert is_binary(att["content_hash"])
     end
 
+    test "emits decrypt-batch telemetry for manifest paths", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Tel/A.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "Tel/B.md", content: "# B", mtime: 1_000.0})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      conn2 = get(conn, "/api/sync/manifest")
+      assert json_response(conn2, 200)["total_notes"] == 2
+
+      assert_receive {[:engram, :crypto, :decrypt_batch], ^ref, measurements,
+                      %{kind: :manifest_notes}}
+
+      assert measurements.count == 2
+      assert is_integer(measurements.duration_us)
+    end
+
     test "excludes deleted notes and attachments", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Del.md", content: "# Del", mtime: 1_000.0})
       delete(conn, "/api/notes/Test/Del.md")

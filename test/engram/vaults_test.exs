@@ -2,6 +2,7 @@ defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.Billing.OverrideCache
   alias Engram.Vaults
 
   setup do
@@ -35,8 +36,11 @@ defmodule Engram.VaultsTest do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
       # Give the second user unlimited vaults via user_overrides or just test default (1) blocks
-      # Override the limit so we can insert a second vault
+      # Override the limit so we can insert a second vault. The first create
+      # cached the override MISS — evict so the grant is visible (same idiom
+      # as PlanCache.invalidate after mid-test plan edits).
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
 
       assert {:ok, vault2} = Vaults.create_vault(user, %{name: "Second"})
       assert vault2.is_default == false
@@ -73,8 +77,10 @@ defmodule Engram.VaultsTest do
       assert {:error, {:vault_limit_reached, 1, 1}} =
                Vaults.create_vault(user, %{name: "Second"})
 
-      # Lift the limit via per-user override
+      # Lift the limit via per-user override. Earlier creates cached the
+      # override MISS — evict so the grant is visible immediately.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
 
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
@@ -812,7 +818,9 @@ defmodule Engram.VaultsTest do
     test "second vault does not double-record" do
       user = insert(:user)
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      # First create cached the override MISS — evict so the grant lands.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Second"})
 
       assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)

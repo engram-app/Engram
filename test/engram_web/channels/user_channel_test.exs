@@ -89,5 +89,38 @@ defmodule EngramWeb.UserChannelTest do
 
       refute_broadcast "vault_populated", %{}, 200
     end
+
+    # Characterization guard: the populated check is VAULT-scoped, not
+    # user-scoped. A user with an existing populated vault must still get
+    # the broadcast for the first note of a NEW vault. (Protects against
+    # replacing the existence probe with the per-user notes_count meter.)
+    test "fires for the first note of a second vault even when another vault has notes",
+         %{user: user} do
+      # Free tier caps vaults at 1 — lift it so this user can hold two.
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+
+      {:ok, vault_a} = Vaults.create_vault(user, %{name: "A"})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault_a, %{
+          "path" => "Existing.md",
+          "content" => "old",
+          "mtime" => 1_700_000_000.0
+        })
+
+      assert_broadcast "vault_populated", %{}
+
+      {:ok, vault_b} = Vaults.create_vault(user, %{name: "B"})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault_b, %{
+          "path" => "Fresh.md",
+          "content" => "new",
+          "mtime" => 1_700_000_001.0
+        })
+
+      assert_broadcast "vault_populated", %{vault_id: vault_b_id}
+      assert vault_b_id == vault_b.id
+    end
   end
 end

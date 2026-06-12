@@ -317,23 +317,39 @@ defmodule Engram.Crypto do
     # representative per group: content (with title), path (with folder),
     # and tags (standalone). Any group present → load DEK + run decrypt.
     not is_nil(note.content_ciphertext) or
+      not is_nil(note.title_ciphertext) or
       not is_nil(note.path_ciphertext) or
       not is_nil(note.tags_ciphertext)
   end
 
-  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{content_ciphertext: nil} = note, _dek),
+  # Content and title decrypt independently: metadata-only listings project
+  # out content_ciphertext (the big column) while still carrying title.
+  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{} = note, dek) do
+    with {:ok, note} <- decrypt_note_content(note, dek) do
+      decrypt_note_title(note, dek)
+    end
+  end
+
+  defp decrypt_note_content(%Engram.Notes.Note{content_ciphertext: nil} = note, _dek),
     do: {:ok, note}
 
-  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{} = note, dek) do
-    content_aad = decrypt_aad(note, :notes, :content)
-    title_aad = decrypt_aad(note, :notes, :title)
+  defp decrypt_note_content(%Engram.Notes.Note{} = note, dek) do
+    aad = decrypt_aad(note, :notes, :content)
 
-    with {:ok, content} <-
-           Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek, content_aad),
-         {:ok, title} <-
-           Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek, title_aad) do
-      {:ok, %{note | content: content, title: title}}
-    else
+    case Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek, aad) do
+      {:ok, content} -> {:ok, %{note | content: content}}
+      :error -> {:error, :decrypt_failed}
+    end
+  end
+
+  defp decrypt_note_title(%Engram.Notes.Note{title_ciphertext: nil} = note, _dek),
+    do: {:ok, note}
+
+  defp decrypt_note_title(%Engram.Notes.Note{} = note, dek) do
+    aad = decrypt_aad(note, :notes, :title)
+
+    case Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek, aad) do
+      {:ok, title} -> {:ok, %{note | title: title}}
       :error -> {:error, :decrypt_failed}
     end
   end
@@ -369,6 +385,91 @@ defmodule Engram.Crypto do
       :error ->
         {:error, :decrypt_failed}
     end
+  end
+
+  @doc """
+  Decrypts a list of notes as one instrumented batch. Returns per-note
+  result tuples in input order — a corrupt row yields `{:error, reason}`
+  in place without aborting the rest of the batch.
+
+  The user's DEK is warmed into the cache once up front, so the per-note
+  `get_dek/1` calls inside `maybe_decrypt_note_fields/2` are pure ETS hits
+  even when the batch is the first crypto touch of the request.
+  """
+  @spec decrypt_notes_batch([Engram.Notes.Note.t()], User.t()) ::
+          [{:ok, Engram.Notes.Note.t()} | {:error, term()}]
+  def decrypt_notes_batch([], _user), do: []
+
+  def decrypt_notes_batch(notes, %User{} = user) when is_list(notes) do
+    _ = get_dek(user)
+
+    measure_decrypt_batch(:notes, length(notes), fn ->
+      parallel_map(notes, &maybe_decrypt_note_fields(&1, user))
+    end)
+  end
+
+  # Below this size the per-task spawn/copy overhead rivals the AES-GCM
+  # work itself (path-sized payloads decrypt in ~µs), so small batches
+  # stay inline on the caller.
+  @parallel_map_threshold 32
+
+  @doc """
+  Chunked parallel map for CPU-bound crypto batches. Splits `items` into
+  one chunk per scheduler and decrypts chunks concurrently, preserving
+  input order. Batches at or below #{@parallel_map_threshold} items run
+  inline — task overhead beats the win there.
+
+  Ciphertext binaries are refc (heap-shared), so fan-out does not copy
+  payload bytes. Workers touching the DEK mark themselves `:sensitive`
+  via `get_dek/1` exactly like the caller (T3.3 / M9).
+
+  A worker exit (timeout, raise inside `fun`) re-raises in the caller,
+  matching the sequential behavior where the exception propagates.
+  """
+  @spec parallel_map([item], (item -> result)) :: [result]
+        when item: var, result: var
+  def parallel_map(items, fun) when length(items) <= @parallel_map_threshold do
+    Enum.map(items, fun)
+  end
+
+  def parallel_map(items, fun) do
+    schedulers = System.schedulers_online()
+    chunk_size = items |> length() |> Kernel./(schedulers) |> ceil() |> max(1)
+
+    items
+    |> Enum.chunk_every(chunk_size)
+    |> Task.async_stream(fn chunk -> Enum.map(chunk, fun) end,
+      max_concurrency: schedulers,
+      ordered: true,
+      timeout: :timer.seconds(60)
+    )
+    |> Enum.flat_map(fn
+      {:ok, results} -> results
+      {:exit, reason} -> exit(reason)
+    end)
+  end
+
+  @doc """
+  Runs `fun` and emits one `[:engram, :crypto, :decrypt_batch]` event with
+  `%{count: count, duration_us: ...}` tagged `%{kind: kind}`. Count-zero
+  batches run untimed — they'd only skew the duration summaries.
+  """
+  @spec measure_decrypt_batch(atom(), non_neg_integer(), (-> result)) :: result
+        when result: var
+  def measure_decrypt_batch(_kind, 0, fun), do: fun.()
+
+  def measure_decrypt_batch(kind, count, fun) when is_atom(kind) and is_integer(count) do
+    start = System.monotonic_time(:microsecond)
+    result = fun.()
+    duration_us = System.monotonic_time(:microsecond) - start
+
+    :telemetry.execute(
+      [:engram, :crypto, :decrypt_batch],
+      %{count: count, duration_us: duration_us},
+      %{kind: kind}
+    )
+
+    result
   end
 
   @doc """

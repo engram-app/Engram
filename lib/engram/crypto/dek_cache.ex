@@ -37,6 +37,7 @@ defmodule Engram.Crypto.DekCache do
     case :ets.lookup(@table, user_id) do
       [{^user_id, dek, expires_at}] ->
         if :erlang.system_time(:millisecond) < expires_at do
+          emit_lookup(:hit)
           {:ok, dek}
         else
           # T3.3 — eviction of an expired entry must go through the owner
@@ -44,12 +45,21 @@ defmodule Engram.Crypto.DekCache do
           # table directly. Cast is fine: a stale entry living for one
           # extra request is harmless (decrypt under the same key).
           GenServer.cast(__MODULE__, {:expire, user_id})
+          emit_lookup(:miss)
           :miss
         end
 
       [] ->
+        emit_lookup(:miss)
         :miss
     end
+  end
+
+  # A miss is paired with a provider unwrap (Local ~µs, AWS KMS a network
+  # RPC), so the hit/miss ratio is the cheapest leading indicator of
+  # read-path crypto cost.
+  defp emit_lookup(outcome) do
+    :telemetry.execute([:engram, :crypto, :dek_cache], %{count: 1}, %{outcome: outcome})
   end
 
   @spec put(user_id :: integer(), dek :: <<_::256>>, ttl_ms :: non_neg_integer() | nil) :: :ok

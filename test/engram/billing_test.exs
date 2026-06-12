@@ -927,6 +927,62 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "user override caching" do
+    alias Engram.Billing.OverrideCache
+
+    setup do
+      on_exit(fn -> OverrideCache.evict_all() end)
+      %{user: insert(:user)}
+    end
+
+    test "caches an override hit after the first lookup", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 9})
+
+      {first, q1} =
+        with_query_count("user_limit_overrides", fn ->
+          Billing.effective_limit(user, :vaults_cap)
+        end)
+
+      assert first == 9
+      assert q1 == 1
+
+      {second, q2} =
+        with_query_count("user_limit_overrides", fn ->
+          Billing.effective_limit(user, :vaults_cap)
+        end)
+
+      assert second == 9
+      assert q2 == 0
+    end
+
+    test "caches the miss — the common case is no override row", %{user: user} do
+      {_, q1} =
+        with_query_count("user_limit_overrides", fn ->
+          Billing.effective_limit(user, :vaults_cap)
+        end)
+
+      assert q1 == 1
+
+      {_, q2} =
+        with_query_count("user_limit_overrides", fn ->
+          Billing.effective_limit(user, :vaults_cap)
+        end)
+
+      assert q2 == 0
+    end
+
+    test "evict/1 makes a newly granted override visible immediately", %{user: user} do
+      default = Billing.effective_limit(user, :vaults_cap)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 33})
+
+      # The miss is cached — stale default until evicted (or TTL).
+      assert Billing.effective_limit(user, :vaults_cap) == default
+
+      :ok = OverrideCache.evict(user.id)
+      assert Billing.effective_limit(user, :vaults_cap) == 33
+    end
+  end
+
   defp with_subscription_query_count(fun), do: with_query_count("subscriptions", fun)
 
   # Counts Repo queries against `source` emitted while `fun` runs. Telemetry

@@ -223,6 +223,109 @@ defmodule Engram.CryptoTest do
       {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
       assert out.tags == ["alpha", "beta"]
     end
+
+    test "decrypts title when content_ciphertext is absent (sparse projection)", %{user: user} do
+      # Metadata-only listings project out content_ciphertext to skip the
+      # big-column I/O + decrypt. Title must still decrypt — the phase-4
+      # gate may not couple title to content presence.
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      note_id = Ecto.UUID.generate()
+
+      {:ok, enc} =
+        Crypto.encrypt_note_fields(%{content: "body", title: "My Title"}, user, note_id)
+
+      note = %Engram.Notes.Note{
+        id: note_id,
+        dek_version: Crypto.row_version_aad_bound(),
+        content_ciphertext: nil,
+        content_nonce: nil,
+        title_ciphertext: enc.title_ciphertext,
+        title_nonce: enc.title_nonce
+      }
+
+      {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
+      assert out.title == "My Title"
+      assert out.content == nil
+    end
+  end
+
+  defp build_encrypted_note(user, content, title) do
+    note_id = Ecto.UUID.generate()
+
+    {:ok, enc} =
+      Crypto.encrypt_note_fields(%{content: content, title: title}, user, note_id)
+
+    %Engram.Notes.Note{
+      id: note_id,
+      dek_version: Crypto.row_version_aad_bound(),
+      content_ciphertext: enc.content_ciphertext,
+      content_nonce: enc.content_nonce,
+      title_ciphertext: enc.title_ciphertext,
+      title_nonce: enc.title_nonce
+    }
+  end
+
+  describe "decrypt_notes_batch/2" do
+    test "decrypts notes preserving order and emits batch telemetry", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      notes = for i <- 1..3, do: build_encrypted_note(user, "c#{i}", "t#{i}")
+
+      results = Crypto.decrypt_notes_batch(notes, user)
+
+      assert [
+               {:ok, %{content: "c1", title: "t1"}},
+               {:ok, %{content: "c2", title: "t2"}},
+               {:ok, %{content: "c3", title: "t3"}}
+             ] = results
+
+      assert_receive {[:engram, :crypto, :decrypt_batch], ^ref, measurements, %{kind: :notes}}
+      assert measurements.count == 3
+      assert is_integer(measurements.duration_us) and measurements.duration_us >= 0
+    end
+
+    test "corrupt note yields an error tuple in place, others still decrypt", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      good = build_encrypted_note(user, "good", "g")
+      bad = build_encrypted_note(user, "bad", "b")
+      bad = %{bad | content_ciphertext: :crypto.strong_rand_bytes(32)}
+
+      assert [{:ok, %{content: "good"}}, {:error, :decrypt_failed}] =
+               Crypto.decrypt_notes_batch([good, bad], user)
+    end
+
+    test "large batch decrypts in order with errors contained (parallel path)", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      notes = for i <- 1..40, do: build_encrypted_note(user, "c#{i}", "t#{i}")
+      corrupt = %{Enum.at(notes, 17) | content_ciphertext: :crypto.strong_rand_bytes(32)}
+      notes = List.replace_at(notes, 17, corrupt)
+
+      results = Crypto.decrypt_notes_batch(notes, user)
+
+      assert length(results) == 40
+      assert {:error, :decrypt_failed} = Enum.at(results, 17)
+
+      for {result, i} <- Enum.with_index(results), i != 17 do
+        assert {:ok, %{content: content}} = result
+        assert content == "c#{i + 1}"
+      end
+    end
+
+    test "empty list returns empty without telemetry noise", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      assert [] = Crypto.decrypt_notes_batch([], user)
+      refute_receive {[:engram, :crypto, :decrypt_batch], ^ref, _, _}, 50
+    end
   end
 
   describe "dek_filter_key/1" do

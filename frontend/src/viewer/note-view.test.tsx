@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
 import NoteView from './note-view'
 
 let mockTier: 'free' | 'starter' | 'pro' | 'trial' | 'none' = 'free'
+// SaaS by default; self-host flips false (no billing → attachments ungated).
+let billingEnabled = true
 const showUpgradeMock = vi.fn()
 
 vi.mock('../api/queries', async () => {
@@ -12,6 +14,18 @@ vi.mock('../api/queries', async () => {
     ...actual,
     useBillingStatus: () => ({ data: { tier: mockTier } }),
   }
+})
+
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    useConfig: () => ({ billingEnabled }) as ReturnType<typeof actual.useConfig>,
+  }
+})
+
+beforeEach(() => {
+  billingEnabled = true
 })
 
 vi.mock('@/billing/upgrade-dialog-provider', () => ({
@@ -51,6 +65,14 @@ describe('NoteView attachment gating', () => {
 
   it('renders AttachmentImg for paid tier on the same embed', () => {
     mockTier = 'pro'
+    renderNote('Here is an embed:\n\n![[image.png]]\n')
+    expect(screen.getByTestId('attachment-img')).toHaveTextContent('image.png')
+    expect(screen.queryByTestId('attachment-fallback-lock')).toBeNull()
+  })
+
+  it('renders AttachmentImg on self-host (billing disabled) even though tier is "free"', () => {
+    billingEnabled = false
+    mockTier = 'free'
     renderNote('Here is an embed:\n\n![[image.png]]\n')
     expect(screen.getByTestId('attachment-img')).toHaveTextContent('image.png')
     expect(screen.queryByTestId('attachment-fallback-lock')).toBeNull()

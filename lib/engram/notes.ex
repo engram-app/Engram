@@ -800,6 +800,29 @@ defmodule Engram.Notes do
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
+  def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
+    Repo.transaction(fn ->
+      case Crypto.ensure_user_dek(user) do
+        {:ok, user} ->
+          ids
+          |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+            case move_note_into_folder(user, vault, id, "") do
+              {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+              {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+              {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            end
+          end)
+          |> case do
+            {:rollback, reason} -> Repo.rollback(reason)
+            acc -> acc
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
   def batch_move_notes(user, vault, ids, target_folder_id)
       when is_list(ids) and is_binary(target_folder_id) do
     Repo.transaction(fn ->
@@ -855,28 +878,69 @@ defmodule Engram.Notes do
     end
   end
 
+  # Every persisted Note column except content_ciphertext/content_nonce —
+  # the metadata projection for listings that never serialize content.
+  # Skipping the big column saves its I/O AND its AES-GCM decrypt (the
+  # phase-4 helpers short-circuit per-field on nil ciphertext).
+  @note_meta_fields [
+    :id,
+    :version,
+    :kind,
+    :dek_version,
+    :content_hash,
+    :embed_hash,
+    :mtime,
+    :deleted_at,
+    :title_ciphertext,
+    :title_nonce,
+    :tags_ciphertext,
+    :tags_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_hmac,
+    :user_id,
+    :vault_id,
+    :created_at,
+    :updated_at
+  ]
+
   @doc """
   Returns notes changed (upserted or deleted) since the given datetime.
   Deleted notes are included with deleted: true.
+
+  Options:
+
+    * `fields: :meta` — project out `content_ciphertext` and return
+      `content: nil`. Used by the sync channel's `pull_changes`, whose
+      reply never includes content; skips the dominant column read and
+      its decrypt.
   """
-  @spec list_changes(map(), map(), DateTime.t()) :: {:ok, [map()]}
-  def list_changes(user, vault, since) do
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
-                n.kind == "note",
-            order_by: [asc: n.updated_at]
-          )
-        )
-      end)
+  @spec list_changes(map(), map(), DateTime.t(), keyword()) :: {:ok, [map()]}
+  def list_changes(user, vault, since, opts \\ []) do
+    base =
+      from(n in Note,
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+            n.kind == "note",
+        order_by: [asc: n.updated_at]
+      )
+
+    query =
+      case Keyword.get(opts, :fields, :all) do
+        :meta -> from(n in base, select: struct(n, @note_meta_fields))
+        :all -> base
+      end
+
+    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     changes =
-      Enum.map(notes, fn note ->
-        note = decrypt_or_raise!(note, user)
-
+      notes
+      |> decrypt_or_raise!(user)
+      |> Enum.map(fn note ->
         %{
           id: note.id,
           path: note.path,
@@ -1013,21 +1077,34 @@ defmodule Engram.Notes do
 
   @doc """
   Returns hydrated folder marker rows (kind="folder", non-deleted) for the
-  user/vault, with `.folder` decrypted. Used by Materialization to compute
-  the existing-marker set and by callers that need full marker structs
-  (vs. `list_explicit_folders/2` which only returns sorted names).
+  user/vault, with `.folder` decrypted. Structs are sparsely loaded — only
+  `.id`, `.folder` and `.folder_hmac` are populated (plus the decrypt
+  inputs); callers needing other columns must fetch the row themselves. Used by
+  Materialization to compute the existing-marker set and by the folders
+  index for the path→id map (vs. `list_explicit_folders/2` which only
+  returns sorted names).
   """
   @spec list_folder_markers(map(), map()) :: [Note.t()]
   def list_folder_markers(user, vault) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
+      # Callers only consume `.id` + `.folder` (hydrated below) — project
+      # just the decrypt inputs instead of full rows so a marker-heavy
+      # vault doesn't pay for ~20 unused columns per row.
       {:ok, markers} =
         Repo.with_tenant(user.id, fn ->
           Repo.all(
             from(n in Note,
               where:
                 n.user_id == ^user.id and n.vault_id == ^vault.id and
-                  is_nil(n.deleted_at) and n.kind == "folder"
+                  is_nil(n.deleted_at) and n.kind == "folder",
+              select: %Note{
+                id: n.id,
+                dek_version: n.dek_version,
+                folder_ciphertext: n.folder_ciphertext,
+                folder_nonce: n.folder_nonce,
+                folder_hmac: n.folder_hmac
+              }
             )
           )
         end)
@@ -1191,6 +1268,9 @@ defmodule Engram.Notes do
       {:ok, filter_key} ->
         target_hmac = Crypto.hmac_field(filter_key, folder)
 
+        # Metadata projection: every caller serializes summaries (path,
+        # title, tags, ...) — content is never returned, so don't fetch
+        # or decrypt it.
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
@@ -1199,7 +1279,8 @@ defmodule Engram.Notes do
                   n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
                     n.kind == "note" and
                     n.folder_hmac == ^target_hmac,
-                order_by: [asc: n.id]
+                order_by: [asc: n.id],
+                select: struct(n, @note_meta_fields)
               )
             )
           end)
@@ -1336,36 +1417,36 @@ defmodule Engram.Notes do
     exists?
   end
 
-  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
-    # Phase B.3: plaintext `folder` column is gone — can't `WHERE folder LIKE
-    # 'prefix/%'` in SQL. Load all non-deleted notes, decrypt path+folder,
-    # then filter by prefix in Elixir. Single decrypt per row, then bulk
-    # updates use the already-decrypted plaintext.
-    {:ok, all_notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: n
-          )
-        )
-      end)
+  # Fetch + decrypt every live row in the vault for a folder-cascade scan
+  # (Phase B.3: plaintext `folder` is gone, so prefix filtering happens in
+  # Elixir over decrypted rows). Markers hydrate their single folder
+  # envelope; real notes go through the parallel batch decryptor instead
+  # of one-at-a-time. `:meta` skips the content column entirely for flows
+  # that never rewrite content (delete cascades).
+  defp fetch_decrypted_live_rows(user, vault, fields) do
+    base =
+      from(n in Note,
+        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at)
+      )
 
-    # Marker rows have nil path_ciphertext, so the standard decrypt path
-    # short-circuits before unwrapping the folder envelope (gated on
-    # path_ciphertext != nil). Branch on kind so markers go through the
-    # dedicated hydrate path Task 4 introduced — they still carry a
-    # folder, so the prefix-match filter below catches them alongside
-    # real notes.
+    query =
+      case fields do
+        :meta -> from(n in base, select: struct(n, @note_meta_fields))
+        :all -> base
+      end
+
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
 
-    decrypted =
-      Enum.map(all_notes, fn note ->
-        case note.kind do
-          "folder" -> hydrate_folder_marker(note, dek)
-          _ -> decrypt_or_raise!(note, user)
-        end
-      end)
+    # Marker rows have nil path_ciphertext, so the standard decrypt path
+    # short-circuits before unwrapping the folder envelope — they go
+    # through the dedicated hydrate path instead.
+    {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
+    Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
+  end
+
+  defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
+    decrypted = fetch_decrypted_live_rows(user, vault, :all)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -1544,35 +1625,21 @@ defmodule Engram.Notes do
     end
   end
 
-  defp do_delete_folder(user, vault, folder) do
-    prefix = folder <> "/"
+  defp do_delete_folder(user, vault, folder), do: do_delete_folders(user, vault, [folder])
 
-    # Phase B.3 mirror of do_rename_folder/5: plaintext `folder` is gone,
-    # so we cannot prefix-filter in SQL. Load all live rows, decrypt the
-    # folder envelope, then filter in Elixir.
-    {:ok, all_rows} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
-            select: n
-          )
-        )
-      end)
-
-    {:ok, dek} = Crypto.get_dek(user)
-
-    decrypted =
-      Enum.map(all_rows, fn row ->
-        case row.kind do
-          "folder" -> hydrate_folder_marker(row, dek)
-          _ -> decrypt_or_raise!(row, user)
-        end
-      end)
+  # Shared-scan cascade delete for one or more folders: ONE vault fetch
+  # (metadata projection — deletes never touch content) + one parallel
+  # batch decrypt + one update_all, regardless of how many folders the
+  # batch names. Overlapping folders (parent + child in the same batch)
+  # naturally dedupe through the union filter.
+  defp do_delete_folders(user, vault, folders) do
+    prefixes = Enum.map(folders, &(&1 <> "/"))
+    decrypted = fetch_decrypted_live_rows(user, vault, :meta)
 
     matches =
       Enum.filter(decrypted, fn r ->
-        r.folder == folder or String.starts_with?(r.folder || "", prefix)
+        f = r.folder || ""
+        f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
       end)
 
     if matches == [] do
@@ -1648,23 +1715,26 @@ defmodule Engram.Notes do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, dek} <- Crypto.get_dek(user) do
+        # Resolve every marker first (cheap indexed lookups), then run ONE
+        # shared-scan cascade for all folders — the old per-id shape
+        # re-fetched and re-decrypted the entire vault once per marker.
         marker_ids
-        |> Enum.reduce_while(%{deleted: 0}, fn id, acc ->
+        |> Enum.reduce_while([], fn id, acc ->
           case get_folder_marker_by_id(user, vault, id) do
             {:ok, marker} ->
-              folder = hydrate_folder_marker(marker, dek).folder
-              # do_delete_folder/3 returns {:ok, %{deleted: n}} only — Crypto.ensure_user_dek
-              # already ran above so the error path is unreachable here.
-              {:ok, %{deleted: n}} = do_delete_folder(user, vault, folder)
-              {:cont, Map.update!(acc, :deleted, &(&1 + n))}
+              {:cont, [hydrate_folder_marker(marker, dek).folder | acc]}
 
             {:error, :not_found} ->
               {:halt, {:rollback, {:not_found, id}}}
           end
         end)
         |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
+          {:rollback, reason} ->
+            Repo.rollback(reason)
+
+          folders ->
+            {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
+            %{deleted: n}
         end
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -1698,6 +1768,30 @@ defmodule Engram.Notes do
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, dek} <- Crypto.get_dek(user) do
+        marker_ids
+        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+          case move_folder_into(user, vault, id, "", dek) do
+            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
+            {:error, reason} -> {:halt, {:rollback, reason}}
+          end
+        end)
+        |> case do
+          {:rollback, reason} -> Repo.rollback(reason)
+          acc -> acc
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
       when is_list(marker_ids) and is_binary(target_folder_id) do
@@ -1802,7 +1896,20 @@ defmodule Engram.Notes do
   end
 
   defp decrypt_or_raise!(notes, user) when is_list(notes) do
-    Enum.map(notes, &decrypt_or_raise!(&1, user))
+    notes
+    |> Crypto.decrypt_notes_batch(user)
+    |> Enum.zip(notes)
+    |> Enum.map(fn
+      {{:ok, decrypted}, _note} ->
+        decrypted
+
+      {{:error, reason}, note} ->
+        Logger.error(
+          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        )
+
+        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+    end)
   end
 
   # Decrypts an envelope (ciphertext + nonce) with the user's DEK and the
@@ -1847,17 +1954,24 @@ defmodule Engram.Notes do
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
   defp maybe_broadcast_vault_populated(user, vault) do
-    {:ok, count} =
+    # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
+    # visits every matching row, so a bulk first-sync paid an O(vault)
+    # count on every insert. The probe touches at most two index entries
+    # regardless of vault size. Scope stays per-vault (NOT the per-user
+    # usage_meters counter — multi-vault users must still get the event
+    # for a new vault's first note).
+    {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        Repo.one(
+        Repo.all(
           from n in Note,
             where: n.user_id == ^user.id and n.vault_id == ^vault.id,
-            select: count(n.id)
+            select: n.id,
+            limit: 2
         )
       end)
 
     _ =
-      if count == 1 do
+      if length(ids) == 1 do
         EngramWeb.Endpoint.broadcast(
           "user:#{user.id}",
           "vault_populated",

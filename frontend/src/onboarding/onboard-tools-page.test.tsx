@@ -24,6 +24,9 @@ let billingStatus: { data: Partial<BillingStatus> | undefined; isLoading: boolea
   isLoading: false,
 }
 
+// SaaS by default; self-host flips this false (no billing, unlimited connections).
+let billingEnabled = true
+
 vi.mock('../api/queries', async () => {
   const actual = await vi.importActual<typeof import('../api/queries')>('../api/queries')
   return {
@@ -35,6 +38,14 @@ vi.mock('../api/queries', async () => {
       isError: false,
     }),
     useBillingStatus: () => billingStatus,
+  }
+})
+
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    useConfig: () => ({ billingEnabled }) as ReturnType<typeof actual.useConfig>,
   }
 })
 
@@ -67,6 +78,7 @@ beforeEach(() => {
     data: { tier: 'free', active: false } as Partial<BillingStatus>,
     isLoading: false,
   }
+  billingEnabled = true
 })
 
 describe('OnboardToolsPage — Free tier', () => {
@@ -91,6 +103,35 @@ describe('OnboardToolsPage — Free tier', () => {
     fireEvent.click(cursor)
     expect(cursor).toHaveAttribute('data-state', 'checked')
     expect(claude).toHaveAttribute('data-state', 'unchecked')
+  })
+})
+
+describe('OnboardToolsPage — Self-host (billing disabled)', () => {
+  beforeEach(() => {
+    // Self-host: no billing. tier is still "free" (no subscription) but
+    // connections are unlimited, so the step must not gate to a single pick.
+    billingEnabled = false
+    billingStatus = {
+      data: { tier: 'free', active: false } as Partial<BillingStatus>,
+      isLoading: false,
+    }
+  })
+
+  it('does not render the Free-tier single-select banner', () => {
+    render(wrap(<OnboardToolsPage />))
+    expect(screen.queryByText(/free tier.*pick 1 to start/i)).toBeNull()
+  })
+
+  it('allows multi-select (no auto-deselect)', () => {
+    render(wrap(<OnboardToolsPage />))
+
+    const claude = screen.getByLabelText(/^Claude$/i)
+    fireEvent.click(claude)
+    const cursor = screen.getByLabelText(/^Cursor$/i)
+    fireEvent.click(cursor)
+
+    expect(claude).toHaveAttribute('data-state', 'checked')
+    expect(cursor).toHaveAttribute('data-state', 'checked')
   })
 })
 
