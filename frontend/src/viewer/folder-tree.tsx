@@ -370,7 +370,10 @@ export default function FolderTree() {
       </p>
     )
   }
-  if (!folders || folders.length === 0) {
+  // Empty only when there are neither folders nor root-level notes. A vault
+  // with root notes but no folders (e.g. a freshly created "Untitled" at root)
+  // must still render the tree — the loader stitches rootNotes under ROOT.
+  if (!folders || (folders.length === 0 && rootNotes.length === 0)) {
     return (
       <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
         No notes yet.

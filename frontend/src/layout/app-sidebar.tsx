@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { useBillingStatus } from '../api/queries'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import FilesPanel from './files-panel'
 import Rail from './rail'
 import SearchPanel from './search-panel'
@@ -7,8 +7,7 @@ import { useRailView } from './rail-view-context'
 
 export default function AppSidebarPanel() {
   const { view } = useRailView()
-  const billing = useBillingStatus()
-  const showFreeFooter = billing.data?.tier === 'free'
+  const showFreeFooter = useIsFreeTier()
 
   return (
     <div className="flex h-full flex-col">
