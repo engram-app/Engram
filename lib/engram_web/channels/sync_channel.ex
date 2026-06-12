@@ -236,7 +236,9 @@ defmodule EngramWeb.SyncChannel do
 
         case DateTime.from_iso8601(since_str) do
           {:ok, since, _} ->
-            {:ok, changes} = Notes.list_changes(user, vault, since)
+            # :meta — this reply never includes content (clients pull
+            # bodies separately), so skip the content fetch + decrypt.
+            {:ok, changes} = Notes.list_changes(user, vault, since, fields: :meta)
 
             serialized =
               Enum.map(changes, fn c ->

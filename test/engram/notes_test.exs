@@ -484,6 +484,29 @@ defmodule Engram.NotesTest do
       assert Enum.any?(changes, &(&1.path == "Test/SameSecond.md")),
              "Changes in the same second as truncated server_time must be included"
     end
+
+    test "fields: :meta returns full metadata with content omitted", %{user: user, vault: vault} do
+      # The sync channel's pull_changes drops content from its reply, so it
+      # asks for the metadata-only projection — content_ciphertext (the big
+      # column) is never fetched or decrypted.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Meta/Sparse.md",
+          "content" => "# Big body that must not be decrypted",
+          "mtime" => 1_000.0
+        })
+
+      past = DateTime.add(note.updated_at, -60, :second)
+      {:ok, changes} = Notes.list_changes(user, vault, past, fields: :meta)
+
+      change = Enum.find(changes, &(&1.path == "Meta/Sparse.md"))
+      assert change != nil
+      assert change.title == "Big body that must not be decrypted"
+      assert change.folder == "Meta"
+      assert change.version == note.version
+      assert change.deleted == false
+      assert change.content == nil
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -907,6 +930,26 @@ defmodule Engram.NotesTest do
       paths = Enum.map(notes, & &1.path)
       assert "Health/Note1.md" in paths
       assert "Health/Note2.md" in paths
+    end
+
+    test "does not fetch or decrypt note content (metadata listing)", %{
+      user: user,
+      vault: vault
+    } do
+      # Every caller (folders controller note_summary, MCP list_folder, tree
+      # loaders) serializes metadata only — content stays projected out so
+      # folder browsing never pays content I/O + decrypt.
+      Notes.upsert_note(user, vault, %{
+        "path" => "Health/Sparse.md",
+        "content" => "# never needed here",
+        "mtime" => 1_000.0
+      })
+
+      {:ok, [note]} = Notes.list_notes_in_folder(user, vault, "Health")
+      assert note.title == "never needed here"
+      assert note.path == "Health/Sparse.md"
+      assert note.content == nil
+      assert note.content_ciphertext == nil
     end
 
     test "returns root-level notes with empty string", %{user: user, vault: vault} do

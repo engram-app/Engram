@@ -855,28 +855,69 @@ defmodule Engram.Notes do
     end
   end
 
+  # Every persisted Note column except content_ciphertext/content_nonce —
+  # the metadata projection for listings that never serialize content.
+  # Skipping the big column saves its I/O AND its AES-GCM decrypt (the
+  # phase-4 helpers short-circuit per-field on nil ciphertext).
+  @note_meta_fields [
+    :id,
+    :version,
+    :kind,
+    :dek_version,
+    :content_hash,
+    :embed_hash,
+    :mtime,
+    :deleted_at,
+    :title_ciphertext,
+    :title_nonce,
+    :tags_ciphertext,
+    :tags_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_hmac,
+    :user_id,
+    :vault_id,
+    :created_at,
+    :updated_at
+  ]
+
   @doc """
   Returns notes changed (upserted or deleted) since the given datetime.
   Deleted notes are included with deleted: true.
+
+  Options:
+
+    * `fields: :meta` — project out `content_ciphertext` and return
+      `content: nil`. Used by the sync channel's `pull_changes`, whose
+      reply never includes content; skips the dominant column read and
+      its decrypt.
   """
-  @spec list_changes(map(), map(), DateTime.t()) :: {:ok, [map()]}
-  def list_changes(user, vault, since) do
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
-                n.kind == "note",
-            order_by: [asc: n.updated_at]
-          )
-        )
-      end)
+  @spec list_changes(map(), map(), DateTime.t(), keyword()) :: {:ok, [map()]}
+  def list_changes(user, vault, since, opts \\ []) do
+    base =
+      from(n in Note,
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+            n.kind == "note",
+        order_by: [asc: n.updated_at]
+      )
+
+    query =
+      case Keyword.get(opts, :fields, :all) do
+        :meta -> from(n in base, select: struct(n, @note_meta_fields))
+        :all -> base
+      end
+
+    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     changes =
-      Enum.map(notes, fn note ->
-        note = decrypt_or_raise!(note, user)
-
+      notes
+      |> decrypt_or_raise!(user)
+      |> Enum.map(fn note ->
         %{
           id: note.id,
           path: note.path,
@@ -1204,6 +1245,9 @@ defmodule Engram.Notes do
       {:ok, filter_key} ->
         target_hmac = Crypto.hmac_field(filter_key, folder)
 
+        # Metadata projection: every caller serializes summaries (path,
+        # title, tags, ...) — content is never returned, so don't fetch
+        # or decrypt it.
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
@@ -1212,7 +1256,8 @@ defmodule Engram.Notes do
                   n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
                     n.kind == "note" and
                     n.folder_hmac == ^target_hmac,
-                order_by: [asc: n.id]
+                order_by: [asc: n.id],
+                select: struct(n, @note_meta_fields)
               )
             )
           end)
@@ -1873,17 +1918,24 @@ defmodule Engram.Notes do
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
   defp maybe_broadcast_vault_populated(user, vault) do
-    {:ok, count} =
+    # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
+    # visits every matching row, so a bulk first-sync paid an O(vault)
+    # count on every insert. The probe touches at most two index entries
+    # regardless of vault size. Scope stays per-vault (NOT the per-user
+    # usage_meters counter — multi-vault users must still get the event
+    # for a new vault's first note).
+    {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        Repo.one(
+        Repo.all(
           from n in Note,
             where: n.user_id == ^user.id and n.vault_id == ^vault.id,
-            select: count(n.id)
+            select: n.id,
+            limit: 2
         )
       end)
 
     _ =
-      if count == 1 do
+      if length(ids) == 1 do
         EngramWeb.Endpoint.broadcast(
           "user:#{user.id}",
           "vault_populated",

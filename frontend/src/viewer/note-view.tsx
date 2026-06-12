@@ -1,5 +1,5 @@
 import matter from 'gray-matter'
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 import rehypeHighlight from 'rehype-highlight'
@@ -56,7 +56,11 @@ const rehypePlugins = [
 // are first-class note types that should still link normally on Free.
 const TEXT_EMBED = /\.(md|canvas)$/i
 
-export default function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
+// memo: NotePage re-renders on every editor keystroke (draft state) while
+// the preview stays force-mounted with identical props; react-markdown has
+// no internal memoization, so an unmemoized NoteView re-ran the full
+// remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
+function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
   const { data: billing } = useBillingStatus()
   const tier = billing?.tier
   const { frontmatter, body } = useMemo(() => {
@@ -144,3 +148,5 @@ export default function NoteView({ content, title, tags, updatedAt }: NoteViewPr
     </article>
   )
 }
+
+export default memo(NoteView)

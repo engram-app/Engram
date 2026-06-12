@@ -223,6 +223,31 @@ defmodule Engram.CryptoTest do
       {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
       assert out.tags == ["alpha", "beta"]
     end
+
+    test "decrypts title when content_ciphertext is absent (sparse projection)", %{user: user} do
+      # Metadata-only listings project out content_ciphertext to skip the
+      # big-column I/O + decrypt. Title must still decrypt — the phase-4
+      # gate may not couple title to content presence.
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      note_id = Ecto.UUID.generate()
+
+      {:ok, enc} =
+        Crypto.encrypt_note_fields(%{content: "body", title: "My Title"}, user, note_id)
+
+      note = %Engram.Notes.Note{
+        id: note_id,
+        dek_version: Crypto.row_version_aad_bound(),
+        content_ciphertext: nil,
+        content_nonce: nil,
+        title_ciphertext: enc.title_ciphertext,
+        title_nonce: enc.title_nonce
+      }
+
+      {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
+      assert out.title == "My Title"
+      assert out.content == nil
+    end
   end
 
   defp build_encrypted_note(user, content, title) do

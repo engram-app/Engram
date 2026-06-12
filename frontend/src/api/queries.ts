@@ -1,4 +1,10 @@
-import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api, ApiError } from './client'
@@ -314,9 +320,14 @@ export function useSearch(query: string) {
   const vaultId = useActiveVaultId()
   return useQuery({
     queryKey: ['search', vaultId, query],
-    queryFn: () => api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }),
+    // Each search costs a Voyage embedding + Qdrant round trip server-side:
+    // abort superseded requests, and keep the previous results rendered
+    // while the next key loads so the panel doesn't flicker empty.
+    queryFn: ({ signal }) =>
+      api.post<{ results: SearchResult[] }>('/search', { query, limit: 20 }, { signal }),
     select: (data) => data.results,
     enabled: query.length > 0,
+    placeholderData: keepPreviousData,
   })
 }
 
