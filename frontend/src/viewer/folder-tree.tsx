@@ -381,14 +381,26 @@ export default function FolderTree() {
     )
   }
 
+  // Register the scroll container with BOTH the virtualizer (scrollRef) and
+  // headless-tree (so getDragLineStyle's coordinates have the right origin).
+  // HT's ref is `tree.registerElement`, which is idempotent, so merging is safe.
+  const containerProps = tree.getContainerProps('Files')
+  const setContainerEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el
+      const htRef = (containerProps as { ref?: (e: HTMLElement | null) => void }).ref
+      htRef?.(el)
+    },
+    [containerProps],
+  )
+
   return (
     <>
       <nav
-        ref={scrollRef}
-        role="tree"
-        aria-label="Files"
+        {...containerProps}
+        ref={setContainerEl}
         data-testid="folder-tree-root"
-        className="flex-1 overflow-auto py-2 text-base"
+        className="relative flex-1 overflow-auto py-2 text-base"
       >
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((v) => (
@@ -402,6 +414,11 @@ export default function FolderTree() {
             />
           ))}
         </div>
+        <div
+          aria-hidden
+          style={tree.getDragLineStyle()}
+          className="z-10 h-0.5 rounded bg-blue-500"
+        />
       </nav>
 
       <SelectionBar
