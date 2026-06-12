@@ -33,4 +33,21 @@ defmodule Engram.IdempotencyTest do
     Process.sleep(5)
     assert :miss = Idempotency.lookup("key-2")
   end
+
+  test "periodic sweep deletes expired rows from the table" do
+    # Entries cache full response bodies for batch endpoints; expired rows
+    # previously returned :miss but were never deleted — a certain (if
+    # slow) memory leak. Live entries must survive the sweep.
+    Idempotency.remember("dead-1", %{status: 200, body: %{big: "payload"}}, ttl_ms: 0)
+    Idempotency.remember("dead-2", %{status: 200, body: %{}}, ttl_ms: 0)
+    Idempotency.remember("alive", %{status: 200, body: %{}}, ttl_ms: 60_000)
+    Process.sleep(5)
+
+    send(Process.whereis(Idempotency), :sweep)
+    :sys.get_state(Idempotency)
+
+    assert :ets.lookup(:engram_idempotency, "dead-1") == []
+    assert :ets.lookup(:engram_idempotency, "dead-2") == []
+    assert [{"alive", _, _}] = :ets.lookup(:engram_idempotency, "alive")
+  end
 end
