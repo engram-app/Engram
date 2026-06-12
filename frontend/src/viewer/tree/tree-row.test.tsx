@@ -170,7 +170,7 @@ describe('TreeRow', () => {
     expect(onContextMenu).toHaveBeenCalledWith('n:100', 10, 20)
   })
 
-  it('invokes onLongPress with item id after the long-press delay', () => {
+  it('invokes onLongPress with item id after the long-press delay (touch)', () => {
     vi.useFakeTimers()
     const onLongPress = vi.fn()
     const instance = mockInstance({ data: noteItem })
@@ -181,12 +181,32 @@ describe('TreeRow', () => {
     )
     const link = screen.getByRole('link')
     act(() => {
-      fireEvent.pointerDown(link, { clientX: 5, clientY: 5 })
+      fireEvent.pointerDown(link, { pointerType: 'touch', clientX: 5, clientY: 5 })
     })
     act(() => {
       vi.advanceTimersByTime(600)
     })
     expect(onLongPress).toHaveBeenCalledWith('n:100')
+    vi.useRealTimers()
+  })
+
+  it('does NOT invoke onLongPress for a mouse pointer (mouse drag must not trip it)', () => {
+    vi.useFakeTimers()
+    const onLongPress = vi.fn()
+    const instance = mockInstance({ data: noteItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onLongPress={onLongPress} />
+      </MemoryRouter>,
+    )
+    const link = screen.getByRole('link')
+    act(() => {
+      fireEvent.pointerDown(link, { pointerType: 'mouse', clientX: 5, clientY: 5 })
+    })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(onLongPress).not.toHaveBeenCalled()
     vi.useRealTimers()
   })
 
