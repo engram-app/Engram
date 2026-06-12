@@ -36,8 +36,9 @@ defmodule Engram.Application do
         cache_store_child(),
         Engram.UsageMeters.ActivityCache,
         Engram.Onboarding.TermsCache,
-        # Subscribes to CacheSync in init → must start after PubSub.
+        # Subscribe to CacheSync in init → must start after PubSub.
         Engram.Onboarding.GateCache,
+        Engram.Billing.OverrideCache,
         Engram.Auth.SignupRejections,
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
