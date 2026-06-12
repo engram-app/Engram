@@ -2,6 +2,7 @@ defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.Billing.OverrideCache
   alias Engram.Vaults
 
   setup do
@@ -39,7 +40,7 @@ defmodule Engram.VaultsTest do
       # cached the override MISS — evict so the grant is visible (same idiom
       # as PlanCache.invalidate after mid-test plan edits).
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
-      :ok = Engram.Billing.OverrideCache.evict(user.id)
+      :ok = OverrideCache.evict(user.id)
 
       assert {:ok, vault2} = Vaults.create_vault(user, %{name: "Second"})
       assert vault2.is_default == false
@@ -79,7 +80,7 @@ defmodule Engram.VaultsTest do
       # Lift the limit via per-user override. Earlier creates cached the
       # override MISS — evict so the grant is visible immediately.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
-      :ok = Engram.Billing.OverrideCache.evict(user.id)
+      :ok = OverrideCache.evict(user.id)
 
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
@@ -819,7 +820,7 @@ defmodule Engram.VaultsTest do
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Main"})
       # First create cached the override MISS — evict so the grant lands.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
-      :ok = Engram.Billing.OverrideCache.evict(user.id)
+      :ok = OverrideCache.evict(user.id)
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Second"})
 
       assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)
