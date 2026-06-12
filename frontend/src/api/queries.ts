@@ -83,6 +83,11 @@ export function useFolders() {
       api.get<{ folders: Array<Folder & { id: string | null }> }>('/folders'),
     select: selectFolders,
     enabled: !demo?.active,
+    // Folder listing decrypts every marker row server-side; without a
+    // staleTime each remount/window-focus refetches it. Mutations and the
+    // sync channel (channel.ts) invalidate this key, so 60s of staleness
+    // only spans gaps nothing else would catch anyway.
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
   if (demo?.active) {
     // Demo folders use string ids; synthesize stable sentinel ids
@@ -117,6 +122,9 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
       api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
     select: selectNotes,
     enabled: !demo?.active && (options?.enabled ?? folder.length > 0),
+    // Same contract as useFolderNotesById: mutations + channel events
+    // invalidate; staleness only spans gaps those already don't cover.
+    staleTime: FOLDER_NOTES_STALE_MS,
   })
   if (demo?.active) {
     const matchFolder = demo.folders.find((f) => f.path === folder)
