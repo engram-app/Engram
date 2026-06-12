@@ -166,6 +166,24 @@ defmodule Engram.Workers.CleanupVaultTest do
       refute Repo.get(Note, note.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
     end
+
+    test "discards and preserves the vault when the job's user_id does not own it", %{
+      vault: vault,
+      note: note
+    } do
+      # No Qdrant stub: an owner-mismatch must bail out before any destructive
+      # work, so the worker must never reach the Qdrant delete.
+      log =
+        capture_log(fn ->
+          assert {:discard, :owner_mismatch} =
+                   CleanupVault.perform_cleanup(vault.id, Ecto.UUID.generate())
+        end)
+
+      assert log =~ "owner mismatch"
+      # Tenant data untouched.
+      assert Repo.get(Note, note.id, skip_tenant_check: true)
+      assert Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
   end
 
   # ---------------------------------------------------------------------------
