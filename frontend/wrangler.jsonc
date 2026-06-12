@@ -2,8 +2,12 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "engram-frontend",
 	"compatibility_date": "2026-06-10",
-	// Pure static SPA — no Worker script (`main`), just edge-served assets.
-	// `bun run build:saas` emits the bundle + config.json into ./dist.
+	// Mostly a pure static SPA. `bun run build:saas` emits the bundle +
+	// config.json into ./dist. The Worker script below runs ONLY for the
+	// dead pre-eject `/api/mcp` path (see `assets.run_worker_first`) to 410
+	// stale MCP clients; every other path is served as a static asset
+	// directly, without invoking the Worker.
+	"main": "./worker/index.ts",
 	"workers_dev": false,
 	// CUTOVER (Phase M): serve app.engram.page from this Worker via a ROUTE,
 	// not a custom domain. A route shadows the existing proxied
@@ -17,8 +21,13 @@
 	],
 	"assets": {
 		"directory": "./dist",
+		"binding": "ASSETS",
 		// Serve index.html (200) for any path that isn't a built asset, so
 		// React Router client-side routes (deep links, /settings, etc.) work.
-		"not_found_handling": "single-page-application"
+		"not_found_handling": "single-page-application",
+		// Invoke the Worker FIRST only for the dead MCP path (returns 410);
+		// all other paths serve static assets directly. House pattern mirrors
+		// engram-marketing's wrangler `run_worker_first` scoping.
+		"run_worker_first": ["/api/mcp", "/api/mcp/*"]
 	}
 }
