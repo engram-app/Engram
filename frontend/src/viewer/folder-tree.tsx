@@ -160,6 +160,19 @@ export default function FolderTree() {
     fetchFolderNotes,
   })
 
+  // Register the scroll container with BOTH the virtualizer (scrollRef) and
+  // headless-tree (so getDragLineStyle's coordinates have the right origin).
+  // Depends only on the stable `tree` instance — avoids ref churn from the
+  // new-object-every-render returned by getContainerProps.
+  const containerProps = tree.getContainerProps('Files')
+  const setContainerEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el
+      tree.registerElement(el)
+    },
+    [tree],
+  )
+
   // Auto-expand the chain leading to the active note so users can see
   // where they are after navigation. Mirrors the old recursive
   // `containsSelected` behaviour but driven by HT's expand API.
@@ -380,19 +393,6 @@ export default function FolderTree() {
       </p>
     )
   }
-
-  // Register the scroll container with BOTH the virtualizer (scrollRef) and
-  // headless-tree (so getDragLineStyle's coordinates have the right origin).
-  // HT's ref is `tree.registerElement`, which is idempotent, so merging is safe.
-  const containerProps = tree.getContainerProps('Files')
-  const setContainerEl = useCallback(
-    (el: HTMLDivElement | null) => {
-      scrollRef.current = el
-      const htRef = (containerProps as { ref?: (e: HTMLElement | null) => void }).ref
-      htRef?.(el)
-    },
-    [containerProps],
-  )
 
   return (
     <>

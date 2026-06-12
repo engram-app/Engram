@@ -41,8 +41,8 @@ const {
   batchMoveNotesMutate: vi.fn(),
   batchDeleteFoldersMutate: vi.fn(),
   batchMoveFoldersMutate: vi.fn(),
-  // Mutable per-test fixtures (folders + root notes), set in beforeEach.
-  mock: { folders: [] as unknown[], rootNotes: [] as unknown[] },
+  // Mutable per-test fixtures (folders + root notes + loading flag), set in beforeEach.
+  mock: { folders: [] as unknown[], rootNotes: [] as unknown[], loading: false },
 }))
 
 vi.mock('../api/queries', async () => {
@@ -50,8 +50,8 @@ vi.mock('../api/queries', async () => {
   return {
     ...actual,
     useFolders: () => ({
-      data: mock.folders,
-      isLoading: false,
+      data: mock.loading ? undefined : mock.folders,
+      isLoading: mock.loading,
       isError: false,
     }),
     // Root notes for the by-id loader (legacy useFolderNotes('') compat)
@@ -112,6 +112,7 @@ beforeEach(() => {
   batchMoveFoldersMutate.mockReset()
   mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }))
   mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
+  mock.loading = false
 })
 
 describe('FolderTree (HT)', () => {
@@ -188,5 +189,31 @@ describe('FolderTree (HT)', () => {
     // We just smoke that the loading branch isn't visible in the happy path.
     renderTree()
     expect(screen.queryByText(/Loading/i)).not.toBeInTheDocument()
+  })
+
+  it('does not crash on loading→loaded transition (hook-count regression)', async () => {
+    // Start in loading state — renders the "Loading…" early-return branch.
+    mock.loading = true
+    const { rerender } = renderTree()
+    expect(screen.getByText('Loading…')).toBeInTheDocument()
+
+    // Flip to loaded — if useCallback were placed after the early returns,
+    // React would throw "Rendered more hooks than during the previous render".
+    mock.loading = false
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <FolderTreeProvider>
+            <FolderTree />
+          </FolderTreeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    // Tree root must be present — no crash, no "Loading…" text.
+    await waitFor(() => {
+      expect(screen.getByTestId('folder-tree-root')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
   })
 })
