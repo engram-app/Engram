@@ -15,6 +15,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { QueryClient } from '@tanstack/react-query'
 import { buildLoader, type SortKey, type LoaderItem } from './loader'
 import { ROOT_ID } from './types'
+import { resolveDropMove } from './drop-redirect'
 import type { Folder, NoteSummary } from '../../api/queries'
 
 interface Deps {
@@ -107,16 +108,20 @@ export function useEngramTree(deps: Deps) {
       const d = item.getItemData()
       return d?.isFolder ?? false
     },
-    canReorder: false,
+    canReorder: true,
     onRename: (item: ItemInstance<Data>, value: string) =>
       deps.onRenameCommit(item.getId(), value),
     onDrop: (items: ItemInstance<Data>[], target: DragTarget<Data>) => {
-      const sourceIds = items.map(i => i.getId())
-      // target shape varies (item vs between-items); fall back to item id of
-      // whichever container the drop lands on.
-      const targetItem = (target as { item?: ItemInstance<Data> }).item
-      const targetId = targetItem ? targetItem.getId() : ROOT_ID
-      deps.onMove(sourceIds, targetId)
+      // HT normalizes `target.item` to the destination container (the parent
+      // folder for between-siblings, or the folder dropped onto). We ignore the
+      // insertion index and reparent into it. See drop-redirect.ts.
+      const destId = (target as { item?: ItemInstance<Data> }).item?.getId()
+      const sources = items.map((i) => ({
+        id: i.getId(),
+        parentId: i.getParent()?.getId(),
+      }))
+      const move = resolveDropMove(sources, destId, ROOT_ID)
+      if (move) deps.onMove(move.ids, move.dest)
     },
     features: [
       syncDataLoaderFeature,
