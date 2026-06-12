@@ -317,23 +317,39 @@ defmodule Engram.Crypto do
     # representative per group: content (with title), path (with folder),
     # and tags (standalone). Any group present → load DEK + run decrypt.
     not is_nil(note.content_ciphertext) or
+      not is_nil(note.title_ciphertext) or
       not is_nil(note.path_ciphertext) or
       not is_nil(note.tags_ciphertext)
   end
 
-  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{content_ciphertext: nil} = note, _dek),
+  # Content and title decrypt independently: metadata-only listings project
+  # out content_ciphertext (the big column) while still carrying title.
+  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{} = note, dek) do
+    with {:ok, note} <- decrypt_note_content(note, dek) do
+      decrypt_note_title(note, dek)
+    end
+  end
+
+  defp decrypt_note_content(%Engram.Notes.Note{content_ciphertext: nil} = note, _dek),
     do: {:ok, note}
 
-  defp decrypt_phase_4_note_fields(%Engram.Notes.Note{} = note, dek) do
-    content_aad = decrypt_aad(note, :notes, :content)
-    title_aad = decrypt_aad(note, :notes, :title)
+  defp decrypt_note_content(%Engram.Notes.Note{} = note, dek) do
+    aad = decrypt_aad(note, :notes, :content)
 
-    with {:ok, content} <-
-           Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek, content_aad),
-         {:ok, title} <-
-           Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek, title_aad) do
-      {:ok, %{note | content: content, title: title}}
-    else
+    case Envelope.decrypt(note.content_ciphertext, note.content_nonce, dek, aad) do
+      {:ok, content} -> {:ok, %{note | content: content}}
+      :error -> {:error, :decrypt_failed}
+    end
+  end
+
+  defp decrypt_note_title(%Engram.Notes.Note{title_ciphertext: nil} = note, _dek),
+    do: {:ok, note}
+
+  defp decrypt_note_title(%Engram.Notes.Note{} = note, dek) do
+    aad = decrypt_aad(note, :notes, :title)
+
+    case Envelope.decrypt(note.title_ciphertext, note.title_nonce, dek, aad) do
+      {:ok, title} -> {:ok, %{note | title: title}}
       :error -> {:error, :decrypt_failed}
     end
   end
