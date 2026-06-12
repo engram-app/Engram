@@ -196,6 +196,33 @@ defmodule Engram.NotesBatchTest do
     test "empty list → {:ok, %{deleted: 0}}", %{user: user, vault: vault} do
       assert {:ok, %{deleted: 0}} = Notes.batch_delete_folders(user, vault, [])
     end
+
+    test "scans the vault once for the whole batch, not once per marker", %{
+      user: user,
+      vault: vault
+    } do
+      # Each folder cascade used to re-fetch and re-decrypt EVERY live row
+      # in the vault per marker id — a 10-folder batch in a 10k-note vault
+      # meant 10 full-vault decrypt passes inside one transaction.
+      {:ok, m1} = Notes.create_folder_marker(user, vault, "F1")
+      {:ok, m2} = Notes.create_folder_marker(user, vault, "F2")
+      {:ok, m3} = Notes.create_folder_marker(user, vault, "F3")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"})
+
+      {result, queries} =
+        with_notes_query_count(fn ->
+          Notes.batch_delete_folders(user, vault, [m1.id, m2.id, m3.id])
+        end)
+
+      assert {:ok, %{deleted: 6}} = result
+
+      # 3 marker lookups + 1 vault scan + 1 update_all (+1 headroom).
+      # The per-marker shape costs >= 9 (3 lookups + 3 scans + 3 updates).
+      assert queries <= 6,
+             "expected a single shared vault scan, saw #{queries} notes-table queries"
+    end
   end
 
   describe "batch_move_folders/3" do
@@ -288,6 +315,31 @@ defmodule Engram.NotesBatchTest do
 
       {:ok, moved} = Notes.get_note_by_id(user, vault, note.id)
       assert moved.path == "B/x.md"
+    end
+  end
+
+  # Counts Repo queries against the notes table emitted while `fun` runs,
+  # scoped to this test's pid (same shape as billing_test's helper).
+  defp with_notes_query_count(fun) do
+    test_pid = self()
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{source: src}, _config ->
+        if src == "notes" and self() == test_pid, do: Agent.update(counter, &(&1 + 1))
+      end,
+      nil
+    )
+
+    try do
+      result = fun.()
+      {result, Agent.get(counter, & &1)}
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(counter)
     end
   end
 end
