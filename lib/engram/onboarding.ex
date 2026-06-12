@@ -258,6 +258,12 @@ defmodule Engram.Onboarding do
         user
         |> Ecto.Changeset.change(onboarding_profile: merged)
         |> Repo.update(skip_tenant_check: true)
+        |> tap(fn
+          # uses_obsidian flips can re-arm the vault gate for a passed
+          # user — drop the cached verdict so the plug re-derives.
+          {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
+          _ -> :ok
+        end)
     end
   end
 

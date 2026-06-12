@@ -594,6 +594,11 @@ defmodule Engram.Billing do
   # vault_created broadcast in Engram.Vaults. Fire-and-forget: if nobody
   # is listening, Phoenix.PubSub drops it.
   defp broadcast_subscription_activated(user_id, %Subscription{} = sub) do
+    # Chokepoint for every subscription mutation (created/updated/canceled):
+    # tier/status flips can change the onboarding gate's subscription_ok,
+    # so the cached pass verdict must re-derive.
+    :ok = Engram.Onboarding.GateCache.evict(user_id)
+
     _ =
       EngramWeb.Endpoint.broadcast(
         "user:#{user_id}",
