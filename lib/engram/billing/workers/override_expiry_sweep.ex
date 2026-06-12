@@ -24,6 +24,10 @@ defmodule Engram.Billing.Workers.OverrideExpirySweep do
         skip_tenant_check: true
       )
 
+    # Cached lookups (hits and misses) may now be wrong — flush so
+    # expirations take effect without waiting out the cache TTL.
+    if count > 0, do: Engram.Billing.OverrideCache.evict_all()
+
     :telemetry.execute(
       [:engram, :billing, :overrides, :expired],
       %{count: count},

@@ -94,19 +94,24 @@ defmodule Engram.Billing do
   # ── Private Limit Helpers ─────────────────────────────────────────
 
   defp user_override_lookup(user_id, string_key) do
-    now = DateTime.utc_now()
+    # Read-through cache (60s TTL, hits AND misses): this lookup runs on
+    # every effective_limit resolution and hot paths resolve several
+    # limits per request, while override rows are rare admin grants.
+    Engram.Billing.OverrideCache.fetch(user_id, string_key, fn ->
+      now = DateTime.utc_now()
 
-    Repo.one(
-      from(o in UserLimitOverride,
-        where:
-          o.user_id == ^user_id and
-            o.key == ^string_key and
-            (is_nil(o.expires_at) or o.expires_at > ^now),
-        select: fragment("?->'v'", o.value)
-      ),
-      skip_tenant_check: true
-    )
-    |> wrap_lookup()
+      Repo.one(
+        from(o in UserLimitOverride,
+          where:
+            o.user_id == ^user_id and
+              o.key == ^string_key and
+              (is_nil(o.expires_at) or o.expires_at > ^now),
+          select: fragment("?->'v'", o.value)
+        ),
+        skip_tenant_check: true
+      )
+      |> wrap_lookup()
+    end)
   end
 
   defp env_override_lookup(tier, key) do
@@ -594,6 +599,11 @@ defmodule Engram.Billing do
   # vault_created broadcast in Engram.Vaults. Fire-and-forget: if nobody
   # is listening, Phoenix.PubSub drops it.
   defp broadcast_subscription_activated(user_id, %Subscription{} = sub) do
+    # Chokepoint for every subscription mutation (created/updated/canceled):
+    # tier/status flips can change the onboarding gate's subscription_ok,
+    # so the cached pass verdict must re-derive.
+    :ok = Engram.Onboarding.GateCache.evict(user_id)
+
     _ =
       EngramWeb.Endpoint.broadcast(
         "user:#{user_id}",
