@@ -106,11 +106,13 @@ export default function FolderTree() {
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
     const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
     // 'root' is the backend sentinel for the vault root; a folder target uses
-    // its marker id.
-    const noteTarget = target.kind === 'root' ? 'root' : target.id
-    const folderTarget = target.kind === 'root' ? 'root' : target.id
-    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: noteTarget })
-    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: folderTarget })
+    // its marker id. Note→root has no optimistic patch (root notes live under a
+    // different cache key than the by-id folder lists), so a moved note briefly
+    // disappears until useBatchMoveNotes' onSuccess invalidation + the
+    // count-keyed rebuildTree reconcile it at root — an accepted trade-off.
+    const dest = target.kind === 'root' ? 'root' : target.id
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: dest })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
   }
 
   // The loader fires this on cache-miss when a folder is expanded. Mirrors
