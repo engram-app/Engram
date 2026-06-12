@@ -1802,7 +1802,20 @@ defmodule Engram.Notes do
   end
 
   defp decrypt_or_raise!(notes, user) when is_list(notes) do
-    Enum.map(notes, &decrypt_or_raise!(&1, user))
+    notes
+    |> Crypto.decrypt_notes_batch(user)
+    |> Enum.zip(notes)
+    |> Enum.map(fn
+      {{:ok, decrypted}, _note} ->
+        decrypted
+
+      {{:error, reason}, note} ->
+        Logger.error(
+          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        )
+
+        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+    end)
   end
 
   # Decrypts an envelope (ciphertext + nonce) with the user's DEK and the

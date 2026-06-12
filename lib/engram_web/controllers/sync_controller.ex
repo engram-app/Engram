@@ -59,20 +59,22 @@ defmodule EngramWeb.SyncController do
       end)
 
     notes =
-      note_rows
-      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
-        aad = path_aad(:notes, id, dek_version)
-        path = decrypt_path!(path_ct, path_nonce, dek, aad)
-        %{path: path, content_hash: hash}
+      Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
+        Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
+          aad = path_aad(:notes, id, dek_version)
+          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          %{path: path, content_hash: hash}
+        end)
       end)
       |> Enum.sort_by(& &1.path)
 
     attachments =
-      attachment_rows
-      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
-        aad = path_aad(:attachments, id, dek_version)
-        path = decrypt_path!(path_ct, path_nonce, dek, aad)
-        %{path: path, content_hash: hash}
+      Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
+        Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
+          aad = path_aad(:attachments, id, dek_version)
+          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          %{path: path, content_hash: hash}
+        end)
       end)
       |> Enum.sort_by(& &1.path)
 

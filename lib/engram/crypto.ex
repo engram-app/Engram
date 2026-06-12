@@ -372,6 +372,50 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Decrypts a list of notes as one instrumented batch. Returns per-note
+  result tuples in input order — a corrupt row yields `{:error, reason}`
+  in place without aborting the rest of the batch.
+
+  The user's DEK is warmed into the cache once up front, so the per-note
+  `get_dek/1` calls inside `maybe_decrypt_note_fields/2` are pure ETS hits
+  even when the batch is the first crypto touch of the request.
+  """
+  @spec decrypt_notes_batch([Engram.Notes.Note.t()], User.t()) ::
+          [{:ok, Engram.Notes.Note.t()} | {:error, term()}]
+  def decrypt_notes_batch([], _user), do: []
+
+  def decrypt_notes_batch(notes, %User{} = user) when is_list(notes) do
+    _ = get_dek(user)
+
+    measure_decrypt_batch(:notes, length(notes), fn ->
+      Enum.map(notes, &maybe_decrypt_note_fields(&1, user))
+    end)
+  end
+
+  @doc """
+  Runs `fun` and emits one `[:engram, :crypto, :decrypt_batch]` event with
+  `%{count: count, duration_us: ...}` tagged `%{kind: kind}`. Count-zero
+  batches run untimed — they'd only skew the duration summaries.
+  """
+  @spec measure_decrypt_batch(atom(), non_neg_integer(), (-> result)) :: result
+        when result: var
+  def measure_decrypt_batch(_kind, 0, fun), do: fun.()
+
+  def measure_decrypt_batch(kind, count, fun) when is_atom(kind) and is_integer(count) do
+    start = System.monotonic_time(:microsecond)
+    result = fun.()
+    duration_us = System.monotonic_time(:microsecond) - start
+
+    :telemetry.execute(
+      [:engram, :crypto, :decrypt_batch],
+      %{count: count, duration_us: duration_us},
+      %{kind: kind}
+    )
+
+    result
+  end
+
+  @doc """
   Decrypts the Phase B `path_ciphertext` on an attachment into the virtual
   `path` field. No-op when ciphertext is nil (legacy pre-B.1 row).
   """

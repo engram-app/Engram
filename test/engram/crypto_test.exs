@@ -225,6 +225,66 @@ defmodule Engram.CryptoTest do
     end
   end
 
+  defp build_encrypted_note(user, content, title) do
+    note_id = Ecto.UUID.generate()
+
+    {:ok, enc} =
+      Crypto.encrypt_note_fields(%{content: content, title: title}, user, note_id)
+
+    %Engram.Notes.Note{
+      id: note_id,
+      dek_version: Crypto.row_version_aad_bound(),
+      content_ciphertext: enc.content_ciphertext,
+      content_nonce: enc.content_nonce,
+      title_ciphertext: enc.title_ciphertext,
+      title_nonce: enc.title_nonce
+    }
+  end
+
+  describe "decrypt_notes_batch/2" do
+    test "decrypts notes preserving order and emits batch telemetry", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      notes = for i <- 1..3, do: build_encrypted_note(user, "c#{i}", "t#{i}")
+
+      results = Crypto.decrypt_notes_batch(notes, user)
+
+      assert [
+               {:ok, %{content: "c1", title: "t1"}},
+               {:ok, %{content: "c2", title: "t2"}},
+               {:ok, %{content: "c3", title: "t3"}}
+             ] = results
+
+      assert_receive {[:engram, :crypto, :decrypt_batch], ^ref, measurements, %{kind: :notes}}
+      assert measurements.count == 3
+      assert is_integer(measurements.duration_us) and measurements.duration_us >= 0
+    end
+
+    test "corrupt note yields an error tuple in place, others still decrypt", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      good = build_encrypted_note(user, "good", "g")
+      bad = build_encrypted_note(user, "bad", "b")
+      bad = %{bad | content_ciphertext: :crypto.strong_rand_bytes(32)}
+
+      assert [{:ok, %{content: "good"}}, {:error, :decrypt_failed}] =
+               Crypto.decrypt_notes_batch([good, bad], user)
+    end
+
+    test "empty list returns empty without telemetry noise", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      assert [] = Crypto.decrypt_notes_batch([], user)
+      refute_receive {[:engram, :crypto, :decrypt_batch], ^ref, _, _}, 50
+    end
+  end
+
   describe "dek_filter_key/1" do
     test "returns a deterministic 32-byte key for the same user" do
       user = insert(:user)
