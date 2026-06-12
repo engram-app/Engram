@@ -1873,17 +1873,24 @@ defmodule Engram.Notes do
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
   defp maybe_broadcast_vault_populated(user, vault) do
-    {:ok, count} =
+    # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
+    # visits every matching row, so a bulk first-sync paid an O(vault)
+    # count on every insert. The probe touches at most two index entries
+    # regardless of vault size. Scope stays per-vault (NOT the per-user
+    # usage_meters counter — multi-vault users must still get the event
+    # for a new vault's first note).
+    {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        Repo.one(
+        Repo.all(
           from n in Note,
             where: n.user_id == ^user.id and n.vault_id == ^vault.id,
-            select: count(n.id)
+            select: n.id,
+            limit: 2
         )
       end)
 
     _ =
-      if count == 1 do
+      if length(ids) == 1 do
         EngramWeb.Endpoint.broadcast(
           "user:#{user.id}",
           "vault_populated",
