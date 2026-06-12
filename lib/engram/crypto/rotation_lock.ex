@@ -34,10 +34,10 @@ defmodule Engram.Crypto.RotationLock do
 
   @stale_after_seconds 10 * 60
 
-  @spec acquire(integer()) ::
+  @spec acquire(Ecto.UUID.t()) ::
           {:ok, DateTime.t()}
           | {:error, :rotation_in_progress | :not_found | :half_state_pending}
-  def acquire(user_id) when is_integer(user_id) do
+  def acquire(user_id) when is_binary(user_id) do
     Repo.transaction(fn ->
       # Postgres advisory lock keyed on the user — serializes concurrent
       # acquire/1 callers without holding a row-level lock that would
@@ -66,8 +66,8 @@ defmodule Engram.Crypto.RotationLock do
     end)
   end
 
-  @spec release(integer()) :: :ok
-  def release(user_id) when is_integer(user_id) do
+  @spec release(Ecto.UUID.t()) :: :ok
+  def release(user_id) when is_binary(user_id) do
     case from(u in User, where: u.id == ^user_id)
          |> Repo.update_all([set: [dek_rotation_locked_at: nil]], skip_tenant_check: true) do
       {1, _} ->
@@ -89,8 +89,8 @@ defmodule Engram.Crypto.RotationLock do
     end
   end
 
-  @spec locked?(integer()) :: boolean()
-  def locked?(user_id) when is_integer(user_id) do
+  @spec locked?(Ecto.UUID.t()) :: boolean()
+  def locked?(user_id) when is_binary(user_id) do
     Repo.one(
       from(u in User, where: u.id == ^user_id, select: not is_nil(u.dek_rotation_locked_at)),
       skip_tenant_check: true

@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useMe } from '@/api/queries'
-import { config } from '@/config'
+import { useConfig } from '@/config-context'
 import InvitesTab from './InvitesTab'
 import MembersTab from './MembersTab'
 import RegistrationTab from './RegistrationTab'
 
 export default function AdminPanel() {
+  const config = useConfig()
   const { data: me, isLoading } = useMe()
   // Lifted from MembersTab so the one-time reset link sits OUTSIDE the
   // Members card — its own standalone block above the table.

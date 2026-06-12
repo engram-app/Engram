@@ -1,4 +1,5 @@
 import { getActiveVaultId } from './active-vault'
+import { getApiBase, joinApiUrl } from './base'
 
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null
@@ -7,10 +8,33 @@ export function setTokenGetter(getter: () => Promise<string | null>) {
   tokenGetter = getter
 }
 
+// Module-level upgrade handler — the UpgradeDialogProvider registers itself
+// on mount so the client (a plain module, no React) can fire the dialog when
+// the backend returns a 402 limit_exceeded. Kept as a setter (Option B) rather
+// than an event bus to stay simple and tree-shakeable.
+let upgradeHandler: ((reason: string) => void) | null = null
+
+export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
+  upgradeHandler = fn
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
     this.name = 'ApiError'
+  }
+}
+
+export class LimitExceededError extends Error {
+  readonly name = 'LimitExceededError'
+  constructor(
+    public readonly reason: string,
+    public readonly limitKey: string | null,
+    public readonly limit: number | boolean | null,
+    public readonly current: number | null,
+    public readonly upgradeUrl: string | null,
+  ) {
+    super(`Engram limit: ${reason}`)
   }
 }
 
@@ -27,10 +51,25 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
     headers.set('X-Vault-ID', String(vaultId))
   }
 
-  const response = await fetch(`/api${path}`, { ...options, headers })
+  // joinApiUrl handles both same-origin (selfhost) and cross-origin
+  // (saas, `https://api.engram.page`). For selfhost apiBase is "" so
+  // this composes to `/api${path}` identically to the pre-eject shape.
+  const url = joinApiUrl(getApiBase(), `/api${path}`)
+  const response = await fetch(url, { ...options, headers })
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
+    if (response.status === 402) {
+      const reason = body.reason ?? 'unknown'
+      if (upgradeHandler) upgradeHandler(reason)
+      throw new LimitExceededError(
+        reason,
+        body.limit_key ?? null,
+        body.limit ?? null,
+        body.current ?? null,
+        body.upgrade_url ?? null,
+      )
+    }
     throw new ApiError(response.status, body.error ?? response.statusText)
   }
 
@@ -43,10 +82,16 @@ export const api = {
     return res.json()
   },
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
+  async post<T>(
+    path: string,
+    body?: unknown,
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal },
+  ): Promise<T> {
     const res = await authFetch(path, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
+      headers: opts?.headers,
+      signal: opts?.signal,
     })
     return res.json()
   },

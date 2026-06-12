@@ -21,6 +21,7 @@ defmodule Engram.Factory do
     # the vault later in real usage). Tests that exercise the onboarding
     # gate must explicitly override `onboarding_profile: %{}`.
     %Engram.Accounts.User{
+      id: Ecto.UUID.generate(),
       email: sequence(:email, &"user#{&1}@test.com"),
       display_name: sequence(:display_name, &"User #{&1}"),
       external_id: nil,
@@ -56,6 +57,7 @@ defmodule Engram.Factory do
     # are random placeholders satisfying NOT NULL; tests that need real
     # decryptable content should use Engram.Fixtures.insert_note!/3.
     %Engram.Notes.Note{
+      id: Ecto.UUID.generate(),
       version: 1,
       content_hash: :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower),
       embed_hash: nil,
@@ -81,6 +83,7 @@ defmodule Engram.Factory do
     user = build(:user)
 
     %Engram.Attachments.Attachment{
+      id: Ecto.UUID.generate(),
       content: <<0, 1, 2, 3>>,
       content_hash: :crypto.hash(:sha256, <<0, 1, 2, 3>>) |> Base.encode16(case: :lower),
       mime_type: "image/png",
@@ -96,6 +99,7 @@ defmodule Engram.Factory do
 
   def api_key_factory do
     %Engram.Accounts.ApiKey{
+      id: Ecto.UUID.generate(),
       key_hash:
         :crypto.hash(:sha256, "engram_" <> sequence(:key, &"key#{&1}"))
         |> Base.encode16(case: :lower),
@@ -106,6 +110,7 @@ defmodule Engram.Factory do
 
   def vault_factory do
     %Engram.Vaults.Vault{
+      id: Ecto.UUID.generate(),
       user: build(:user),
       slug: sequence(:vault_slug, &"vault-#{&1}"),
       is_default: false,
@@ -117,6 +122,7 @@ defmodule Engram.Factory do
 
   def plan_factory do
     %Engram.Billing.Plan{
+      id: Ecto.UUID.generate(),
       name: sequence(:plan_name, &"plan_#{&1}"),
       limits: %{
         "vaults_cap" => 1,
@@ -126,8 +132,15 @@ defmodule Engram.Factory do
     }
   end
 
+  # Override lookups are cached (Engram.Billing.OverrideCache, 60s TTL,
+  # misses included). Inserting an override AFTER the same user's limits
+  # have already been resolved in the test requires an explicit
+  # `OverrideCache.evict(user.id)` — same idiom as PlanCache.invalidate
+  # after mid-test plan edits. Inserts in setup (before any limit check)
+  # need nothing.
   def user_limit_override_factory do
     %Engram.Billing.UserLimitOverride{
+      id: Ecto.UUID.generate(),
       user: build(:user),
       key: "notes_cap",
       value: %{"v" => 1000},
@@ -138,6 +151,7 @@ defmodule Engram.Factory do
 
   def subscription_factory do
     %Engram.Billing.Subscription{
+      id: Ecto.UUID.generate(),
       paddle_customer_id: sequence(:paddle_customer_id, &"ctm_test#{&1}"),
       paddle_subscription_id: sequence(:paddle_sub_id, &"sub_test#{&1}"),
       tier: "starter",
@@ -148,8 +162,21 @@ defmodule Engram.Factory do
     }
   end
 
+  @doc """
+  Attach a built (not persisted) subscription to a built user so
+  `Billing.tier/1` and `Billing.active?/1` see the assoc without a DB
+  round-trip. Use for unit tests asserting tier resolution; for tests
+  that touch the DB, insert the subscription explicitly with
+  `insert(:subscription, user: user, ...)`.
+  """
+  def with_subscription(%Engram.Accounts.User{} = user, attrs) do
+    sub = build(:subscription, Keyword.put(attrs, :user, user))
+    %{user | subscription: sub}
+  end
+
   def device_authorization_factory do
     %Engram.Auth.DeviceAuthorization{
+      id: Ecto.UUID.generate(),
       device_code:
         sequence(:device_code, &"dc_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(8))}"),
       user_code:
@@ -165,6 +192,7 @@ defmodule Engram.Factory do
 
   def device_refresh_token_factory do
     %Engram.Auth.DeviceRefreshToken{
+      id: Ecto.UUID.generate(),
       token_hash:
         sequence(:token_hash, &"hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(16))}"),
       family_id: Ecto.UUID.generate(),
@@ -178,6 +206,7 @@ defmodule Engram.Factory do
 
   def agreement_factory do
     %Engram.Onboarding.Agreement{
+      id: Ecto.UUID.generate(),
       user: build(:user),
       document: "terms_of_service",
       version: "2026-05-15",
@@ -209,6 +238,7 @@ defmodule Engram.Factory do
   # pass `user_id: some_user.id` at the call site.
   def oauth_refresh_token_factory do
     %Engram.OAuth.RefreshToken{
+      id: Ecto.UUID.generate(),
       token_hash:
         sequence(:rt_hash, &"rt_hash_#{&1}_#{Base.encode16(:crypto.strong_rand_bytes(8))}"),
       family_id: Ecto.UUID.generate(),

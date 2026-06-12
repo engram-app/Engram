@@ -73,4 +73,72 @@ defmodule EngramWeb.Plugs.CORSTest do
 
     assert get_resp_header(conn, "access-control-allow-origin") == ["http://engram.ax"]
   end
+
+  describe "ENGRAM_SAAS_FRONTEND_ORIGINS extras (Cloudflare Pages saas frontend)" do
+    # These tests simulate the post-cutover allowlist shape: the original
+    # phx_hosts origins PLUS the saas frontend origin (app.engram.page) and
+    # the Cloudflare Pages preview-deploy origin. ENGRAM_SAAS_FRONTEND_ORIGINS
+    # is consumed in config/runtime.exs at boot; here we set the final merged
+    # allowlist directly via :cors_origin to assert the plug's runtime behavior.
+
+    setup do
+      Application.put_env(:engram, :cors_origin, [
+        "https://api.engram.page",
+        "https://app.engram.page",
+        "https://engram-frontend.pages.dev"
+      ])
+
+      on_exit(fn -> Application.delete_env(:engram, :cors_origin) end)
+      :ok
+    end
+
+    test "echoes Origin for app.engram.page (saas frontend)" do
+      conn =
+        build_conn()
+        |> put_req_header("origin", "https://app.engram.page")
+        |> options("/api/health")
+
+      assert get_resp_header(conn, "access-control-allow-origin") == [
+               "https://app.engram.page"
+             ]
+    end
+
+    test "echoes Origin for Cloudflare Pages preview-deploy origin" do
+      conn =
+        build_conn()
+        |> put_req_header("origin", "https://engram-frontend.pages.dev")
+        |> options("/api/health")
+
+      assert get_resp_header(conn, "access-control-allow-origin") == [
+               "https://engram-frontend.pages.dev"
+             ]
+    end
+
+    test "rejects (does not echo) Origin not in extended allowlist" do
+      conn =
+        build_conn()
+        |> put_req_header("origin", "https://evil.example.com")
+        |> options("/api/health")
+
+      refute get_resp_header(conn, "access-control-allow-origin") == [
+               "https://evil.example.com"
+             ]
+
+      # Falls back to first allowlist entry instead.
+      assert get_resp_header(conn, "access-control-allow-origin") == [
+               "https://api.engram.page"
+             ]
+    end
+
+    test "still echoes original phx_hosts origin (api.engram.page)" do
+      conn =
+        build_conn()
+        |> put_req_header("origin", "https://api.engram.page")
+        |> options("/api/health")
+
+      assert get_resp_header(conn, "access-control-allow-origin") == [
+               "https://api.engram.page"
+             ]
+    end
+  end
 end

@@ -1,328 +1,442 @@
-import { Link, useLocation } from 'react-router'
-import { type NoteSummary, useFolders, useFolderNotes, type Folder } from '../api/queries'
-import { type SortKey, useFolderTreeState } from '../layout/folder-tree-context'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useParams } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import {
+  type Folder,
+  FOLDER_NOTES_STALE_MS,
+  type Note,
+  type NoteSummary,
+  useFolders,
+  useFolderNotes,
+  useBatchDeleteNotes,
+  useBatchMoveNotes,
+  useBatchDeleteFolders,
+  useBatchMoveFolders,
+  useRenameNote,
+  useRenameFolder,
+  useDuplicateNote,
+} from '../api/queries'
+import { api } from '../api/client'
+import { useActiveVaultId } from '../api/active-vault'
+import { useFolderTreeState } from '../layout/folder-tree-context'
+import { useEngramTree } from './tree/use-engram-tree'
+import { TreeRowVirtualized } from './tree/tree-row-virtualized'
+import { parseItemId } from './tree/types'
+import { DeleteConfirm } from './tree-actions/delete-confirm'
+import { MoveDialog } from './tree-actions/move-dialog'
+import { ContextMenu } from './tree-actions/context-menu'
+import { ActionDrawer } from './tree-actions/action-drawer'
+import { actionsFor, type ActionId } from './tree-actions/action-list'
+import { nextCopyName } from './tree-actions/duplicate'
 
-interface TreeNode {
-  name: string
-  fullPath: string
-  children: TreeNode[]
-}
+// Row shapes that <DeleteConfirm> and <MoveDialog> accept.
+type DeleteRow =
+  | { kind: 'file'; path: string }
+  | { kind: 'folder'; path: string; childCount: number }
+type MoveRow =
+  | { kind: 'file'; path: string }
+  | { kind: 'folder'; path: string }
 
-function buildTree(folders: Folder[], sort: SortKey): TreeNode[] {
-  const root: TreeNode[] = []
+// Module-level stable empty array — passing `folders ?? []` creates a new
+// reference each render while the query is loading, which spins up an
+// infinite re-render loop in useEngramTree's rebuildTree effect.
+const EMPTY_FOLDERS: Folder[] = []
 
-  for (const folder of folders) {
-    if (!folder.name) continue // root files handled separately
-    const segments = folder.name.split('/')
-    let level = root
-
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i] ?? ''
-      const fullPath = segments.slice(0, i + 1).join('/')
-
-      let node = level.find((n) => n.name === seg)
-      if (!node) {
-        node = { name: seg, fullPath, children: [] }
-        level.push(node)
-      }
-      level = node.children
-    }
-  }
-
-  sortTree(root, sort)
-  return root
-}
-
-function sortTree(nodes: TreeNode[], sort: SortKey) {
-  // Folders always sort by name — modification time doesn't make sense for them.
-  const dir = sort === 'name-desc' ? -1 : 1
-  nodes.sort((a, b) => dir * a.name.localeCompare(b.name))
-  for (const n of nodes) sortTree(n.children, sort)
-}
-
-function sortNotes(notes: NoteSummary[], sort: SortKey): NoteSummary[] {
-  const sign = sort.endsWith('-desc') ? -1 : 1
-  if (sort.startsWith('modified')) {
-    return [...notes].sort((a, b) => sign * (Date.parse(a.updated_at) - Date.parse(b.updated_at)))
-  }
-  if (sort.startsWith('created')) {
-    return [...notes].sort((a, b) => sign * (Date.parse(a.created_at) - Date.parse(b.created_at)))
-  }
-  return [...notes].sort((a, b) => sign * a.title.localeCompare(b.title))
-}
+type DialogState =
+  | { kind: 'none' }
+  | { kind: 'delete'; nodes: DeleteRow[]; itemIds: string[] }
+  | { kind: 'move'; nodes: MoveRow[]; itemIds: string[] }
+  | { kind: 'context'; itemId: string; position: { x: number; y: number } }
+  | { kind: 'drawer'; itemId: string }
 
 export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
+  // Root notes still come via the legacy path-keyed endpoint — the by-id
+  // hook requires a non-null folderId. The loader stitches these into
+  // the tree under ROOT.
+  const { data: rootNotes = [] } = useFolderNotes('', { enabled: true })
   const { sort } = useFolderTreeState()
-  const location = useLocation()
-  // Note routes: /note/<path>. Read from pathname directly because
-  // useParams() in the parent layout doesn't expose the child route's
-  // splat. The pathname segments are %-encoded, decode each before
-  // joining so we can compare against raw note paths.
-  const selectedNotePath = location.pathname.startsWith('/note/')
-    ? decodePathFromRouter(location.pathname.slice('/note/'.length))
-    : null
+  const vaultId = useActiveVaultId()
+  const qc = useQueryClient()
+  const params = useParams()
+  const selectedNoteId = params.id ?? null
 
-  if (isLoading) {
-    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">Loading…</p>
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [dialog, setDialog] = useState<DialogState>({ kind: 'none' })
+
+  const batchDeleteNotes = useBatchDeleteNotes()
+  const batchMoveNotes = useBatchMoveNotes()
+  const batchDeleteFolders = useBatchDeleteFolders()
+  const batchMoveFolders = useBatchMoveFolders()
+  const renameNote = useRenameNote()
+  const renameFolder = useRenameFolder()
+  const duplicateNote = useDuplicateNote()
+
+  // Rename handler — TreeRow already wires HT's renaming state. HT calls
+  // back with the new leaf-name; we rebuild the new full path from the
+  // existing item path's folder + new leaf name.
+  const onRenameCommit = (itemId: string, newName: string) => {
+    const p = parseItemId(itemId)
+    if (p.kind === 'note') {
+      const item = qc.getQueryCache().findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+        .flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? [])
+        .find((n) => n.id === p.id)
+      if (!item) return
+      const parts = item.path.split('/')
+      parts[parts.length - 1] = newName
+      const new_path = parts.join('/')
+      renameNote.mutateAsync({ old_path: item.path, new_path }).catch(() => toast.error('Rename failed'))
+    } else if (p.kind === 'folder') {
+      const folder = folders?.find((f) => f.id === p.id)
+      if (!folder) return
+      const parts = folder.name.split('/')
+      parts[parts.length - 1] = newName
+      const new_path = parts.join('/')
+      renameFolder.mutateAsync({ old_path: folder.name, new_path }).catch(() => toast.error('Rename failed'))
+    }
   }
-  if (isError) {
-    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-red-600 dark:text-red-400">Failed to load folders.</p>
+
+  // Drag-and-drop move — partition sources by kind, dispatch to the
+  // matching batch hook. Drop target must be a folder or the vault root.
+  const onMove = (sourceIds: string[], targetItemId: string) => {
+    const target = parseItemId(targetItemId)
+    if (target.kind === 'note') return
+    const parsed = sourceIds.map(parseItemId)
+    const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
+    const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
+    // 'root' is the backend sentinel for the vault root; a folder target uses
+    // its marker id. Note→root has no optimistic patch (root notes live under a
+    // different cache key than the by-id folder lists), so a moved note briefly
+    // disappears until useBatchMoveNotes' onSuccess invalidation + the
+    // count-keyed rebuildTree reconcile it at root — an accepted trade-off.
+    const dest = target.kind === 'root' ? 'root' : target.id
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: dest })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
   }
-  if (!folders || folders.length === 0) {
-    return <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">No notes yet.</p>
+
+  // The loader fires this on cache-miss when a folder is expanded. Mirrors
+  // the queryFn inside `useFolderNotesById` so react-query treats both as
+  // the same query (cache key + fetcher shape).
+  const fetchFolderNotes = useCallback(
+    (folderId: string) =>
+      api
+        .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
+        .then((r) => r.notes),
+    [],
+  )
+
+  // Prefetch on hover — by the time the user clicks, the notes are usually
+  // already cached, so expansion is instant. Uses the same key as the loader
+  // so we don't fetch twice if the user clicks before the hover resolves.
+  const prefetchFolderNotes = useCallback(
+    (folderId: string) => {
+      void qc.prefetchQuery({
+        queryKey: ['folder-notes-by-id', vaultId, folderId],
+        queryFn: () => fetchFolderNotes(folderId),
+        staleTime: FOLDER_NOTES_STALE_MS,
+      })
+    },
+    [qc, vaultId, fetchFolderNotes],
+  )
+
+  // Bulk prefetch every folder's notes once after `useFolders` lands. Trades
+  // a small burst of parallel requests at startup for zero-latency folder
+  // expansion thereafter. Skipped on every render — gated on folders length
+  // becoming non-zero — and `staleTime` keeps it idempotent on remount.
+  const bulkPrefetchedRef = useRef(false)
+  useEffect(() => {
+    if (bulkPrefetchedRef.current) return
+    if (!folders || folders.length === 0) return
+    bulkPrefetchedRef.current = true
+    for (const f of folders) prefetchFolderNotes(f.id)
+  }, [folders, prefetchFolderNotes])
+
+  const { tree, virtualizer, items } = useEngramTree({
+    folders: folders ?? EMPTY_FOLDERS,
+    rootNotes,
+    qc,
+    vaultId: vaultId ?? '',
+    sort,
+    scrollParentRef: scrollRef,
+    onRenameCommit,
+    onMove,
+    fetchFolderNotes,
+  })
+
+  // Register the scroll container with BOTH the virtualizer (scrollRef) and
+  // headless-tree, whose getContainerProps supplies the empty-space drop handler
+  // (drops not on a row resolve to the vault root). Depends only on the stable
+  // `tree` instance — avoids ref churn from the new-object-every-render props.
+  const containerProps = tree.getContainerProps('Files')
+  const setContainerEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el
+      tree.registerElement(el)
+    },
+    [tree],
+  )
+
+  const [rootDragOver, setRootDragOver] = useState(false)
+  const onContainerDragOver = (e: React.DragEvent) => {
+    ;(containerProps.onDragOver as ((ev: React.DragEvent) => void) | undefined)?.(e)
+    setRootDragOver(true)
+  }
+  const onContainerDragLeave = () => setRootDragOver(false)
+  const onContainerDrop = (e: React.DragEvent) => {
+    setRootDragOver(false)
+    ;(containerProps.onDrop as ((ev: React.DragEvent) => void) | undefined)?.(e)
   }
 
-  const tree = buildTree(folders, sort)
-  const hasRootFiles = folders.some((f) => f.name === '')
+  // Auto-expand the chain leading to the active note so users can see
+  // where they are after navigation. Mirrors the old recursive
+  // `containsSelected` behaviour but driven by HT's expand API.
+  useEffect(() => {
+    if (selectedNoteId == null || !folders) return
+    const note = qc.getQueryData<Note>(['note', vaultId, selectedNoteId])
+    if (!note?.folder) return
+    const segments = note.folder.split('/')
+    for (let i = 1; i <= segments.length; i++) {
+      const path = segments.slice(0, i).join('/')
+      const folder = folders.find((f) => f.name === path)
+      if (folder) {
+        const instance = tree.getItemInstance(`f:${folder.id}`)
+        if (instance && !instance.isExpanded()) instance.expand()
+      }
+    }
+  }, [selectedNoteId, folders, vaultId, qc, tree])
 
-  return (
-    <nav aria-label="Files" className="py-2 text-base" data-testid="folder-tree-root">
-      <ul role="list" className="space-y-1">
-        {hasRootFiles && (
-          <RootFiles selectedNotePath={selectedNotePath} />
-        )}
-        {tree.map((node) => (
-          <FolderNode
-            key={node.fullPath}
-            node={node}
-            depth={0}
-            selectedNotePath={selectedNotePath}
-          />
-        ))}
-      </ul>
-    </nav>
-  )
-}
+  // Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
+  function rowsFor(itemId: string, mode: 'delete' | 'move'): DeleteRow[] | MoveRow[] {
+    const p = parseItemId(itemId)
+    if (p.kind === 'note') {
+      const note = lookupNote(p.id)
+      if (!note) return []
+      return mode === 'delete'
+        ? [{ kind: 'file', path: note.path }]
+        : [{ kind: 'file', path: note.path }]
+    }
+    if (p.kind === 'folder') {
+      const folder = folders?.find((f) => f.id === p.id)
+      if (!folder) return []
+      const direct = folder.count
+      const descendants =
+        folders?.filter((f) => f.name.startsWith(`${folder.name}/`)).reduce((sum, f) => sum + f.count, 0) ?? 0
+      return mode === 'delete'
+        ? [{ kind: 'folder', path: folder.name, childCount: direct + descendants }]
+        : [{ kind: 'folder', path: folder.name }]
+    }
+    return []
+  }
 
-function RootFiles({ selectedNotePath }: { selectedNotePath: string | null }) {
-  const { data: notes } = useFolderNotes('', { enabled: true })
-  const { sort } = useFolderTreeState()
-  if (!notes || notes.length === 0) return null
-  return (
-    <>
-      {sortNotes(notes, sort).map((note) => (
-        <NoteLeaf
-          key={note.path}
-          note={note}
-          depth={0}
-          selectedNotePath={selectedNotePath}
-        />
-      ))}
-    </>
-  )
-}
+  function lookupNote(id: string): { id: string; path: string; title?: string } | undefined {
+    const cached = qc
+      .getQueryCache()
+      .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+      .flatMap((q) => (q.state.data as Array<{ id: string; path: string; title?: string }> | undefined) ?? [])
+      .find((n) => n.id === id)
+    if (cached) return cached
+    return rootNotes.find((n) => n.id === id)
+  }
 
-interface FolderNodeProps {
-  node: TreeNode
-  depth: number
-  selectedNotePath: string | null
-}
+  function kindOf(itemId: string): 'file' | 'folder' {
+    const p = parseItemId(itemId)
+    return p.kind === 'folder' ? 'folder' : 'file'
+  }
 
-function FolderNode({ node, depth, selectedNotePath }: FolderNodeProps) {
-  const { isOpen: getIsOpen, toggle } = useFolderTreeState()
-  // Force-open the chain leading to the active note so the user can always see
-  // where they are. Side effect: "Collapse all" leaves the active-note chain
-  // open, which matches Obsidian's behaviour — intentional, not a bug.
-  const containsSelected = selectedNotePath?.startsWith(`${node.fullPath}/`) ?? false
-  const isOpen = getIsOpen(node.fullPath) || containsSelected
+  function titleForItem(itemId: string): string {
+    const p = parseItemId(itemId)
+    if (p.kind === 'folder') {
+      const f = folders?.find((x) => x.id === p.id)
+      return f ? f.name.split('/').pop() ?? f.name : 'Folder'
+    }
+    if (p.kind === 'note') {
+      const n = lookupNote(p.id)
+      return n?.title || n?.path.split('/').pop() || 'Note'
+    }
+    return ''
+  }
 
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => toggle(node.fullPath)}
-        aria-expanded={isOpen}
-        className="flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
-        style={{ paddingLeft: `${depth * 12 + 4}px` }}
-      >
-        <span
-          className={`shrink-0 text-[10px] text-gray-400 dark:text-gray-500 transition-transform ${
-            isOpen ? 'rotate-90' : ''
-          }`}
-          aria-hidden="true"
-        >
-          ▶
-        </span>
-        <FolderIcon open={isOpen} />
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
-      </button>
+  function openDelete(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'delete')) as DeleteRow[]
+    setDialog({ kind: 'delete', nodes, itemIds })
+  }
 
-      {isOpen && (
-        <ul role="list" className="space-y-1">
-          {node.children.map((child) => (
-            <FolderNode
-              key={child.fullPath}
-              node={child}
-              depth={depth + 1}
-              selectedNotePath={selectedNotePath}
-            />
-          ))}
-          <FolderFiles
-            folderPath={node.fullPath}
-            depth={depth + 1}
-            selectedNotePath={selectedNotePath}
-          />
-        </ul>
-      )}
-    </li>
-  )
-}
+  function openMove(itemIds: string[]) {
+    const nodes = itemIds.flatMap((id) => rowsFor(id, 'move')) as MoveRow[]
+    setDialog({ kind: 'move', nodes, itemIds })
+  }
 
-function FolderFiles({
-  folderPath,
-  depth,
-  selectedNotePath,
-}: {
-  folderPath: string
-  depth: number
-  selectedNotePath: string | null
-}) {
-  const { data: notes, isLoading } = useFolderNotes(folderPath, { enabled: true })
-  const { sort } = useFolderTreeState()
+  function handleContextMenu(itemId: string, x: number, y: number) {
+    setDialog({ kind: 'context', itemId, position: { x, y } })
+  }
+
+  function handleLongPress(itemId: string) {
+    setDialog({ kind: 'drawer', itemId })
+  }
+
+  function handleActionPick(actionId: ActionId, itemId: string) {
+    switch (actionId) {
+      case 'rename': {
+        const instance = tree.getItemInstance(itemId)
+        if (instance) instance.startRenaming()
+        break
+      }
+      case 'delete':
+        openDelete([itemId])
+        break
+      case 'move':
+        openMove([itemId])
+        break
+      case 'duplicate': {
+        const p = parseItemId(itemId)
+        if (p.kind !== 'note') break
+        const note = lookupNote(p.id)
+        if (!note) break
+        // No reliable sibling-name set on hand — pass an empty Set and let
+        // the backend reject if collision happens; the toast surfaces it.
+        const new_path = nextCopyName(note.path, new Set<string>())
+        duplicateNote
+          .mutateAsync({ src_path: note.path, new_path })
+          .then(() => toast.success('Duplicated'))
+          .catch(() => toast.error('Duplicate failed'))
+        break
+      }
+      case 'copy-wikilink': {
+        const p = parseItemId(itemId)
+        if (p.kind !== 'note') break
+        const note = lookupNote(p.id)
+        if (!note) break
+        const label = note.title || note.path.split('/').pop() || note.path
+        navigator.clipboard
+          .writeText(`[[${label}]]`)
+          .then(() => toast.success('Copied wikilink'))
+          .catch(() => toast.error('Copy failed'))
+        break
+      }
+    }
+  }
+
+  function partition(itemIds: string[]): { noteIds: string[]; folderIds: string[] } {
+    const noteIds: string[] = []
+    const folderIds: string[] = []
+    for (const id of itemIds) {
+      const p = parseItemId(id)
+      if (p.kind === 'note') noteIds.push(p.id)
+      else if (p.kind === 'folder') folderIds.push(p.id)
+    }
+    return { noteIds, folderIds }
+  }
+
+  function commitDelete() {
+    if (dialog.kind !== 'delete') return
+    const { noteIds, folderIds } = partition(dialog.itemIds)
+    if (noteIds.length) batchDeleteNotes.mutate({ ids: noteIds })
+    if (folderIds.length) batchDeleteFolders.mutate({ ids: folderIds })
+    tree.setSelectedItems([])
+    setDialog({ kind: 'none' })
+  }
+
+  function commitMove(targetFolderName: string) {
+    if (dialog.kind !== 'move') return
+    const target = folders?.find((f) => f.name === targetFolderName)
+    if (!target) {
+      setDialog({ kind: 'none' })
+      return
+    }
+    const { noteIds, folderIds } = partition(dialog.itemIds)
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
+    tree.setSelectedItems([])
+    setDialog({ kind: 'none' })
+  }
+
   if (isLoading) {
     return (
-      <li
-        className="px-1 py-0.5 text-xs text-gray-400 dark:text-gray-500"
-        style={{ paddingLeft: `${depth * 12 + 4}px` }}
-      >
-        …
-      </li>
+      <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+        Loading…
+      </p>
     )
   }
-  if (!notes || notes.length === 0) return null
+  if (isError) {
+    return (
+      <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        Failed to load folders.
+      </p>
+    )
+  }
+  // Empty only when there are neither folders nor root-level notes. A vault
+  // with root notes but no folders (e.g. a freshly created "Untitled" at root)
+  // must still render the tree — the loader stitches rootNotes under ROOT.
+  if (!folders || (folders.length === 0 && rootNotes.length === 0)) {
+    return (
+      <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+        No notes yet.
+      </p>
+    )
+  }
+
   return (
     <>
-      {sortNotes(notes, sort).map((note) => (
-        <NoteLeaf
-          key={note.path}
-          note={note}
-          depth={depth}
-          selectedNotePath={selectedNotePath}
-        />
-      ))}
-    </>
-  )
-}
-
-function NoteLeaf({
-  note,
-  depth,
-  selectedNotePath,
-}: {
-  note: NoteSummary
-  depth: number
-  selectedNotePath: string | null
-}) {
-  const isSelected = selectedNotePath === note.path
-  const extension = nonMdExtension(note.path)
-  return (
-    <li>
-      <Link
-        to={`/note/${encodePathForRouter(note.path)}`}
-        aria-current={isSelected ? 'page' : undefined}
-        className={`flex items-center gap-1 rounded py-0.5 pl-1 pr-3 ${
-          isSelected
-            ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
-            : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+      <nav
+        {...containerProps}
+        ref={setContainerEl}
+        onDragOver={onContainerDragOver}
+        onDragLeave={onContainerDragLeave}
+        onDrop={onContainerDrop}
+        data-testid="folder-tree-root"
+        data-tour="folder-tree"
+        className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
+          rootDragOver ? 'ring-1 ring-inset ring-blue-400 bg-blue-50/40 dark:bg-blue-950/30' : ''
         }`}
-        style={{ paddingLeft: `${depth * 12 + 16}px` }}
       >
-        <FileIcon />
-        <span className="min-w-0 flex-1 truncate">{noteLabel(note)}</span>
-        {extension && (
-          <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">
-            {extension}
-          </span>
-        )}
-      </Link>
-    </li>
-  )
-}
+        {/* minHeight ensures blank, droppable space below the rows even for a
+            short tree, so there's always a place to drop "to root". */}
+        <div style={{ height: virtualizer.getTotalSize(), minHeight: '100%', position: 'relative' }}>
+          {virtualizer.getVirtualItems().map((v) => (
+            <TreeRowVirtualized
+              key={items[v.index]?.getId() ?? v.index}
+              virtualItem={v}
+              items={items}
+              onContextMenu={handleContextMenu}
+              onLongPress={handleLongPress}
+              onFolderHover={prefetchFolderNotes}
+            />
+          ))}
+        </div>
+      </nav>
 
-function noteLabel(note: NoteSummary): string {
-  if (note.title) return note.title
-  const last = note.path.split('/').pop() ?? note.path
-  // Only strip recognized extensions, otherwise "archive.tar.gz" loses ".gz"
-  // and the row reads "archive.tar" + "GZ" chip — confusing.
-  const ext = recognizedExtension(last)
-  return ext ? last.slice(0, -(ext.length + 1)) : last
-}
-
-const KNOWN_EXTENSIONS = new Set([
-  'md',
-  'pdf',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'svg',
-  'mp3',
-  'mp4',
-  'webm',
-  'mov',
-  'csv',
-  'json',
-  'txt',
-])
-
-function recognizedExtension(filename: string): string | null {
-  const dot = filename.lastIndexOf('.')
-  if (dot <= 0) return null
-  const ext = filename.slice(dot + 1).toLowerCase()
-  return KNOWN_EXTENSIONS.has(ext) ? ext : null
-}
-
-function nonMdExtension(path: string): string | null {
-  const last = path.split('/').pop() ?? path
-  const ext = recognizedExtension(last)
-  return ext && ext !== 'md' ? ext : null
-}
-
-function encodePathForRouter(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/')
-}
-
-function decodePathFromRouter(encoded: string): string {
-  return encoded
-    .split('/')
-    .map((s) => {
-      try {
-        return decodeURIComponent(s)
-      } catch {
-        return s
-      }
-    })
-    .join('/')
-}
-
-function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-500 dark:text-gray-400"
-      fill="currentColor"
-    >
-      {open ? (
-        <path d="M2 4a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293L8.707 4.6A1 1 0 0 0 9.414 5H13a1 1 0 0 1 1 1H2V4zm0 3h12.5a.5.5 0 0 1 .49.598l-1 5A.5.5 0 0 1 13.5 13h-11a.5.5 0 0 1-.49-.402l-1-5A.5.5 0 0 1 1.5 7H2z" />
-      ) : (
-        <path d="M2 4a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293L8.707 4.6A1 1 0 0 0 9.414 5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4z" />
+      {dialog.kind === 'delete' && (
+        <DeleteConfirm
+          nodes={dialog.nodes}
+          onConfirm={commitDelete}
+          onCancel={() => setDialog({ kind: 'none' })}
+        />
       )}
-    </svg>
-  )
-}
-
-function FileIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500"
-      fill="currentColor"
-    >
-      <path d="M4 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.414a1 1 0 0 0-.293-.707L9.293 1.293A1 1 0 0 0 8.586 1H4zm5 0v4a1 1 0 0 0 1 1h3" />
-    </svg>
+      {dialog.kind === 'move' && (
+        <MoveDialog
+          nodes={dialog.nodes}
+          folders={folders.map((f) => ({ name: f.name }))}
+          onPick={commitMove}
+          onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {dialog.kind === 'context' && (
+        <ContextMenu
+          actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+          position={dialog.position}
+          onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
+          onClose={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {dialog.kind === 'drawer' && (
+        <ActionDrawer
+          title={titleForItem(dialog.itemId)}
+          actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+          onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
+          onClose={() => setDialog({ kind: 'none' })}
+        />
+      )}
+    </>
   )
 }

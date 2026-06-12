@@ -11,7 +11,6 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
-  alias Engram.Billing
   alias Engram.Crypto.RotationGate
   alias Engram.{Notes, Vaults}
   alias EngramWeb.Presence
@@ -22,20 +21,8 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def join("sync:" <> ids, params, socket) do
-    user = socket.assigns.current_user
-
-    # Pricing v2 §G — Free's realtime_sync_enabled is false. Gate is
-    # enforced when :realtime_sync_gate_enabled config is true (set on
-    # launch day; default false so pre-v2-launch Free users keep syncing).
-    if gate_enabled?() and
-         Billing.effective_limit(user, :realtime_sync_enabled) == false do
-      {:error, %{reason: "channel_forbidden_on_plan"}}
-    else
-      do_join(ids, params, socket, user)
-    end
+    do_join(ids, params, socket, socket.assigns.current_user)
   end
-
-  defp gate_enabled?, do: Application.get_env(:engram, :realtime_sync_gate_enabled, false)
 
   defp do_join(ids, params, socket, user) do
     case String.split(ids, ":") do
@@ -52,14 +39,14 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp resolve_vault_and_join(vault_id_str, params, socket, user) do
-    case Integer.parse(vault_id_str) do
-      {vault_id, ""} ->
+    case Ecto.UUID.cast(vault_id_str) do
+      {:ok, vault_id} ->
         case Vaults.get_vault(user, vault_id) do
           {:ok, vault} -> attach_vault_to_socket(vault, params, socket)
           {:error, _} -> {:error, %{reason: "vault_not_found"}}
         end
 
-      _ ->
+      :error ->
         {:error, %{reason: "invalid_vault_id"}}
     end
   end
@@ -249,11 +236,14 @@ defmodule EngramWeb.SyncChannel do
 
         case DateTime.from_iso8601(since_str) do
           {:ok, since, _} ->
-            {:ok, changes} = Notes.list_changes(user, vault, since)
+            # :meta — this reply never includes content (clients pull
+            # bodies separately), so skip the content fetch + decrypt.
+            {:ok, changes} = Notes.list_changes(user, vault, since, fields: :meta)
 
             serialized =
               Enum.map(changes, fn c ->
                 %{
+                  "id" => c.id,
                   "path" => c.path,
                   "title" => c.title,
                   "folder" => c.folder,

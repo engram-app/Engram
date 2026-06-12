@@ -15,6 +15,7 @@ defmodule Engram.Auth.TokenResolver do
   @spec resolve(any()) ::
           {:ok, Accounts.User.t()}
           | {:ok, Accounts.User.t(), Accounts.ApiKey.t()}
+          | {:ok, Accounts.User.t(), :internal_jwt}
           | {:error, atom() | keyword()}
 
   def resolve("engram_" <> _ = raw_key) do
@@ -47,9 +48,13 @@ defmodule Engram.Auth.TokenResolver do
 
   defp authenticate_internal_jwt(token) do
     case Accounts.verify_jwt(token) do
-      {:ok, %{"user_id" => user_id}} when is_integer(user_id) ->
+      {:ok, %{"user_id" => user_id}} when is_binary(user_id) ->
         case Accounts.get_user(user_id) do
-          %Accounts.User{} = user -> {:ok, user}
+          # `:internal_jwt` marker distinguishes device-flow / OAuth /
+          # MCP access tokens (all minted via Accounts.generate_jwt) from
+          # Clerk-authed web-SPA tokens, so cap plugs can tell programmatic
+          # ("external tooling") traffic apart from the user in the app.
+          %Accounts.User{} = user -> {:ok, user, :internal_jwt}
           _ -> {:error, :user_not_found}
         end
 

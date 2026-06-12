@@ -43,6 +43,13 @@ E2E_EMAIL_PREFIXES = (
     # The test code is gone but Clerk users persist; 70+ accumulated
     # since 2026-05-15 and ate most of the dev-tier 100-user cap.
     "e2e-onboard-",
+    # Free-tier launch suite (PR #502): attachment quota, signup-on-free,
+    # cancel-into-free. Each test fixture creates its own Clerk user that
+    # leaks when the job fails post-create; ~100 accumulated by 2026-06-09
+    # and re-hit the dev-tier 100-user cap.
+    "e2e-free-att-",
+    "e2e-free-signup-",
+    "e2e-cancel-free-",
 )
 
 

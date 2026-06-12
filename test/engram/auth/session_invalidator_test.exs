@@ -4,7 +4,7 @@ defmodule Engram.Auth.SessionInvalidatorTest do
   alias Engram.Auth.SessionInvalidator
 
   test "disconnect_user/1 broadcasts disconnect on user_socket:{id}" do
-    user_id = 12_345
+    user_id = Ecto.UUID.generate()
     topic = "user_socket:#{user_id}"
     EngramWeb.Endpoint.subscribe(topic)
 
@@ -17,15 +17,19 @@ defmodule Engram.Auth.SessionInvalidatorTest do
     }
   end
 
-  test "disconnect_user/1 accepts integer or string user id" do
-    EngramWeb.Endpoint.subscribe("user_socket:42")
+  test "disconnect_user/1 accepts a uuid string user id" do
+    user_id = Ecto.UUID.generate()
+    EngramWeb.Endpoint.subscribe("user_socket:#{user_id}")
 
-    assert :ok = SessionInvalidator.disconnect_user("42")
+    assert :ok = SessionInvalidator.disconnect_user(user_id)
 
-    assert_receive %Phoenix.Socket.Broadcast{topic: "user_socket:42", event: "disconnect"}
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "user_socket:" <> ^user_id,
+      event: "disconnect"
+    }
   end
 
   test "disconnect_user/1 returns :ok even when no subscribers" do
-    assert :ok = SessionInvalidator.disconnect_user(99_999_999)
+    assert :ok = SessionInvalidator.disconnect_user(Ecto.UUID.generate())
   end
 end

@@ -69,10 +69,12 @@ env:
   # The `||` fallback covers Dependabot PRs, which by GitHub policy don't receive
   # workflow secrets. Without it, `secrets.CI_ENCRYPTION_MASTER_KEY` evaluates to
   # empty string and Phoenix boot crashes with "ENCRYPTION_MASTER_KEY is required
-  # when KEY_PROVIDER=local". The fallback is a known constant — no secret value
-  # since the CI DB is recreated per run.
+  # when KEY_PROVIDER=local". The fallback must base64-decode to exactly 32 bytes
+  # (Engram.Crypto.Config.decode_master_key!/2) — using 32 zero bytes here so the
+  # value is unambiguously a CI fixture, not a leaked key. Per the doc above the
+  # CI database is recreated per run; nothing the fallback wraps survives.
   KEY_PROVIDER: "local"
-  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'ci-dependabot-fallback-key-ephemeral-only-not-secret' }}
+  ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
 
 jobs:
   # Fingerprint: content-hash of every source path that affects test
@@ -377,8 +379,8 @@ jobs:
           # reads. :test additionally hashes test/** because that's part
           # of its compile scope; :dev does not.
           DEPS_KEY="mix-deps-${BEAM}-${{ hashFiles('mix.lock') }}"
-          DEV_KEY="mix-build-dev-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**') }}"
-          TEST_KEY="mix-build-test-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**', 'test/**') }}"
+          DEV_KEY="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**') }}"
+          TEST_KEY="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**', 'test/**') }}"
           echo "deps=$DEPS_KEY" >> "$GITHUB_OUTPUT"
           echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
@@ -397,7 +399,7 @@ jobs:
         with:
           path: _build/dev
           key: ${{ steps.keys.outputs.build-dev }}
-          restore-keys: mix-build-dev-${{ steps.beam.outputs.tag }}-
+          restore-keys: mix-build-dev-v2-${{ steps.beam.outputs.tag }}-
 
       - name: Cache _build/test
         id: cache-build-test
@@ -405,7 +407,7 @@ jobs:
         with:
           path: _build/test
           key: ${{ steps.keys.outputs.build-test }}
-          restore-keys: mix-build-test-${{ steps.beam.outputs.tag }}-
+          restore-keys: mix-build-test-v2-${{ steps.beam.outputs.tag }}-
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — the cache's `restore-keys`
@@ -974,10 +976,10 @@ jobs:
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
 
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
-            PG_IMAGE="${LOCAL_REGISTRY}/postgres:16-alpine"
-            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:16-alpine"
+            PG_IMAGE="${LOCAL_REGISTRY}/postgres:18.4"
+            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:18.4"
           else
-            PG_IMAGE="postgres:16-alpine"
+            PG_IMAGE="postgres:18.4"
           fi
 
           # `docker run -p 0:5432` races concurrent runners on the shared VM:
@@ -1029,7 +1031,7 @@ jobs:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
           restore-keys: |
-            mix-build-test-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            mix-build-test-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -1230,7 +1232,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -1671,7 +1673,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps
         if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
@@ -1852,7 +1854,7 @@ jobs:
             -e POSTGRES_PASSWORD=engram \
             -e POSTGRES_DB=engram_n1 \
             -P \
-            postgres:16-alpine
+            postgres:18.4
           # Wait for ready
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then
@@ -1889,6 +1891,11 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
           mix ecto.create
+          # Idempotent cluster bootstrap (engram_app role + DEFAULT
+          # PRIVILEGES). Must run BEFORE migrate — baseline migration's
+          # structure dump references engram_app in GRANT statements.
+          # Mirrors prod entrypoint.sh ordering and the unit-tests job.
+          mix engram.prepare_database
           mix ecto.migrate
           echo "DB now at prev release schema."
 
@@ -2179,7 +2186,7 @@ jobs:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
-            mix-build-dev-${{ needs.prebuild-mix.outputs.beam-tag }}-
+            mix-build-dev-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Allocate dynamic ports
         id: ports
@@ -2210,10 +2217,10 @@ jobs:
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
-            PG_IMAGE="${LOCAL_REGISTRY}/postgres:16-alpine"
-            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:16-alpine"
+            PG_IMAGE="${LOCAL_REGISTRY}/postgres:18.4"
+            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:18.4"
           else
-            PG_IMAGE="postgres:16-alpine"
+            PG_IMAGE="postgres:18.4"
           fi
           # Retry on ephemeral-port race with sibling runners (see unit-tests).
           for attempt in 1 2 3 4 5; do
@@ -3032,3 +3039,94 @@ jobs:
           # it, only direct deps appear — and most CVEs live in transitive
           # deps (cowboy_telemetry, mime, etc.).
           install-deps: true
+
+  # ── Frontend deploy (Cloudflare Workers static assets) ──────────────
+  # Folded in from the standalone deploy-frontend.yml. Builds the saas SPA
+  # and `wrangler deploy`s it to the engram-frontend Worker. Runs only on
+  # push to main, gated on the `ci` aggregate, and only when the frontend
+  # tree actually changed in the merge (path guard) — so a backend-only
+  # merge doesn't redeploy the SPA.
+  #
+  # Pre-cutover this targets the *.workers.dev URL only (no custom domain in
+  # frontend/wrangler.jsonc yet), so it can't affect the live app.engram.page.
+  #
+  # Repo config: secrets.CLOUDFLARE_API_TOKEN (Workers Scripts:Edit) +
+  # secrets.CLOUDFLARE_ACCOUNT_ID + secrets.VITE_CLERK_PUBLISHABLE_KEY.
+  deploy-frontend:
+    name: Deploy frontend (Cloudflare Workers)
+    needs: [ci, fingerprint]
+    # Auto-deploy on main push (path-guarded below); also manually triggerable
+    # via the "CI" workflow's "Run workflow" button (workflow_dispatch) for
+    # on-demand smoke / the Phase M cutover.
+    #
+    # `ci` is SKIPPED (not success) when the fingerprint cache shows this exact
+    # content already passed — so accept that case too, matching the
+    # build-and-publish-image / submit-dep-graph gate convention in this file.
+    if: >-
+      always() &&
+      (needs.ci.result == 'success' ||
+       (needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true')) &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: [self-hosted, linux, x64, isolated]
+    concurrency:
+      group: deploy-frontend-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need the parent commit to diff the merge for frontend changes.
+          fetch-depth: 2
+
+      - name: Path-filter early-exit
+        id: guard
+        run: |
+          set -euo pipefail
+          # Manual runs always deploy; push runs deploy only if frontend changed.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet HEAD^ HEAD -- frontend/ 2>/dev/null; then
+            echo "No frontend/ changes in this merge — skipping deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend/ changed — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.guard.outputs.skip != 'true'
+        with: { bun-version: 1.3.11 }
+
+      - name: Install
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Build (saas)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run build:saas
+        env:
+          VITE_AUTH_PROVIDER: clerk
+          VITE_BILLING_ENABLED: 'true'
+          VITE_CLERK_WAITLIST_MODE: 'false'
+          VITE_API_BASE: https://api.engram.page
+          VITE_WS_BASE: wss://api.engram.page
+          # PROD publishable key (pk_live_…). Distinct from the repo SECRET
+          # `VITE_CLERK_PUBLISHABLE_KEY`, which is the pk_test the e2e CI uses
+          # — baking that here would point the live app at the dev Clerk
+          # instance. Set this repo VARIABLE from SOPS `clerk_pk_live`. Public
+          # by design (ships in the browser), so a variable not a secret.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY_PROD }}
+          VITE_GIT_SHA: ${{ github.sha }}
+
+      - name: Deploy (wrangler)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bunx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

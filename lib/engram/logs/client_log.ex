@@ -1,5 +1,6 @@
 defmodule Engram.Logs.ClientLog do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
   import Ecto.Changeset
 
   schema "client_logs" do

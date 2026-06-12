@@ -35,81 +35,116 @@ defmodule Engram.Attachments do
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       path_hmac = Crypto.hmac_field(filter_key, path)
 
-      # T3-audit H1 — concurrent upserts to the same path can race: each
-      # reads "no existing row," allocates its own att_id, encrypts the
-      # blob with AAD bound to that id, then PUTs to the same S3 key (last
-      # writer wins on the blob). The unique path_hmac constraint then
-      # picks a winning row whose id may not match the AAD baked into the
-      # surviving blob → reads decrypt-fail. Serialize per (user, path) via
-      # a transaction-scoped advisory lock so the second upsert blocks
-      # until the first commits, then sees the existing row + reuses its
-      # id. The lock auto-releases on commit/rollback.
-      Repo.transaction(fn ->
-        :ok = acquire_path_lock(user.id, path_hmac)
+      # Pre-lock window: probable-id read, cap check, encrypt, and the S3
+      # PUT all run WITHOUT holding a pool transaction or the advisory
+      # lock — a slow multi-MB upload must not pin a DB connection
+      # (POOL_SIZE defaults to 10; a handful of concurrent uploads used to
+      # starve the whole API). The locked transaction below re-checks
+      # `existing` and repairs the rare race.
+      existing0 = fetch_existing(user, vault.id, path_hmac)
 
-        existing =
-          Repo.with_tenant(user.id, fn ->
-            Repo.one(
-              from(a in Attachment,
-                where:
-                  a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-                    a.vault_id == ^vault.id
-              )
-            )
-          end)
-          |> unwrap_tenant()
-          |> case do
-            {:ok, att} -> att
-            {:error, _} -> nil
-          end
+      att_id0 =
+        case existing0 do
+          nil -> Ecto.UUID.generate()
+          %Attachment{id: id} -> id
+        end
 
-        att_id =
-          case existing do
-            nil -> Crypto.next_row_id(:attachments)
-            %Attachment{id: id} -> id
-          end
+      with :ok <- validate_storage_cap(user, existing0, byte_size(plaintext)),
+           {:ok, key, attrs0, ciphertext} <-
+             prepare_upload(
+               user,
+               vault,
+               att_id0,
+               path,
+               path_hmac,
+               plaintext,
+               mtime,
+               explicit_mime
+             ),
+           :ok <- store_external(key, ciphertext, attrs0.mime_type) do
+        # T3-audit H1 — concurrent upserts to the same path can race: each
+        # encrypts the blob with AAD bound to its own att_id, then PUTs to
+        # the same S3 key (last writer wins on the blob). The surviving DB
+        # row's id must match the AAD baked into the surviving blob, so the
+        # row write is serialized per (user, path) via a transaction-scoped
+        # advisory lock; if the locked re-read reveals a different winning
+        # id, we re-encrypt + re-PUT under the lock (rare race path only).
+        # The lock auto-releases on commit/rollback.
+        Repo.transaction(fn ->
+          :ok = acquire_path_lock(user.id, path_hmac)
 
-        with :ok <- validate_storage_cap(user, existing, byte_size(plaintext)),
-             {:ok, key, changeset_attrs, ciphertext} <-
-               prepare_upload(
-                 user,
-                 vault,
-                 att_id,
-                 path,
-                 path_hmac,
-                 plaintext,
-                 mtime,
-                 explicit_mime
-               ),
-             :ok <- store_external(key, ciphertext, changeset_attrs.mime_type) do
-          Repo.with_tenant(user.id, fn ->
+          existing = fetch_existing(user, vault.id, path_hmac)
+
+          rebind =
             case existing do
-              nil ->
-                %Attachment{id: att_id}
-                |> Attachment.changeset(changeset_attrs)
-                |> Repo.insert()
+              %Attachment{id: id} when id != att_id0 ->
+                with {:ok, _key, attrs1, ciphertext1} <-
+                       prepare_upload(
+                         user,
+                         vault,
+                         id,
+                         path,
+                         path_hmac,
+                         plaintext,
+                         mtime,
+                         explicit_mime
+                       ),
+                     :ok <- store_external(key, ciphertext1, attrs1.mime_type) do
+                  {:ok, attrs1}
+                end
 
-              att ->
-                att
-                |> Attachment.changeset(changeset_attrs)
-                |> Repo.update()
+              _ ->
+                {:ok, attrs0}
             end
-          end)
-          |> unwrap_tenant()
-          |> case do
+
+          with {:ok, changeset_attrs} <- rebind,
+               {:ok, att} <- write_row(user, existing, att_id0, changeset_attrs) do
             # Phase B.3: path is virtual — splice the plaintext we already
             # have onto the returned struct so callers can read att.path
             # without a second decrypt round-trip.
-            {:ok, att} -> {:ok, %{att | path: path}}
-            other -> other
+            {:ok, %{att | path: path}}
           end
-        end
-        |> case do
-          {:ok, att} -> att
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+          |> case do
+            {:ok, att} -> att
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+      end
     end
+  end
+
+  defp fetch_existing(user, vault_id, path_hmac) do
+    Repo.with_tenant(user.id, fn ->
+      Repo.one(
+        from(a in Attachment,
+          where:
+            a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+              a.vault_id == ^vault_id
+        )
+      )
+    end)
+    |> unwrap_tenant()
+    |> case do
+      {:ok, att} -> att
+      {:error, _} -> nil
+    end
+  end
+
+  defp write_row(user, existing, fallback_id, changeset_attrs) do
+    Repo.with_tenant(user.id, fn ->
+      case existing do
+        nil ->
+          %Attachment{id: fallback_id}
+          |> Attachment.changeset(changeset_attrs)
+          |> Repo.insert()
+
+        att ->
+          att
+          |> Attachment.changeset(changeset_attrs)
+          |> Repo.update()
+      end
+    end)
+    |> unwrap_tenant()
   end
 
   # T3-audit H1 — txn-scoped advisory lock keyed on (user_id, path_hmac).

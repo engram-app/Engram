@@ -1,25 +1,25 @@
 defmodule EngramWeb.Plugs.RequireActiveSubscription do
   @moduledoc """
-  Plug that checks whether the current user has an active subscription or is within trial.
-  Returns 403 with `subscription_required` error if not.
+  Gate for vault-scoped routes. Passes when the user has any tier
+  (`:free`, `:starter`, `:pro`) AND is not suspended. Returns 402 via
+  `EngramWeb.LimitResponse` otherwise.
 
-  Must run AFTER EngramWeb.Plugs.Auth (needs conn.assigns.current_user).
+  Re-purposed 2026-06-07 — was the paid-only gate; Free now counts as active.
+  The defensive nil-tier case is structurally unreachable in normal flow
+  (RequireOnboarding gates upstream), but kept for belt-and-suspenders.
+
+  Must run AFTER EngramWeb.Plugs.Auth (needs `conn.assigns.current_user`).
   """
-
-  import Plug.Conn
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
     user = conn.assigns.current_user
 
-    if Engram.Billing.active?(user) do
+    if is_nil(user.suspended_at) do
       conn
     else
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(403, Jason.encode!(%{error: "subscription_required"}))
-      |> halt()
+      EngramWeb.LimitResponse.halt(conn, "account_suspended", nil, nil, nil)
     end
   end
 end

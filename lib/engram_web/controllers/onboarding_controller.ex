@@ -89,6 +89,26 @@ defmodule EngramWeb.OnboardingController do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
 
+  # Free-tier acceptance: user clicked "Continue with Free" on /onboard/billing.
+  # Stamps `free_tier_accepted_at` (idempotent — Onboarding.accept_free_tier/1
+  # returns {:ok, user} unchanged if already set). Returns the same status
+  # payload shape as GET /api/onboarding/status so the SPA can navigate to the
+  # next step (`:billing` -> `:tools`/`:vault`/`:done`) without a second fetch.
+  def accept_free_tier(conn, _params) do
+    user = conn.assigns.current_user
+
+    with {:ok, updated} <- Onboarding.accept_free_tier(user) do
+      payload =
+        Onboarding.status(updated)
+        |> Map.update!(:next_step, &Atom.to_string/1)
+        |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
+        |> reject_nil_notice()
+        |> reject_empty_profile()
+
+      json(conn, payload)
+    end
+  end
+
   # FTUX questionnaire submit. Body shape (either or both):
   #   { tools: [string] }              — submitted from /onboard/tools
   #   { uses_obsidian: bool }          — submitted from /onboard/vault

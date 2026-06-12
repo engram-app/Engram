@@ -57,14 +57,15 @@ defmodule Engram.Crypto.AadRebind do
   @spec rebind_all(keyword()) :: counts()
   def rebind_all(opts \\ []) do
     batch_size = Keyword.get(opts, :batch_size, 100)
-    drive_loop(0, batch_size, %{ok: 0, skipped: 0, failed: 0})
+
+    drive_loop("00000000-0000-0000-0000-000000000000", batch_size, %{ok: 0, skipped: 0, failed: 0})
   end
 
   @doc "Rebind a single user. Idempotent — already-rebound users return `:skipped`."
   @spec rebind_user(integer() | User.t()) :: rebind_result()
   def rebind_user(%User{id: id}), do: rebind_user(id)
 
-  def rebind_user(user_id) when is_integer(user_id) do
+  def rebind_user(user_id) when is_binary(user_id) do
     started_at = System.monotonic_time()
     result = do_rebind(user_id)
     duration_us = duration_us_since(started_at)

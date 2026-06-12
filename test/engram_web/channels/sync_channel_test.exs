@@ -88,37 +88,6 @@ defmodule EngramWeb.SyncChannelTest do
       assert {:error, %{reason: "invalid_topic"}} =
                subscribe_and_join(socket, EngramWeb.SyncChannel, "sync:#{user.id}")
     end
-
-    # Pricing v2 §G — Free's realtime_sync_enabled is false; bypass the
-    # ChannelCase helper that grants the override and confirm reject.
-    # The gate is env-flag-gated so we flip it on for this test only.
-    test "rejects Free user without realtime_sync override (gate on)" do
-      prev = Application.get_env(:engram, :realtime_sync_gate_enabled)
-      Application.put_env(:engram, :realtime_sync_gate_enabled, true)
-
-      on_exit(fn ->
-        if is_nil(prev),
-          do: Application.delete_env(:engram, :realtime_sync_gate_enabled),
-          else: Application.put_env(:engram, :realtime_sync_gate_enabled, prev)
-      end)
-
-      free_user = insert(:user)
-      {:ok, free_user} = Engram.Crypto.ensure_user_dek(free_user)
-      vault = insert(:vault, user: free_user, is_default: true)
-
-      socket =
-        Phoenix.ChannelTest.socket(EngramWeb.UserSocket, "user_#{free_user.id}", %{
-          current_user: free_user,
-          current_api_key: nil
-        })
-
-      assert {:error, %{reason: "channel_forbidden_on_plan"}} =
-               subscribe_and_join(
-                 socket,
-                 EngramWeb.SyncChannel,
-                 "sync:#{free_user.id}:#{vault.id}"
-               )
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -130,7 +99,7 @@ defmodule EngramWeb.SyncChannelTest do
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-chan")
 
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key_record.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       socket = user_socket(user, api_key_record)
@@ -144,7 +113,7 @@ defmodule EngramWeb.SyncChannelTest do
 
       # Only grant access to vault_b — NOT the default vault
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key_record.id, vault_id: vault_b.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
       ])
 
       # Try to join the default vault (which the key does NOT have access to)
@@ -383,6 +352,47 @@ defmodule EngramWeb.SyncChannelTest do
     test "returns error when since is missing", %{socket: socket} do
       ref = push(socket, "pull_changes", %{})
       assert_reply ref, :error, %{"reason" => _}
+    end
+
+    test "carries note id in each change", %{socket: socket, user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/WithId.md",
+          "content" => "# WithId",
+          "mtime" => 1_000.0
+        })
+
+      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
+      assert_reply ref, :ok, %{"changes" => changes}
+
+      change = Enum.find(changes, &(&1["path"] == "Test/WithId.md"))
+      assert change["id"] == note.id
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Batch broadcasts (notes.batch / folders.batch) pass through unintercepted
+  # ---------------------------------------------------------------------------
+
+  describe "batch broadcasts pass through" do
+    test "notes.batch reaches subscribed client", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.broadcast!(
+        "sync:#{user.id}:#{vault.id}",
+        "notes.batch",
+        %{op: "delete", ids: [1, 2, 3]}
+      )
+
+      assert_push "notes.batch", %{op: "delete", ids: [1, 2, 3]}
+    end
+
+    test "folders.batch reaches subscribed client", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.broadcast!(
+        "sync:#{user.id}:#{vault.id}",
+        "folders.batch",
+        %{op: "move", ids: [42], target_parent_id: 99}
+      )
+
+      assert_push "folders.batch", %{op: "move", ids: [42], target_parent_id: 99}
     end
   end
 

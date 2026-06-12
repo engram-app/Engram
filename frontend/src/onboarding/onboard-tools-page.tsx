@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Navigate, useNavigate } from 'react-router'
+import { Link, Navigate, useNavigate } from 'react-router'
 import { useOnboardingStatus, useSetOnboardingProfile } from '../api/queries'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { Checkbox } from '@/components/ui/checkbox'
 import AuthPanel from '@/layout/auth-panel'
 import LoadingScreen from '../layout/loading-screen'
@@ -17,6 +18,7 @@ export default function OnboardToolsPage() {
   const navigate = useNavigate()
   const { data: status, isLoading } = useOnboardingStatus()
   const setProfile = useSetOnboardingProfile()
+  const isFree = useIsFreeTier()
 
   if (isLoading || !status) {
     return <LoadingScreen />
@@ -42,6 +44,7 @@ export default function OnboardToolsPage() {
       initialTools={status.profile?.tools ?? []}
       isPending={setProfile.isPending}
       hasError={setProfile.isError}
+      isFree={isFree}
       onSubmit={async (tools) => {
         await setProfile.mutateAsync({ tools })
         navigate('/onboard/vault', { replace: true })
@@ -54,14 +57,29 @@ interface ToolsFormProps {
   initialTools: string[]
   isPending: boolean
   hasError: boolean
+  isFree: boolean
   onSubmit: (tools: string[]) => Promise<void>
 }
 
-function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormProps) {
-  const [tools, setTools] = useState<Set<string>>(new Set(initialTools))
+function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: ToolsFormProps) {
+  // Free tier is single-select — if the user arrives with multiple already
+  // saved, drop everything except the first so the UI invariant holds from
+  // the first render.
+  const [tools, setTools] = useState<Set<string>>(() => {
+    if (isFree && initialTools.length > 1) {
+      return new Set(initialTools.slice(0, 1))
+    }
+    return new Set(initialTools)
+  })
 
   function toggleTool(slug: string) {
     setTools((prev) => {
+      if (isFree) {
+        // Free tier: clicking a selected tool deselects it; clicking any
+        // other tool replaces the selection entirely.
+        if (prev.has(slug)) return new Set()
+        return new Set([slug])
+      }
       const next = new Set(prev)
       next.has(slug) ? next.delete(slug) : next.add(slug)
       return next
@@ -82,11 +100,20 @@ function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormPro
         <p className="text-base text-foreground">
           We'll tailor your setup around the tools you already work with.
         </p>
-        <p className="text-sm text-muted-foreground">
-          Not a comprehensive list — pick <strong>Other connection</strong> if
-          yours isn't here.
-        </p>
       </header>
+
+      {isFree ? (
+        <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          Free tier — pick 1 to start.{' '}
+          <Link
+            to="/onboard/billing"
+            className="font-medium text-foreground underline underline-offset-4"
+          >
+            Upgrade
+          </Link>{' '}
+          anytime for unlimited connections.
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
         <ToolColumn
@@ -110,6 +137,11 @@ function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormPro
         onToggle={toggleTool}
         layout="row"
       />
+
+      <p className="text-sm text-muted-foreground">
+        Not a comprehensive list — pick <strong>Other connection</strong> if
+        yours isn't here.
+      </p>
 
       {hasError ? (
         <p role="alert" className="text-sm text-destructive">

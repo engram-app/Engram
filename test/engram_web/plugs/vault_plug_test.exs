@@ -78,14 +78,14 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
     test "returns 404 for non-existent vault ID", %{user: user} do
       conn =
         conn_with_user(user)
-        |> put_req_header("x-vault-id", "999999")
+        |> put_req_header("x-vault-id", "00000000-0000-0000-0000-000000999999")
         |> VaultPlug.call([])
 
       assert conn.halted
       assert conn.status == 404
     end
 
-    test "returns 404 for non-integer vault ID", %{user: user} do
+    test "returns 404 for non-uuid vault ID", %{user: user} do
       conn =
         conn_with_user(user)
         |> put_req_header("x-vault-id", "not-an-int")
@@ -128,7 +128,7 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       # Insert a vault restriction row directly
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       conn =
@@ -146,7 +146,7 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       # Restrict to other_user's vault ID (some other vault_id not owned by user)
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: other_vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(other_vault.id)}
       ])
 
       # Try to access user's own vault — not in the restriction set

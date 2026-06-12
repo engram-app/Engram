@@ -327,7 +327,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
       body = json_response(conn, 201)
       assert String.starts_with?(body["key"], "engram_")
-      assert is_integer(body["id"])
+      assert is_binary(body["id"])
       assert body["name"] == "ci-bot"
     end
 

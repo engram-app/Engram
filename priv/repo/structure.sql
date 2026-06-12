@@ -3,14 +3,16 @@
 --
 
 
--- Dumped from database version 16.13
--- Dumped by pg_dump version 16.13
+-- Dumped from database version 18.4 (Debian 18.4-1.pgdg13+1)
+-- Dumped by pg_dump version 18.4 (Debian 18.4-1.pgdg13+1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
@@ -41,8 +43,8 @@ SET default_table_access_method = heap;
 --
 
 CREATE TABLE public.api_key_vaults (
-    api_key_id bigint NOT NULL,
-    vault_id bigint NOT NULL
+    api_key_id uuid NOT NULL,
+    vault_id uuid NOT NULL
 );
 
 
@@ -51,8 +53,8 @@ CREATE TABLE public.api_key_vaults (
 --
 
 CREATE TABLE public.api_keys (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     key_hash text NOT NULL,
     name text,
     last_used timestamp(0) without time zone,
@@ -63,31 +65,12 @@ ALTER TABLE ONLY public.api_keys FORCE ROW LEVEL SECURITY;
 
 
 --
--- Name: api_keys_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.api_keys_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: api_keys_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.api_keys_id_seq OWNED BY public.api_keys.id;
-
-
---
 -- Name: attachments; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.attachments (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     mime_type text,
     size_bytes bigint,
     mtime double precision,
@@ -96,7 +79,7 @@ CREATE TABLE public.attachments (
     updated_at timestamp(0) without time zone NOT NULL,
     content_hash text,
     storage_key character varying(255),
-    vault_id bigint NOT NULL,
+    vault_id uuid NOT NULL,
     encryption_version integer DEFAULT 0 NOT NULL,
     content_nonce bytea,
     path_ciphertext bytea NOT NULL,
@@ -110,61 +93,23 @@ ALTER TABLE ONLY public.attachments FORCE ROW LEVEL SECURITY;
 
 
 --
--- Name: attachments_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.attachments_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: attachments_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.attachments_id_seq OWNED BY public.attachments.id;
-
-
---
 -- Name: chunks; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.chunks (
-    id bigint NOT NULL,
-    note_id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    note_id uuid NOT NULL,
+    user_id uuid NOT NULL,
     "position" smallint NOT NULL,
     heading_path text,
     char_start integer NOT NULL,
     char_end integer NOT NULL,
     qdrant_point_id uuid NOT NULL,
     created_at timestamp(0) without time zone NOT NULL,
-    vault_id bigint NOT NULL
+    vault_id uuid NOT NULL
 );
 
 ALTER TABLE ONLY public.chunks FORCE ROW LEVEL SECURITY;
-
-
---
--- Name: chunks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.chunks_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: chunks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.chunks_id_seq OWNED BY public.chunks.id;
 
 
 --
@@ -172,8 +117,8 @@ ALTER SEQUENCE public.chunks_id_seq OWNED BY public.chunks.id;
 --
 
 CREATE TABLE public.client_logs (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     ts timestamp(0) without time zone NOT NULL,
     level text DEFAULT 'info'::text,
     category text DEFAULT ''::text,
@@ -186,30 +131,11 @@ CREATE TABLE public.client_logs (
 
 
 --
--- Name: client_logs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.client_logs_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: client_logs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.client_logs_id_seq OWNED BY public.client_logs.id;
-
-
---
 -- Name: client_origin_stats; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.client_origin_stats (
-    user_id bigint NOT NULL,
+    user_id uuid NOT NULL,
     day date NOT NULL,
     fingerprint_class character varying(255) NOT NULL,
     request_count bigint DEFAULT 0 NOT NULL,
@@ -223,12 +149,12 @@ CREATE TABLE public.client_origin_stats (
 --
 
 CREATE TABLE public.device_authorizations (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     device_code character varying(255) NOT NULL,
     user_code character varying(255) NOT NULL,
     client_id character varying(255) NOT NULL,
-    user_id bigint,
-    vault_id bigint,
+    user_id uuid,
+    vault_id uuid,
     status character varying(255) DEFAULT 'pending'::character varying NOT NULL,
     expires_at timestamp(0) without time zone NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL
@@ -236,33 +162,14 @@ CREATE TABLE public.device_authorizations (
 
 
 --
--- Name: device_authorizations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.device_authorizations_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: device_authorizations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.device_authorizations_id_seq OWNED BY public.device_authorizations.id;
-
-
---
 -- Name: device_refresh_tokens; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.device_refresh_tokens (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     token_hash character varying(255) NOT NULL,
-    user_id bigint NOT NULL,
-    vault_id bigint NOT NULL,
+    user_id uuid NOT NULL,
+    vault_id uuid NOT NULL,
     expires_at timestamp(0) without time zone NOT NULL,
     revoked_at timestamp(0) without time zone,
     inserted_at timestamp(0) without time zone NOT NULL,
@@ -272,54 +179,16 @@ CREATE TABLE public.device_refresh_tokens (
 
 
 --
--- Name: device_refresh_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.device_refresh_tokens_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: device_refresh_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.device_refresh_tokens_id_seq OWNED BY public.device_refresh_tokens.id;
-
-
---
 -- Name: email_suppressions; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.email_suppressions (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     email character varying(255) NOT NULL,
     reason character varying(255) NOT NULL,
     inserted_at timestamp without time zone NOT NULL,
-    CONSTRAINT reason_must_be_valid CHECK (((reason)::text = ANY ((ARRAY['bounced'::character varying, 'complained'::character varying])::text[])))
+    CONSTRAINT reason_must_be_valid CHECK (((reason)::text = ANY (ARRAY[('bounced'::character varying)::text, ('complained'::character varying)::text])))
 );
-
-
---
--- Name: email_suppressions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.email_suppressions_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: email_suppressions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.email_suppressions_id_seq OWNED BY public.email_suppressions.id;
 
 
 --
@@ -327,26 +196,11 @@ ALTER SEQUENCE public.email_suppressions_id_seq OWNED BY public.email_suppressio
 --
 
 CREATE TABLE public.instance_settings (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     registration_mode text DEFAULT 'invite_only'::text NOT NULL,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    bootstrap_completed_at timestamp with time zone,
-    CONSTRAINT singleton CHECK ((id = 1))
-);
-
-
---
--- Name: instance_settings_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.instance_settings ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.instance_settings_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
+    bootstrap_completed_at timestamp with time zone
 );
 
 
@@ -355,9 +209,9 @@ ALTER TABLE public.instance_settings ALTER COLUMN id ADD GENERATED BY DEFAULT AS
 --
 
 CREATE TABLE public.invites (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     token_hash text NOT NULL,
-    created_by bigint NOT NULL,
+    created_by uuid NOT NULL,
     label text,
     max_uses bigint DEFAULT 1 NOT NULL,
     use_count bigint DEFAULT 0 NOT NULL,
@@ -369,26 +223,12 @@ CREATE TABLE public.invites (
 
 
 --
--- Name: invites_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.invites ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.invites_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
-);
-
-
---
 -- Name: notes; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.notes (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     version integer DEFAULT 1 NOT NULL,
     content_hash text,
     mtime double precision,
@@ -396,7 +236,7 @@ CREATE TABLE public.notes (
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL,
     embed_hash text,
-    vault_id bigint NOT NULL,
+    vault_id uuid NOT NULL,
     content_ciphertext bytea NOT NULL,
     content_nonce bytea NOT NULL,
     title_ciphertext bytea NOT NULL,
@@ -417,62 +257,24 @@ ALTER TABLE ONLY public.notes FORCE ROW LEVEL SECURITY;
 
 
 --
--- Name: notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.notes_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: notes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.notes_id_seq OWNED BY public.notes.id;
-
-
---
 -- Name: oauth_authorization_codes; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.oauth_authorization_codes (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     code_hash character varying(255) NOT NULL,
     client_id uuid NOT NULL,
-    user_id bigint NOT NULL,
+    user_id uuid NOT NULL,
     redirect_uri character varying(255) NOT NULL,
     code_challenge character varying(255) NOT NULL,
     code_challenge_method character varying(255) DEFAULT 'S256'::character varying NOT NULL,
     scope character varying(255),
-    vault_id bigint,
+    vault_id uuid,
     state character varying(255),
     expires_at timestamp(0) without time zone NOT NULL,
     consumed_at timestamp(0) without time zone,
     inserted_at timestamp without time zone NOT NULL
 );
-
-
---
--- Name: oauth_authorization_codes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.oauth_authorization_codes_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: oauth_authorization_codes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.oauth_authorization_codes_id_seq OWNED BY public.oauth_authorization_codes.id;
 
 
 --
@@ -498,7 +300,7 @@ CREATE TABLE public.oauth_clients (
     logo_uri text,
     tos_uri text,
     policy_uri text,
-    CONSTRAINT oauth_clients_kind_check CHECK (((kind)::text = ANY ((ARRAY['mcp'::character varying, 'obsidian'::character varying])::text[])))
+    CONSTRAINT oauth_clients_kind_check CHECK (((kind)::text = ANY (ARRAY[('mcp'::character varying)::text, ('obsidian'::character varying)::text])))
 );
 
 
@@ -507,12 +309,12 @@ CREATE TABLE public.oauth_clients (
 --
 
 CREATE TABLE public.oauth_refresh_tokens (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     token_hash character varying(255) NOT NULL,
     family_id uuid NOT NULL,
     client_id uuid NOT NULL,
-    user_id bigint NOT NULL,
-    vault_id bigint,
+    user_id uuid NOT NULL,
+    vault_id uuid,
     scope character varying(255),
     expires_at timestamp(0) without time zone NOT NULL,
     revoked_at timestamp(0) without time zone,
@@ -521,25 +323,6 @@ CREATE TABLE public.oauth_refresh_tokens (
     last_used_at timestamp without time zone,
     last_used_ip text
 );
-
-
---
--- Name: oauth_refresh_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.oauth_refresh_tokens_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: oauth_refresh_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.oauth_refresh_tokens_id_seq OWNED BY public.oauth_refresh_tokens.id;
 
 
 --
@@ -615,27 +398,13 @@ CREATE UNLOGGED TABLE public.oban_peers (
 --
 
 CREATE TABLE public.password_reset_tokens (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     token_hash text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     used_at timestamp with time zone,
-    created_by bigint,
+    created_by uuid,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: password_reset_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.password_reset_tokens ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.password_reset_tokens_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
 );
 
 
@@ -644,7 +413,7 @@ ALTER TABLE public.password_reset_tokens ALTER COLUMN id ADD GENERATED BY DEFAUL
 --
 
 CREATE TABLE public.plans (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     name text NOT NULL,
     limits jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp(0) without time zone NOT NULL,
@@ -653,56 +422,18 @@ CREATE TABLE public.plans (
 
 
 --
--- Name: plans_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.plans_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: plans_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.plans_id_seq OWNED BY public.plans.id;
-
-
---
 -- Name: refresh_tokens; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.refresh_tokens (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     token_hash character varying(255) NOT NULL,
     family_id character varying(255) NOT NULL,
     expires_at timestamp(0) without time zone NOT NULL,
     revoked_at timestamp(0) without time zone,
     created_at timestamp(0) without time zone NOT NULL
 );
-
-
---
--- Name: refresh_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.refresh_tokens_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: refresh_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.refresh_tokens_id_seq OWNED BY public.refresh_tokens.id;
 
 
 --
@@ -722,8 +453,8 @@ CREATE TABLE public.storage_objects (
 --
 
 CREATE TABLE public.subscriptions (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     tier character varying(255) DEFAULT 'trial'::character varying NOT NULL,
     status character varying(255) DEFAULT 'trialing'::character varying NOT NULL,
     current_period_end timestamp(0) without time zone,
@@ -736,30 +467,11 @@ CREATE TABLE public.subscriptions (
 
 
 --
--- Name: subscriptions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.subscriptions_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: subscriptions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.subscriptions_id_seq OWNED BY public.subscriptions.id;
-
-
---
 -- Name: system_canaries; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.system_canaries (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     wrapped_dek bytea NOT NULL,
     dek_sha256 bytea NOT NULL,
     inserted_at timestamp without time zone NOT NULL,
@@ -768,30 +480,11 @@ CREATE TABLE public.system_canaries (
 
 
 --
--- Name: system_canaries_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.system_canaries_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: system_canaries_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.system_canaries_id_seq OWNED BY public.system_canaries.id;
-
-
---
 -- Name: terms_versions; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.terms_versions (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     document character varying(255) NOT NULL,
     version character varying(255) NOT NULL,
     content_hash character varying(255) NOT NULL,
@@ -799,27 +492,8 @@ CREATE TABLE public.terms_versions (
     effective_date date,
     changelog text,
     inserted_at timestamp without time zone NOT NULL,
-    CONSTRAINT document_must_be_valid CHECK (((document)::text = ANY ((ARRAY['terms_of_service'::character varying, 'privacy_policy'::character varying])::text[])))
+    CONSTRAINT document_must_be_valid CHECK (((document)::text = ANY (ARRAY[('terms_of_service'::character varying)::text, ('privacy_policy'::character varying)::text])))
 );
-
-
---
--- Name: terms_versions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.terms_versions_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: terms_versions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.terms_versions_id_seq OWNED BY public.terms_versions.id;
 
 
 --
@@ -827,7 +501,7 @@ ALTER SEQUENCE public.terms_versions_id_seq OWNED BY public.terms_versions.id;
 --
 
 CREATE TABLE public.usage_meters (
-    user_id bigint NOT NULL,
+    user_id uuid NOT NULL,
     lifetime_embed_tokens bigint DEFAULT 0 NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     last_active_at timestamp without time zone,
@@ -846,8 +520,8 @@ CREATE TABLE public.usage_meters (
 --
 
 CREATE TABLE public.user_agreements (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     document text NOT NULL,
     version text NOT NULL,
     accepted_at timestamp(0) without time zone DEFAULT now() NOT NULL,
@@ -860,31 +534,12 @@ ALTER TABLE ONLY public.user_agreements FORCE ROW LEVEL SECURITY;
 
 
 --
--- Name: user_agreements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.user_agreements_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: user_agreements_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.user_agreements_id_seq OWNED BY public.user_agreements.id;
-
-
---
 -- Name: user_limit_overrides; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.user_limit_overrides (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     key character varying(255) NOT NULL,
     value jsonb NOT NULL,
     reason character varying(255) NOT NULL,
@@ -895,36 +550,17 @@ CREATE TABLE public.user_limit_overrides (
 
 
 --
--- Name: user_limit_overrides_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.user_limit_overrides_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: user_limit_overrides_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.user_limit_overrides_id_seq OWNED BY public.user_limit_overrides.id;
-
-
---
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.users (
-    id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
     email text NOT NULL,
     display_name text,
     created_at timestamp(0) without time zone NOT NULL,
     updated_at timestamp(0) without time zone NOT NULL,
     external_id text,
-    plan_id bigint,
+    plan_id uuid,
     password_hash character varying(255),
     role character varying(255) DEFAULT 'member'::character varying NOT NULL,
     encrypted_dek bytea,
@@ -941,31 +577,12 @@ CREATE TABLE public.users (
 
 
 --
--- Name: users_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.users_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: users_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
-
-
---
 -- Name: vaults; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.vaults (
-    id bigint NOT NULL,
-    user_id bigint NOT NULL,
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
     description text,
     slug text NOT NULL,
     client_id text,
@@ -983,162 +600,10 @@ ALTER TABLE ONLY public.vaults FORCE ROW LEVEL SECURITY;
 
 
 --
--- Name: vaults_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.vaults_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: vaults_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.vaults_id_seq OWNED BY public.vaults.id;
-
-
---
--- Name: api_keys id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.api_keys ALTER COLUMN id SET DEFAULT nextval('public.api_keys_id_seq'::regclass);
-
-
---
--- Name: attachments id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.attachments ALTER COLUMN id SET DEFAULT nextval('public.attachments_id_seq'::regclass);
-
-
---
--- Name: chunks id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chunks ALTER COLUMN id SET DEFAULT nextval('public.chunks_id_seq'::regclass);
-
-
---
--- Name: client_logs id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.client_logs ALTER COLUMN id SET DEFAULT nextval('public.client_logs_id_seq'::regclass);
-
-
---
--- Name: device_authorizations id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.device_authorizations ALTER COLUMN id SET DEFAULT nextval('public.device_authorizations_id_seq'::regclass);
-
-
---
--- Name: device_refresh_tokens id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.device_refresh_tokens ALTER COLUMN id SET DEFAULT nextval('public.device_refresh_tokens_id_seq'::regclass);
-
-
---
--- Name: email_suppressions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.email_suppressions ALTER COLUMN id SET DEFAULT nextval('public.email_suppressions_id_seq'::regclass);
-
-
---
--- Name: notes id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.notes ALTER COLUMN id SET DEFAULT nextval('public.notes_id_seq'::regclass);
-
-
---
--- Name: oauth_authorization_codes id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.oauth_authorization_codes ALTER COLUMN id SET DEFAULT nextval('public.oauth_authorization_codes_id_seq'::regclass);
-
-
---
--- Name: oauth_refresh_tokens id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.oauth_refresh_tokens ALTER COLUMN id SET DEFAULT nextval('public.oauth_refresh_tokens_id_seq'::regclass);
-
-
---
 -- Name: oban_jobs id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.oban_jobs ALTER COLUMN id SET DEFAULT nextval('public.oban_jobs_id_seq'::regclass);
-
-
---
--- Name: plans id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.plans ALTER COLUMN id SET DEFAULT nextval('public.plans_id_seq'::regclass);
-
-
---
--- Name: refresh_tokens id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.refresh_tokens ALTER COLUMN id SET DEFAULT nextval('public.refresh_tokens_id_seq'::regclass);
-
-
---
--- Name: subscriptions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.subscriptions ALTER COLUMN id SET DEFAULT nextval('public.subscriptions_id_seq'::regclass);
-
-
---
--- Name: system_canaries id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.system_canaries ALTER COLUMN id SET DEFAULT nextval('public.system_canaries_id_seq'::regclass);
-
-
---
--- Name: terms_versions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.terms_versions ALTER COLUMN id SET DEFAULT nextval('public.terms_versions_id_seq'::regclass);
-
-
---
--- Name: user_agreements id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_agreements ALTER COLUMN id SET DEFAULT nextval('public.user_agreements_id_seq'::regclass);
-
-
---
--- Name: user_limit_overrides id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_limit_overrides ALTER COLUMN id SET DEFAULT nextval('public.user_limit_overrides_id_seq'::regclass);
-
-
---
--- Name: users id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
-
-
---
--- Name: vaults id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.vaults ALTER COLUMN id SET DEFAULT nextval('public.vaults_id_seq'::regclass);
 
 
 --
@@ -2246,24 +1711,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.api_keys TO engram_app;
 
 
 --
--- Name: SEQUENCE api_keys_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.api_keys_id_seq TO engram_app;
-
-
---
 -- Name: TABLE attachments; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.attachments TO engram_app;
-
-
---
--- Name: SEQUENCE attachments_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.attachments_id_seq TO engram_app;
 
 
 --
@@ -2274,24 +1725,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.chunks TO engram_app;
 
 
 --
--- Name: SEQUENCE chunks_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.chunks_id_seq TO engram_app;
-
-
---
 -- Name: TABLE client_logs; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.client_logs TO engram_app;
-
-
---
--- Name: SEQUENCE client_logs_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.client_logs_id_seq TO engram_app;
 
 
 --
@@ -2309,24 +1746,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.device_authorizations TO engra
 
 
 --
--- Name: SEQUENCE device_authorizations_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.device_authorizations_id_seq TO engram_app;
-
-
---
 -- Name: TABLE device_refresh_tokens; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.device_refresh_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE device_refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.device_refresh_tokens_id_seq TO engram_app;
 
 
 --
@@ -2337,24 +1760,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.email_suppressions TO engram_a
 
 
 --
--- Name: SEQUENCE email_suppressions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.email_suppressions_id_seq TO engram_app;
-
-
---
 -- Name: TABLE instance_settings; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.instance_settings TO engram_app;
-
-
---
--- Name: SEQUENCE instance_settings_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.instance_settings_id_seq TO engram_app;
 
 
 --
@@ -2365,13 +1774,6 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.invites TO engram_app;
 
 
 --
--- Name: SEQUENCE invites_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.invites_id_seq TO engram_app;
-
-
---
 -- Name: TABLE notes; Type: ACL; Schema: public; Owner: -
 --
 
@@ -2379,24 +1781,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.notes TO engram_app;
 
 
 --
--- Name: SEQUENCE notes_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.notes_id_seq TO engram_app;
-
-
---
 -- Name: TABLE oauth_authorization_codes; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_authorization_codes TO engram_app;
-
-
---
--- Name: SEQUENCE oauth_authorization_codes_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.oauth_authorization_codes_id_seq TO engram_app;
 
 
 --
@@ -2411,13 +1799,6 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_clients TO engram_app;
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.oauth_refresh_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE oauth_refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.oauth_refresh_tokens_id_seq TO engram_app;
 
 
 --
@@ -2449,13 +1830,6 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.password_reset_tokens TO engra
 
 
 --
--- Name: SEQUENCE password_reset_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.password_reset_tokens_id_seq TO engram_app;
-
-
---
 -- Name: TABLE plans; Type: ACL; Schema: public; Owner: -
 --
 
@@ -2463,24 +1837,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.plans TO engram_app;
 
 
 --
--- Name: SEQUENCE plans_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.plans_id_seq TO engram_app;
-
-
---
 -- Name: TABLE refresh_tokens; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.refresh_tokens TO engram_app;
-
-
---
--- Name: SEQUENCE refresh_tokens_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.refresh_tokens_id_seq TO engram_app;
 
 
 --
@@ -2498,13 +1858,6 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.subscriptions TO engram_app;
 
 
 --
--- Name: SEQUENCE subscriptions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.subscriptions_id_seq TO engram_app;
-
-
---
 -- Name: TABLE system_canaries; Type: ACL; Schema: public; Owner: -
 --
 
@@ -2512,24 +1865,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.system_canaries TO engram_app;
 
 
 --
--- Name: SEQUENCE system_canaries_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.system_canaries_id_seq TO engram_app;
-
-
---
 -- Name: TABLE terms_versions; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.terms_versions TO engram_app;
-
-
---
--- Name: SEQUENCE terms_versions_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.terms_versions_id_seq TO engram_app;
 
 
 --
@@ -2547,24 +1886,10 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_agreements TO engram_app;
 
 
 --
--- Name: SEQUENCE user_agreements_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.user_agreements_id_seq TO engram_app;
-
-
---
 -- Name: TABLE user_limit_overrides; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_limit_overrides TO engram_app;
-
-
---
--- Name: SEQUENCE user_limit_overrides_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.user_limit_overrides_id_seq TO engram_app;
 
 
 --
@@ -2575,33 +1900,11 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.users TO engram_app;
 
 
 --
--- Name: SEQUENCE users_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.users_id_seq TO engram_app;
-
-
---
 -- Name: TABLE vaults; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.vaults TO engram_app;
 
-
---
--- Name: SEQUENCE vaults_id_seq; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,USAGE ON SEQUENCE public.vaults_id_seq TO engram_app;
-
-
---
--- DEFAULT PRIVILEGES are wired by Engram.Release.prepare_database/0
--- (CURRENT_USER-bound) instead of being baked into the dump. The
--- prior `ALTER DEFAULT PRIVILEGES FOR ROLE engram` form assumed the
--- dev superuser was named `engram`, which breaks on RDS where the
--- master is `engram_admin`. Keep this dump role-name-portable.
---
 
 --
 -- PostgreSQL database dump complete

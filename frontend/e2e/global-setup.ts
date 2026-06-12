@@ -51,6 +51,21 @@ export default async function globalSetup() {
   const user = await resp.json()
   console.log(`Clerk test user created: ${email} (${user.id})`)
 
+  // Stamp the state file IMMEDIATELY so globalTeardown can clean up the
+  // Clerk user even if a subsequent setup step throws. Previously the file
+  // wasn't written until AFTER waitUntilSignInReady + preCompleteOnboarding,
+  // which meant any flake in those probes leaked a user into Clerk's dev
+  // instance — the main cause of the 100-user-cap hits we've been seeing.
+  fs.writeFileSync(
+    AUTH_STATE_PATH,
+    JSON.stringify({
+      email,
+      password,
+      clerk_user_id: user.id,
+      skipped: false,
+    }),
+  )
+
   // Block until BOTH endpoints @clerk/testing's signIn helper uses can see
   // this user. Splitting the probe in two because Clerk's user-list-by-email
   // lookup (called FIRST by signIn) and sign-in-tokens (called second) can
@@ -65,16 +80,6 @@ export default async function globalSetup() {
   // RequireOnboarding gates /api/* with 403 `onboarding_required` until the
   // user has a profile. uses_obsidian=true short-circuits the vault step too.
   await preCompleteOnboarding(user.id, secretKey)
-
-  fs.writeFileSync(
-    AUTH_STATE_PATH,
-    JSON.stringify({
-      email,
-      password,
-      clerk_user_id: user.id,
-      skipped: false,
-    }),
-  )
 }
 
 const CLERK_BACKEND_PORT = process.env.PW_CLERK_BACKEND_PORT ?? '4001'

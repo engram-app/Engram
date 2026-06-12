@@ -44,7 +44,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
 
     test "returns {:error, :not_found} for missing user" do
-      assert {:error, :not_found} = UserDekRotation.rotate_user(999_999_999)
+      assert {:error, :not_found} = UserDekRotation.rotate_user(Ecto.UUID.generate())
     end
   end
 
@@ -934,7 +934,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # deleted during final_flip must NOT raise MatchError; it must return
       # {:error, {:user_vanished_mid_rotation, uid}} or {:error, :not_found}.
       # We verify the :not_found path directly (which goes through load_user).
-      assert {:error, :not_found} = UserDekRotation.rotate_user(999_888_777)
+      assert {:error, :not_found} = UserDekRotation.rotate_user(Ecto.UUID.generate())
     end
 
     test "final_flip user-vanish returns error tuple, not raise, via direct hard-delete",

@@ -11,6 +11,7 @@ import {
   useRevokePat,
 } from '../api/queries'
 import { ApiError } from '../api/client'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,7 +32,7 @@ import { SettingsSectionCard } from '@/settings/account/section-card'
 function useTierCaps() {
   const { data } = useBillingStatus()
   const tier = data?.tier ?? 'free'
-  const isFree = tier === 'free' || tier === 'none'
+  const isFree = useIsFreeTier()
   const caps = data?.caps
   return {
     tier,
@@ -316,7 +317,7 @@ function PatSection({
   onRevoke: (pat: Connection) => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [newKey, setNewKey] = useState<{ key: string; id: number; name: string } | null>(null)
+  const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null)
 
   return (
     <SettingsSectionCard
@@ -479,7 +480,7 @@ function RevealKeyModal({
   createdKey,
   onClose,
 }: {
-  createdKey: { key: string; id: number; name: string }
+  createdKey: { key: string; id: string; name: string }
   onClose: () => void
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')

@@ -8,7 +8,9 @@
   "author": "Rasbandit Software Solutions LLC d/b/a Engram",
   "scripts": {
     "dev": "vite",
-    "build": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
+    "build": "bun run build:selfhost",
+    "build:selfhost": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build",
+    "build:saas": "bun scripts/check-legal-manifest.ts && tsc --noEmit && vite build --outDir dist --emptyOutDir && bun scripts/write-config-json.ts dist/config.json",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -27,6 +29,8 @@
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/noto-serif": "^5.2.9",
+    "@headless-tree/core": "^1.7.0",
+    "@headless-tree/react": "^1.7.0",
     "@lobehub/icons-static-svg": "^1.91.0",
     "@paddle/paddle-js": "^1.6.4",
     "@portaljs/remark-callouts": "^1.0.5",
@@ -34,6 +38,7 @@
     "@sentry/vite-plugin": "^5.3.0",
     "@tailwindcss/typography": "^0.5.19",
     "@tanstack/react-query": "^5.100.14",
+    "@tanstack/react-virtual": "^3.14.2",
     "@uiw/react-codemirror": "^4.25.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -80,10 +85,11 @@
     "happy-dom": "^20.9.0",
     "pg": "^8.21.0",
     "pngquant-bin": "^9.0.0",
+    "shadcn": "^4.8.3",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.14",
     "vitest": "^4.1.7",
-    "shadcn": "^4.8.3"
+    "wrangler": "^4.90.0"
   }
 }

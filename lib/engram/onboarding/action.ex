@@ -6,10 +6,9 @@ defmodule Engram.Onboarding.Action do
   semantics.
   """
 
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
-  # Default integer (bigserial) PK — matches every other per-user table.
   @timestamps_opts [type: :utc_datetime_usec, updated_at: false]
 
   @actions ~w(
@@ -22,7 +21,7 @@ defmodule Engram.Onboarding.Action do
   )
 
   schema "onboarding_actions" do
-    field :user_id, :integer
+    field :user_id, Ecto.UUID
     field :action, :string
     field :metadata, :map, default: %{}
 

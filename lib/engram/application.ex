@@ -36,10 +36,18 @@ defmodule Engram.Application do
         cache_store_child(),
         Engram.UsageMeters.ActivityCache,
         Engram.Onboarding.TermsCache,
+        # Subscribe to CacheSync in init → must start after PubSub.
+        Engram.Onboarding.GateCache,
+        # Dedicated LISTEN/NOTIFY connection — OverrideCache LISTENs on it
+        # so raw-SQL override writes (trigger → pg_notify) evict caches on
+        # every node. Must start before OverrideCache.
+        pg_notifications_child(),
+        Engram.Billing.OverrideCache,
         Engram.Auth.SignupRejections,
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
+        {Engram.Idempotency, []},
         # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
         # is unset (dev, test, self-host), and Enum.reject below filters it out.
         pyroscope_child(),
@@ -177,6 +185,30 @@ defmodule Engram.Application do
     if Engram.Cache.backend() == :redis do
       {Engram.Cache.Redix, Application.get_env(:engram, Engram.Cache, [])}
     end
+  end
+
+  # One LISTEN/NOTIFY connection per node, shared by caches that subscribe
+  # to Postgres triggers (OverrideCache today). auto_reconnect re-LISTENs
+  # after a connection blip — Postgrex re-establishes the subscriptions on
+  # reconnect for listeners registered via listen/3.
+  defp pg_notifications_child do
+    opts =
+      Engram.Repo.config()
+      |> Keyword.take([
+        :hostname,
+        :host,
+        :port,
+        :username,
+        :password,
+        :database,
+        :ssl,
+        :ssl_opts,
+        :socket_options,
+        :url
+      ])
+      |> Keyword.merge(name: Engram.PgNotifications, auto_reconnect: true, sync_connect: false)
+
+    {Postgrex.Notifications, opts}
   end
 
   # Start the concrete limiter matching the configured backend. ETS (default)

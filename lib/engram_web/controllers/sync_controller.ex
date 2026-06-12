@@ -58,21 +58,27 @@ defmodule EngramWeb.SyncController do
         )
       end)
 
+    # Path-sized payloads decrypt in ~4µs each — measured 10k sequential at
+    # ~43ms while chunked parallel came out *slower* (result copy-back to the
+    # caller's heap rivals the AES-GCM work). Keep these loops sequential;
+    # the batch telemetry tells us if a real-world vault disagrees.
     notes =
-      note_rows
-      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
-        aad = path_aad(:notes, id, dek_version)
-        path = decrypt_path!(path_ct, path_nonce, dek, aad)
-        %{path: path, content_hash: hash}
+      Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
+        Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
+          aad = path_aad(:notes, id, dek_version)
+          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          %{path: path, content_hash: hash}
+        end)
       end)
       |> Enum.sort_by(& &1.path)
 
     attachments =
-      attachment_rows
-      |> Enum.map(fn {id, dek_version, path_ct, path_nonce, hash} ->
-        aad = path_aad(:attachments, id, dek_version)
-        path = decrypt_path!(path_ct, path_nonce, dek, aad)
-        %{path: path, content_hash: hash}
+      Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
+        Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
+          aad = path_aad(:attachments, id, dek_version)
+          path = decrypt_path!(path_ct, path_nonce, dek, aad)
+          %{path: path, content_hash: hash}
+        end)
       end)
       |> Enum.sort_by(& &1.path)
 

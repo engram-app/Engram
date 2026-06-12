@@ -7,6 +7,21 @@ defmodule Engram.Embedders.Voyage do
   bulk indexing burst cannot starve synchronous user search. Callers should
   pass `purpose: :query` for search/RAG paths; everything else (EmbedNote
   worker, parity validation, future batch jobs) is treated as `:index`.
+
+  ## Telemetry
+
+    * `[:engram, :voyage, :embed, :start | :stop | :exception]` — request
+      span. Stop metadata: `%{status: ..., purpose: ...}`.
+    * `[:engram, :voyage, :embed, :tokens]` — emitted on a successful 200
+      response when the Voyage payload includes `usage.total_tokens`.
+      Measurements: `%{total_tokens: pos_integer()}`. Metadata:
+      `%{purpose: :index | :query}`. Drives the
+      `engram_prom_ex_voyage_embed_tokens_total` sum metric used by the
+      Grafana cost / tokens-per-minute panels. Voyage publishes no usage
+      API, so this is the only telemetry path for billing reconciliation.
+    * `[:engram, :embed, :client_rate_limited]` — synthetic-429s emitted
+      when the in-process Hammer throttle fast-fails a request before
+      reaching Voyage.
   """
 
   @behaviour Engram.Embedder
@@ -64,6 +79,19 @@ defmodule Engram.Embedders.Voyage do
   defp status_label({:error, {status, _}}) when is_integer(status), do: :client_error
   defp status_label({:error, _}), do: :error
 
+  @doc """
+  Default Req options per embed purpose.
+
+  `:query` backs synchronous user search — the request process is pinned
+  for the whole call, so a Voyage brownout must fail fast (one attempt,
+  short timeout) instead of holding searches for up to ~2 minutes.
+  `:index` runs in Oban workers where patient retries are the right call.
+  Explicit caller opts always win over these defaults.
+  """
+  @spec request_defaults(atom()) :: keyword()
+  def request_defaults(:query), do: [receive_timeout: 5_000, retry: false]
+  def request_defaults(_purpose), do: [receive_timeout: 30_000, retry: :transient, max_retries: 3]
+
   defp do_embed_texts(texts, opts) do
     url = Application.get_env(:engram, :voyage_url, @default_url)
     model = Keyword.get(opts, :model, Application.get_env(:engram, :embed_model, @default_model))
@@ -73,22 +101,21 @@ defmodule Engram.Embedders.Voyage do
         raise "VOYAGE_API_KEY not configured (set VOYAGE_API_KEY env var)"
 
     {req_opts, _} = Keyword.split(opts, [:retry, :max_retries, :receive_timeout])
+    purpose = Keyword.get(opts, :purpose, :index)
 
     result =
       Req.post(
         "#{url}/v1/embeddings",
         [
           json: %{input: texts, model: model},
-          headers: [{"authorization", "Bearer #{api_key}"}],
-          receive_timeout: 30_000,
-          retry: :transient,
-          max_retries: 3
-        ] ++ req_opts
+          headers: [{"authorization", "Bearer #{api_key}"}]
+        ] ++ Keyword.merge(request_defaults(purpose), req_opts)
       )
 
     case result do
-      {:ok, %{status: 200, body: %{"data" => data}}} ->
+      {:ok, %{status: 200, body: %{"data" => data} = body}} ->
         vectors = Enum.map(data, & &1["embedding"])
+        emit_token_telemetry(body, Keyword.get(opts, :purpose, :index))
         {:ok, vectors}
 
       {:ok, %{status: status, body: body}} ->
@@ -98,6 +125,23 @@ defmodule Engram.Embedders.Voyage do
         {:error, reason}
     end
   end
+
+  # Voyage's `/v1/embeddings` 200 response always carries a `usage` object
+  # with `total_tokens`. The field is the only billing-relevant signal — no
+  # public usage API exists — so we lift it into a telemetry event for the
+  # PromEx `tokens_total` sum metric. Absence-of-event is the contract when
+  # the field is missing: a future endpoint shape change should not surface
+  # as silently-zero tokens.
+  defp emit_token_telemetry(%{"usage" => %{"total_tokens" => total}}, purpose)
+       when is_integer(total) do
+    :telemetry.execute(
+      [:engram, :voyage, :embed, :tokens],
+      %{total_tokens: total},
+      %{purpose: purpose}
+    )
+  end
+
+  defp emit_token_telemetry(_body, _purpose), do: :ok
 
   # Client-side rate limit. Enabled when `:voyage_rpm` is set (env: VOYAGE_RPM).
   # When the bucket is empty we synthesize the same `{:error, {429, body}}`

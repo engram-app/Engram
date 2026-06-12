@@ -271,6 +271,46 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # get_note_by_id/3
+  # ---------------------------------------------------------------------------
+
+  describe "get_note_by_id/3" do
+    test "returns the note for the owner", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, fetched} = Notes.get_note_by_id(user, vault, note.id)
+      assert fetched.id == note.id
+      assert fetched.path == "a.md"
+      assert fetched.content == "# A"
+    end
+
+    test "returns :not_found for non-existent id", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, Ecto.UUID.generate())
+    end
+
+    test "returns :not_found across tenants (RLS)", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :not_found} = Notes.get_note_by_id(other_user, other_vault, note.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # delete_note/3
   # ---------------------------------------------------------------------------
 
@@ -305,6 +345,46 @@ defmodule Engram.NotesTest do
       assert :ok = Notes.delete_note(other_user, other_vault, "Test/Shared Path.md")
       # User A's note should still exist
       assert {:ok, _} = Notes.get_note(user, vault, "Test/Shared Path.md")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # delete_note_by_id/3
+  # ---------------------------------------------------------------------------
+
+  describe "delete_note_by_id/3" do
+    test "deletes the note and is not found afterward", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert :ok = Notes.delete_note_by_id(user, vault, note.id)
+      assert {:error, :not_found} = Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "returns :not_found for non-existent id", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.delete_note_by_id(user, vault, Ecto.UUID.generate())
+    end
+
+    test "RLS: cannot delete another user's note", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :not_found} = Notes.delete_note_by_id(other_user, other_vault, note.id)
+      # Original still accessible to owner
+      assert {:ok, _} = Notes.get_note_by_id(user, vault, note.id)
     end
   end
 
@@ -403,6 +483,29 @@ defmodule Engram.NotesTest do
 
       assert Enum.any?(changes, &(&1.path == "Test/SameSecond.md")),
              "Changes in the same second as truncated server_time must be included"
+    end
+
+    test "fields: :meta returns full metadata with content omitted", %{user: user, vault: vault} do
+      # The sync channel's pull_changes drops content from its reply, so it
+      # asks for the metadata-only projection — content_ciphertext (the big
+      # column) is never fetched or decrypted.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Meta/Sparse.md",
+          "content" => "# Big body that must not be decrypted",
+          "mtime" => 1_000.0
+        })
+
+      past = DateTime.add(note.updated_at, -60, :second)
+      {:ok, changes} = Notes.list_changes(user, vault, past, fields: :meta)
+
+      change = Enum.find(changes, &(&1.path == "Meta/Sparse.md"))
+      assert change != nil
+      assert change.title == "Big body that must not be decrypted"
+      assert change.folder == "Meta"
+      assert change.version == note.version
+      assert change.deleted == false
+      assert change.content == nil
     end
   end
 
@@ -588,6 +691,27 @@ defmodule Engram.NotesTest do
 
       assert {:error, :not_found} =
                Notes.rename_note(other_user, other_vault, "Test/Mine.md", "Test/Stolen.md")
+    end
+
+    test "returns {:error, :conflict} when target path exists", %{user: user, vault: vault} do
+      {:ok, _a} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _b} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :conflict} = Notes.rename_note(user, vault, "a.md", "b.md")
+
+      # Original still present, untouched
+      assert {:ok, %{path: "a.md"}} = Notes.get_note(user, vault, "a.md")
     end
   end
 
@@ -806,6 +930,26 @@ defmodule Engram.NotesTest do
       paths = Enum.map(notes, & &1.path)
       assert "Health/Note1.md" in paths
       assert "Health/Note2.md" in paths
+    end
+
+    test "does not fetch or decrypt note content (metadata listing)", %{
+      user: user,
+      vault: vault
+    } do
+      # Every caller (folders controller note_summary, MCP list_folder, tree
+      # loaders) serializes metadata only — content stays projected out so
+      # folder browsing never pays content I/O + decrypt.
+      Notes.upsert_note(user, vault, %{
+        "path" => "Health/Sparse.md",
+        "content" => "# never needed here",
+        "mtime" => 1_000.0
+      })
+
+      {:ok, [note]} = Notes.list_notes_in_folder(user, vault, "Health")
+      assert note.title == "never needed here"
+      assert note.path == "Health/Sparse.md"
+      assert note.content == nil
+      assert note.content_ciphertext == nil
     end
 
     test "returns root-level notes with empty string", %{user: user, vault: vault} do
@@ -1034,6 +1178,112 @@ defmodule Engram.NotesTest do
       assert {:ok, _} = Notes.get_note(other_user, other_vault, "Shared/Note.md")
     end
 
+    test "returns {:error, :conflict} when target folder has notes",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "dst/b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
+
+      # Source unchanged
+      assert {:ok, %{path: "src/a.md"}} = Notes.get_note(user, vault, "src/a.md")
+      assert {:ok, %{path: "dst/b.md"}} = Notes.get_note(user, vault, "dst/b.md")
+    end
+
+    test "returns {:error, :conflict} when target folder marker exists",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} = Notes.create_folder_marker(user, vault, "dst")
+
+      assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
+    end
+
+    # Lock-down test: documents the nested-collision gap in
+    # folder_target_exists?/3. The immediate-children fingerprint check
+    # passes (no row sits directly in `dst`), but the cascade then trips
+    # the unique (user, vault, path_hmac) constraint when src/sub/x.md
+    # tries to become dst/sub/x.md (which already exists). If a future
+    # change silently masks this — e.g. by catching the Postgrex error
+    # and returning {:ok, _} or {:error, :conflict} without a deliberate
+    # design — this test fails and forces a re-review of the gap doc.
+    test "nested collision still raises Postgrex.Error (documented gap)",
+         %{user: user, vault: vault} do
+      # src has a nested file
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/sub/x.md",
+          "content" => "# X (src)",
+          "mtime" => 1_000.0
+        })
+
+      # dst is EMPTY at the immediate level (no dst/* row), so
+      # folder_target_exists?/3 returns false and the rename proceeds...
+      # but dst/sub/x.md already exists, so the cascade collides.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "dst/sub/x.md",
+          "content" => "# X (dst)",
+          "mtime" => 1_000.0
+        })
+
+      assert_raise Postgrex.Error, fn ->
+        Notes.rename_folder(user, vault, "src", "dst")
+      end
+    end
+
+    test "cascades to all children including nested subfolders",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "src/sub/b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, 2} = Notes.rename_folder(user, vault, "src", "dst")
+      assert {:ok, %{path: "dst/a.md"}} = Notes.get_note(user, vault, "dst/a.md")
+      assert {:ok, %{path: "dst/sub/b.md"}} = Notes.get_note(user, vault, "dst/sub/b.md")
+      assert {:error, :not_found} = Notes.get_note(user, vault, "src/a.md")
+      assert {:error, :not_found} = Notes.get_note(user, vault, "src/sub/b.md")
+    end
+
+    test "same-folder rename is a no-op (returns {:ok, _})",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "same/a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        })
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "same", "same")
+      assert {:ok, %{path: "same/a.md"}} = Notes.get_note(user, vault, "same/a.md")
+    end
+
     test "recomputes path_hmac and folder_hmac for the new path/folder",
          %{user: user, vault: vault} do
       {:ok, before} =
@@ -1130,6 +1380,200 @@ defmodule Engram.NotesTest do
       {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Mixed")
       assert length(notes) == 1
       assert hd(notes).path == "Mixed/a.md"
+    end
+  end
+
+  describe "list_folder_notes_by_id/3" do
+    test "returns notes whose folder matches the marker's folder", %{user: user, vault: vault} do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+
+      {:ok, _n1} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, _n2} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/b.md",
+          "content" => "b",
+          "mtime" => 2.0
+        })
+
+      {:ok, _other} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Archive/c.md",
+          "content" => "c",
+          "mtime" => 3.0
+        })
+
+      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      paths = Enum.map(notes, & &1.path) |> Enum.sort()
+      assert paths == ["Projects/a.md", "Projects/b.md"]
+    end
+
+    test "returns {:error, :not_found} when marker doesn't exist",
+         %{user: user, vault: vault} do
+      assert {:error, :not_found} =
+               Notes.list_folder_notes_by_id(user, vault, Ecto.UUID.generate())
+    end
+
+    test "returns {:error, :not_found} when marker belongs to another vault (RLS)", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+
+      assert {:error, :not_found} =
+               Notes.list_folder_notes_by_id(other_user, other_vault, marker.id)
+    end
+
+    test "excludes folder markers themselves", %{user: user, vault: vault} do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
+      {:ok, _child_marker} = Notes.create_folder_marker(user, vault, "Projects/Sub")
+
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      assert Enum.map(notes, & &1.path) == ["Projects/a.md"]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # delete_folder/3 (cascading)
+  # ---------------------------------------------------------------------------
+
+  describe "delete_folder/3" do
+    test "soft-deletes an empty folder marker", %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Empty")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      refute "Empty" in Enum.map(folders, & &1.folder)
+    end
+
+    test "cascades through folder marker and direct child notes", %{user: user, vault: vault} do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Doomed")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Doomed/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 2}} = Notes.delete_folder(user, vault, "Doomed")
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Doomed/a.md")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      refute "Doomed" in Enum.map(folders, & &1.folder)
+    end
+
+    test "cascades through nested subfolders (marker + sub-marker + nested note)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "a")
+      {:ok, _} = Notes.create_folder_marker(user, vault, "a/b")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "a/b/c.md",
+          "content" => "c",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 3}} = Notes.delete_folder(user, vault, "a")
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "a/b/c.md")
+
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      names = Enum.map(folders, & &1.folder)
+      refute "a" in names
+      refute "a/b" in names
+    end
+
+    test "does not delete sibling-prefix folders (no false-positive matches)",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Proj")
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Projects")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Projects/keep.md",
+          "content" => "keep",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Proj")
+
+      # Projects/keep.md must still be readable.
+      assert {:ok, %{path: "Projects/keep.md"}} =
+               Notes.get_note(user, vault, "Projects/keep.md")
+    end
+
+    test "idempotent: re-deleting an already-deleted folder returns {:ok, %{deleted: 0}}",
+         %{user: user, vault: vault} do
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Once")
+      {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Once")
+
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Once")
+    end
+
+    test "returns {:ok, %{deleted: 0}} for nonexistent folder", %{user: user, vault: vault} do
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Nope")
+    end
+
+    test "does not affect other user's folder with the same name", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(other_user, other_vault, %{
+          "path" => "Shared/keep.md",
+          "content" => "keep",
+          "mtime" => 1.0
+        })
+
+      assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Shared")
+
+      assert {:ok, _} = Notes.get_note(other_user, other_vault, "Shared/keep.md")
+    end
+
+    test "broadcasts per-note delete event for each descendant note", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Watched")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Watched/a.md",
+          "content" => "a",
+          "mtime" => 1.0
+        })
+
+      # Drain the upsert broadcast emitted by upsert_note/3.
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
+
+      assert {:ok, %{deleted: 2}} = Notes.delete_folder(user, vault, "Watched")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Watched/a.md"}
+      }
     end
   end
 end

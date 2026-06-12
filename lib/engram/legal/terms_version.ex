@@ -3,7 +3,7 @@ defmodule Engram.Legal.TermsVersion do
   A canonical legal-document version. Global (non-tenant). Rows are immutable
   once published — a correction is a new version. See `Engram.Legal`.
   """
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

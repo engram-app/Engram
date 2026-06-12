@@ -1,5 +1,6 @@
 defmodule Engram.Accounts.User do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
 
   # T3.0.5 — Allowlist serialization. Anything not listed is invisible to
   # Jason.encode!/1 even if a future controller does `json(conn, %{user: user})`.
@@ -24,6 +25,7 @@ defmodule Engram.Accounts.User do
     field :inactivity_warning_60_at, :utc_datetime_usec
     field :inactivity_warning_80_at, :utc_datetime_usec
     field :onboarding_profile, :map, default: %{}
+    field :free_tier_accepted_at, :utc_datetime_usec
 
     belongs_to :plan, Engram.Billing.Plan
     has_one :subscription, Engram.Billing.Subscription

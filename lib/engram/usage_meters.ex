@@ -15,7 +15,12 @@ defmodule Engram.UsageMeters do
   defmodule Meter do
     use Ecto.Schema
 
-    @primary_key {:user_id, :id, autogenerate: false}
+    # PK-as-uuid exception: this table is keyed on `user_id`, not `id`,
+    # so it can't use `Engram.Schema` (which forces id-as-PK). Mirror the
+    # macro's effect by hand: PK type is `Ecto.UUID` (app/server-supplied,
+    # no autogenerate) and FK type is `Ecto.UUID` for any future belongs_to.
+    @primary_key {:user_id, Ecto.UUID, autogenerate: false}
+    @foreign_key_type Ecto.UUID
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
       field :notes_count, :integer, default: 0
@@ -30,8 +35,8 @@ defmodule Engram.UsageMeters do
     end
   end
 
-  @spec lifetime_embed_tokens(integer()) :: non_neg_integer()
-  def lifetime_embed_tokens(user_id) when is_integer(user_id) do
+  @spec lifetime_embed_tokens(Ecto.UUID.t()) :: non_neg_integer()
+  def lifetime_embed_tokens(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.lifetime_embed_tokens),
       skip_tenant_check: true
@@ -43,9 +48,9 @@ defmodule Engram.UsageMeters do
   the new total. Uses a single upsert so concurrent embeds can't lose
   increments to a read-modify-write race.
   """
-  @spec add_embed_tokens(integer(), non_neg_integer()) :: non_neg_integer()
+  @spec add_embed_tokens(Ecto.UUID.t(), non_neg_integer()) :: non_neg_integer()
   def add_embed_tokens(user_id, count)
-      when is_integer(user_id) and is_integer(count) and count > 0 do
+      when is_binary(user_id) and is_integer(count) and count > 0 do
     now = DateTime.utc_now()
 
     {1, [%{lifetime_embed_tokens: total}]} =
@@ -61,7 +66,7 @@ defmodule Engram.UsageMeters do
     total
   end
 
-  def add_embed_tokens(_user_id, 0), do: lifetime_embed_tokens(0)
+  def add_embed_tokens(user_id, 0) when is_binary(user_id), do: lifetime_embed_tokens(user_id)
 
   @doc """
   Estimates Voyage token count from raw byte size. English averages ~4 bytes
@@ -79,8 +84,8 @@ defmodule Engram.UsageMeters do
   # ── Notes counter (pricing v2 §G) ─────────────────────────────
 
   @doc "Returns the maintained live-note count for the user (0 if no row yet)."
-  @spec notes_count(integer()) :: non_neg_integer()
-  def notes_count(user_id) when is_integer(user_id) do
+  @spec notes_count(Ecto.UUID.t()) :: non_neg_integer()
+  def notes_count(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.notes_count),
       skip_tenant_check: true
@@ -92,9 +97,9 @@ defmodule Engram.UsageMeters do
   positive `delta` when notes become live (insert/restore). Single upsert so
   concurrent writes can't lose increments to a read-modify-write race.
   """
-  @spec inc_notes_count(integer(), pos_integer()) :: :ok
+  @spec inc_notes_count(Ecto.UUID.t(), pos_integer()) :: :ok
   def inc_notes_count(user_id, delta)
-      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+      when is_binary(user_id) and is_integer(delta) and delta > 0 do
     now = DateTime.utc_now()
 
     {_, _} =
@@ -114,11 +119,11 @@ defmodule Engram.UsageMeters do
   or a missing row can never produce a negative. Use when notes leave the live
   set (soft-delete, bulk hard-delete). No-op when no meter row exists.
   """
-  @spec dec_notes_count(integer(), non_neg_integer()) :: :ok
+  @spec dec_notes_count(Ecto.UUID.t(), non_neg_integer()) :: :ok
   def dec_notes_count(_user_id, 0), do: :ok
 
   def dec_notes_count(user_id, delta)
-      when is_integer(user_id) and is_integer(delta) and delta > 0 do
+      when is_binary(user_id) and is_integer(delta) and delta > 0 do
     now = DateTime.utc_now()
 
     {_, _} =
@@ -144,8 +149,8 @@ defmodule Engram.UsageMeters do
   are structural metadata, not user-facing notes, and have a separate quota
   path. See `Engram.Notes.create_folder_marker/3`.
   """
-  @spec recount_notes!(integer()) :: non_neg_integer()
-  def recount_notes!(user_id) when is_integer(user_id) do
+  @spec recount_notes!(Ecto.UUID.t()) :: non_neg_integer()
+  def recount_notes!(user_id) when is_binary(user_id) do
     count =
       Repo.one(
         from(n in Engram.Notes.Note,
@@ -173,8 +178,8 @@ defmodule Engram.UsageMeters do
 
   # ── Activity tracking (pricing v2 §C) ─────────────────────────
 
-  @spec last_active_at(integer()) :: DateTime.t() | nil
-  def last_active_at(user_id) when is_integer(user_id) do
+  @spec last_active_at(Ecto.UUID.t()) :: DateTime.t() | nil
+  def last_active_at(user_id) when is_binary(user_id) do
     Repo.one(
       from(m in Meter, where: m.user_id == ^user_id, select: m.last_active_at),
       skip_tenant_check: true
@@ -185,8 +190,8 @@ defmodule Engram.UsageMeters do
   Stamps `last_active_at = now()` for the user. Lazy-inits the row.
   Called from the auth pipeline plug (debounced to once per hour).
   """
-  @spec bump_last_active(integer()) :: :ok
-  def bump_last_active(user_id) when is_integer(user_id) do
+  @spec bump_last_active(Ecto.UUID.t()) :: :ok
+  def bump_last_active(user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     {_, _} =

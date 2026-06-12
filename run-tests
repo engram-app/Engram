@@ -54,7 +54,7 @@ ensure_pg() {
       -e POSTGRES_PASSWORD="$PG_PASS" \
       -e POSTGRES_DB="$PG_DB" \
       -p "${PG_PORT}:5432" \
-      postgres:16-alpine > /dev/null
+      postgres:18.4 > /dev/null
   fi
 
   log "Waiting for Postgres..."

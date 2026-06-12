@@ -36,7 +36,7 @@ defmodule Engram.Crypto.RotationGateTest do
 
     test "returns {:error, :user_not_found} when user does not exist" do
       # Use an id that cannot exist in the test DB
-      assert {:error, :user_not_found} = RotationGate.check(0)
+      assert {:error, :user_not_found} = RotationGate.check(Ecto.UUID.generate())
     end
   end
 

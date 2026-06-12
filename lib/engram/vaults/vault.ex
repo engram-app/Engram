@@ -1,5 +1,6 @@
 defmodule Engram.Vaults.Vault do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

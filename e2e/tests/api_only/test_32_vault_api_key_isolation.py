@@ -40,12 +40,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _set_vault_limit(user_id: int, limit: int) -> None:
+def _set_vault_limit(user_id: str, limit: int) -> None:
     """Insert/update a user_limit_overrides row to set vaults_cap via docker exec SQL."""
     sql = (
         f"INSERT INTO user_limit_overrides "
         f"(user_id, key, value, reason, set_by) "
-        f"VALUES ({user_id}, 'vaults_cap', '{{\"v\": {limit}}}'::jsonb, 'e2e-test', 'e2e') "
+        f"VALUES ('{user_id}', 'vaults_cap', '{{\"v\": {limit}}}'::jsonb, 'e2e-test', 'e2e') "
         f"ON CONFLICT (user_id, key) DO UPDATE SET "
         f"value = '{{\"v\": {limit}}}'::jsonb, set_at = NOW()"
     )

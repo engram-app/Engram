@@ -19,7 +19,8 @@ defmodule Engram.Vaults do
   - First vault is automatically set as default.
   - Generates a unique slug from the name.
 
-  Returns {:ok, vault} or {:error, :vault_limit_reached} or {:error, changeset}.
+  Returns {:ok, vault} or {:error, {:vault_limit_reached, limit, current}}
+  or {:error, changeset}.
   """
   def create_vault(user, attrs) do
     # Ensure user has a DEK before Phase B injection
@@ -29,13 +30,19 @@ defmodule Engram.Vaults do
 
         case Billing.check_limit(user, :vaults_cap, current_count) do
           {:error, :limit_reached} ->
-            {:error, :vault_limit_reached}
+            # Free-tier launch §4.5 — carry the resolved limit + current
+            # count back to the controller so the 402 body can populate
+            # them. The resolver call here is the same one check_limit
+            # already made internally; a second call is cheaper than
+            # threading the value out of check_limit (no hot path).
+            limit = Billing.effective_limit(user, :vaults_cap)
+            {:error, {:vault_limit_reached, limit, current_count}}
 
           :ok ->
             is_default = current_count == 0
             name = attrs[:name] || attrs["name"] || ""
             slug = unique_slug(user.id, slugify(name))
-            vault_id = Engram.Crypto.next_row_id(:vaults)
+            vault_id = Ecto.UUID.generate()
 
             vault_attrs =
               attrs
@@ -102,7 +109,7 @@ defmodule Engram.Vaults do
   Returns:
     {:ok, vault, :created}   — new vault was inserted
     {:ok, vault, :existing}  — matched an existing vault
-    {:error, :vault_limit_reached}
+    {:error, {:vault_limit_reached, limit, current}}
   """
   def register_vault(user, name, client_id) do
     # Ensure user has a DEK before Phase B injection
@@ -120,12 +127,13 @@ defmodule Engram.Vaults do
 
               case Billing.check_limit(user, :vaults_cap, current_count) do
                 {:error, :limit_reached} ->
-                  {:error, :vault_limit_reached}
+                  limit = Billing.effective_limit(user, :vaults_cap)
+                  {:error, {:vault_limit_reached, limit, current_count}}
 
                 :ok ->
                   is_default = current_count == 0
                   slug = unique_slug(user.id, slugify(name))
-                  vault_id = Engram.Crypto.next_row_id(:vaults)
+                  vault_id = Ecto.UUID.generate()
 
                   attrs = %{
                     name: name,
@@ -209,9 +217,9 @@ defmodule Engram.Vaults do
       vault_ids
       |> Enum.uniq()
       |> Enum.flat_map(fn s ->
-        case Integer.parse(to_string(s)) do
-          {n, ""} -> [n]
-          _ -> []
+        case Ecto.UUID.cast(to_string(s)) do
+          {:ok, uuid} -> [uuid]
+          :error -> []
         end
       end)
 
@@ -431,6 +439,12 @@ defmodule Engram.Vaults do
       end
     end)
     |> unwrap_transaction()
+    |> tap(fn
+      # Deleting the last vault can flip the onboarding gate back to
+      # failing — drop the cached pass verdict so it re-derives.
+      {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
+      _ -> :ok
+    end)
   end
 
   # ── Restore (soft-delete reversal) ──────────────────────────────────────────
@@ -438,11 +452,13 @@ defmodule Engram.Vaults do
   @doc """
   Restores a soft-deleted vault by clearing deleted_at.
 
-  Refuses (`{:error, :limit_reached}`) if restoring would exceed the user's
-  vault cap. The vault is restored as non-default; the user re-sets default
-  explicitly. The pending CleanupVault job becomes a no-op once deleted_at is nil.
+  Refuses (`{:error, {:limit_reached, limit, current}}`) if restoring would
+  exceed the user's vault cap. The vault is restored as non-default; the user
+  re-sets default explicitly. The pending CleanupVault job becomes a no-op
+  once deleted_at is nil.
 
-  Returns {:ok, vault}, {:error, :limit_reached}, or {:error, :not_found}.
+  Returns {:ok, vault}, {:error, {:limit_reached, limit, current}}, or
+  {:error, :not_found}.
   """
   def restore_vault(user, vault_id) do
     user = fresh_user(user)
@@ -457,7 +473,8 @@ defmodule Engram.Vaults do
 
           case Billing.check_limit(user, :vaults_cap, active_count) do
             {:error, :limit_reached} ->
-              {:error, :limit_reached}
+              limit = Billing.effective_limit(user, :vaults_cap)
+              {:error, {:limit_reached, limit, active_count}}
 
             :ok ->
               vault
@@ -513,10 +530,12 @@ defmodule Engram.Vaults do
   def check_api_key_access(nil, _vault), do: :ok
 
   def check_api_key_access(api_key, vault) do
+    # Schemaless query: Ecto/Postgrex can't infer column types so we declare
+    # them explicitly. Both columns are `uuid` (Phase B of PG18+UUIDv7 rework).
     restricted_vault_ids =
       from(akv in "api_key_vaults",
-        where: akv.api_key_id == ^api_key.id,
-        select: akv.vault_id
+        where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
+        select: type(akv.vault_id, Ecto.UUID)
       )
       |> Repo.all(skip_tenant_check: true)
 

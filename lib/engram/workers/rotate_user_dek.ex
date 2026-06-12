@@ -38,7 +38,7 @@ defmodule Engram.Workers.RotateUserDek do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt})
-      when is_integer(user_id) do
+      when is_binary(user_id) do
     case UserDekRotation.rotate_user(user_id) do
       :ok ->
         :ok

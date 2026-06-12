@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { heading, fieldInput, destructiveAlert } from '@/lib/ui-classes'
 import { cn } from '@/lib/utils'
 import { ROUTES } from '@/routes'
+import { getApiBase, joinApiUrl } from '@/api/base'
 
 export default function ResetPasswordPage() {
   const [params] = useSearchParams()
@@ -32,7 +33,7 @@ export default function ResetPasswordPage() {
 
     setLoading(true)
     try {
-      const res = await fetch('/api/auth/password/reset', {
+      const res = await fetch(joinApiUrl(getApiBase(), '/api/auth/password/reset'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, password }),

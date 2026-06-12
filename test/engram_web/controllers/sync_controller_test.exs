@@ -3,6 +3,10 @@ defmodule EngramWeb.SyncControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
+    # Free-tier launch §4.5 — attachment uploads now gate on attachments_enabled,
+    # which is paid-only. Tests that POST to /api/attachments need an active
+    # Pro subscription to clear the controller gate.
+    insert(:subscription, user: user, tier: "pro", status: "active")
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
@@ -49,6 +53,23 @@ defmodule EngramWeb.SyncControllerTest do
       att = hd(body["attachments"])
       assert att["path"] == "photos/img.png"
       assert is_binary(att["content_hash"])
+    end
+
+    test "emits decrypt-batch telemetry for manifest paths", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Tel/A.md", content: "# A", mtime: 1_000.0})
+      post(conn, "/api/notes", %{path: "Tel/B.md", content: "# B", mtime: 1_000.0})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :decrypt_batch]])
+
+      conn2 = get(conn, "/api/sync/manifest")
+      assert json_response(conn2, 200)["total_notes"] == 2
+
+      assert_receive {[:engram, :crypto, :decrypt_batch], ^ref, measurements,
+                      %{kind: :manifest_notes}}
+
+      assert measurements.count == 2
+      assert is_integer(measurements.duration_us)
     end
 
     test "excludes deleted notes and attachments", %{conn: conn} do

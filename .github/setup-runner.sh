@@ -54,7 +54,7 @@ fi
 echo "Pushing CI images to local Docker registry (${DOCKER_REGISTRY})..."
 ELIXIR_IMAGE="hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
 RUNNER_IMAGE="debian:bookworm-20241202-slim"
-for img in postgres:16-alpine qdrant/qdrant:v1.17.1 node:20-slim "$ELIXIR_IMAGE" "$RUNNER_IMAGE"; do
+for img in postgres:18.4 qdrant/qdrant:v1.17.1 node:20-slim "$ELIXIR_IMAGE" "$RUNNER_IMAGE"; do
   local_tag="${DOCKER_REGISTRY}/${img}"
   docker pull "$img"
   docker tag "$img" "$local_tag"

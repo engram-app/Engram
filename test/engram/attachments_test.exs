@@ -7,6 +7,8 @@ defmodule Engram.AttachmentsTest do
 
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
+  alias Engram.Crypto
+  alias Engram.Storage.InMemory
 
   @path "photos/test.png"
   @valid_content Base.encode64("test image content")
@@ -41,6 +43,79 @@ defmodule Engram.AttachmentsTest do
       assert src =~ ~r/Repo\.transaction/,
              "upsert_attachment must wrap the allocation + insert in a transaction so " <>
                "the advisory lock auto-releases on commit/rollback (T3-audit H1)"
+    end
+  end
+
+  describe "upsert_attachment/3 transaction shape" do
+    test "S3 PUT runs outside the row transaction on the common path", %{
+      user: user,
+      vault: vault
+    } do
+      # A slow S3 PUT inside the transaction holds a pool connection (and
+      # the per-path advisory lock) for the whole upload — ~10 concurrent
+      # uploads can starve the entire API of DB connections.
+      test_pid = self()
+
+      expect(Engram.MockStorage, :put, fn _key, _binary, _opts ->
+        send(test_pid, {:put_in_txn, Engram.Repo.in_transaction?()})
+        :ok
+      end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => @valid_content
+        })
+
+      assert_received {:put_in_txn, false}
+    end
+
+    test "raced first-upload converges: blob AAD re-bound to the surviving row id", %{
+      user: user,
+      vault: vault
+    } do
+      # With the PUT outside the lock, two concurrent first-uploads can
+      # encrypt under different att_ids. The locked re-read must detect
+      # that the surviving row id differs from the AAD baked into the
+      # uploaded blob and re-encrypt + re-PUT under the lock (T3-audit H1
+      # invariant: surviving blob AAD == surviving row id).
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      path_hmac = Crypto.hmac_field(filter_key, @path)
+      competing_id = Ecto.UUID.generate()
+
+      {:ok, raced} = Agent.start_link(fn -> false end)
+
+      stub(Engram.MockStorage, :get, &InMemory.get/1)
+
+      expect(Engram.MockStorage, :put, 2, fn key, binary, opts ->
+        # First PUT happens in the pre-lock window — simulate a concurrent
+        # upsert winning the lock first by inserting the surviving row now.
+        unless Agent.get_and_update(raced, &{&1, true}) do
+          insert(:attachment,
+            id: competing_id,
+            user: user,
+            vault: vault,
+            path_hmac: path_hmac
+          )
+        end
+
+        InMemory.put(key, binary, opts)
+      end)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => @valid_content
+        })
+
+      # The pre-existing row won; our upload updated it rather than
+      # inserting a duplicate path.
+      assert att.id == competing_id
+
+      # End-to-end proof the blob decrypts under the surviving id.
+      {:ok, fetched} = Attachments.get_attachment(user, vault, @path)
+      assert fetched.content == Base.decode64!(@valid_content)
     end
   end
 
@@ -131,7 +206,7 @@ defmodule Engram.AttachmentsTest do
 
       # Ensure user has DEK before calling upsert_attachment
       user = user |> Engram.Repo.reload!()
-      {:ok, _} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, _} = Crypto.ensure_user_dek(user)
       user = user |> Engram.Repo.reload!()
 
       {:ok, att} =
@@ -140,8 +215,8 @@ defmodule Engram.AttachmentsTest do
           "content_base64" => Base.encode64("img bytes")
         })
 
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      expected_hmac = Engram.Crypto.hmac_field(filter_key, "photos/test.png")
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+      expected_hmac = Crypto.hmac_field(filter_key, "photos/test.png")
 
       assert att.path_hmac == expected_hmac
       assert is_binary(att.path_ciphertext)
@@ -299,7 +374,7 @@ defmodule Engram.AttachmentsTest do
 
       # Delete the underlying object directly to simulate storage corruption
       # while leaving the DB row live.
-      Engram.Storage.InMemory.delete("#{user.id}/#{vault.id}/#{path}")
+      InMemory.delete("#{user.id}/#{vault.id}/#{path}")
 
       log =
         capture_log(fn ->

@@ -2,6 +2,7 @@ defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.Billing.OverrideCache
   alias Engram.Vaults
 
   setup do
@@ -35,8 +36,11 @@ defmodule Engram.VaultsTest do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
       # Give the second user unlimited vaults via user_overrides or just test default (1) blocks
-      # Override the limit so we can insert a second vault
+      # Override the limit so we can insert a second vault. The first create
+      # cached the override MISS — evict so the grant is visible (same idiom
+      # as PlanCache.invalidate after mid-test plan edits).
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
 
       assert {:ok, vault2} = Vaults.create_vault(user, %{name: "Second"})
       assert vault2.is_default == false
@@ -45,7 +49,8 @@ defmodule Engram.VaultsTest do
     test "enforces default billing limit of 1", %{user: user} do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
 
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Second"})
+      assert {:error, {:vault_limit_reached, 1, 1}} =
+               Vaults.create_vault(user, %{name: "Second"})
     end
 
     test "unlimited override (-1) allows any number of vaults", %{user: user} do
@@ -61,15 +66,21 @@ defmodule Engram.VaultsTest do
 
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Third"})
+
+      assert {:error, {:vault_limit_reached, 2, 2}} =
+               Vaults.create_vault(user, %{name: "Third"})
     end
 
     test "override upgrade: blocked by default, then lifted", %{user: user} do
       {:ok, _} = Vaults.create_vault(user, %{name: "First"})
-      assert {:error, :vault_limit_reached} = Vaults.create_vault(user, %{name: "Second"})
 
-      # Lift the limit via per-user override
+      assert {:error, {:vault_limit_reached, 1, 1}} =
+               Vaults.create_vault(user, %{name: "Second"})
+
+      # Lift the limit via per-user override. Earlier creates cached the
+      # override MISS — evict so the grant is visible immediately.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
 
       {:ok, _} = Vaults.create_vault(user, %{name: "Second"})
       {:ok, _} = Vaults.create_vault(user, %{name: "Third"})
@@ -224,7 +235,7 @@ defmodule Engram.VaultsTest do
     test "returns :vault_limit_reached when default limit exceeded", %{user: user} do
       Vaults.register_vault(user, "First", "client-1")
 
-      assert {:error, :vault_limit_reached} =
+      assert {:error, {:vault_limit_reached, 1, 1}} =
                Vaults.register_vault(user, "Second", "client-2")
     end
 
@@ -285,6 +296,10 @@ defmodule Engram.VaultsTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1} = Vaults.create_vault(user, %{name: "Alpha"})
+      # 1.1s gap ensures distinct second-precision `created_at` timestamps so the
+      # secondary `v.id` ordering doesn't race with UUIDv7 sub-millisecond
+      # tiebreaker randomness.
+      Process.sleep(1100)
       {:ok, v2} = Vaults.create_vault(user, %{name: "Beta"})
 
       [first, second | _] = Vaults.list_vaults(user)
@@ -341,7 +356,7 @@ defmodule Engram.VaultsTest do
       {:ok, _} = Vaults.delete_vault(user, first.id)
       {:ok, _replacement} = Vaults.create_vault(user, %{name: "Replacement"})
 
-      assert {:error, :limit_reached} = Vaults.restore_vault(user, first.id)
+      assert {:error, {:limit_reached, 1, 1}} = Vaults.restore_vault(user, first.id)
       # Blocked restore leaves the vault soft-deleted: it stays in the trash
       # list and is NOT promoted back into the active list.
       assert first.id in deleted_ids(user)
@@ -403,7 +418,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for unknown id", %{user: user} do
-      assert {:error, :not_found} = Vaults.get_vault(user, 0)
+      assert {:error, :not_found} = Vaults.get_vault(user, Ecto.UUID.generate())
     end
 
     test "returns {:error, :not_found} for another user's vault", %{
@@ -479,7 +494,8 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.update_vault(user, 0, %{name: "X"})
+      assert {:error, :not_found} =
+               Vaults.update_vault(user, Ecto.UUID.generate(), %{name: "X"})
     end
   end
 
@@ -521,7 +537,7 @@ defmodule Engram.VaultsTest do
     end
 
     test "returns {:error, :not_found} for missing vault", %{user: user} do
-      assert {:error, :not_found} = Vaults.delete_vault(user, 0)
+      assert {:error, :not_found} = Vaults.delete_vault(user, Ecto.UUID.generate())
     end
 
     test "delete_vault enqueues the deletion-notice email", %{user: user} do
@@ -558,7 +574,7 @@ defmodule Engram.VaultsTest do
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
 
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(vault.id)}
       ])
 
       assert :ok = Vaults.check_api_key_access(api_key, vault)
@@ -574,7 +590,7 @@ defmodule Engram.VaultsTest do
 
       # Restrict to other vault only
       Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: api_key.id, vault_id: other_vault.id}
+        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(other_vault.id)}
       ])
 
       assert :forbidden = Vaults.check_api_key_access(api_key, vault)
@@ -802,7 +818,9 @@ defmodule Engram.VaultsTest do
     test "second vault does not double-record" do
       user = insert(:user)
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Main"})
+      # First create cached the override MISS — evict so the grant lands.
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+      :ok = OverrideCache.evict(user.id)
       {:ok, _} = Engram.Vaults.create_vault(user, %{name: "Second"})
 
       assert ["first_vault_created"] = Engram.Onboarding.list_actions(user.id)

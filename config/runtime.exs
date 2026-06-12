@@ -1,5 +1,16 @@
 import Config
 
+# Prod delivers all app secrets as one SSM SecureString (1 KMS decrypt
+# instead of one per secret). Expand it into the process env BEFORE the
+# System.get_env/1 reads below so they resolve unchanged. Self-host/dev set
+# individual env vars and never set APP_SECRETS_JSON, so this is a no-op.
+# Malformed JSON raises here → boot fails loud rather than starting with
+# missing secrets.
+if blob = System.get_env("APP_SECRETS_JSON") do
+  Engram.Secrets.unpack(blob, &System.get_env/1)
+  |> Enum.each(fn {k, v} -> System.put_env(k, v) end)
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -182,6 +193,12 @@ default_registration_mode =
 
 config :engram, :default_registration_mode, default_registration_mode
 
+# Upgrade URL surfaced in 402 limit-exceeded responses (see EngramWeb.LimitResponse).
+# SaaS points at the in-app billing page; self-hosters can override or set to nil.
+config :engram,
+       :upgrade_url,
+       System.get_env("ENGRAM_UPGRADE_URL", "https://app.engram.page/settings/billing")
+
 # Email transactional provider (pricing v2 §C). Default: NoOp for self-host;
 # Resend when RESEND_API_KEY is set.
 #
@@ -288,14 +305,6 @@ end
 # when ready to enforce.
 if System.get_env("REQUIRE_PHONE_FOR_EMBED") in ["1", "true"] do
   config :engram, :require_phone_for_embed, true
-end
-
-# Pricing v2 §G — sync channel realtime_sync_enabled gate. Default off so
-# pre-v2-launch Free users keep their realtime sync. Cloud ops flips to
-# "true" on launch day; Free users joining sync:* get
-# %{reason: "channel_forbidden_on_plan"}.
-if System.get_env("REALTIME_SYNC_GATE_ENABLED") in ["1", "true"] do
-  config :engram, :realtime_sync_gate_enabled, true
 end
 
 # Pricing v2 §H — attachment MIME / extension whitelist self-host knobs.
@@ -598,9 +607,59 @@ if config_env() == :prod do
   # CORS and WebSocket origin — only lock down when PHX_HOST is explicitly set.
   # Without it (CI, local dev), defaults apply: CORS allows "*", WS allows all.
   # See Engram.HostOrigins for parsing rules (CSV, scheme expansion, dedup).
+  #
+  # ENGRAM_SAAS_FRONTEND_ORIGINS appends extra origins (comma-separated) for the
+  # Cloudflare Pages saas frontend at app.engram.page + its preview deploys at
+  # *.engram-frontend.pages.dev. Unset on selfhost (same-origin) → no-op.
   if phx_hosts do
-    config :engram, :cors_origin, phx_hosts.origins
-    config :engram, :websocket_check_origin, phx_hosts.origins
+    extra_origins =
+      case System.get_env("ENGRAM_SAAS_FRONTEND_ORIGINS") do
+        nil ->
+          []
+
+        "" ->
+          []
+
+        s ->
+          s
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+      end
+
+    cors_origins = phx_hosts.origins ++ extra_origins
+    config :engram, :cors_origin, cors_origins
+    config :engram, :websocket_check_origin, cors_origins
+  end
+
+  # Host-driven path rewrite for the dedicated `api.engram.page` and
+  # `mcp.engram.page` saas hosts. Opt-in: selfhost releases (and the
+  # current `app.engram.page` host until DNS cutover) leave this unset
+  # and the plug is a strict no-op. See EngramWeb.Plugs.HostRewrite.
+  if System.get_env("ENGRAM_HOST_REWRITE_ENABLED") == "true" do
+    saas_only? = System.get_env("ENGRAM_SAAS_ONLY") == "true"
+
+    extra_hosts =
+      case System.get_env("ENGRAM_ALLOWED_EXTRA_HOSTS") do
+        nil -> []
+        "" -> []
+        s -> String.split(s, ",", trim: true)
+      end
+
+    config :engram, :host_rewrite,
+      api_host: System.get_env("ENGRAM_HOST_REWRITE_API_HOST", "api.engram.page"),
+      mcp_host: System.get_env("ENGRAM_HOST_REWRITE_MCP_HOST", "mcp.engram.page"),
+      reject_unknown_hosts: saas_only?,
+      allowed_extra_hosts: extra_hosts
+  end
+
+  # Absolute base URL of the frontend (SPA) host. After the saas eject the SPA
+  # lives on a different origin (app.engram.page) than the backend it reaches
+  # on api./mcp.engram.page, so the OAuth /authorize flow must 302 the consent
+  # page there absolutely instead of relative. Unset on self-host (same-origin
+  # → relative redirect). See EngramWeb.OAuthAuthorizeController.redirect_to_spa.
+  if url = System.get_env("ENGRAM_FRONTEND_URL") do
+    config :engram, :frontend_base_url, url
   end
 
   # ## SSL Support

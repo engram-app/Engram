@@ -9,36 +9,87 @@ defmodule Engram.Repo do
   Executes `fun` inside a transaction with RLS tenant context set.
 
   Sets both the process-dict guard (for prepare_query) and the
-  PostgreSQL `SET LOCAL app.current_tenant` (for RLS enforcement).
-  """
-  def with_tenant(tenant_id, fun) when is_integer(tenant_id) and tenant_id > 0 do
-    Process.put(:engram_tenant, tenant_id)
+  PostgreSQL transaction-local `app.current_tenant` (for RLS enforcement).
 
-    try do
-      transaction(fn ->
-        # SET LOCAL doesn't support $1 parameter binding — it's a utility statement.
-        # Guard clause ensures tenant_id is always a positive integer.
-        _ = query!("SET LOCAL app.current_tenant = '#{tenant_id}'")
-        # Drop to engram_app role so RLS policies are enforced.
-        # Superusers bypass RLS even with FORCE — SET LOCAL ROLE scopes to this transaction.
-        _ = query!("SET LOCAL ROLE engram_app")
-        result = fun.()
-        # In Ecto Sandbox (tests), this transaction runs as a savepoint. PostgreSQL's
-        # SET LOCAL is scoped to the full outer transaction, so RELEASE SAVEPOINT
-        # would leak `engram_app` into the sandbox transaction. Resetting the role
-        # INSIDE the transaction ensures the last SET LOCAL that persists is DEFAULT.
-        # In production this runs inside a real transaction and is harmless.
-        _ = query!("RESET ROLE")
-        result
-      end)
-    after
-      Process.delete(:engram_tenant)
+  `tenant_id` is a canonical UUID string (post PG18+UUIDv7 rework).
+  The RLS policy compares `(user_id)::text = current_setting('app.current_tenant')`,
+  so the bind value is the lower-case hyphenated UUID string.
+
+  Wire shape: tenant + role drop are applied in ONE parameterized
+  `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL)
+  and reset in one — hot requests open several tenant blocks, and the old
+  three-utility-statement shape was pure fixed overhead per block.
+
+  Re-entrant: a nested call for the SAME tenant inside an active
+  with_tenant transaction runs `fun` directly (the settings are
+  transaction-scoped and still in force) and returns `{:ok, result}` for
+  shape-compatibility with the transactional path. A nested call for a
+  DIFFERENT tenant raises — silently switching RLS identity
+  mid-transaction is never legitimate.
+  """
+  def with_tenant(tenant_id, fun) when is_binary(tenant_id) do
+    case Ecto.UUID.cast(tenant_id) do
+      {:ok, uuid} ->
+        case Process.get(:engram_tenant) do
+          ^uuid ->
+            if in_transaction?() do
+              {:ok, fun.()}
+            else
+              run_with_tenant(uuid, fun)
+            end
+
+          nil ->
+            run_with_tenant(uuid, fun)
+
+          other ->
+            raise ArgumentError,
+                  "with_tenant nested for a different tenant " <>
+                    "(active: #{other}, requested: #{uuid})"
+        end
+
+      :error ->
+        raise ArgumentError,
+              "tenant_id must be a canonical UUID string, got: #{inspect(tenant_id)}"
     end
   end
 
   def with_tenant(tenant_id, _fun) do
     raise ArgumentError,
-          "tenant_id must be a positive integer, got: #{inspect(tenant_id)}"
+          "tenant_id must be a canonical UUID string, got: #{inspect(tenant_id)}"
+  end
+
+  defp run_with_tenant(uuid, fun) do
+    Process.put(:engram_tenant, uuid)
+
+    try do
+      transaction(fn ->
+        # `set_config(..., true)` == SET LOCAL, but as a regular SELECT it
+        # takes a bind parameter (no string interpolation) and applies the
+        # tenant + the engram_app role drop in a single round trip.
+        # Superusers bypass RLS even with FORCE — the role drop scopes
+        # enforcement to this transaction.
+        _ =
+          query!(
+            "SELECT set_config('app.current_tenant', $1, true), " <>
+              "set_config('role', 'engram_app', true)",
+            [uuid]
+          )
+
+        result = fun.()
+        # In Ecto Sandbox (tests), this transaction runs as a savepoint.
+        # PostgreSQL's transaction-local settings span the full outer
+        # transaction, so RELEASE SAVEPOINT would leak `engram_app` into
+        # the sandbox transaction. Resetting the role INSIDE the
+        # transaction (`set_config('role', 'none', true)` == SET LOCAL
+        # ROLE NONE) ensures the last local setting that persists is the
+        # default. In production this runs inside a real transaction and
+        # is harmless.
+        _ = query!("SELECT set_config('role', 'none', true)")
+        result
+      end)
+    after
+      Process.delete(:engram_tenant)
+    end
   end
 
   @doc """

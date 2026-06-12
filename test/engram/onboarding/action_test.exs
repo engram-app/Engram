@@ -3,8 +3,8 @@ defmodule Engram.Onboarding.ActionTest do
 
   alias Engram.Onboarding.Action
 
-  # synthetic bigint; not persisted, no FK enforcement on changeset alone
-  @user_id 12_345
+  # synthetic uuid; not persisted, no FK enforcement on changeset alone
+  @user_id "00000000-0000-0000-0000-000000012345"
 
   test "accepts every enum value" do
     for action <- [
@@ -37,7 +37,7 @@ defmodule Engram.Onboarding.ActionTest do
       cs =
         Action.changeset(
           %Action{},
-          %{user_id: 1, action: "dismissed:claude"}
+          %{user_id: @user_id, action: "dismissed:claude"}
         )
 
       assert cs.valid?
@@ -51,7 +51,7 @@ defmodule Engram.Onboarding.ActionTest do
         cs =
           Action.changeset(
             %Action{},
-            %{user_id: 1, action: "dismissed:" <> slug}
+            %{user_id: @user_id, action: "dismissed:" <> slug}
           )
 
         assert cs.valid?, "expected dismissed:#{slug} to be valid"
@@ -69,7 +69,7 @@ defmodule Engram.Onboarding.ActionTest do
         cs =
           Action.changeset(
             %Action{},
-            %{user_id: 1, action: bad}
+            %{user_id: @user_id, action: bad}
           )
 
         refute cs.valid?, "expected #{inspect(bad)} to be invalid"
@@ -80,7 +80,7 @@ defmodule Engram.Onboarding.ActionTest do
       cs =
         Action.changeset(
           %Action{},
-          %{user_id: 1, action: "not_a_real_action"}
+          %{user_id: @user_id, action: "not_a_real_action"}
         )
 
       refute cs.valid?
@@ -92,7 +92,7 @@ defmodule Engram.Onboarding.ActionTest do
       cs =
         Action.changeset(
           %Action{},
-          %{user_id: 1, action: "dismissed:" <> long_slug}
+          %{user_id: @user_id, action: "dismissed:" <> long_slug}
         )
 
       refute cs.valid?
@@ -104,7 +104,7 @@ defmodule Engram.Onboarding.ActionTest do
       cs =
         Action.changeset(
           %Action{},
-          %{user_id: 1, action: "dismissed:" <> slug}
+          %{user_id: @user_id, action: "dismissed:" <> slug}
         )
 
       assert cs.valid?

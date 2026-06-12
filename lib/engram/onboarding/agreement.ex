@@ -4,7 +4,7 @@ defmodule Engram.Onboarding.Agreement do
   Service, Privacy Policy, etc.). One row per user per accepted version.
   Tenant-scoped via RLS — must be queried inside `Repo.with_tenant/2`.
   """
-  use Ecto.Schema
+  use Engram.Schema
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

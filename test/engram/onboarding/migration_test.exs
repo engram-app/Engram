@@ -3,11 +3,7 @@ defmodule Engram.Onboarding.MigrationTest do
 
   alias Engram.Repo
 
-  # NOTE: spec literal asserted uuid for id/user_id, but `users.id` is bigint
-  # in this repo, so every per-user table mirrors that. Asserting bigint here
-  # matches the actual migration; the rest of the schema contract (action text
-  # not-null, metadata jsonb, inserted_at timestamptz not-null) + unique index
-  # is unchanged from the spec.
+  # PG18+UUIDv7 rework: id + user_id are uuid (matches users.id).
   test "onboarding_actions table exists with expected columns + unique index" do
     %{rows: rows} =
       Repo.query!(
@@ -22,8 +18,8 @@ defmodule Engram.Onboarding.MigrationTest do
 
     cols = Map.new(rows, fn [name, type, nullable] -> {name, {type, nullable}} end)
 
-    assert {"bigint", "NO"} = cols["id"]
-    assert {"bigint", "NO"} = cols["user_id"]
+    assert {"uuid", "NO"} = cols["id"]
+    assert {"uuid", "NO"} = cols["user_id"]
     assert {_text, "NO"} = cols["action"]
     assert {"jsonb", _} = cols["metadata"]
     assert {"timestamp with time zone", "NO"} = cols["inserted_at"]

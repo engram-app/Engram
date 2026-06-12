@@ -72,7 +72,7 @@ defmodule EngramWeb.ConnectionsController do
   def delete_pat(conn, %{"id" => id_str}) do
     user = conn.assigns.current_user
 
-    with {id, ""} <- Integer.parse(id_str),
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
          :ok <- Engram.Accounts.revoke_api_key(user, id) do
       send_resp(conn, 204, "")
     else
@@ -85,13 +85,12 @@ defmodule EngramWeb.ConnectionsController do
   defp parse_vault_id(""), do: nil
 
   defp parse_vault_id(v) when is_binary(v) do
-    case Integer.parse(v) do
-      {n, ""} -> n
-      _ -> nil
+    case Ecto.UUID.cast(v) do
+      {:ok, uuid} -> uuid
+      :error -> nil
     end
   end
 
-  defp parse_vault_id(v) when is_integer(v), do: v
   defp parse_vault_id(_), do: nil
 
   defp serialize(row) do

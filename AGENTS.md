@@ -45,6 +45,20 @@ Squawk (run via `priv/repo/lint_migrations.sh`) already hard-fails on:
 
 Read the Squawk message; it tells you the safe equivalent.
 
+## PG18-era cheap patterns
+
+After the PG16 → PG18 bump (2026-06-10), two patterns that used to require
+multi-phase migrations are now safe in a single migrate:
+
+- **`ALTER TABLE ... ADD CONSTRAINT ... NOT NULL NOT VALID`** then
+  **`ALTER TABLE ... VALIDATE CONSTRAINT ...`** in a follow-up migrate —
+  avoids the full-table scan under `ACCESS EXCLUSIVE`. Use for hardening
+  existing columns without blocking writes.
+- **`UNIQUE NULLS DISTINCT`** — express "this column is unique except where
+  it's NULL" directly, instead of partial-unique-index workarounds.
+
+Phase labels still apply for any column-type change or destructive DDL.
+
 ## The `# safety_assured:` escape
 
 Top-of-file magic comment, justification required:

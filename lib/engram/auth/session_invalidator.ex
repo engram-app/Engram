@@ -18,7 +18,7 @@ defmodule Engram.Auth.SessionInvalidator do
   Fire-and-forget. If no sockets are listening, `Phoenix.PubSub` drops it.
   """
 
-  def disconnect_user(user_id) when is_integer(user_id) or is_binary(user_id) do
+  def disconnect_user(user_id) when is_binary(user_id) do
     _ = EngramWeb.Endpoint.broadcast("user_socket:#{user_id}", "disconnect", %{})
     :ok
   end

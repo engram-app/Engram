@@ -78,6 +78,11 @@ services:
       # single source IP — collisions yield flaky 429 "rate_limited" failures.
       # Mirrors the override in docker-compose.ci-local.yml.
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
+      # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
+      # subscription.canceled webhook with this fixed secret so the e2e
+      # exercises the real verify_signature → upsert_from_paddle_event path
+      # (Phase 4) end-to-end. Not a real Paddle env — purely test fixture.
+      PADDLE_NOTIFICATION_SECRET: ${PADDLE_NOTIFICATION_SECRET:-pdl_ntfn_e2e_fake}
     healthcheck:
       # 1s interval (was 3s) so docker compose --wait detects "ready" with
       # finer granularity — BEAM cold boot finishes mid-interval and the
@@ -99,7 +104,7 @@ services:
     restart: "no"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4
     ports:
       - "${CI_PG_PORT:-5433}:5432"
     environment:

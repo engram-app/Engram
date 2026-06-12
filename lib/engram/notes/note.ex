@@ -1,5 +1,6 @@
 defmodule Engram.Notes.Note do
-  use Ecto.Schema
+  @moduledoc false
+  use Engram.Schema
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}
@@ -68,6 +69,12 @@ defmodule Engram.Notes.Note do
     |> cast(
       attrs,
       [
+        # `:id` is cast so callers that build the changeset on a bare
+        # `%Note{}` (instead of `%Note{id: minted_id}`) can still supply
+        # the app-minted UUIDv7 via `attrs`. The PK is `autogenerate: false`
+        # under `Engram.Schema`; without this `:id` is silently dropped and
+        # Postgres rejects the INSERT for a missing PK.
+        :id,
         :version,
         :dek_version,
         :content_hash,
@@ -81,6 +88,7 @@ defmodule Engram.Notes.Note do
     )
     |> validate_inclusion(:kind, ["note", "folder"])
     |> validate_required_for_kind()
+    |> validate_format(:id, ~r/^[0-9a-f-]{36}$/i)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
       name: :notes_user_vault_path_v2
     )

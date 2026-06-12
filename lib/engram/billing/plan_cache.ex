@@ -22,7 +22,7 @@ defmodule Engram.Billing.PlanCache do
   Returns the cached limits map for `plan_id`, loading and caching it on a
   miss. An unknown plan id resolves to an empty map (no limits).
   """
-  @spec limits(plan_id :: integer()) :: map()
+  @spec limits(plan_id :: Ecto.UUID.t()) :: map()
   def limits(plan_id) do
     case :persistent_term.get(key(plan_id), :__miss__) do
       :__miss__ ->
@@ -35,7 +35,7 @@ defmodule Engram.Billing.PlanCache do
     end
   end
 
-  @spec invalidate(plan_id :: integer()) :: :ok
+  @spec invalidate(plan_id :: Ecto.UUID.t()) :: :ok
   def invalidate(plan_id) do
     _ = :persistent_term.erase(key(plan_id))
     :ok

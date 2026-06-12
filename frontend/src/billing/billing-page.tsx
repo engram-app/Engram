@@ -15,6 +15,7 @@ import { api } from '../api/client'
 import { useTheme } from '../theme/theme-provider'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { CadenceToggle, PLAN_CATALOG, PlanCard } from './plan-cards'
 import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
@@ -143,17 +144,23 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   })
 
   // Mount-time cache check: if the user lands on billing with a cached
-  // onboarding status already past 'billing' (paid in another tab, browser-
-  // back, refresh), fire onActivated synchronously instead of waiting on
-  // a push event. Only meaningful in onboarding mode.
+  // onboarding status already past 'billing' AND has a paid subscription,
+  // fire onActivated synchronously instead of waiting on a push event
+  // (paid in another tab, browser-back, refresh). Only meaningful in
+  // onboarding mode. Skipped for Free users who deliberately re-visit
+  // /onboard/billing to upgrade — bouncing them back to the next step
+  // defeats the upgrade affordance.
   useEffect(() => {
     if (!onActivatedRef.current) return
+    if (!billing?.active) return
     const cached = qc.getQueryData<OnboardingStatus>(['onboarding', 'status'])
     if (cached && cached.next_step !== 'billing' && !onActivatedFiredRef.current) {
       onActivatedFiredRef.current = true
       onActivatedRef.current(cached)
     }
     // mount-only — qc identity is stable, onActivated read via ref.
+    // billing?.active read on first paint; the page renders Loading first
+    // anyway and we only want the synchronous case (cache hit).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -255,7 +262,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   )
 
   if (isLoading || !billing) {
-    return <p className="text-muted-foreground">Loading billing info...</p>
+    return <BillingPageSkeleton hideHeading={hideHeading} />
   }
 
   const needsSubscription = !billing.active
@@ -484,3 +491,42 @@ function SlowActivationBanner({
   )
 }
 
+
+// Skeleton placeholder that matches the post-load layout so the page does
+// not jump when billing status + Paddle init resolve. Shape: optional
+// heading, cadence toggle row, two cards in the same grid as the real cards.
+function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
+  return (
+    <article className="space-y-6" aria-busy="true" aria-label="Loading billing">
+      {!hideHeading && (
+        <header className="space-y-2">
+          <Skeleton className="h-6 w-32" />
+          <Skeleton className="h-4 w-64" />
+        </header>
+      )}
+      <section className="space-y-4">
+        <Skeleton className="h-9 w-48" />
+        <ul className="grid items-stretch gap-4 sm:grid-cols-2">
+          {[0, 1].map((i) => (
+            <li
+              key={i}
+              className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6"
+            >
+              <Skeleton className="h-6 w-24" />
+              <Skeleton className="h-9 w-32" />
+              <Skeleton className="h-3 w-40" />
+              <ul className="space-y-2 pt-2">
+                {[0, 1, 2, 3].map((j) => (
+                  <li key={j}>
+                    <Skeleton className="h-4 w-full" />
+                  </li>
+                ))}
+              </ul>
+              <Skeleton className="mt-2 h-10 w-full" />
+            </li>
+          ))}
+        </ul>
+      </section>
+    </article>
+  )
+}

@@ -26,7 +26,8 @@ defmodule Engram.PromEx do
       Engram.PromEx.Qdrant,
       Engram.PromEx.Sync,
       Engram.PromEx.Search,
-      Engram.PromEx.Mcp
+      Engram.PromEx.Mcp,
+      Engram.PromEx.Crypto
     ]
   end
 

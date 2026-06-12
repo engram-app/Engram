@@ -200,7 +200,7 @@ class ApiClient:
         """POST /folders/rename. Returns HTTP status code."""
         resp = self.session.post(
             f"{self.base_url}/folders/rename",
-            json={"old_folder": old_folder, "new_folder": new_folder},
+            json={"old_path": old_folder, "new_path": new_folder},
             timeout=10,
         )
         return resp.status_code
@@ -233,19 +233,19 @@ class ApiClient:
         self._log_error_response(resp)
         return resp.json() if resp.status_code in (200, 201) else {}, resp.status_code
 
-    def get_vault(self, vault_id: int) -> tuple[dict | None, int]:
+    def get_vault(self, vault_id: str) -> tuple[dict | None, int]:
         """GET /vaults/:id. Returns (vault_dict or None, status_code)."""
         resp = self.session.get(f"{self.base_url}/vaults/{vault_id}", timeout=10)
         if resp.status_code == 404:
             return None, 404
         return resp.json(), resp.status_code
 
-    def delete_vault(self, vault_id: int) -> int:
+    def delete_vault(self, vault_id: str) -> int:
         """DELETE /vaults/:id. Returns HTTP status code."""
         resp = self.session.delete(f"{self.base_url}/vaults/{vault_id}", timeout=10)
         return resp.status_code
 
-    def with_vault(self, vault_id: int) -> "ApiClient":
+    def with_vault(self, vault_id: str) -> "ApiClient":
         """Return a new ApiClient that sends X-Vault-ID header on all requests."""
         clone = ApiClient.__new__(ApiClient)
         clone.base_url = self.base_url

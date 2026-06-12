@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4
     environment:
       POSTGRES_USER: engram
       POSTGRES_PASSWORD: engram
@@ -25,7 +25,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pg_elixir_data:/var/lib/postgresql/data
+      - pg18_elixir_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U engram"]
       interval: 5s
@@ -64,5 +64,5 @@ services:
       "
 
 volumes:
-  pg_elixir_data:
+  pg18_elixir_data:
   minio_data:

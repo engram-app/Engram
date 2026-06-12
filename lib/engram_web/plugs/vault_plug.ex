@@ -42,9 +42,9 @@ defmodule EngramWeb.Plugs.VaultPlug do
   defp resolve_vault(conn, user) do
     case get_req_header(conn, "x-vault-id") do
       [vault_id_str | _] ->
-        case Integer.parse(vault_id_str) do
-          {vault_id, ""} -> Vaults.get_vault(user, vault_id)
-          _ -> {:error, :not_found}
+        case Ecto.UUID.cast(vault_id_str) do
+          {:ok, vault_id} -> Vaults.get_vault(user, vault_id)
+          :error -> {:error, :not_found}
         end
 
       [] ->

@@ -54,7 +54,7 @@ defmodule EngramWeb.OnboardingControllerTest do
     test "returns next_step=done for fully onboarded obsidian user with vault",
          %{conn: conn, user: user} do
       {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "trialing")
+      insert(:subscription, user: user, status: "active")
       {:ok, _} = Engram.Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
@@ -365,6 +365,33 @@ defmodule EngramWeb.OnboardingControllerTest do
 
       assert ["tour_completed"] = Engram.Onboarding.list_actions(user.id)
       assert [] = Engram.Onboarding.list_actions(other_user.id)
+    end
+  end
+
+  describe "POST /api/onboarding/accept_free_tier" do
+    test "sets free_tier_accepted_at and returns next step", %{conn: conn, user: user} do
+      assert is_nil(user.free_tier_accepted_at)
+
+      conn = post(conn, ~p"/api/onboarding/accept_free_tier")
+      body = json_response(conn, 200)
+      assert Map.has_key?(body, "next_step")
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.free_tier_accepted_at != nil
+    end
+
+    test "is idempotent", %{conn: conn} do
+      post(conn, ~p"/api/onboarding/accept_free_tier")
+      conn2 = post(conn, ~p"/api/onboarding/accept_free_tier")
+      assert json_response(conn2, 200)
+    end
+
+    test "401 when unauthenticated" do
+      conn = Phoenix.ConnTest.build_conn()
+
+      assert conn
+             |> post(~p"/api/onboarding/accept_free_tier")
+             |> response(401)
     end
   end
 end

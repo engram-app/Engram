@@ -49,20 +49,20 @@ export default function MembersTab({
   currentUserId,
   onResetIssued,
 }: {
-  currentUserId: number
+  currentUserId: string
   // Lifted to AdminPanel so the one-time reset-link banner can sit OUTSIDE
   // the Members card — above it, where it's visually separated.
   onResetIssued: (url: string) => void
 }) {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(true)
-  const [pendingDelete, setPendingDelete] = useState<number | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   // One open at a time keeps the table calm. null = all collapsed.
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   // Per-user in-flight action: disables that row's buttons + shows a
   // spinner on the active one, so feedback is instant on click even
   // while the request is in flight.
-  const [pending, setPending] = useState<Record<number, 'role' | 'suspend' | 'reset' | 'delete'>>(
+  const [pending, setPending] = useState<Record<string, 'role' | 'suspend' | 'reset' | 'delete'>>(
     {},
   )
 
@@ -93,7 +93,7 @@ export default function MembersTab({
   // reflects the intent on the next paint. On success we refresh from
   // the server to canonicalize; on failure refresh also rolls us back.
   async function optimistic<T>(
-    id: number,
+    id: string,
     kind: 'role' | 'suspend' | 'reset' | 'delete',
     label: string,
     patch: Partial<AdminUser> | 'remove',
@@ -161,7 +161,7 @@ export default function MembersTab({
     }
   }
 
-  function toggleExpanded(id: number) {
+  function toggleExpanded(id: string) {
     setExpandedId((cur) => (cur === id ? null : id))
     setPendingDelete(null)
   }

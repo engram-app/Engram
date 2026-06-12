@@ -56,7 +56,7 @@ defmodule Engram.Auth.DeviceFlow do
   # and read the original user's local Obsidian vault name. The row's main
   # `user_id` is set later, at authorize time, and so is unsuitable as a
   # pre-authorize ownership check.
-  def suggested_vault_name(user_code, user_id) when is_integer(user_id) do
+  def suggested_vault_name(user_code, user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     query =

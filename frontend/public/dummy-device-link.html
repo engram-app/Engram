@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Engram Device-Link Dummy Client</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  p.lede { color: #525252; margin-top: 0; }
+  label { display: block; margin: 0.5rem 0; font-size: 0.9rem; color: #404040; }
+  input { padding: 0.5rem 0.75rem; font-size: 0.95rem; border: 1px solid #d4d4d8; border-radius: 6px; width: 100%; max-width: 320px; }
+  button { padding: 0.625rem 1rem; font-size: 0.95rem; border: 1px solid #d4d4d8; background: white; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: #71717a; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 0.75rem; margin: 1rem 0; flex-wrap: wrap; }
+  pre { background: #fff; border: 1px solid #e4e4e7; border-radius: 6px; padding: 0.75rem 1rem; font-size: 0.85rem; overflow-x: auto; }
+  .ok { color: #15803d; }
+  .err { color: #b91c1c; }
+  .step { border-left: 3px solid #d4d4d8; padding-left: 0.75rem; margin: 1rem 0; }
+</style>
+</head>
+<body>
+<h1>Engram Device-Link Dummy Client</h1>
+<p class="lede">Pretends to be the Obsidian plugin starting a device-flow link. Runs <code>POST /api/auth/device</code> to mint a <code>user_code</code>, then sends you to <code>/link?code=…</code> with your existing Engram session. Use this to exercise <code>concurrent_devices_cap</code> on Free tier — first vault link works, second 402s at Authorize.</p>
+
+<div class="step">
+  <strong>Pre-flight:</strong>
+  <p>You must be signed in to the Engram app at <a href="/" target="_blank">localhost:5173</a> in this same browser. Free tier syncs files between 1 device at a time, so the second link will hit the cap dialog.</p>
+</div>
+
+<div class="row">
+  <label>
+    Vault name (optional — used as the new vault's name):
+    <input id="vault-name" type="text" placeholder="My Vault" value="Dummy Vault A" />
+  </label>
+</div>
+
+<div class="row">
+  <button id="start">Start device-flow + open /link</button>
+  <button id="clear">Clear log</button>
+</div>
+
+<pre id="log">Ready. Click "Start device-flow + open /link" to mint a code and go to the link page.</pre>
+
+<script>
+const logEl = document.getElementById('log');
+function log(msg, cls) {
+  const line = document.createElement('span');
+  line.textContent = `[${new Date().toISOString().slice(11,19)}] ${msg}\n`;
+  if (cls) line.className = cls;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function startDeviceFlow() {
+  const vaultName = document.getElementById('vault-name').value || 'Dummy Vault';
+  log(`POST /api/auth/device — client_id="dummy-link-page", vault_name="${vaultName}"`);
+  const res = await fetch('/api/auth/device', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: 'dummy-link-page', vault_name: vaultName }),
+  });
+  if (!res.ok) {
+    log(`Start failed: ${res.status} ${await res.text()}`, 'err');
+    return;
+  }
+  const { user_code, verification_url, expires_in } = await res.json();
+  log(`✓ user_code=${user_code} (expires in ${expires_in}s)`, 'ok');
+  log(`Opening ${verification_url}?code=${user_code} — sign in if prompted, then click Authorize.`);
+  // Same-window navigate so the user comes back to this tab if they close /link.
+  window.location.href = `/link?code=${encodeURIComponent(user_code)}`;
+}
+
+document.getElementById('start').addEventListener('click', () => {
+  startDeviceFlow().catch((err) => log(`Error: ${err.message}`, 'err'));
+});
+document.getElementById('clear').addEventListener('click', () => { logEl.textContent = 'Cleared.\n'; });
+</script>
+</body>
+</html>

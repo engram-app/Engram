@@ -80,6 +80,91 @@ defmodule Engram.IndexingTest do
       assert chunk_count > 0
     end
 
+    test "splits embedding calls into batches of at most 128 texts", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # A 10MB-class note can yield thousands of chunks; a single Voyage
+      # call with all of them is a guaranteed 4xx (1,000-input API limit)
+      # that retries can never fix — the job then churns through
+      # ReconcileEmbeddings forever, burning RPM budget.
+      {:ok, big_note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Big/Sections.md",
+          "content" => big_sectioned_content(300),
+          "mtime" => 1_000.0
+        })
+
+      test_pid = self()
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts ->
+        send(test_pid, {:embed_batch, length(texts)})
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, chunk_count} = Indexing.index_note(big_note, vault)
+
+      batches = collect_messages(:embed_batch)
+      total = Enum.sum(batches)
+
+      assert total == chunk_count
+      assert total > 128, "fixture must exceed one batch (got #{total} chunks)"
+      assert length(batches) >= 2
+      assert Enum.all?(batches, &(&1 <= 128)), "oversized embed batch: #{inspect(batches)}"
+    end
+
+    test "upserts Qdrant points in batches of at most 256", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # 5k chunks × 1024-dim float vectors as one JSON body is tens of MB
+      # per upsert — split the PUT into bounded batches.
+      {:ok, big_note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Big/Upserts.md",
+          "content" => big_sectioned_content(300),
+          "mtime" => 1_000.0
+        })
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      test_pid = self()
+
+      Bypass.expect(bypass, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn, length: 100_000_000)
+
+        if conn.method == "PUT" and String.ends_with?(conn.request_path, "/points") do
+          points = Jason.decode!(body)["points"]
+          if points, do: send(test_pid, {:upsert_batch, length(points)})
+        end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, chunk_count} = Indexing.index_note(big_note, vault)
+
+      batches = collect_messages(:upsert_batch)
+
+      assert Enum.sum(batches) == chunk_count
+      assert chunk_count > 256, "fixture must exceed one upsert batch"
+      assert length(batches) >= 2
+      assert Enum.all?(batches, &(&1 <= 256)), "oversized upsert batch: #{inspect(batches)}"
+    end
+
     test "skips embedding for empty content", %{vault: vault} do
       note = %Engram.Notes.Note{
         id: 999,
@@ -439,6 +524,22 @@ defmodule Engram.IndexingTest do
         )
 
       assert chunks == []
+    end
+  end
+
+  # Markdown with `n` distinct heading sections — each becomes at least one
+  # chunk under the heading-aware chunker.
+  defp big_sectioned_content(n) do
+    Enum.map_join(1..n, "\n\n", fn i ->
+      "## Section #{i}\n\nParagraph for section #{i} with enough words to be a real chunk."
+    end)
+  end
+
+  defp collect_messages(tag, acc \\ []) do
+    receive do
+      {^tag, n} -> collect_messages(tag, [n | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 end

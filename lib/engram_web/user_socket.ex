@@ -10,6 +10,14 @@ defmodule EngramWeb.UserSocket do
       {:ok, user} ->
         {:ok, assign(socket, %{current_user: user, current_api_key: nil})}
 
+      {:ok, user, :internal_jwt} ->
+        # Device-flow / OAuth / MCP access tokens. Mirror the Auth plug's
+        # branch — current_api_key stays nil so downstream code that
+        # branches on its presence (e.g. SyncChannel api-key vault
+        # restriction) doesn't misclassify this as a PAT auth and try to
+        # treat the atom `:internal_jwt` as a struct.
+        {:ok, assign(socket, %{current_user: user, current_api_key: nil})}
+
       {:ok, user, api_key} ->
         {:ok, assign(socket, %{current_user: user, current_api_key: api_key})}
 

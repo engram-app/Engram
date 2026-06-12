@@ -84,7 +84,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
   test "halts 403 with missing=[profile,terms] when only subscription is satisfied",
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
@@ -96,7 +96,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
@@ -110,7 +110,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     refute conn.halted
@@ -120,7 +120,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert conn.halted
     assert conn.status == 403
@@ -133,7 +133,7 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
        %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-    insert(:subscription, user: user, status: "trialing")
+    insert(:subscription, user: user, status: "active")
     {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
     {:ok, _} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
@@ -174,5 +174,62 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
     assert Plug.Conn.get_resp_header(conn, "content-type") |> List.first() =~ "application/json"
+  end
+
+  describe "pass-verdict caching" do
+    alias Engram.Onboarding.GateCache
+
+    setup do
+      on_exit(fn -> GateCache.evict_all() end)
+      :ok
+    end
+
+    defp passed_user do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+      {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "My Vault"})
+      {user, vault}
+    end
+
+    test "a passing request populates the cache and short-circuits the next one",
+         %{conn: conn} do
+      {user, vault} = passed_user()
+
+      first = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      refute first.halted
+      assert GateCache.passed?(user.id)
+
+      # Break the underlying state WITHOUT going through the context (no
+      # eviction fires): the cached verdict must short-circuit — proving the
+      # plug no longer re-derives status per request.
+      import Ecto.Query
+
+      Engram.Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        [set: [deleted_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
+
+      second = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      refute second.halted
+    end
+
+    test "context vault deletion evicts the verdict and the gate re-derives",
+         %{conn: conn} do
+      {user, vault} = passed_user()
+
+      first = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      refute first.halted
+
+      {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)
+
+      second = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      assert second.halted
+      assert second.status == 403
+      body = Phoenix.ConnTest.json_response(second, 403)
+      assert body["missing"] == ["vault"]
+    end
   end
 end

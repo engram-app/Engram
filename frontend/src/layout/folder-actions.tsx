@@ -1,6 +1,5 @@
 import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical } from 'lucide-react'
 import { Fragment } from 'react'
-import { useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -18,7 +17,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useCreateFolder, useCreateNote } from '@/api/queries'
-import { deriveActiveFolder } from '@/lib/active-folder'
+import { useActiveFolder } from '@/lib/active-folder'
 import { type SortKey, useFolderTreeState } from './folder-tree-context'
 
 const ICON = 'size-5'
@@ -55,8 +54,7 @@ const SORT_SECTIONS: ReadonlyArray<SortSection> = [
 
 export default function FolderActions() {
   const { collapseAll, sort, setSort } = useFolderTreeState()
-  const { pathname } = useLocation()
-  const activeFolder = deriveActiveFolder(pathname)
+  const activeFolder = useActiveFolder()
   const targetLabel = activeFolder === '' ? 'vault root' : `"${activeFolder}"`
 
   const createNote = useCreateNote()

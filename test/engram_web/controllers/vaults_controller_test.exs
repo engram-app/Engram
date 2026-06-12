@@ -134,7 +134,7 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = post(conn, "/api/vaults", %{name: "Work Notes"})
       body = json_response(conn, 201)
       assert body["vault"]["name"] == "Work Notes"
-      assert is_integer(body["vault"]["id"])
+      assert is_binary(body["vault"]["id"])
       assert is_binary(body["vault"]["slug"])
     end
 
@@ -152,8 +152,11 @@ defmodule EngramWeb.VaultsControllerTest do
 
       conn = post(conn, "/api/vaults", %{name: "Second"})
       body = json_response(conn, 402)
-      assert body["error"] == "vault_limit_reached"
-      assert is_integer(body["limit"])
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "vaults_cap_exceeded"
+      assert body["limit_key"] == "vaults_cap"
+      assert body["limit"] == 1
+      assert body["current"] == 1
     end
 
     test "returns 422 with missing name", %{conn: conn} do
@@ -172,7 +175,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 404 for non-existent vault", %{conn: conn} do
-      conn = get(conn, "/api/vaults/99999999")
+      conn = get(conn, "/api/vaults/00000000-0000-0000-0000-000099999999")
       assert json_response(conn, 404)
     end
 
@@ -195,7 +198,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 404 for non-existent vault", %{conn: conn} do
-      conn = patch(conn, "/api/vaults/99999999", %{name: "X"})
+      conn = patch(conn, "/api/vaults/00000000-0000-0000-0000-000099999999", %{name: "X"})
       assert json_response(conn, 404)
     end
   end
@@ -213,7 +216,7 @@ defmodule EngramWeb.VaultsControllerTest do
     end
 
     test "returns 404 for non-existent vault", %{conn: conn} do
-      conn = delete(conn, "/api/vaults/99999999")
+      conn = delete(conn, "/api/vaults/00000000-0000-0000-0000-000099999999")
       assert json_response(conn, 404)
     end
   end
@@ -264,7 +267,11 @@ defmodule EngramWeb.VaultsControllerTest do
       {:ok, _} = Vaults.create_vault(other, %{name: "Replacement"})
 
       body = oconn |> post("/api/vaults/#{first.id}/restore") |> json_response(402)
-      assert body["error"] == "vault_limit_reached"
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "vaults_cap_exceeded"
+      assert body["limit_key"] == "vaults_cap"
+      assert body["limit"] == 1
+      assert body["current"] == 1
     end
 
     test "returns 404 for an active vault", %{conn: conn, user: user} do
@@ -294,7 +301,7 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = post(conn, "/api/vaults/register", %{name: "My Mac", client_id: "mac-001"})
       body = json_response(conn, 201)
       assert body["name"] == "My Mac"
-      assert is_integer(body["id"])
+      assert is_binary(body["id"])
       assert body["status"] == "created"
     end
 
@@ -319,12 +326,49 @@ defmodule EngramWeb.VaultsControllerTest do
 
       conn = post(conn, "/api/vaults/register", %{name: "New", client_id: "xyz"})
       body = json_response(conn, 402)
-      assert body["error"] == "vault_limit_reached"
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "vaults_cap_exceeded"
+      assert body["limit_key"] == "vaults_cap"
+      assert body["limit"] == 1
+      assert body["current"] == 1
     end
 
     test "returns 400 when name or client_id missing", %{conn: conn} do
       conn = post(conn, "/api/vaults/register", %{name: "No ID"})
       assert json_response(conn, 400)
+    end
+  end
+
+  # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.halt/5
+  describe "POST /api/vaults — Free tier vaults_cap exceeded" do
+    setup %{conn: _conn} do
+      # Fresh user with no vaults_cap override → falls through to the Free
+      # default of 1 (lib/engram/billing/limit_keys.ex). Seed 1 vault so the
+      # next create hits the cap with current == 1.
+      user =
+        insert(:user, free_tier_accepted_at: DateTime.utc_now(), suspended_at: nil)
+
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "ft-test-key")
+      grant_api_write!(user)
+      {:ok, _first} = Vaults.create_vault(user, %{name: "First"})
+
+      authed =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+
+      %{conn: authed, user: user}
+    end
+
+    test "returns standardized 402 shape", %{conn: conn} do
+      conn = post(conn, ~p"/api/vaults", %{name: "Second"})
+      body = json_response(conn, 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["reason"] == "vaults_cap_exceeded"
+      assert body["tier"] == "free"
+      assert body["limit_key"] == "vaults_cap"
+      assert body["limit"] == 1
+      assert body["current"] == 1
+      assert body["upgrade_url"] =~ "/settings/billing"
     end
   end
 end

@@ -1,8 +1,14 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { Waypoints } from 'lucide-react'
 import { useOnboardingActions } from './use-onboarding-actions'
-import { useConnections, useOnboardingStatus, type OnboardingStatus } from '../api/queries'
+import {
+  useConnections,
+  useOnboardingStatus,
+  type OnboardingStatus,
+} from '../api/queries'
+import { useIsFreeTier } from '../billing/use-is-free-tier'
 import { Button } from '../components/ui/button'
 import { Shimmer } from '../components/ui/shimmer'
 
@@ -61,6 +67,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
   const status = useOnboardingStatus()
   const profile = status.data?.profile
   const connections = useConnections({ enabled: !!profile?.uses_obsidian })
+  const isFreeTier = useIsFreeTier()
   const qc = useQueryClient()
 
   if (ob.isLoading) return null
@@ -228,6 +235,17 @@ export function ChecklistWidget({ onStartTour }: Props) {
           </li>
         ))}
       </ul>
+      {isFreeTier && (
+        <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+          You're on Free — 1 connection.{' '}
+          <Link
+            to="/onboard/billing"
+            className="font-medium text-foreground underline underline-offset-4"
+          >
+            Upgrade
+          </Link>
+        </p>
+      )}
     </section>
   )
 }

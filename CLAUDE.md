@@ -173,6 +173,8 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/followup-show-attachments-in-tree.md` | One-feature follow-up tracker |
 | `docs/context/local-supabase-audit.md` | Throwaway local Supabase stack to run Studio Security/Performance Advisors against the Engram schema (AVX2 CLI build, encrypted-seed, RLS role grant, boot-canary gotchas) |
 | `docs/context/spa-state-injection.md` | How Phoenix ships server-known state into `window.__ENGRAM_CONFIG__` so the React SPA can render first-paint-correct UI without a fetch round-trip — the recipe for adding new injected fields, dev vs prod behavior, gotchas (NOT real SSR; see #353) |
+| `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md` | PG18/UUIDv7 prod crash-loop root cause: in-place RDS engine bump preserved data instead of the specced taint+recreate, so the wreck-and-recreate baseline never replayed → integer PKs vs `Ecto.UUID` schemas → boot ArgumentError. Includes the guarded `reset_baseline/0` fix |
+| `docs/context/read-path-decrypt-perf.md` | Read-path decrypt perf: parallel_map economics (3.6× on 50KB content, SLOWER on path-sized payloads — keep those sequential), local test DB needs PG18 on :5433 post-uuidv7 (symptom table), why manifest needs no `(user_id, vault_id, kind)` index, decrypt_batch/dek_cache telemetry to check first |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS

@@ -392,7 +392,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4
     environment:
       POSTGRES_USER: engram
       POSTGRES_PASSWORD: engram

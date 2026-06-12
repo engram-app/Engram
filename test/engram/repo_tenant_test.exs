@@ -68,15 +68,21 @@ defmodule Engram.RepoTenantTest do
       assert Process.get(:engram_tenant) == nil
     end
 
-    test "rejects non-integer tenant_id (SQL injection guard)" do
-      assert_raise ArgumentError, ~r/tenant_id must be a positive integer/, fn ->
+    test "rejects non-uuid tenant_id (SQL injection guard)" do
+      assert_raise ArgumentError, ~r/tenant_id must be a canonical UUID string/, fn ->
         Repo.with_tenant("1'; DROP TABLE notes; --", fn -> :ok end)
       end
     end
 
     test "rejects nil tenant_id" do
-      assert_raise ArgumentError, ~r/tenant_id must be a positive integer/, fn ->
+      assert_raise ArgumentError, ~r/tenant_id must be a canonical UUID string/, fn ->
         Repo.with_tenant(nil, fn -> :ok end)
+      end
+    end
+
+    test "rejects integer tenant_id" do
+      assert_raise ArgumentError, ~r/tenant_id must be a canonical UUID string/, fn ->
+        Repo.with_tenant(123, fn -> :ok end)
       end
     end
   end

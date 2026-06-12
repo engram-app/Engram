@@ -1,6 +1,7 @@
 defmodule EngramWeb.SearchController do
   use EngramWeb, :controller
 
+  alias Engram.Notes
   alias Engram.Search
 
   @max_search_limit 50
@@ -29,7 +30,17 @@ defmodule EngramWeb.SearchController do
 
     case Search.search(user, vault, query, opts) do
       {:ok, results} ->
-        notes = results |> group_by_note() |> Enum.take(note_limit)
+        # `cross_vault` mode passes nil as the vault filter so id lookup
+        # spans all of the user's vaults (matches how the search hits
+        # were sourced).
+        id_lookup_vault = if cross_vault, do: nil, else: vault
+
+        notes =
+          results
+          |> group_by_note()
+          |> Enum.take(note_limit)
+          |> attach_ids(user, id_lookup_vault)
+
         json(conn, %{results: notes})
 
       {:error, :feature_not_available} ->
@@ -75,6 +86,7 @@ defmodule EngramWeb.SearchController do
       [best | _] = Enum.sort_by(group, & &1.score, :desc)
 
       %{
+        id: nil,
         path: path,
         title: best[:title] || derive_title(path),
         folder: derive_folder(path),
@@ -85,6 +97,20 @@ defmodule EngramWeb.SearchController do
       }
     end)
     |> Enum.sort_by(& &1.score, :desc)
+  end
+
+  # Batch-resolve note ids for the visible page only — runs once after
+  # `Enum.take/2` so we don't pay HMAC + index lookup for over-fetched
+  # chunks that get discarded. Hits without a DB id (e.g. a stale Qdrant
+  # chunk for a soft-deleted note) keep `id: nil`; the client treats
+  # those as legacy-path-only and the LegacyNoteResolver handles
+  # routing.
+  defp attach_ids([], _user, _vault), do: []
+
+  defp attach_ids(hits, user, vault) do
+    paths = Enum.map(hits, & &1.path)
+    id_by_path = Notes.note_ids_for_paths(user, vault, paths)
+    Enum.map(hits, fn hit -> %{hit | id: Map.get(id_by_path, hit.path)} end)
   end
 
   defp derive_folder(path) do

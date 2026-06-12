@@ -1,8 +1,13 @@
 import { api } from './client'
+import { getApiBase, joinApiUrl } from './base'
 
 export interface OAuthClientMetadata {
   client_id: string
   client_name: string
+  // "mcp" | "obsidian" — drives the proactive cap UI on /oauth/consent.
+  // DCR rejects "obsidian"; device-flow clients carry that kind. The
+  // backend `oauth_clients_controller.show/2` echoes it from the DB row.
+  kind: 'mcp' | 'obsidian'
 }
 
 export interface OAuthConsentParams {
@@ -22,7 +27,8 @@ export interface OAuthConsentResponse {
 }
 
 export async function fetchOAuthClient(clientId: string): Promise<OAuthClientMetadata> {
-  return fetch(`/api/oauth/clients/${encodeURIComponent(clientId)}`).then(async (res) => {
+  const url = joinApiUrl(getApiBase(), `/api/oauth/clients/${encodeURIComponent(clientId)}`)
+  return fetch(url).then(async (res) => {
     if (!res.ok) {
       throw new Error(`oauth client lookup failed: ${res.status}`)
     }

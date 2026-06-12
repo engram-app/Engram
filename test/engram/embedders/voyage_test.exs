@@ -1,5 +1,5 @@
 defmodule Engram.Embedders.VoyageTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
@@ -53,6 +53,40 @@ defmodule Engram.Embedders.VoyageTest do
         # Pass retry: false to avoid 3 retries with backoff against a dead server
         assert {:error, _} = Voyage.embed_texts(["hello"], retry: false)
       end)
+    end
+
+    test "query purpose defaults to fast-fail request options" do
+      # Interactive search holds a request process for the full embed call.
+      # With the index defaults (30s timeout x 4 attempts) a Voyage brownout
+      # pins searches for up to ~2 minutes each. Queries fail fast instead;
+      # callers can still override per call.
+      defaults = Voyage.request_defaults(:query)
+      assert defaults[:receive_timeout] == 5_000
+      assert defaults[:retry] == false
+    end
+
+    test "index purpose keeps patient retry defaults" do
+      defaults = Voyage.request_defaults(:index)
+      assert defaults[:receive_timeout] == 30_000
+      assert defaults[:retry] == :transient
+      assert defaults[:max_retries] == 3
+    end
+
+    test "query purpose does not retry against a failing upstream", %{bypass: bypass} do
+      # Behavior pin: with purpose: :query and no caller overrides, a 500
+      # gets exactly ONE request (retry: false), not 4.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Plug.Conn.send_resp(conn, 500, ~s({"error": "boom"}))
+      end)
+
+      capture_log(fn ->
+        assert {:error, {500, _}} = Voyage.embed_texts(["hello"], purpose: :query)
+      end)
+
+      assert Agent.get(counter, & &1) == 1
     end
 
     test "sends correct model in request body", %{bypass: bypass} do
@@ -133,6 +167,133 @@ defmodule Engram.Embedders.VoyageTest do
       assert {:ok, _} = Voyage.embed_texts(["a"])
       assert {:ok, _} = Voyage.embed_texts(["b"])
       assert {:ok, _} = Voyage.embed_texts(["c"])
+    end
+  end
+
+  describe "token usage telemetry" do
+    test "emits [:engram, :voyage, :embed, :tokens] when response includes usage", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{
+          "data" => [%{"embedding" => [0.1, 0.2]}],
+          "model" => "voyage-4-large",
+          "usage" => %{"total_tokens" => 42}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _vectors} = Voyage.embed_texts(["hello"], purpose: :query)
+
+        assert_received {:voyage_tokens, %{total_tokens: 42}, %{purpose: :query}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "defaults purpose tag to :index when caller omits opts", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{
+          "data" => [%{"embedding" => [0.1]}],
+          "usage" => %{"total_tokens" => 7}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_default_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _} = Voyage.embed_texts(["hello"])
+        assert_received {:voyage_tokens, %{total_tokens: 7}, %{purpose: :index}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "does NOT emit tokens event when response omits usage field", %{bypass: bypass} do
+      # Defensive: Voyage's documented embedding response always includes
+      # usage, but we should not crash or emit a 0-token event if a future
+      # endpoint shape drops it. Absence-of-event is the contract.
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{"data" => [%{"embedding" => [0.1]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :tokens_absent_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:ok, _} = Voyage.embed_texts(["hello"])
+        refute_received {:voyage_tokens, _, _}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "does NOT emit tokens event on non-200 response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        Plug.Conn.send_resp(conn, 500, ~s({"error": "server"}))
+      end)
+
+      handler_id = {__MODULE__, :tokens_error_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :voyage, :embed, :tokens],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:voyage_tokens, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:error, _} = Voyage.embed_texts(["hello"], retry: false)
+        refute_received {:voyage_tokens, _, _}
+      after
+        :telemetry.detach(handler_id)
+      end
     end
   end
 

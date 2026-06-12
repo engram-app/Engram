@@ -10,8 +10,10 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   to nil (unlimited).
 
   Rejection body:
-      {"error": "connection_cap_reached",
-       "kind": "<obsidian|mcp>",
+      {"error": "limit_exceeded",
+       "reason": "<obsidian|mcp>_connections_exceeded",
+       "limit_key": "<obsidian|mcp>_connections_cap",
+       "tier": "free" | "starter" | "pro",
        "current": <integer>,
        "limit": <integer>,
        "upgrade_url": "/settings/billing"}
@@ -38,8 +40,6 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
 
   alias Engram.{Billing, Connections, Repo}
   alias Engram.OAuth.Client
-
-  @upgrade_url "/settings/billing"
 
   def init(opts), do: opts
 
@@ -76,13 +76,8 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
             if current < limit do
               conn
             else
-              send_json(conn, 402, %{
-                error: "connection_cap_reached",
-                kind: kind_str,
-                current: current,
-                limit: limit,
-                upgrade_url: @upgrade_url
-              })
+              reason = "#{kind_str}_connections_exceeded"
+              EngramWeb.LimitResponse.halt(conn, reason, limit_key_for(kind_str), limit, current)
             end
         end
 
@@ -100,6 +95,9 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   # been touched yet in a given beam node (e.g. unit test isolation).
   defp kind_atom("obsidian"), do: :obsidian
   defp kind_atom("mcp"), do: :mcp
+
+  defp limit_key_for("obsidian"), do: :obsidian_connections_cap
+  defp limit_key_for("mcp"), do: :mcp_connections_cap
 
   # Resolve the billing cap for a user using literal LimitKey atoms so the
   # static lint can verify catalog membership at compile time. Unknown kinds

@@ -1,8 +1,9 @@
 import { Search, X } from 'lucide-react'
-import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { type SearchResult, useSearch } from '../api/queries'
 import { pushRecent, readRecent } from './recent-searches'
 import { useRailView } from './rail-view-context'
@@ -10,7 +11,10 @@ import { useRailView } from './rail-view-context'
 export default function SearchPanel() {
   const { setView } = useRailView()
   const [input, setInput] = useState('')
-  const deferred = useDeferredValue(input.trim())
+  // True debounce, not useDeferredValue: deferral only delays rendering —
+  // every settled keystroke still became a new query key, i.e. one vector
+  // search (Voyage embed + Qdrant) per character typed.
+  const deferred = useDebouncedValue(input.trim(), 300)
   const { data: results, isLoading, error } = useSearch(deferred)
   const [recent, setRecent] = useState<string[]>(() => readRecent())
   const inputRef = useRef<HTMLInputElement>(null)
@@ -97,7 +101,9 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 }
 
 function ResultRow({ result }: { result: SearchResult }) {
-  const href = `/note/${result.path.split('/').map(encodeURIComponent).join('/')}`
+  // Orphan hits (no id) are unreachable — render nothing.
+  if (result.id == null) return null
+  const href = `/note/${result.id}`
   return (
     <Link
       to={href}

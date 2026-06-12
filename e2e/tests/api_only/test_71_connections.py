@@ -400,11 +400,22 @@ async def test_free_tier_cap_blocks_second_mcp_consent(clerk_client):
             f"second MCP consent should be 402, got {resp2.status_code}: {resp2.text}"
         )
         body = resp2.json()
-        assert body["error"] == "connection_cap_reached"
-        assert body["kind"] == "mcp"
+        # Standardized 402 LimitResponse shape (spec §4.5): error is the
+        # constant "limit_exceeded", reason carries the machine key, and
+        # limit_key names the LimitKeys entry that fired. The plug no
+        # longer leaks the legacy `kind` field.
+        assert body["error"] == "limit_exceeded"
+        assert body["reason"] == "mcp_connections_exceeded"
+        assert body["limit_key"] == "mcp_connections_cap"
         assert body["current"] == 1
         assert body["limit"] == 1
-        assert body["upgrade_url"] == "/settings/billing"
+        assert body["tier"] == "free"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
@@ -425,7 +436,12 @@ async def test_free_tier_pat_minting_blocked(clerk_client):
         )
         body = resp.json()
         assert body["error"] == "pat_disabled_on_free"
-        assert body["upgrade_url"] == "/settings/billing"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
@@ -451,7 +467,7 @@ def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -
     return resp.json()
 
 
-def device_authorize(jwt_token: str, user_code: str, vault_id: int) -> requests.Response:
+def device_authorize(jwt_token: str, user_code: str, vault_id: str) -> requests.Response:
     """POST /api/auth/device/authorize — confirm device from user side.
     Returns the raw Response so callers can check 402 cap responses.
     """
@@ -672,10 +688,16 @@ async def test_free_tier_cap_blocks_second_device_authorize(clerk_client):
             f"second authorize should be 402, got {auth2.status_code}: {auth2.text}"
         )
         body = auth2.json()
-        assert body["error"] == "connection_cap_reached"
-        assert body["kind"] == "obsidian"
+        assert body["error"] == "limit_exceeded"
+        assert body["reason"] == "concurrent_devices_exceeded"
+        assert body["limit_key"] == "concurrent_devices"
         assert body["current"] == 1
         assert body["limit"] == 1
-        assert body["upgrade_url"] == "/settings/billing"
+        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
+        # the full https://app.engram.page/settings/billing URL, self-host
+        # can override. Assert the path suffix only.
+        assert body["upgrade_url"] and body["upgrade_url"].endswith(
+            "/settings/billing"
+        ), f"upgrade_url should end with /settings/billing; got {body['upgrade_url']!r}"
     finally:
         clerk_client.delete_user(clerk_user_id)

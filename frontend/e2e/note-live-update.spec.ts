@@ -75,7 +75,7 @@ async function upsertNote(
   path: string,
   content: string,
   version?: number,
-): Promise<void> {
+): Promise<{ id: number }> {
   const res = await fetch(`${baseURL}/api/notes`, {
     method: 'POST',
     headers: {
@@ -86,6 +86,8 @@ async function upsertNote(
     body: JSON.stringify({ path, content, mtime: Date.now() / 1000, version }),
   })
   if (!res.ok) throw new Error(`note upsert failed: ${res.status} ${await res.text()}`)
+  const { note } = (await res.json()) as { note: { id: number } }
+  return { id: note.id }
 }
 
 /**
@@ -98,10 +100,10 @@ async function signInForNote(
   page: Page,
   email: string,
   vaultId: number,
-  notePath: string,
+  noteId: number,
 ): Promise<void> {
-  // Hitting /note/* unauth → AuthGuard redirects to /sign-in?return_to=…
-  await page.goto(`/note/${notePath}`)
+  // Hitting /note/:id unauth → AuthGuard redirects to /sign-in?return_to=…
+  await page.goto(`/note/${noteId}`)
   await expect(page).toHaveURL(/\/sign-in/, { timeout: 10_000 })
 
   // Seed active vault before sign-in completes so the post-redirect render
@@ -115,7 +117,7 @@ async function signInForNote(
   await page.getByLabel('Password', { exact: true }).fill(PASS)
   await page.getByRole('button', { name: /sign in/i }).click()
 
-  await expect(page).toHaveURL(new RegExp(`/note/${notePath}`), { timeout: 10_000 })
+  await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 })
 }
 
 test.describe('SPA viewer live-update (#277)', () => {
@@ -127,11 +129,17 @@ test.describe('SPA viewer live-update (#277)', () => {
     const token = await registerAndLogin(baseURL!, email)
     const vault = await createVault(baseURL!, token, `liveview-${Date.now()}`)
     const path = 'live-view.md'
-    await upsertNote(baseURL!, token, vault.id, path, '# Initial\n\nFirst body.')
+    const { id: noteId } = await upsertNote(
+      baseURL!,
+      token,
+      vault.id,
+      path,
+      '# Initial\n\nFirst body.',
+    )
 
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    await signInForNote(page, email, vault.id, path)
+    await signInForNote(page, email, vault.id, noteId)
 
     // `forceMount` on both Tabs.Content means the Edit panel is in the DOM
     // alongside Preview; scope assertions to the visible Preview panel.
@@ -155,11 +163,17 @@ test.describe('SPA viewer live-update (#277)', () => {
     const token = await registerAndLogin(baseURL!, email)
     const vault = await createVault(baseURL!, token, `liveedit-${Date.now()}`)
     const path = 'live-edit.md'
-    await upsertNote(baseURL!, token, vault.id, path, '# Initial\n\noriginal text.')
+    const { id: noteId } = await upsertNote(
+      baseURL!,
+      token,
+      vault.id,
+      path,
+      '# Initial\n\noriginal text.',
+    )
 
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    await signInForNote(page, email, vault.id, path)
+    await signInForNote(page, email, vault.id, noteId)
 
     const preview = page.getByRole('tabpanel', { name: 'Preview' })
     const editPanel = page.getByRole('tabpanel', { name: 'Edit' })

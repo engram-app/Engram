@@ -39,6 +39,28 @@ defmodule Engram.Crypto.DekCacheTest do
     assert :miss = DekCache.get(1)
   end
 
+  describe "telemetry" do
+    test "get/1 emits hit and miss outcomes" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+
+      assert :miss = DekCache.get(999_001)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :miss}}
+
+      DekCache.put(999_001, @dek)
+      assert {:ok, _} = DekCache.get(999_001)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :hit}}
+    end
+
+    test "expired entry counts as miss" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+
+      DekCache.put(999_002, @dek, _ttl_ms = 1)
+      Process.sleep(10)
+      assert :miss = DekCache.get(999_002)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :miss}}
+    end
+  end
+
   describe "cross-node invalidation (PubSub round-trip)" do
     alias Engram.Cluster.CacheSync
 

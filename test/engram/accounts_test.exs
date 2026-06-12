@@ -53,7 +53,7 @@ defmodule Engram.AccountsTest do
       topic = "user_socket:#{user.id}"
       EngramWeb.Endpoint.subscribe(topic)
 
-      assert {:error, :not_found} = Accounts.revoke_api_key(user, 999_999)
+      assert {:error, :not_found} = Accounts.revoke_api_key(user, Ecto.UUID.generate())
 
       refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}, 50
     end

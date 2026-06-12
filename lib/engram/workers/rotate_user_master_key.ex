@@ -31,7 +31,7 @@ defmodule Engram.Workers.RotateUserMasterKey do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "target_version" => target_version}})
-      when is_integer(user_id) and is_integer(target_version) and target_version >= 1 do
+      when is_binary(user_id) and is_integer(target_version) and target_version >= 1 do
     case MasterRotation.rotate_user(user_id, target_version) do
       :ok -> :ok
       :skipped -> :ok

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { ChecklistWidget } from './checklist-widget'
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import type { Connection, OnboardingAction, OnboardingStatus } from '../api/queries'
+import type { BillingStatus, Connection, OnboardingAction, OnboardingStatus } from '../api/queries'
 import { useOnboardingActions } from './use-onboarding-actions'
 
 let actionsList: OnboardingAction[] = []
@@ -32,6 +33,11 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false }
 
+let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
+  data: { tier: 'free', active: false } as Partial<BillingStatus>,
+  isLoading: false,
+}
+
 vi.mock('./use-onboarding-actions', () => ({
   useOnboardingActions: () => onboardingActionsValue,
 }))
@@ -53,6 +59,16 @@ vi.mock('../api/queries', async () => {
       return { data, isLoading: onboardingStatusValue.isLoading }
     },
     useConnections: () => connectionsValue,
+    useBillingStatus: () => billingStatusValue,
+  }
+})
+
+vi.mock('../config-context', async () => {
+  const actual = await vi.importActual<typeof import('../config-context')>('../config-context')
+  return {
+    ...actual,
+    // SaaS context — free-tier footer logic under test depends on this.
+    useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
   }
 })
 
@@ -63,7 +79,11 @@ function wrap(ui: ReactNode) {
   // Pre-seed the cache so the first render sees the same data the mock
   // would have returned synchronously (no flash of loading state).
   activeQc.setQueryData(['onboarding', 'status'], onboardingStatusValue.data)
-  return <QueryClientProvider client={activeQc}>{ui}</QueryClientProvider>
+  return (
+    <QueryClientProvider client={activeQc}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
+  )
 }
 
 beforeEach(() => {
@@ -88,6 +108,10 @@ beforeEach(() => {
     isLoading: false,
   }
   connectionsValue = { data: [], isLoading: false }
+  billingStatusValue = {
+    data: { tier: 'free', active: false } as Partial<BillingStatus>,
+    isLoading: false,
+  }
 })
 
 afterEach(() => {
@@ -303,5 +327,26 @@ describe('ChecklistWidget — chrome', () => {
 
     // vault + tour + claude + cursor = 4 items, none done.
     expect(screen.getByText(/0 of 4 done/i)).toBeInTheDocument()
+  })
+})
+
+describe('ChecklistWidget — Free-tier reminder', () => {
+  it('renders Free reminder with Upgrade link to /onboard/billing when tier=free', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
+    billingStatusValue.data = { tier: 'free', active: false } as Partial<BillingStatus>
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    expect(screen.getByText(/free.*1 connection/i)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /upgrade/i })
+    expect(link).toHaveAttribute('href', '/onboard/billing')
+  })
+
+  it('does not render the reminder when tier=pro', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
+    billingStatusValue.data = { tier: 'pro', active: true } as Partial<BillingStatus>
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    expect(screen.queryByText(/free.*1 connection/i)).toBeNull()
+    expect(screen.queryByRole('link', { name: /upgrade/i })).toBeNull()
   })
 })

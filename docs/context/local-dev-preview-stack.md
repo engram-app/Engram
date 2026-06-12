@@ -40,7 +40,7 @@ rest of `.env.local` as-is: Clerk vars, Paddle sandbox vars, shared
 ```bash
 docker run -d --name engram-dev-pg \
   -e POSTGRES_USER=engram -e POSTGRES_PASSWORD=engram -e POSTGRES_DB=engram \
-  -p 55432:5432 postgres:16-alpine
+  -p 55432:5432 postgres:18.4
 ```
 
 ### 2. Backend (Phoenix on :4000)

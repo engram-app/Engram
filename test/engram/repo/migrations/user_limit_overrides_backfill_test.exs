@@ -29,7 +29,7 @@ defmodule Engram.Repo.Migrations.UserLimitOverridesBackfillTest do
 
     Repo.query!("""
     CREATE TABLE legacy_user_overrides (
-      user_id BIGINT NOT NULL,
+      user_id UUID NOT NULL,
       overrides JSONB NOT NULL,
       reason TEXT,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -50,7 +50,7 @@ defmodule Engram.Repo.Migrations.UserLimitOverridesBackfillTest do
 
     Repo.query!(
       "INSERT INTO legacy_user_overrides (user_id, overrides, reason) " <>
-        "VALUES (#{user_id}, '#{json}'::jsonb, #{reason_sql})"
+        "VALUES ('#{user_id}'::uuid, '#{json}'::jsonb, #{reason_sql})"
     )
   end
 
