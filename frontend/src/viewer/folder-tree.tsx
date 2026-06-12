@@ -98,15 +98,19 @@ export default function FolderTree() {
   }
 
   // Drag-and-drop move — partition sources by kind, dispatch to the
-  // matching batch hook. Drop target must be a folder.
+  // matching batch hook. Drop target must be a folder or the vault root.
   const onMove = (sourceIds: string[], targetItemId: string) => {
     const target = parseItemId(targetItemId)
-    if (target.kind !== 'folder') return
+    if (target.kind === 'note') return
     const parsed = sourceIds.map(parseItemId)
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
     const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
-    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
-    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
+    // 'root' is the backend sentinel for the vault root; a folder target uses
+    // its marker id.
+    const noteTarget = target.kind === 'root' ? 'root' : target.id
+    const folderTarget = target.kind === 'root' ? 'root' : target.id
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: noteTarget })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: folderTarget })
   }
 
   // The loader fires this on cache-miss when a folder is expanded. Mirrors

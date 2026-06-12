@@ -136,7 +136,7 @@ export function useEngramTree(deps: Deps) {
         id: i.getId(),
         parentId: i.getParent()?.getId(),
       }))
-      const move = resolveDropMove(sources, destId, ROOT_ID)
+      const move = resolveDropMove(sources, destId)
       if (move) deps.onMove(move.ids, move.dest)
     },
     features: [

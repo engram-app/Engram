@@ -15,7 +15,6 @@ export interface DropSource {
 export function resolveDropMove(
   sources: DropSource[],
   destId: string | undefined,
-  rootId: string,
 ): { dest: string; ids: string[] } | null {
   // A root destination is allowed (move to vault root). Only a missing target
   // is a no-op. Sources already at root are filtered below.
