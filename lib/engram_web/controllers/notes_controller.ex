@@ -198,6 +198,95 @@ defmodule EngramWeb.NotesController do
   # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
   # follow-up (after-commit hook).
 
+  @batch_upsert_max 100
+
+  def batch_upsert(conn, %{"notes" => notes}) when is_list(notes) do
+    cond do
+      length(notes) > @batch_upsert_max ->
+        conn |> put_status(400) |> json(%{error: "too_many_notes", max: @batch_upsert_max})
+
+      not Enum.all?(notes, &is_map/1) ->
+        conn |> put_status(400) |> json(%{error: "invalid_notes"})
+
+      true ->
+        do_batch_upsert(conn, notes)
+    end
+  end
+
+  def batch_upsert(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required param: notes"})
+  end
+
+  defp do_batch_upsert(conn, notes) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    # Per-note size gate (mirrors the single-note 413): oversized entries
+    # become per-note errors instead of failing the whole batch — the other
+    # 99 notes in a bulk sync shouldn't pay for one huge file.
+    {sized, oversized} =
+      notes
+      |> Enum.with_index()
+      |> Enum.split_with(fn {note, _idx} ->
+        byte_size(note["content"] || "") <= @max_note_bytes
+      end)
+
+    case Notes.batch_upsert_notes(user, vault, Enum.map(sized, &elem(&1, 0))) do
+      {:ok, %{results: results}} ->
+        by_index =
+          sized
+          |> Enum.map(&elem(&1, 1))
+          |> Enum.zip(Enum.map(results, &batch_result_json/1))
+          |> Map.new()
+
+        oversized_by_index =
+          Map.new(oversized, fn {note, idx} ->
+            {idx,
+             %{
+               path: note["path"] || "",
+               status: "error",
+               errors: %{content: ["exceeds maximum size of 10MB"]}
+             }}
+          end)
+
+        merged =
+          Enum.map(0..(length(notes) - 1), fn idx ->
+            by_index[idx] || oversized_by_index[idx]
+          end)
+
+        body = %{results: merged}
+        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+        json(conn, body)
+
+      {:error, {:notes_cap_reached, limit, current}} ->
+        EngramWeb.LimitResponse.halt(conn, "notes_cap_exceeded", :notes_cap, limit, current)
+
+      {:error, _reason} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
+    end
+  end
+
+  defp batch_result_json(%{status: :ok} = result) do
+    %{
+      path: result.path,
+      status: "ok",
+      id: result.id,
+      version: result.version,
+      content_hash: result.content_hash
+    }
+  end
+
+  defp batch_result_json(%{status: :conflict} = result) do
+    %{path: result.path, status: "conflict", server_note: note_json(result.server_note)}
+  end
+
+  defp batch_result_json(%{status: :error} = result) do
+    %{path: result.path, status: "error", errors: batch_errors_json(result.errors)}
+  end
+
+  defp batch_errors_json(%Ecto.Changeset{} = changeset), do: format_errors(changeset)
+  defp batch_errors_json(other), do: other
+
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
@@ -282,6 +371,10 @@ defmodule EngramWeb.NotesController do
       tags: note.tags || [],
       version: note.version,
       content: note.content || "",
+      # Protocol rev — clients store the server hash per path so hash-only
+      # broadcasts / fields=meta pages can be compared without refetching.
+      # The hash is keyed server-side (HMAC); clients treat it as opaque.
+      content_hash: note.content_hash,
       mtime: note.mtime,
       updated_at: note.updated_at
     }
