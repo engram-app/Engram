@@ -179,7 +179,7 @@ defmodule EngramWeb.NotesController do
         {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}} ->
           json(conn, %{
             changes: Enum.map(changes, &change_json(&1, fields)),
-            server_time: DateTime.utc_now() |> DateTime.to_iso8601(),
+            server_time: changes_server_time(changes, has_more),
             has_more: has_more,
             next_cursor: next_cursor
           })
@@ -201,6 +201,21 @@ defmodule EngramWeb.NotesController do
 
   def changes(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: since"})
+  end
+
+  # Legacy-client convergence: pre-pagination plugins advance
+  # `since = server_time` after every poll. On a truncated page, "now" would
+  # skip the un-fetched tail forever (silent loss) — so server_time is the
+  # high-water mark this response is COMPLETE through: the last returned
+  # change's updated_at when has_more, "now" otherwise. The since filter is
+  # inclusive (>=), so the next poll resumes exactly at the boundary (the
+  # boundary row repeats once; applies are idempotent).
+  defp changes_server_time(changes, true) when changes != [] do
+    changes |> List.last() |> Map.fetch!(:updated_at) |> DateTime.to_iso8601()
+  end
+
+  defp changes_server_time(_changes, _has_more) do
+    DateTime.utc_now() |> DateTime.to_iso8601()
   end
 
   @changes_max_limit 500
