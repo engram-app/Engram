@@ -1198,39 +1198,40 @@ defmodule Engram.Notes do
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
 
-    if ok_entries != [] do
-      digest =
-        Enum.map(ok_entries, fn %{result: {:ok, info}} = entry ->
-          %{
-            "event_type" => "upsert",
-            "id" => info.id,
-            "path" => entry.path,
-            "title" => entry.title,
-            "folder" => entry.folder,
-            "tags" => entry.tags,
-            "mtime" => entry.mtime,
-            "version" => info.version,
-            "updated_at" => info.updated_at,
-            "content_hash" => entry.hash
-          }
-        end)
+    _ =
+      if ok_entries != [] do
+        digest =
+          Enum.map(ok_entries, fn %{result: {:ok, info}} = entry ->
+            %{
+              "event_type" => "upsert",
+              "id" => info.id,
+              "path" => entry.path,
+              "title" => entry.title,
+              "folder" => entry.folder,
+              "tags" => entry.tags,
+              "mtime" => entry.mtime,
+              "version" => info.version,
+              "updated_at" => info.updated_at,
+              "content_hash" => entry.hash
+            }
+          end)
 
-      _ =
-        EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "notes.batch", %{
-          op: "upsert",
-          vault_id: vault.id,
-          notes: digest
-        })
-    end
+        _ =
+          EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "notes.batch", %{
+            op: "upsert",
+            vault_id: vault.id,
+            notes: digest
+          })
+      end
 
     created = Enum.filter(ok_entries, fn %{result: {:ok, info}} -> is_nil(info.prev_hash) end)
 
-    if state.was_empty and created != [] do
-      _ =
+    _ =
+      if state.was_empty and created != [] do
         EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
           vault_id: vault.id
         })
-    end
+      end
 
     distinct_id = PostHog.distinct_id_for(user)
 

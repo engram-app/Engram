@@ -40,6 +40,10 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     else:
         raise TimeoutError(f"Obsidian indexed only {count}/{NOTE_COUNT} bulk files")
 
+    # The PreSync gate blocks engine work until accepted (1,000 new local
+    # files look destructive) — accept it explicitly like push_file_now does.
+    await cdp_a.accept_sync_gate()
+
     started = time.monotonic()
     result = await cdp_a.trigger_full_sync()
     elapsed = time.monotonic() - started
