@@ -29,6 +29,7 @@ defmodule EngramWeb.NotesControllerBatchUpsertTest do
       assert %{"path" => "a.md", "status" => "ok", "version" => 1} = r1
       assert is_binary(r1["id"])
       assert is_binary(r1["content_hash"])
+      assert r1["server_path"] == "a.md"
       assert %{"path" => "sub/b.md", "status" => "ok"} = r2
 
       replay =
@@ -139,3 +140,4 @@ defmodule EngramWeb.NotesControllerBatchUpsertTest do
     end
   end
 end
+

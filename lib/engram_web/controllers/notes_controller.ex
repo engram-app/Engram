@@ -309,7 +309,8 @@ defmodule EngramWeb.NotesController do
       status: "ok",
       id: result.id,
       version: result.version,
-      content_hash: result.content_hash
+      content_hash: result.content_hash,
+      server_path: result.server_path
     }
   end
 

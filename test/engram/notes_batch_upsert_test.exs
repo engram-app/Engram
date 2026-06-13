@@ -335,7 +335,11 @@ defmodule Engram.NotesBatchUpsertTest do
                ])
 
       assert r.status == :ok
-      # Sanitizer strips the traversal — note lands at a safe path.
+      # Sanitizer strips the traversal — note lands at a safe path. The
+      # result echoes the input path for correlation and exposes the
+      # canonical path separately so clients can rename local files.
+      assert r.path == "../escape.md"
+      assert r.server_path == "escape.md"
       assert {:ok, _} = Notes.get_note(user, vault, "escape.md")
     end
   end

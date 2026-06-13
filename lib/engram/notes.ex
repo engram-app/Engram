@@ -1207,7 +1207,10 @@ defmodule Engram.Notes do
             status: :ok,
             id: info.id,
             version: info.version,
-            content_hash: entry.hash
+            content_hash: entry.hash,
+            # Canonical (sanitized) path — differs from `path` when the
+            # sanitizer rewrote the input; clients rename local files to it.
+            server_path: entry.path
           }
 
         {:conflict, existing} ->
