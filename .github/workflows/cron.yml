@@ -18,7 +18,7 @@ name: cron
 
 on:
   schedule:
-    - cron: '30 6 * * *'    # clerk-orphans            (daily 06:30 UTC)
+    - cron: '30 * * * *'    # clerk-orphans            (hourly, :30)
     - cron: '0 3 * * 0'     # runner-cleanup           (Sun 03:00 UTC)
     - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
     - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
@@ -52,11 +52,15 @@ jobs:
   # (issue #160), so users from a run cancelled / OOM-killed before its
   # session_cleanup fired would otherwise accumulate forever. This cron
   # mops them up — with a 1h age filter to avoid racing in-flight runs.
-  # Once-daily off-peak; per-run pytest fixture handles the fresh-user path
-  # so hourly was overkill.
+  # Hourly (:30): the Clerk dev instance caps at 100 users, and a heavy-CI
+  # burst (release day, an e2e-rerun storm) can mint 100+ e2e-* users within
+  # a few hours — faster than a once-daily sweep clears them, exhausting the
+  # quota and 403'ing every Clerk-auth e2e run (2026-06-13). Hourly bounds the
+  # standing orphan count to ~1-2h of churn; the 1h age filter still protects
+  # in-flight runs. (Was once-daily 2026-06-02..06-13 — too sparse for bursts.)
   clerk-orphans:
     if: |
-      github.event.schedule == '30 6 * * *'
+      github.event.schedule == '30 * * * *'
       || github.event.inputs.task == 'clerk-orphans'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
