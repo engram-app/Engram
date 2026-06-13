@@ -211,14 +211,21 @@ defmodule Engram.Notes do
   @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
+
+  Options:
+
+    * `broadcast_from: pid` — emit the `note_changed` broadcast via
+      `Endpoint.broadcast_from/4` so the given subscriber (the pushing
+      channel process) is excluded. Channel pushes pass `self()`; HTTP
+      pushes have no socket to exclude and use plain broadcast.
   """
-  @spec upsert_note(map(), map(), map()) ::
+  @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
           | {:error, Ecto.Changeset.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
-  def upsert_note(user, vault, attrs) do
+  def upsert_note(user, vault, attrs, opts \\ []) do
     path = attrs["path"] || attrs[:path]
     content = attrs["content"] || attrs[:content] || ""
     mtime = attrs["mtime"] || attrs[:mtime]
@@ -281,7 +288,7 @@ defmodule Engram.Notes do
             end
 
           note = decrypt_or_raise!(note, user)
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
 
           if is_nil(prev_hash) do
             # FTUX vault page listens for this — fires when an empty vault
@@ -2413,7 +2420,15 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t(), Note.t()) :: :ok
+  @spec broadcast_change(
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          String.t(),
+          Note.t(),
+          keyword()
+        ) ::
+          :ok
   # Emits `vault_populated` only when this insert took the vault from 0
   # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
@@ -2447,21 +2462,37 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do
+  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts \\ []) do
+    # Protocol rev — dual-field transition: the payload carries BOTH
+    # `content` and `content_hash` for one release. `content` is dropped the
+    # release after the plugin min-version floor covers the hash-only
+    # handler (self-host backends and plugins update on independent
+    # cadences — do NOT remove early).
+    payload = %{
+      "event_type" => "upsert",
+      "id" => note.id,
+      "path" => path,
+      "vault_id" => vault_id,
+      "content" => note.content || "",
+      "content_hash" => note.content_hash,
+      "title" => note.title || "",
+      "folder" => note.folder || "",
+      "tags" => note.tags || [],
+      "mtime" => note.mtime,
+      "updated_at" => note.updated_at,
+      "version" => note.version
+    }
+
+    topic = "sync:#{user_id}:#{vault_id}"
+
     _ =
-      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-        "event_type" => "upsert",
-        "id" => note.id,
-        "path" => path,
-        "vault_id" => vault_id,
-        "content" => note.content || "",
-        "title" => note.title || "",
-        "folder" => note.folder || "",
-        "tags" => note.tags || [],
-        "mtime" => note.mtime,
-        "updated_at" => note.updated_at,
-        "version" => note.version
-      })
+      case Keyword.get(opts, :broadcast_from) do
+        pid when is_pid(pid) ->
+          EngramWeb.Endpoint.broadcast_from(pid, topic, "note_changed", payload)
+
+        nil ->
+          EngramWeb.Endpoint.broadcast(topic, "note_changed", payload)
+      end
 
     :ok
   end

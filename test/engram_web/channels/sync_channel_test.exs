@@ -184,24 +184,31 @@ defmodule EngramWeb.SyncChannelTest do
         "event_type" => "upsert",
         "path" => "Test/Shared.md",
         "content" => "# Shared",
+        "content_hash" => content_hash,
         "title" => "Shared"
       }
+
+      # Protocol rev dual-field transition: hash rides along with content
+      # for one release so old and new plugins both work.
+      assert is_binary(content_hash)
     end
 
-    test "broadcasts note_changed to sender (Endpoint.broadcast semantics)", %{socket: socket} do
-      push(socket, "push_note", %{
-        "path" => "Test/Echo.md",
-        "content" => "# Echo",
-        "mtime" => 1_000.0
-      })
+    test "does NOT push note_changed back to the sender (broadcast_from semantics)", %{
+      socket: socket
+    } do
+      ref =
+        push(socket, "push_note", %{
+          "path" => "Test/Echo.md",
+          "content" => "# Echo",
+          "mtime" => 1_000.0
+        })
 
-      # Notes context uses Endpoint.broadcast (not broadcast_from!), so sender
-      # also receives the note_changed event. Clients should deduplicate by path/version.
-      assert_push "note_changed", %{
-        "event_type" => "upsert",
-        "path" => "Test/Echo.md",
-        "content" => "# Echo"
-      }
+      assert_reply ref, :ok, %{"note" => _}
+
+      # Protocol rev: channel pushes broadcast via broadcast_from, so the
+      # pushing socket no longer pays for its own echo. (HTTP pushes still
+      # use plain broadcast — no socket to exclude.)
+      refute_push "note_changed", %{"path" => "Test/Echo.md"}
     end
 
     test "sanitizes path in push_note", %{socket: socket} do
