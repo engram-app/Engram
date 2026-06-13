@@ -27,7 +27,24 @@ defmodule Engram.RuntimeConfig do
   @spec rate_limit_auth_override((String.t() -> String.t() | nil)) ::
           {:ok, integer()} | {:ignored, String.t()} | :none
   def rate_limit_auth_override(getenv) when is_function(getenv, 1) do
-    case getenv.("RATE_LIMIT_AUTH_OVERRIDE") do
+    ci_gated_override(getenv, "RATE_LIMIT_AUTH_OVERRIDE")
+  end
+
+  @doc """
+  Same CI-gated contract as `rate_limit_auth_override/1`, for the pre-auth
+  (vault-pipeline) limiter via `PRE_AUTH_RATE_LIMIT_OVERRIDE`. Needed so bulk
+  e2e flows (e.g. the protocol-rev bulk-push test) can lift the default
+  600/min `/api/notes` cap without 429-ing themselves; production never sets
+  `CI=true`, so it can't weaken the limiter there.
+  """
+  @spec pre_auth_rate_limit_override((String.t() -> String.t() | nil)) ::
+          {:ok, integer()} | {:ignored, String.t()} | :none
+  def pre_auth_rate_limit_override(getenv) when is_function(getenv, 1) do
+    ci_gated_override(getenv, "PRE_AUTH_RATE_LIMIT_OVERRIDE")
+  end
+
+  defp ci_gated_override(getenv, var) do
+    case getenv.(var) do
       nil -> :none
       "" -> :none
       raw -> if getenv.("CI") == "true", do: {:ok, String.to_integer(raw)}, else: {:ignored, raw}

@@ -86,6 +86,11 @@ services:
       # which sets CI=true automatically.)
       CI: "true"
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
+      # Lift the pre-auth (vault-pipeline) 600/min /api/notes cap for e2e —
+      # bulk flows (e.g. test_78 hash-only / protocol-rev bulk push) burst past
+      # it from the runner's single source IP. Same CI=true gate, so it can
+      # never weaken the limiter in prod.
+      PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path

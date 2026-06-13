@@ -249,6 +249,21 @@ case Engram.RuntimeConfig.rate_limit_auth_override(&System.get_env/1) do
     :ok
 end
 
+# Pre-auth (vault-pipeline) limiter override, same CI=true gate. Lets bulk
+# e2e flows lift the default 600/min /api/notes cap; a no-op in prod.
+case Engram.RuntimeConfig.pre_auth_rate_limit_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :pre_auth_rate_limit_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning("PRE_AUTH_RATE_LIMIT_OVERRIDE=#{raw} ignored: only honored when CI=true.")
+
+  :none ->
+    :ok
+end
+
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
 # Note: use local variable, not Application.get_env — runtime.exs config
 # is accumulated and not yet applied, so get_env reads stale config.

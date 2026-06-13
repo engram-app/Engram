@@ -31,6 +31,27 @@ defmodule Engram.RuntimeConfigTest do
     end
   end
 
+  describe "pre_auth_rate_limit_override/1" do
+    test "applies the override only when CI=true" do
+      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ok, 100_000}
+    end
+
+    test "ignores the override when not CI (a stray prod env var)" do
+      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "100000"}
+    end
+
+    test "returns :none when absent" do
+      assert RuntimeConfig.pre_auth_rate_limit_override(getenv(%{"CI" => "true"})) == :none
+    end
+
+    test "is independent of the auth override env var" do
+      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000", "CI" => "true"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == :none
+    end
+  end
+
   describe "validate_saas_origins!/3" do
     test "raises when a Clerk (saas) deploy has no PHX_HOST and is not CI" do
       assert_raise RuntimeError, ~r/PHX_HOST/, fn ->
