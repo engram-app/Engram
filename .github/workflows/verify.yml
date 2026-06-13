@@ -2351,7 +2351,7 @@ jobs:
           # Same for PreAuthRateLimit (vault pipeline, default 600 req/60s):
           # browser suites that create notes burst /api/notes past it → 429s.
           # CI=true is set automatically by the GitHub runner, so it's honored.
-          PRE_AUTH_RATE_LIMIT_OVERRIDE: "10000"
+          PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
           # Production self-host default is invite_only; pin "open" so the
           # Playwright fixtures (which register multiple users) don't 403 with
           # invite_required. Matches docker-compose.ci-local.yml for e2e-local.

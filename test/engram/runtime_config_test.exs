@@ -33,18 +33,18 @@ defmodule Engram.RuntimeConfigTest do
 
   describe "pre_auth_rate_limit_override/1" do
     test "applies the override only when CI=true" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "10000", "CI" => "true"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ok, 10_000}
+      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "true"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ok, 100_000}
     end
 
     test "ignores the override when CI is not true (e.g. a stray prod env var)" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "10000"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "10000"}
+      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "100000"}
     end
 
     test "ignores the override when CI is set to something other than true" do
-      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "10000", "CI" => "false"})
-      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "10000"}
+      env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "100000", "CI" => "false"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == {:ignored, "100000"}
     end
 
     test "returns :none when the override is absent" do
@@ -53,6 +53,11 @@ defmodule Engram.RuntimeConfigTest do
 
     test "returns :none when the override is blank" do
       env = getenv(%{"PRE_AUTH_RATE_LIMIT_OVERRIDE" => "", "CI" => "true"})
+      assert RuntimeConfig.pre_auth_rate_limit_override(env) == :none
+    end
+
+    test "is independent of the auth override env var" do
+      env = getenv(%{"RATE_LIMIT_AUTH_OVERRIDE" => "1000", "CI" => "true"})
       assert RuntimeConfig.pre_auth_rate_limit_override(env) == :none
     end
   end
