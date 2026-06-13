@@ -186,6 +186,53 @@ defmodule Engram.Release do
     end
   end
 
+  @doc """
+  Fail-loud schema-baseline guard. Invoked from `entrypoint.sh` AFTER
+  `migrate/0` and BEFORE the app server boots.
+
+  If a database silently kept its legacy integer-PK shape — an in-place engine
+  upgrade that preserved data and skipped the wreck-and-recreate baseline replay
+  (the 2026-06-11 PG18/uuidv7 incident) — this raises so the deploy fails at the
+  migrate step with a one-line diagnosis, instead of the app crash-looping on a
+  cryptic `cannot load 1 as type Ecto.UUID` error during `Legal.Seeder`.
+
+  No-op (`:ok`) on a healthy uuid schema (including right after a successful
+  `reset_baseline/0`, which heals the state first) or an absent sentinel table.
+  """
+  def verify_schema_baseline do
+    _ = load_app()
+
+    for repo <- repos() do
+      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &verify_schema_baseline!/1)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Raises when `table`'s `id` is a legacy integer PK (the drift `reset_baseline/0`
+  heals), otherwise returns `:ok`. `table` defaults to the `terms_versions`
+  sentinel. Public for testing.
+  """
+  def verify_schema_baseline!(repo, table \\ "terms_versions") do
+    if legacy_integer_pk?(repo, table) do
+      raise """
+      Schema baseline check FAILED: `#{table}.id` is a legacy integer column, but \
+      the code expects a uuid PK (PG18/uuidv7 baseline). This database predates the \
+      uuidv7 cutover and was never wiped/recreated — an in-place engine upgrade \
+      preserves data and silently skips the baseline replay (the 2026-06-11 incident).
+
+      Remedy: deploy once with ENGRAM_DB_RESET_BASELINE=true (DESTROYS ALL DATA, \
+      replays the uuid baseline), or write an ALTER ... TYPE uuid data migration if \
+      the data must be kept.
+
+      See docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md\
+      """
+    end
+
+    :ok
+  end
+
   defp do_prepare_database(repo) do
     repo.query!(@create_engram_app_role_sql, [])
     repo.query!(@grant_schema_usage_sql, [])
