@@ -86,6 +86,11 @@ services:
       # which sets CI=true automatically.)
       CI: "true"
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
+      # PreAuthRateLimit (the 401-loop defense in front of /api/notes etc.)
+      # defaults to 600 req/60s per bucket — bulk/rapid E2E writes (test_77
+      # bulk-sync ~1000 notes, test_78 hash-update) burst past it → flaky 429s.
+      # Same CI=true gating as the auth override (runtime.exs).
+      PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path

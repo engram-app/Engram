@@ -2348,6 +2348,10 @@ jobs:
           # past it on /api/auth/register → 429s. Matches the value already
           # set in docker-compose.ci-local.yml for the e2e-local job.
           RATE_LIMIT_AUTH_OVERRIDE: "1000"
+          # Same for PreAuthRateLimit (vault pipeline, default 600 req/60s):
+          # browser suites that create notes burst /api/notes past it → 429s.
+          # CI=true is set automatically by the GitHub runner, so it's honored.
+          PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
           # Production self-host default is invite_only; pin "open" so the
           # Playwright fixtures (which register multiple users) don't 403 with
           # invite_required. Matches docker-compose.ci-local.yml for e2e-local.

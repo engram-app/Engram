@@ -27,7 +27,35 @@ defmodule Engram.RuntimeConfig do
   @spec rate_limit_auth_override((String.t() -> String.t() | nil)) ::
           {:ok, integer()} | {:ignored, String.t()} | :none
   def rate_limit_auth_override(getenv) when is_function(getenv, 1) do
-    case getenv.("RATE_LIMIT_AUTH_OVERRIDE") do
+    ci_gated_int_override(getenv, "RATE_LIMIT_AUTH_OVERRIDE")
+  end
+
+  @doc """
+  Decides whether the `PRE_AUTH_RATE_LIMIT_OVERRIDE` env var should loosen the
+  pre-auth (vault-pipeline) rate limit — the 401-loop defense in front of
+  `/api/notes`, `/api/search`, etc. (`EngramWeb.Plugs.PreAuthRateLimit`).
+
+  Same contract and CI-gating as `rate_limit_auth_override/1`: the override only
+  exists so bulk/rapid E2E stacks don't 429 themselves (e.g. `test_77` bulk-sync
+  pushing ~1000 notes through the default 600 req/60s bucket). Gated on `CI=true`
+  so a stray `PRE_AUTH_RATE_LIMIT_OVERRIDE` in a prod task def can never weaken
+  the defense — production never sets `CI=true`.
+
+    * `{:ok, integer}`  — present and `CI=true`: apply it.
+    * `{:ignored, raw}` — present but not in CI: do NOT apply; the caller logs.
+    * `:none`           — absent or blank.
+  """
+  @spec pre_auth_rate_limit_override((String.t() -> String.t() | nil)) ::
+          {:ok, integer()} | {:ignored, String.t()} | :none
+  def pre_auth_rate_limit_override(getenv) when is_function(getenv, 1) do
+    ci_gated_int_override(getenv, "PRE_AUTH_RATE_LIMIT_OVERRIDE")
+  end
+
+  # Shared rule: an integer override env var is honored only when `CI=true`,
+  # so a stray copy into a prod task def is inert. Returns {:ok, int} in CI,
+  # {:ignored, raw} when present outside CI, or :none when absent/blank.
+  defp ci_gated_int_override(getenv, var) do
+    case getenv.(var) do
       nil -> :none
       "" -> :none
       raw -> if getenv.("CI") == "true", do: {:ok, String.to_integer(raw)}, else: {:ignored, raw}
