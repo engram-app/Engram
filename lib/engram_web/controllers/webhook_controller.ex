@@ -4,6 +4,7 @@ defmodule EngramWeb.WebhookController do
   alias Engram.Auth.Clerk.Webhook, as: ClerkWebhook
   alias Engram.Billing
   alias Engram.Email.Suppression
+  alias Engram.Webhooks.Idempotency, as: WebhookIdempotency
   alias Engram.Webhooks.Svix
   alias EngramWeb.Webhooks.PostHogForwarder
 
@@ -18,9 +19,18 @@ defmodule EngramWeb.WebhookController do
          {:ok, payload} <- read_body_once(conn),
          :ok <- Svix.verify(id, ts, payload, sig_header, clerk_webhook_secret()) do
       event = Jason.decode!(payload)
-      _ = ClerkWebhook.handle(event)
-      _ = PostHogForwarder.forward_clerk_event(event)
-      json(conn, %{status: "ok"})
+
+      case WebhookIdempotency.check(:clerk, id) do
+        :duplicate ->
+          Logger.info("clerk_webhook_duplicate")
+          json(conn, %{status: "ok"})
+
+        :proceed ->
+          _ = ClerkWebhook.handle(event)
+          _ = PostHogForwarder.forward_clerk_event(event)
+          _ = WebhookIdempotency.mark_processed(:clerk, id)
+          json(conn, %{status: "ok"})
+      end
     else
       {:error, reason} ->
         conn |> put_status(400) |> json(%{error: to_string(reason)})
@@ -43,66 +53,80 @@ defmodule EngramWeb.WebhookController do
 
       Logger.info("paddle_webhook_received")
 
-      response =
-        :telemetry.span(
-          [:engram, :paddle, :webhook],
-          %{event_type: event_type, event_id: event_id},
-          fn ->
-            try do
-              case Billing.upsert_from_paddle_event(event) do
-                {:ok, result} = ok ->
-                  _ = PostHogForwarder.forward_paddle_event(event, result)
-                  {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
-
-                {:error, reason} = err ->
-                  Logger.error("paddle_webhook_handler_error",
-                    reason: format_reason(reason)
-                  )
-
-                  {err, %{event_type: event_type, event_id: event_id, result: :error}}
-              end
-            rescue
-              error ->
-                # If upsert_from_paddle_event/1 raises (Repo down, behaviour
-                # mis-wired, malformed payload that escapes pattern match):
-                # log structurally with stacktrace, capture in Sentry, then
-                # surface as {:error, :exception} so the :telemetry stop
-                # event fires with result: :error (instead of :exception,
-                # which dashboards built on stop.duration miss). Silent-200
-                # ack still goes to Paddle; reconciliation catches any
-                # resulting drift within 24h.
-                stacktrace = __STACKTRACE__
-
-                Logger.error("paddle_webhook_handler_exception",
-                  reason: Exception.message(error),
-                  kind: error.__struct__
-                )
-
-                _ =
-                  Sentry.capture_exception(error,
-                    stacktrace: stacktrace,
-                    extra: %{event_type: event_type, event_id: event_id}
-                  )
-
-                {{:error, :exception},
-                 %{event_type: event_type, event_id: event_id, result: :error}}
-            end
-          end
-        )
-
-      case response do
-        {:ok, _} ->
-          Logger.info("paddle_webhook_ok")
+      case WebhookIdempotency.check(:paddle, event_id) do
+        :duplicate ->
+          Logger.info("paddle_webhook_duplicate")
           json(conn, %{status: "ok"})
 
-        {:error, _} ->
-          json(conn, %{status: "ok"})
+        :proceed ->
+          handle_paddle_event(conn, event, event_type, event_id)
       end
     else
       {:error, reason} ->
         conn
         |> put_status(400)
         |> json(%{error: to_string(reason)})
+    end
+  end
+
+  defp handle_paddle_event(conn, event, event_type, event_id) do
+    response =
+      :telemetry.span(
+        [:engram, :paddle, :webhook],
+        %{event_type: event_type, event_id: event_id},
+        fn ->
+          try do
+            case Billing.upsert_from_paddle_event(event) do
+              {:ok, result} = ok ->
+                _ = PostHogForwarder.forward_paddle_event(event, result)
+                {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
+
+              {:error, reason} = err ->
+                Logger.error("paddle_webhook_handler_error",
+                  reason: format_reason(reason)
+                )
+
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+            end
+          rescue
+            error ->
+              # If upsert_from_paddle_event/1 raises (Repo down, behaviour
+              # mis-wired, malformed payload that escapes pattern match):
+              # log structurally with stacktrace, capture in Sentry, then
+              # surface as {:error, :exception} so the :telemetry stop
+              # event fires with result: :error (instead of :exception,
+              # which dashboards built on stop.duration miss). Silent-200
+              # ack still goes to Paddle; reconciliation catches any
+              # resulting drift within 24h.
+              stacktrace = __STACKTRACE__
+
+              Logger.error("paddle_webhook_handler_exception",
+                reason: Exception.message(error),
+                kind: error.__struct__
+              )
+
+              _ =
+                Sentry.capture_exception(error,
+                  stacktrace: stacktrace,
+                  extra: %{event_type: event_type, event_id: event_id}
+                )
+
+              {{:error, :exception},
+               %{event_type: event_type, event_id: event_id, result: :error}}
+          end
+        end
+      )
+
+    case response do
+      {:ok, _} ->
+        Logger.info("paddle_webhook_ok")
+        # Mark processed only on success so a transient failure stays eligible
+        # for Paddle's retry.
+        _ = WebhookIdempotency.mark_processed(:paddle, event_id)
+        json(conn, %{status: "ok"})
+
+      {:error, _} ->
+        json(conn, %{status: "ok"})
     end
   end
 

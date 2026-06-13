@@ -164,6 +164,43 @@ defmodule EngramWeb.WebhookControllerTest do
       assert sub.custom_data["affiliate_ref"] == "rf_first"
     end
 
+    test "a replayed event_id short-circuits before the handler runs", %{conn: _conn} do
+      user = insert(:user)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :paddle, :webhook, :stop]])
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.created",
+          "event_id" => "ntf_replay_once",
+          "data" => %{
+            "id" => "sub_replay_once",
+            "status" => "trialing",
+            "customer_id" => "ctm_replay_once",
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+            "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
+            "custom_data" => %{"user_id" => user.id}
+          }
+        })
+
+      send_signed = fn ->
+        ts = System.system_time(:second)
+
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("paddle-signature", "ts=#{ts};h1=#{sign(ts, payload)}")
+        |> post("/webhooks/paddle", payload)
+      end
+
+      assert json_response(send_signed.(), 200)["status"] == "ok"
+      assert json_response(send_signed.(), 200)["status"] == "ok"
+
+      # The handler span fires exactly once — the replay was deduped before it.
+      assert_received {[:engram, :paddle, :webhook, :stop], ^ref, _,
+                       %{event_id: "ntf_replay_once"}}
+
+      refute_received {[:engram, :paddle, :webhook, :stop], ^ref, _, _}
+    end
+
     test "subscription.canceled before subscription.created returns 200 without crashing", %{
       conn: conn
     } do

@@ -90,6 +90,19 @@ defmodule EngramWeb.ClerkWebhookTest do
       assert user.normalized_email == "newuser@gmail.com"
     end
 
+    test "a replayed svix-id short-circuits before the handler runs", %{conn: conn} do
+      # First delivery (svix-id evt_idem) creates user_idem_a.
+      first = clerk_user_created_payload("user_idem_a", "idem.a@gmail.com")
+      assert json_response(post_clerk(conn, "evt_idem", first), 200)["status"] == "ok"
+      assert {:ok, _} = Accounts.find_by_external_id("user_idem_a")
+
+      # A second, DIFFERENT payload re-using the SAME svix-id must be treated
+      # as a replay and never reach the handler — so user_idem_b is not created.
+      second = clerk_user_created_payload("user_idem_b", "idem.b@gmail.com")
+      assert json_response(post_clerk(build_conn(), "evt_idem", second), 200)["status"] == "ok"
+      assert {:error, :user_not_found} = Accounts.find_by_external_id("user_idem_b")
+    end
+
     test "rejects and calls Clerk API delete when normalized email duplicates existing user",
          %{conn: conn} do
       # Existing user normalized form is "mefoo@gmail.com". Incoming alias
