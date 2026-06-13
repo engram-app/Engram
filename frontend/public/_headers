@@ -1,0 +1,22 @@
+# Cloudflare Workers Assets response headers for app.engram.page (saas).
+# Served by the Worker-assets pipeline (wrangler.jsonc assets.directory=./dist);
+# copied here from public/ at build time. Harmless in the self-host build
+# (priv/static/app) — Phoenix doesn't consume this file.
+#
+# The finding: the Cloudflare-served SPA origin had NO CSP / framing / sniff /
+# referrer protection (EngramWeb.CSP only covers Phoenix-served responses, not
+# the Worker-served app shell).
+#
+# Rollout note — CSP is shipped as **Report-Only** on purpose. A wrong/too-tight
+# CSP would silently break Clerk / Paddle / PostHog / Sentry. Report-Only never
+# blocks; it only surfaces violations (browser devtools, and a collector if
+# report-to is wired). Validate via a browser smoke of sign-in + checkout +
+# search, confirm zero violations, THEN rename the header to
+# `Content-Security-Policy` to enforce. The other four headers below are safe to
+# enforce immediately.
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(self "https://*.paddle.com")
+  Content-Security-Policy-Report-Only: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://clerk.engram.page https://*.clerk.accounts.dev https://cdn.paddle.com https://*.paddle.com https://us-assets.i.posthog.com https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' https://api.engram.page https://clerk.engram.page https://*.clerk.accounts.dev https://us.i.posthog.com https://us-assets.i.posthog.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.paddle.com https://cloudflareinsights.com; frame-src 'self' https://*.paddle.com https://clerk.engram.page https://challenges.cloudflare.com
