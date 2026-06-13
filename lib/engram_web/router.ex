@@ -163,6 +163,11 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Gate deleted (410) / suspended (403) accounts off the management plane.
+      # A user soft-deleted by the inactivity sweep or admin-suspended still
+      # holds a valid JWT; without this they could mint API keys, CRUD vaults,
+      # and change billing until token expiry.
+      EngramWeb.Plugs.AccountLifecycle,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireApiRpsBudget
     ]
@@ -235,6 +240,7 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.AccountLifecycle,
       EngramWeb.Plugs.RotationLockCheck
     ]
 
