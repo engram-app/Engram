@@ -440,8 +440,6 @@ defmodule EngramWeb.NotesController do
     }
   end
 
-  defp change_json(change, fields \\ :all)
-
   defp change_json(change, :meta) do
     %{
       id: change.id,
