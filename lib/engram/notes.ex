@@ -976,19 +976,35 @@ defmodule Engram.Notes do
     |> mark_duplicate_paths()
   end
 
+  # Marks intra-batch duplicates as per-note errors: by sanitized-path HMAC
+  # (second write would be an update-of-uncommitted-row) and by client id
+  # (two rows with one PK in a single insert_all raises "cannot affect row
+  # a second time" even under ON CONFLICT, aborting the whole batch).
   defp mark_duplicate_paths(entries) do
     {marked, _seen} =
-      Enum.map_reduce(entries, MapSet.new(), fn entry, seen ->
+      Enum.map_reduce(entries, {MapSet.new(), MapSet.new()}, fn entry, {paths, ids} ->
         case entry do
           %{result: nil, path_hmac: hmac} ->
-            if MapSet.member?(seen, hmac) do
-              {%{entry | result: {:error, %{path: ["duplicate path in batch"]}}}, seen}
-            else
-              {entry, MapSet.put(seen, hmac)}
+            client_id =
+              case entry.client_id && Ecto.UUID.cast(entry.client_id) do
+                {:ok, valid} -> valid
+                _ -> nil
+              end
+
+            cond do
+              MapSet.member?(paths, hmac) ->
+                {%{entry | result: {:error, %{path: ["duplicate path in batch"]}}}, {paths, ids}}
+
+              client_id && MapSet.member?(ids, client_id) ->
+                {%{entry | result: {:error, %{id: ["duplicate id in batch"]}}}, {paths, ids}}
+
+              true ->
+                ids = if client_id, do: MapSet.put(ids, client_id), else: ids
+                {entry, {MapSet.put(paths, hmac), ids}}
             end
 
           other ->
-            {other, seen}
+            {other, {paths, ids}}
         end
       end)
 
@@ -1025,10 +1041,37 @@ defmodule Engram.Notes do
         process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
       end)
 
-    inserted_count = length(insert_rows)
+    # on_conflict: :nothing — a PK collision (client-supplied id already in
+    # the DB, possibly cross-tenant) or a path-unique race degrades to a
+    # per-note error below instead of aborting the whole batch with a raise.
+    {entries, inserted_count} =
+      case insert_rows do
+        [] ->
+          {entries, 0}
+
+        rows ->
+          {_count, returned} =
+            Repo.insert_all(Note, Enum.reverse(rows), on_conflict: :nothing, returning: [:id])
+
+          inserted_ids = MapSet.new(returned, & &1.id)
+
+          entries =
+            Enum.map(entries, fn
+              %{result: {:ok, %{prev_hash: nil, id: id}}} = entry ->
+                if MapSet.member?(inserted_ids, id) do
+                  entry
+                else
+                  %{entry | result: {:error, %{id: ["already exists"]}}}
+                end
+
+              entry ->
+                entry
+            end)
+
+          {entries, MapSet.size(inserted_ids)}
+      end
 
     if inserted_count > 0 do
-      {^inserted_count, nil} = Repo.insert_all(Note, Enum.reverse(insert_rows))
       :ok = UsageMeters.inc_notes_count(user.id, inserted_count)
     end
 

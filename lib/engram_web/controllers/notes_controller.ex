@@ -210,6 +210,13 @@ defmodule EngramWeb.NotesController do
   # change's updated_at when has_more, "now" otherwise. The since filter is
   # inclusive (>=), so the next poll resumes exactly at the boundary (the
   # boundary row repeats once; applies are idempotent).
+  #
+  # Bound: legacy convergence assumes fewer than `limit` rows share one
+  # updated_at microsecond — a longer same-usec run would re-serve the same
+  # page forever. Server-side bulk writes stamp at most 100 rows per `now`
+  # (batch upsert cap) and legacy clients can't lower the 500 default, so
+  # the run length stays well under the page size. Revisit if a bulk path
+  # ever writes >500 rows in one timestamp.
   defp changes_server_time(changes, true) when changes != [] do
     changes |> List.last() |> Map.fetch!(:updated_at) |> DateTime.to_iso8601()
   end

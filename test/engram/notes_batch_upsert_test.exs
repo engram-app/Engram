@@ -185,6 +185,46 @@ defmodule Engram.NotesBatchUpsertTest do
       assert note.content == "first"
     end
 
+    test "duplicate client ids within a batch error after the first occurrence", %{
+      user: user,
+      vault: vault
+    } do
+      shared_id = Ecto.UUID.generate()
+
+      notes = [
+        %{"path" => "one.md", "content" => "x", "mtime" => 1.0, "id" => shared_id},
+        %{"path" => "two.md", "content" => "x", "mtime" => 1.0, "id" => shared_id}
+      ]
+
+      assert {:ok, %{results: [first, second]}} = Notes.batch_upsert_notes(user, vault, notes)
+      assert %{status: :ok} = first
+      assert %{status: :error} = second
+
+      assert {:ok, _} = Notes.get_note(user, vault, "one.md")
+      assert {:error, :not_found} = Notes.get_note(user, vault, "two.md")
+    end
+
+    test "client id colliding with an existing row degrades to a per-note error", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, existing} =
+        Notes.upsert_note(user, vault, %{"path" => "taken.md", "content" => "x", "mtime" => 1.0})
+
+      notes = [
+        %{"path" => "thief.md", "content" => "x", "mtime" => 1.0, "id" => existing.id},
+        %{"path" => "fine.md", "content" => "x", "mtime" => 1.0}
+      ]
+
+      assert {:ok, %{results: [collided, ok]}} = Notes.batch_upsert_notes(user, vault, notes)
+      assert %{path: "thief.md", status: :error} = collided
+      assert %{path: "fine.md", status: :ok} = ok
+
+      # The meter only counts rows that actually landed.
+      assert UsageMeters.notes_count(user.id) == 2
+      assert {:error, :not_found} = Notes.get_note(user, vault, "thief.md")
+    end
+
     test "whole batch is rejected when inserts would exceed the notes cap", %{
       user: user,
       vault: vault
