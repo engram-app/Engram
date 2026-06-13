@@ -29,4 +29,34 @@ defmodule Engram.ReleaseTest do
       refute Release.legacy_integer_pk?(Repo, "table_that_does_not_exist")
     end
   end
+
+  describe "verify_schema_baseline!/2" do
+    test "returns :ok for the current uuid `terms_versions` schema" do
+      assert :ok == Release.verify_schema_baseline!(Repo, "terms_versions")
+    end
+
+    test "returns :ok when the sentinel table is absent (fresh DB)" do
+      assert :ok == Release.verify_schema_baseline!(Repo, "table_that_does_not_exist")
+    end
+
+    test "raises an actionable error on a legacy integer-PK table" do
+      Repo.query!("CREATE TABLE baseline_probe_legacy (id bigint NOT NULL)", [])
+
+      err =
+        assert_raise RuntimeError, fn ->
+          Release.verify_schema_baseline!(Repo, "baseline_probe_legacy")
+        end
+
+      # Names the offending column and the documented remedy so the operator
+      # gets a one-line diagnosis instead of a cryptic Ecto.UUID crash-loop.
+      assert err.message =~ "baseline_probe_legacy.id"
+      assert err.message =~ "ENGRAM_DB_RESET_BASELINE"
+    end
+  end
+
+  describe "verify_schema_baseline/0" do
+    test "returns :ok on a healthy uuid schema (all configured repos)" do
+      assert :ok == Release.verify_schema_baseline()
+    end
+  end
 end

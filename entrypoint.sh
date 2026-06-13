@@ -30,4 +30,11 @@ fi
 /app/bin/engram eval "Engram.Release.prepare_database()"
 /app/bin/engram eval "Engram.Release.migrate()"
 
+# Fail-loud schema-baseline guard. If the DB silently kept its legacy
+# integer-PK shape (an in-place engine upgrade that skipped the baseline
+# replay — the 2026-06-11 incident), this exits non-zero with an actionable
+# message HERE, instead of the BEAM crash-looping on a cryptic Ecto.UUID
+# load error during boot. set -e turns the non-zero eval into a clean abort.
+/app/bin/engram eval "Engram.Release.verify_schema_baseline()"
+
 exec "$@"
