@@ -85,4 +85,32 @@ defmodule Engram.RuntimeConfigTest do
       assert RuntimeConfig.validate_saas_origins!(:local, nil, false) == :ok
     end
   end
+
+  describe "database_ssl/2" do
+    test "returns [] when DATABASE_SSL is off (self-host / local pg)" do
+      assert RuntimeConfig.database_ssl(getenv(%{}), "db.local") == []
+      assert RuntimeConfig.database_ssl(getenv(%{"DATABASE_SSL" => "false"}), "db.local") == []
+    end
+
+    test "defaults to verify_none when SSL is on but no mode set (unchanged prod behavior)" do
+      env = getenv(%{"DATABASE_SSL" => "true"})
+      assert [ssl: opts] = RuntimeConfig.database_ssl(env, "db.rds.amazonaws.com")
+      assert opts[:verify] == :verify_none
+      refute Keyword.has_key?(opts, :cacerts)
+    end
+
+    test "verify-full enables peer verification with the OS trust store + SNI + hostname check" do
+      env = getenv(%{"DATABASE_SSL" => "true", "DATABASE_SSL_MODE" => "verify-full"})
+      assert [ssl: opts] = RuntimeConfig.database_ssl(env, "db.rds.amazonaws.com")
+      assert opts[:verify] == :verify_peer
+      assert opts[:server_name_indication] == ~c"db.rds.amazonaws.com"
+      assert Keyword.has_key?(opts, :cacerts)
+      assert Keyword.has_key?(opts, :customize_hostname_check)
+    end
+
+    test "verify-full is ignored when SSL itself is off (must opt into TLS first)" do
+      env = getenv(%{"DATABASE_SSL_MODE" => "verify-full"})
+      assert RuntimeConfig.database_ssl(env, "db.rds.amazonaws.com") == []
+    end
+  end
 end

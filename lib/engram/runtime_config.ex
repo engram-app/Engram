@@ -90,4 +90,46 @@ defmodule Engram.RuntimeConfig do
   end
 
   def validate_saas_origins!(_auth_provider, _phx_hosts, _ci?), do: :ok
+
+  @doc """
+  Builds the `Engram.Repo` SSL options from env.
+
+    * `DATABASE_SSL` not in `~w(true 1)` → `[]` (no TLS; self-host/local pg).
+    * SSL on, `DATABASE_SSL_MODE` unset/other → `[ssl: [verify: :verify_none]]`
+      — the long-standing behavior, kept as the default so merging this can't
+      break a running deploy.
+    * SSL on, `DATABASE_SSL_MODE` in `verify-full`/`verify-peer` →
+      `verify: :verify_peer` against the OS trust store
+      (`:public_key.cacerts_get/0`; the runtime image ships `ca-certificates`,
+      which includes the Amazon Root CA that AWS RDS certs chain to), with SNI
+      and HTTPS-style hostname verification. This closes the MITM gap from
+      `verify_none`, but is **opt-in** — the operator flips
+      `DATABASE_SSL_MODE=verify-full` after confirming the chain validates on
+      staging, since a CA/SNI mismatch would otherwise block DB connections.
+
+  `db_host` is the Postgres host (from `DATABASE_URL`), used for SNI +
+  hostname-check.
+  """
+  @spec database_ssl((String.t() -> String.t() | nil), String.t() | nil) :: keyword()
+  def database_ssl(getenv, db_host) when is_function(getenv, 1) do
+    if getenv.("DATABASE_SSL") in ["true", "1"] do
+      [ssl: ssl_opts(getenv.("DATABASE_SSL_MODE"), db_host)]
+    else
+      []
+    end
+  end
+
+  defp ssl_opts(mode, db_host) when mode in ["verify-full", "verify-peer"] do
+    [
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      server_name_indication: to_charlist(db_host || ""),
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+      ],
+      depth: 4
+    ]
+  end
+
+  defp ssl_opts(_mode, _db_host), do: [verify: :verify_none]
 end
