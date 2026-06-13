@@ -10,6 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
+  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
@@ -299,8 +300,8 @@ defmodule Engram.Notes do
             # Funnel telemetry — emit once per real creation so the funnel
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
-              Engram.Observability.PostHog.capture(
-                Engram.Observability.PostHog.distinct_id_for(user),
+              PostHog.capture(
+                PostHog.distinct_id_for(user),
                 "note_created",
                 %{vault_id: vault.id}
               )
@@ -1188,11 +1189,11 @@ defmodule Engram.Notes do
         })
     end
 
-    distinct_id = Engram.Observability.PostHog.distinct_id_for(user)
+    distinct_id = PostHog.distinct_id_for(user)
 
     Enum.each(created, fn _ ->
       :ok =
-        Engram.Observability.PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
+        PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
     end)
 
     :ok
