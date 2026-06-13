@@ -49,11 +49,10 @@ defmodule EngramWeb.Plugs.RateLimit do
   end
 
   defp rate_limit_key(conn) do
-    # Use conn.remote_ip — this is the IP Plug resolved from the actual TCP
-    # connection (or from a trusted proxy via Plug.RewriteOn if configured).
-    # Do NOT trust x-forwarded-for directly: it is client-controlled and
-    # trivially spoofable, making the rate limit bypassable.
-    ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+    # EngramWeb.RemoteIp resolves the real client IP: the trusted
+    # CF-Connecting-IP in prod (behind Cloudflare AOP), else the raw socket IP.
+    # Never trusts x-forwarded-for directly — that is client-spoofable.
+    ip = conn |> EngramWeb.RemoteIp.resolve() |> :inet.ntoa() |> to_string()
     "#{conn.request_path}:#{ip}"
   end
 end

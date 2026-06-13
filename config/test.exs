@@ -6,6 +6,12 @@ import Config
 # The RateLimitTest validates the 10-req limit explicitly, with per-test resets.
 config :engram, :rate_limit_override, 10_000
 
+# Same rationale for the pre-auth (vault-pipeline) limiter: it now covers
+# every vault path, so without a high ceiling the shared 127.0.0.1 test IP
+# would accumulate across ConnCase tests and flake on 429. The dedicated
+# PreAuthRateLimitTest sets its own low override per-test to exercise limits.
+config :engram, :pre_auth_rate_limit_override, 10_000
+
 # T3.5.5 / M3 — boot canary disabled in tests; supervisor start runs
 # before sandbox checkout, and the canary table is per-sandbox. Tests
 # cover BootCanary directly via Engram.Crypto.BootCanaryTest.

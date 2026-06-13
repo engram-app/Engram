@@ -27,6 +27,14 @@ config :engram, EngramWeb.Endpoint,
 # Phoenix can't validate. Channel auth (JWT) is the real security boundary.
 config :engram, :websocket_check_origin, false
 
+# Client-IP resolution for rate limiting. Default-deny: only trust the
+# Cloudflare `CF-Connecting-IP` header where a verified proxy guarantees it
+# (prod, which enforces Cloudflare Authenticated Origin Pulls). Dev, test,
+# self-host, and staging-fastraid are NOT behind Cloudflare+AOP, so they fall
+# back to the raw socket IP. Flipped on in prod via runtime.exs + the
+# TRUST_CF_CONNECTING_IP env var. See EngramWeb.RemoteIp.
+config :engram, :trust_cf_connecting_ip, false
+
 # PromEx — collects BEAM / Phoenix / Ecto / Oban metrics for the Prom-format
 # /metrics endpoint scraped by the Grafana Agent sidecar in prod. We disable
 # the bundled metrics_server (we mount via the router with bearer auth) and
