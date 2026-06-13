@@ -563,25 +563,17 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  # DATABASE_SSL=true enables TLS to the Postgres server. Required by
-  # AWS RDS (pg_hba.conf rejects "no encryption" connections);
-  # self-host MinIO/local Postgres typically has no SSL configured so
-  # default is false. `verify: :verify_none` skips peer cert chain
-  # validation — the RDS root CA isn't bundled into the Alpine image
-  # and traffic is already inside the prod VPC, so peer auth adds no
-  # meaningful confidentiality beyond what TLS-on-the-wire provides.
+  # DATABASE_SSL=true enables TLS to the Postgres server (required by AWS RDS;
+  # self-host local pg usually has none, so default off). Verification mode is
+  # DATABASE_SSL_MODE: unset → `verify_none` (the long-standing default, kept so
+  # this can't break a running deploy); `verify-full` → `verify_peer` against
+  # the OS trust store with SNI + hostname check, closing the in-VPC MITM gap.
+  # verify-full is opt-in: flip it once the chain is confirmed on staging.
+  # See Engram.RuntimeConfig.database_ssl/2.
   #
-  # Postgrex 0.20+ accepts the SSL opt list directly under `:ssl` (a
-  # keyword list both enables TLS and supplies the opts); the older
-  # `:ssl_opts` companion key was deprecated and emits one
-  # `:ssl_opts is deprecated, pass opts to :ssl instead` warning per
-  # connection start.
+  # Postgrex 0.20+ accepts the SSL opt list directly under `:ssl`.
   database_ssl_opts =
-    if System.get_env("DATABASE_SSL") in ~w(true 1) do
-      [ssl: [verify: :verify_none]]
-    else
-      []
-    end
+    Engram.RuntimeConfig.database_ssl(&System.get_env/1, URI.parse(database_url).host)
 
   config :engram,
          Engram.Repo,
