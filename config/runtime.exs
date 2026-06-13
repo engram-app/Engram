@@ -229,10 +229,24 @@ if config_env() != :test do
   end
 end
 
-# Rate limit override for CI E2E tests (only effective when CI=true).
-# Production deploys never set CI=true, so this is unreachable in prod.
-if override = System.get_env("RATE_LIMIT_AUTH_OVERRIDE") do
-  config :engram, :rate_limit_auth_override, String.to_integer(override)
+# Rate-limit override for CI/E2E stacks only, gated on CI=true so a stray
+# RATE_LIMIT_AUTH_OVERRIDE in a prod task def can never weaken the auth
+# limiter. CI stacks (docker-compose.ci*.yml, the Playwright runner) set
+# CI=true; production never does. See Engram.RuntimeConfig.
+case Engram.RuntimeConfig.rate_limit_auth_override(&System.get_env/1) do
+  {:ok, limit} ->
+    config :engram, :rate_limit_auth_override, limit
+
+  {:ignored, raw} ->
+    require Logger
+
+    Logger.warning(
+      "RATE_LIMIT_AUTH_OVERRIDE=#{raw} ignored: the auth rate-limit override " <>
+        "is only honored when CI=true."
+    )
+
+  :none ->
+    :ok
 end
 
 # Clerk auth (only required when AUTH_PROVIDER=clerk)
@@ -613,12 +627,22 @@ if config_env() == :prod do
     secret_key_base: secret_key_base
 
   # CORS and WebSocket origin — only lock down when PHX_HOST is explicitly set.
-  # Without it (CI, local dev), defaults apply: CORS allows "*", WS allows all.
+  # Without it, defaults apply: CORS allows "*", WS allows all. That permissive
+  # default is fine for self-host (single-tenant, same-origin), but a saas
+  # deploy (AUTH_PROVIDER=clerk) MUST have PHX_HOST or it would answer
+  # Access-Control-Allow-Origin: * and accept any WS Origin — so we fail closed
+  # there (see Engram.RuntimeConfig.validate_saas_origins!/2).
   # See Engram.HostOrigins for parsing rules (CSV, scheme expansion, dedup).
   #
   # ENGRAM_SAAS_FRONTEND_ORIGINS appends extra origins (comma-separated) for the
   # Cloudflare Pages saas frontend at app.engram.page + its preview deploys at
   # *.engram-frontend.pages.dev. Unset on selfhost (same-origin) → no-op.
+  Engram.RuntimeConfig.validate_saas_origins!(
+    auth_provider,
+    phx_hosts,
+    System.get_env("CI") == "true"
+  )
+
   if phx_hosts do
     extra_origins =
       case System.get_env("ENGRAM_SAAS_FRONTEND_ORIGINS") do
