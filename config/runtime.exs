@@ -201,20 +201,32 @@ config :engram,
 
 # Email transactional provider (pricing v2 §C). Default: NoOp for self-host;
 # Resend when RESEND_API_KEY is set.
-if api_key = System.get_env("RESEND_API_KEY") do
-  config :engram, :email_provider, Engram.Email.Resend
-  config :engram, :resend_api_key, api_key
-end
+#
+# Gated to non-test envs so a developer's shell-exported RESEND_API_KEY
+# can't silently flip `mix test` from NoOp to a real Resend send. test.exs
+# pins :email_provider to Engram.Email.Resend's NoOp sibling; runtime.exs
+# loads AFTER test.exs and would otherwise override it, causing unit tests
+# that exercise Mailer paths (profile_test, users_controller_test calling
+# delete_self → Lifecycle.soft_delete → Mailer.send_account_deleted_notice)
+# to fire real emails to test-fixture addresses. Mirrors the test guard
+# already applied to storage (line 26), sentry (line 312), and key_provider
+# (line 396) blocks.
+if config_env() != :test do
+  if api_key = System.get_env("RESEND_API_KEY") do
+    config :engram, :email_provider, Engram.Email.Resend
+    config :engram, :resend_api_key, api_key
+  end
 
-if email_from = System.get_env("EMAIL_FROM") do
-  config :engram, :email_from, email_from
-end
+  if email_from = System.get_env("EMAIL_FROM") do
+    config :engram, :email_from, email_from
+  end
 
-# Resend bounce/complaint webhook secret (whsec_*), verifies inbound svix
-# signatures at POST /webhooks/resend. Without it the endpoint rejects all
-# events (cannot verify → cannot accept).
-if wh_secret = System.get_env("RESEND_WEBHOOK_SECRET") do
-  config :engram, :resend_webhook_secret, String.trim(wh_secret)
+  # Resend bounce/complaint webhook secret (whsec_*), verifies inbound svix
+  # signatures at POST /webhooks/resend. Without it the endpoint rejects all
+  # events (cannot verify → cannot accept).
+  if wh_secret = System.get_env("RESEND_WEBHOOK_SECRET") do
+    config :engram, :resend_webhook_secret, String.trim(wh_secret)
+  end
 end
 
 # Rate limit override for CI E2E tests (only effective when CI=true).
