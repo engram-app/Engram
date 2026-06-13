@@ -490,6 +490,14 @@ if config_env() == :prod do
   # See Engram.SpaIntegrity and docs/context/docker-build-cache-pitfalls.md.
   config :engram, :spa_integrity_check_enabled, true
 
+  # Trust Cloudflare's CF-Connecting-IP for rate-limit client-IP resolution.
+  # Safe ONLY because prod enforces Cloudflare Authenticated Origin Pulls
+  # (AOP `verify`), which guarantees every request transited Cloudflare. The
+  # operator sets TRUST_CF_CONNECTING_IP=true in the prod ECS task def; default
+  # false keeps prod on the raw socket IP until then. If AOP is ever disabled,
+  # unset this. See EngramWeb.RemoteIp.
+  config :engram, :trust_cf_connecting_ip, System.get_env("TRUST_CF_CONNECTING_IP") == "true"
+
   # Telemetry/log HMAC key for hashing user ids in metric labels + logs.
   # Distinct from any encryption key. SaaS prod + staging set this via SOPS so
   # `user_id_hmac` correlates across restarts and deployments. CI test images

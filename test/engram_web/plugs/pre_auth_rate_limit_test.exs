@@ -1,32 +1,33 @@
-defmodule EngramWeb.Plugs.NotesRateLimitTest do
+defmodule EngramWeb.Plugs.PreAuthRateLimitTest do
   @moduledoc """
-  Tests for the application-layer rate limiter that defends `/api/notes/*`
-  against 401-loop attacks. Cloudflare cannot count response-conditional
-  (auth-rejected) requests on the Free tier, so the defense lives in the
-  app layer. See engram-app/Engram#357 / engram-infra#361.
+  Tests for the application-layer rate limiter that defends the vault-scoped
+  pipeline against 401-loop attacks. Cloudflare cannot count
+  response-conditional (auth-rejected) requests on the Free tier, so the
+  defense lives in the app layer. See engram-app/Engram#357 / engram-infra#361.
 
   The plug MUST run before auth so that 401-failed requests still consume
-  bucket capacity — that is the whole point.
+  bucket capacity — that is the whole point. It covers every vault path, with
+  a per-path-category bucket so families (notes, search, …) don't compete.
   """
   use EngramWeb.ConnCase, async: false
 
   import Plug.Conn
 
-  alias EngramWeb.Plugs.NotesRateLimit
+  alias EngramWeb.Plugs.PreAuthRateLimit
 
   @test_limit 5
   @period_ms 60_000
 
   setup_all do
     on_exit(fn ->
-      Application.put_env(:engram, :notes_rate_limit_override, nil)
+      Application.put_env(:engram, :pre_auth_rate_limit_override, nil)
     end)
 
     :ok
   end
 
   setup do
-    Application.put_env(:engram, :notes_rate_limit_override, @test_limit)
+    Application.put_env(:engram, :pre_auth_rate_limit_override, @test_limit)
     EngramWeb.RateLimiter.reset_buckets!()
     :ok
   end
@@ -36,8 +37,8 @@ defmodule EngramWeb.Plugs.NotesRateLimitTest do
   # ---------------------------------------------------------------------------
 
   defp run_plug(conn) do
-    opts = NotesRateLimit.init(limit: @test_limit, period: @period_ms)
-    NotesRateLimit.call(conn, opts)
+    opts = PreAuthRateLimit.init(limit: @test_limit, period: @period_ms)
+    PreAuthRateLimit.call(conn, opts)
   end
 
   defp notes_conn(opts \\ []) do
@@ -81,11 +82,38 @@ defmodule EngramWeb.Plugs.NotesRateLimitTest do
     assert {:ok, %{"error" => "rate_limited"}} = Jason.decode(conn.resp_body)
   end
 
-  test "bypasses paths outside /api/notes" do
-    Enum.each(1..(@test_limit * 3), fn _ ->
-      conn = run_plug(notes_conn(path: "/api/health"))
+  test "rate-limits a non-notes vault path (e.g. /api/search)" do
+    Enum.each(1..@test_limit, fn _ ->
+      conn = run_plug(notes_conn(path: "/api/search"))
       refute conn.halted
     end)
+
+    conn = run_plug(notes_conn(path: "/api/search"))
+    assert conn.halted
+    assert conn.status == 429
+  end
+
+  test "different path categories have independent buckets" do
+    # Exhaust the /api/notes bucket for this IP.
+    Enum.each(1..@test_limit, fn _ -> run_plug(notes_conn(path: "/api/notes/x.md")) end)
+    assert run_plug(notes_conn(path: "/api/notes/y.md")).halted
+
+    # /api/search must NOT be starved by the notes bucket — same IP, fresh
+    # category bucket.
+    conn = run_plug(notes_conn(path: "/api/search"))
+    refute conn.halted
+  end
+
+  test "varying the trailing path within a category does not mint fresh buckets" do
+    # /api/notes/a and /api/notes/b share the `api/notes` category bucket, so
+    # an attacker can't reset the limit by changing the filename.
+    Enum.each(1..@test_limit, fn i ->
+      run_plug(notes_conn(path: "/api/notes/file#{i}.md"))
+    end)
+
+    conn = run_plug(notes_conn(path: "/api/notes/another.md"))
+    assert conn.halted
+    assert conn.status == 429
   end
 
   test "different IPs do not share buckets when unauthenticated" do
@@ -182,6 +210,47 @@ defmodule EngramWeb.Plugs.NotesRateLimitTest do
 
     assert conn.halted
     assert conn.status == 429
+  end
+
+  describe "client-IP resolution via CF-Connecting-IP (trust enabled)" do
+    setup do
+      prev = Application.get_env(:engram, :trust_cf_connecting_ip)
+      Application.put_env(:engram, :trust_cf_connecting_ip, true)
+      on_exit(fn -> Application.put_env(:engram, :trust_cf_connecting_ip, prev) end)
+      :ok
+    end
+
+    test "distinct CF-Connecting-IPs behind the same socket IP get distinct buckets" do
+      # The whole #1 fix: in prod every request shares the ALB's socket IP, so
+      # the limiter MUST key on the resolved CF-Connecting-IP instead.
+      exhaust = fn cf_ip ->
+        Enum.each(1..@test_limit, fn _ ->
+          notes_conn()
+          |> put_req_header("cf-connecting-ip", cf_ip)
+          |> run_plug()
+        end)
+      end
+
+      exhaust.("203.0.113.10")
+
+      # A different real client (different CF-Connecting-IP) sharing the same
+      # ALB socket IP is NOT throttled by the first client's bucket.
+      fresh =
+        notes_conn()
+        |> put_req_header("cf-connecting-ip", "203.0.113.20")
+        |> run_plug()
+
+      refute fresh.halted
+
+      # ...but the first client, on its next request, is over the limit.
+      over =
+        notes_conn()
+        |> put_req_header("cf-connecting-ip", "203.0.113.10")
+        |> run_plug()
+
+      assert over.halted
+      assert over.status == 429
+    end
   end
 
   # ---------------------------------------------------------------------------
