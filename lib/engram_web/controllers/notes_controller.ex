@@ -169,7 +169,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:since, {:ok, since, _}} <- {:since, DateTime.from_iso8601(since_str)},
+    with {:ok, since} <- parse_changes_since(since_str),
          {:ok, limit} <- parse_changes_limit(params["limit"]),
          {:ok, fields} <- parse_changes_fields(params["fields"]) do
       opts = [limit: limit, fields: fields]
@@ -188,7 +188,7 @@ defmodule EngramWeb.NotesController do
           conn |> put_status(400) |> json(%{error: "invalid_cursor"})
       end
     else
-      {:since, _} ->
+      {:error, :invalid_since} ->
         conn |> put_status(400) |> json(%{error: "invalid since timestamp"})
 
       {:error, :invalid_limit} ->
@@ -219,6 +219,13 @@ defmodule EngramWeb.NotesController do
   end
 
   @changes_max_limit 500
+
+  defp parse_changes_since(since_str) do
+    case DateTime.from_iso8601(since_str) do
+      {:ok, since, _offset} -> {:ok, since}
+      {:error, _} -> {:error, :invalid_since}
+    end
+  end
 
   defp parse_changes_limit(nil), do: {:ok, @changes_max_limit}
 
