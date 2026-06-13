@@ -19,6 +19,15 @@ PUSH_TIME_BOUND_S = 120
 
 @pytest.mark.asyncio
 async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
+    # Close the sync gate FIRST: every raw write below fires the vault
+    # watcher, and an open gate turns that into 1,000 debounced single-note
+    # auto-pushes — a request storm that exhausts the rate budget and
+    # starves the batch sync this test measures. handleModify short-circuits
+    # while the gate is closed.
+    await cdp_a.evaluate(
+        "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked(true)"
+    )
+
     # Seed 1,000 files on disk, then wait for Obsidian's indexer to see them
     # (raw filesystem writes only reach app.vault.getFiles() once the
     # watcher fires).
@@ -40,9 +49,12 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     else:
         raise TimeoutError(f"Obsidian indexed only {count}/{NOTE_COUNT} bulk files")
 
-    # The PreSync gate blocks engine work until accepted (1,000 new local
-    # files look destructive) — accept it explicitly like push_file_now does.
+    # Re-open the gate the same way a user accepting the PreSync modal does
+    # (persists the fingerprint + flips syncBlocked false).
     await cdp_a.accept_sync_gate()
+    await cdp_a.evaluate(
+        "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked(false)"
+    )
 
     started = time.monotonic()
     result = await cdp_a.trigger_full_sync()
