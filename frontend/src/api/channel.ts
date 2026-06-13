@@ -133,6 +133,43 @@ export function handleNoteChanged(
   for (const listener of listeners) listener(payload)
 }
 
+// Bulk pushes (POST /api/notes/batch) broadcast ONE notes.batch digest
+// (op "upsert", metadata-only entries) instead of N note_changed events.
+// Re-feed each entry through handleNoteChanged so per-note keys invalidate
+// synchronously and list keys ride the same coalescing window.
+export interface NotesBatchPayload {
+  op: string
+  vault_id?: string
+  notes?: Array<{
+    id: string
+    path: string
+    folder?: string
+    title?: string
+    tags?: string[]
+    mtime?: number
+    version?: number
+    updated_at?: string
+    content_hash?: string
+  }>
+}
+
+export function handleNotesBatch(
+  payload: NotesBatchPayload,
+  queryClient: QueryClient,
+  activeVaultId: string,
+): void {
+  if (payload.op !== 'upsert') return
+  if (payload.vault_id !== activeVaultId) return
+
+  for (const note of payload.notes ?? []) {
+    handleNoteChanged(
+      { event_type: 'upsert', vault_id: activeVaultId, ...note },
+      queryClient,
+      activeVaultId,
+    )
+  }
+}
+
 export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
   disconnectChannel()
 
@@ -149,6 +186,10 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 
   channel.on('note_changed', (payload: NoteChangedPayload) => {
     handleNoteChanged(payload, queryClient, vaultId)
+  })
+
+  channel.on('notes.batch', (payload: NotesBatchPayload) => {
+    handleNotesBatch(payload, queryClient, vaultId)
   })
 
   channel

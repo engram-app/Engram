@@ -144,7 +144,9 @@ defmodule EngramWeb.SyncChannel do
         user = socket.assigns.current_user
         vault = socket.assigns.vault
 
-        case Notes.upsert_note(user, vault, params) do
+        # broadcast_from: the pushing socket already holds this content —
+        # excluding it halves the pusher's bandwidth on bulk syncs.
+        case Notes.upsert_note(user, vault, params, broadcast_from: self()) do
           {:ok, note} ->
             reply = %{
               "note" => serialize_note(note),

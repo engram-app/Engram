@@ -161,27 +161,93 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  def changes(conn, %{"since" => since_str}) do
+  # Protocol rev — keyset pagination. Requests without `limit` are still
+  # capped at the server max (500) and gain `has_more`/`next_cursor`; old
+  # plugins see a truncated-but-valid page and converge over successive
+  # polls because they advance `since = server_time`.
+  def changes(conn, %{"since" => since_str} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _} ->
-        {:ok, changes} = Notes.list_changes(user, vault, since)
+    with {:ok, since} <- parse_changes_since(since_str),
+         {:ok, limit} <- parse_changes_limit(params["limit"]),
+         {:ok, fields} <- parse_changes_fields(params["fields"]) do
+      opts = [limit: limit, fields: fields]
+      opts = if params["cursor"], do: Keyword.put(opts, :cursor, params["cursor"]), else: opts
 
-        json(conn, %{
-          changes: Enum.map(changes, &change_json/1),
-          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
+      case Notes.list_changes_page(user, vault, since, opts) do
+        {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}} ->
+          json(conn, %{
+            changes: Enum.map(changes, &change_json(&1, fields)),
+            server_time: changes_server_time(changes, has_more),
+            has_more: has_more,
+            next_cursor: next_cursor
+          })
 
-      {:error, _} ->
+        {:error, :invalid_cursor} ->
+          conn |> put_status(400) |> json(%{error: "invalid_cursor"})
+      end
+    else
+      {:error, :invalid_since} ->
         conn |> put_status(400) |> json(%{error: "invalid since timestamp"})
+
+      {:error, :invalid_limit} ->
+        conn |> put_status(400) |> json(%{error: "invalid_limit"})
+
+      {:error, :invalid_fields} ->
+        conn |> put_status(400) |> json(%{error: "invalid_fields"})
     end
   end
 
   def changes(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: since"})
   end
+
+  # Legacy-client convergence: pre-pagination plugins advance
+  # `since = server_time` after every poll. On a truncated page, "now" would
+  # skip the un-fetched tail forever (silent loss) — so server_time is the
+  # high-water mark this response is COMPLETE through: the last returned
+  # change's updated_at when has_more, "now" otherwise. The since filter is
+  # inclusive (>=), so the next poll resumes exactly at the boundary (the
+  # boundary row repeats once; applies are idempotent).
+  #
+  # Bound: legacy convergence assumes fewer than `limit` rows share one
+  # updated_at microsecond — a longer same-usec run would re-serve the same
+  # page forever. Server-side bulk writes stamp at most 100 rows per `now`
+  # (batch upsert cap) and legacy clients can't lower the 500 default, so
+  # the run length stays well under the page size. Revisit if a bulk path
+  # ever writes >500 rows in one timestamp.
+  defp changes_server_time(changes, true) when changes != [] do
+    changes |> List.last() |> Map.fetch!(:updated_at) |> DateTime.to_iso8601()
+  end
+
+  defp changes_server_time(_changes, _has_more) do
+    DateTime.utc_now() |> DateTime.to_iso8601()
+  end
+
+  @changes_max_limit 500
+
+  defp parse_changes_since(since_str) do
+    case DateTime.from_iso8601(since_str) do
+      {:ok, since, _offset} -> {:ok, since}
+      {:error, _} -> {:error, :invalid_since}
+    end
+  end
+
+  defp parse_changes_limit(nil), do: {:ok, @changes_max_limit}
+
+  defp parse_changes_limit(limit) when is_binary(limit) do
+    case Integer.parse(limit) do
+      {n, ""} when n >= 1 -> {:ok, min(n, @changes_max_limit)}
+      _ -> {:error, :invalid_limit}
+    end
+  end
+
+  defp parse_changes_limit(_), do: {:error, :invalid_limit}
+
+  defp parse_changes_fields(nil), do: {:ok, :all}
+  defp parse_changes_fields("meta"), do: {:ok, :meta}
+  defp parse_changes_fields(_), do: {:error, :invalid_fields}
 
   # ---------------------------------------------------------------------------
   # Batch ops
@@ -197,6 +263,96 @@ defmodule EngramWeb.NotesController do
   # commit succeeds but the broadcast crashes, the cache is already set, so
   # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
   # follow-up (after-commit hook).
+
+  @batch_upsert_max 100
+
+  def batch_upsert(conn, %{"notes" => notes}) when is_list(notes) do
+    cond do
+      length(notes) > @batch_upsert_max ->
+        conn |> put_status(400) |> json(%{error: "too_many_notes", max: @batch_upsert_max})
+
+      not Enum.all?(notes, &is_map/1) ->
+        conn |> put_status(400) |> json(%{error: "invalid_notes"})
+
+      true ->
+        do_batch_upsert(conn, notes)
+    end
+  end
+
+  def batch_upsert(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required param: notes"})
+  end
+
+  defp do_batch_upsert(conn, notes) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    # Per-note size gate (mirrors the single-note 413): oversized entries
+    # become per-note errors instead of failing the whole batch — the other
+    # 99 notes in a bulk sync shouldn't pay for one huge file.
+    {sized, oversized} =
+      notes
+      |> Enum.with_index()
+      |> Enum.split_with(fn {note, _idx} ->
+        byte_size(note["content"] || "") <= @max_note_bytes
+      end)
+
+    case Notes.batch_upsert_notes(user, vault, Enum.map(sized, &elem(&1, 0))) do
+      {:ok, %{results: results}} ->
+        by_index =
+          sized
+          |> Enum.map(&elem(&1, 1))
+          |> Enum.zip(Enum.map(results, &batch_result_json/1))
+          |> Map.new()
+
+        oversized_by_index =
+          Map.new(oversized, fn {note, idx} ->
+            {idx,
+             %{
+               path: note["path"] || "",
+               status: "error",
+               errors: %{content: ["exceeds maximum size of 10MB"]}
+             }}
+          end)
+
+        merged =
+          Enum.map(0..(length(notes) - 1), fn idx ->
+            by_index[idx] || oversized_by_index[idx]
+          end)
+
+        body = %{results: merged}
+        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+        json(conn, body)
+
+      {:error, {:notes_cap_reached, limit, current}} ->
+        EngramWeb.LimitResponse.halt(conn, "notes_cap_exceeded", :notes_cap, limit, current)
+
+      {:error, _reason} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
+    end
+  end
+
+  defp batch_result_json(%{status: :ok} = result) do
+    %{
+      path: result.path,
+      status: "ok",
+      id: result.id,
+      version: result.version,
+      content_hash: result.content_hash,
+      server_path: result.server_path
+    }
+  end
+
+  defp batch_result_json(%{status: :conflict} = result) do
+    %{path: result.path, status: "conflict", server_note: note_json(result.server_note)}
+  end
+
+  defp batch_result_json(%{status: :error} = result) do
+    %{path: result.path, status: "error", errors: batch_errors_json(result.errors)}
+  end
+
+  defp batch_errors_json(%Ecto.Changeset{} = changeset), do: format_errors(changeset)
+  defp batch_errors_json(other), do: other
 
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
@@ -282,12 +438,16 @@ defmodule EngramWeb.NotesController do
       tags: note.tags || [],
       version: note.version,
       content: note.content || "",
+      # Protocol rev — clients store the server hash per path so hash-only
+      # broadcasts / fields=meta pages can be compared without refetching.
+      # The hash is keyed server-side (HMAC); clients treat it as opaque.
+      content_hash: note.content_hash,
       mtime: note.mtime,
       updated_at: note.updated_at
     }
   end
 
-  defp change_json(change) do
+  defp change_json(change, :meta) do
     %{
       id: change.id,
       path: change.path,
@@ -296,10 +456,16 @@ defmodule EngramWeb.NotesController do
       tags: change.tags || [],
       version: change.version,
       mtime: change.mtime,
-      content: change.content || "",
+      content_hash: change.content_hash,
       deleted: change.deleted,
       updated_at: change.updated_at
     }
+  end
+
+  defp change_json(change, :all) do
+    change
+    |> change_json(:meta)
+    |> Map.put(:content, change.content || "")
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)

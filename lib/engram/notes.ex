@@ -10,6 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
+  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
@@ -211,14 +212,21 @@ defmodule Engram.Notes do
   @doc """
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
+
+  Options:
+
+    * `broadcast_from: pid` — emit the `note_changed` broadcast via
+      `Endpoint.broadcast_from/4` so the given subscriber (the pushing
+      channel process) is excluded. Channel pushes pass `self()`; HTTP
+      pushes have no socket to exclude and use plain broadcast.
   """
-  @spec upsert_note(map(), map(), map()) ::
+  @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
           | {:error, Ecto.Changeset.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
-  def upsert_note(user, vault, attrs) do
+  def upsert_note(user, vault, attrs, opts \\ []) do
     path = attrs["path"] || attrs[:path]
     content = attrs["content"] || attrs[:content] || ""
     mtime = attrs["mtime"] || attrs[:mtime]
@@ -281,7 +289,7 @@ defmodule Engram.Notes do
             end
 
           note = decrypt_or_raise!(note, user)
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
 
           if is_nil(prev_hash) do
             # FTUX vault page listens for this — fires when an empty vault
@@ -292,8 +300,8 @@ defmodule Engram.Notes do
             # Funnel telemetry — emit once per real creation so the funnel
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
-              Engram.Observability.PostHog.capture(
-                Engram.Observability.PostHog.distinct_id_for(user),
+              PostHog.capture(
+                PostHog.distinct_id_for(user),
                 "note_created",
                 %{vault_id: vault.id}
               )
@@ -853,6 +861,416 @@ defmodule Engram.Notes do
     end)
   end
 
+  # ---------------------------------------------------------------------------
+  # Batch upsert (sync protocol rev — bulk push)
+  # ---------------------------------------------------------------------------
+
+  # Persisted columns written by the batch-insert path. Mirrors what the
+  # single-note changeset INSERT produces; timestamps are merged separately
+  # because `insert_all` does not autogenerate them.
+  @batch_insert_columns [
+    :id,
+    :kind,
+    :version,
+    :dek_version,
+    :content_hash,
+    :mtime,
+    :user_id,
+    :vault_id,
+    :content_ciphertext,
+    :content_nonce,
+    :title_ciphertext,
+    :title_nonce,
+    :tags_ciphertext,
+    :tags_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_hmac
+  ]
+
+  @doc """
+  Bulk create/update of notes in ONE tenant transaction.
+
+  Protocol-rev counterpart of `upsert_note/3` for the plugin's bulk/initial
+  sync: one `path_hmac IN (...)` lookup for the whole batch, per-note encrypt,
+  a single `insert_all` for new rows, one usage-meter increment, one
+  `Oban.insert_all` for embed jobs, and one `notes.batch` digest broadcast
+  (op `"upsert"`, metadata-only — no content) instead of N `note_changed`
+  events.
+
+  Returns `{:ok, %{results: [...]}}` with one entry per input note, in input
+  order:
+
+    * `%{path, status: :ok, id, version, content_hash}`
+    * `%{path, status: :conflict, server_note: %Note{}}` — stale client
+      version; the decrypted server note mirrors today's single-note 409 body
+      so 3-way merge keeps working. Does not block other entries.
+    * `%{path, status: :error, errors: term}` — per-note validation failure
+      (blank path, duplicate path within the batch, invalid changeset). Does
+      not block other entries.
+
+  Whole-batch failure: `{:error, {:notes_cap_reached, limit, current}}` when
+  the would-be inserts exceed the plan's notes cap (nothing is committed —
+  mirrors the single-note 402 so the client can fall back / surface upgrade).
+
+  Batch size is capped at the controller boundary (100), matching the other
+  batch endpoints.
+  """
+  @spec batch_upsert_notes(map(), map(), [map()]) ::
+          {:ok, %{results: [map()]}}
+          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
+          | {:error, term()}
+  def batch_upsert_notes(_user, _vault, []), do: {:ok, %{results: []}}
+
+  def batch_upsert_notes(user, vault, notes_params) when is_list(notes_params) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      entries = normalize_batch_entries(user, filter_key, notes_params)
+
+      case Repo.with_tenant(user.id, fn -> run_batch_upsert(user, vault, entries) end) do
+        {:ok, state} ->
+          batch_upsert_side_effects(user, vault, state)
+          {:ok, %{results: batch_upsert_results(user, state.entries)}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # Parse + sanitize each entry outside the transaction (pure CPU). Marks
+  # blank paths and intra-batch duplicates (by sanitized-path HMAC) as
+  # per-note errors so they never reach the write path.
+  defp normalize_batch_entries(user, filter_key, notes_params) do
+    notes_params
+    |> Enum.map(fn attrs ->
+      path = attrs["path"] || attrs[:path]
+      content = attrs["content"] || attrs[:content] || ""
+
+      if path in [nil, ""] do
+        %{input_path: path || "", result: {:error, %{path: ["can't be blank"]}}}
+      else
+        sanitized = PathSanitizer.sanitize(path)
+        {:ok, hash} = content_hash(user, content)
+
+        %{
+          input_path: path,
+          path: sanitized,
+          path_hmac: Crypto.hmac_field(filter_key, sanitized),
+          content: content,
+          mtime: attrs["mtime"] || attrs[:mtime],
+          client_version: attrs["version"] || attrs[:version],
+          client_id: attrs["id"] || attrs[:id],
+          title: Helpers.extract_title(content, sanitized),
+          folder: Helpers.extract_folder(sanitized),
+          tags: Helpers.extract_tags(content),
+          hash: hash,
+          result: nil
+        }
+      end
+    end)
+    |> mark_duplicate_paths()
+  end
+
+  # Marks intra-batch duplicates as per-note errors: by sanitized-path HMAC
+  # (second write would be an update-of-uncommitted-row) and by client id
+  # (two rows with one PK in a single insert_all raises "cannot affect row
+  # a second time" even under ON CONFLICT, aborting the whole batch).
+  defp mark_duplicate_paths(entries) do
+    {marked, _seen} =
+      Enum.map_reduce(entries, {MapSet.new(), MapSet.new()}, fn entry, {paths, ids} ->
+        case entry do
+          %{result: nil, path_hmac: hmac} ->
+            client_id =
+              case entry.client_id && Ecto.UUID.cast(entry.client_id) do
+                {:ok, valid} -> valid
+                _ -> nil
+              end
+
+            cond do
+              MapSet.member?(paths, hmac) ->
+                {%{entry | result: {:error, %{path: ["duplicate path in batch"]}}}, {paths, ids}}
+
+              client_id && MapSet.member?(ids, client_id) ->
+                {%{entry | result: {:error, %{id: ["duplicate id in batch"]}}}, {paths, ids}}
+
+              true ->
+                ids = if client_id, do: MapSet.put(ids, client_id), else: ids
+                {entry, {MapSet.put(paths, hmac), ids}}
+            end
+
+          other ->
+            {other, {paths, ids}}
+        end
+      end)
+
+    marked
+  end
+
+  defp run_batch_upsert(user, vault, entries) do
+    pending = Enum.filter(entries, &is_nil(&1.result))
+    hmacs = Enum.map(pending, & &1.path_hmac)
+
+    existing_by_hmac =
+      Repo.all(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac in ^hmacs and
+              is_nil(n.deleted_at)
+        )
+      )
+      |> Map.new(&{&1.path_hmac, &1})
+
+    # vault_populated probe — must read BEFORE the insert_all below.
+    was_empty =
+      not Repo.exists?(from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault.id))
+
+    to_insert =
+      Enum.count(pending, &(not Map.has_key?(existing_by_hmac, &1.path_hmac)))
+
+    check_batch_notes_cap!(user, to_insert)
+
+    now = DateTime.utc_now()
+
+    {entries, insert_rows} =
+      Enum.map_reduce(entries, [], fn entry, rows ->
+        process_batch_entry(entry, existing_by_hmac, user, vault, now, rows)
+      end)
+
+    # on_conflict: :nothing — a PK collision (client-supplied id already in
+    # the DB, possibly cross-tenant) or a path-unique race degrades to a
+    # per-note error below instead of aborting the whole batch with a raise.
+    {entries, inserted_count} =
+      case insert_rows do
+        [] ->
+          {entries, 0}
+
+        rows ->
+          {_count, returned} =
+            Repo.insert_all(Note, Enum.reverse(rows), on_conflict: :nothing, returning: [:id])
+
+          inserted_ids = MapSet.new(returned, & &1.id)
+
+          entries =
+            Enum.map(entries, fn
+              %{result: {:ok, %{prev_hash: nil, id: id}}} = entry ->
+                if MapSet.member?(inserted_ids, id) do
+                  entry
+                else
+                  %{entry | result: {:error, %{id: ["already exists"]}}}
+                end
+
+              entry ->
+                entry
+            end)
+
+          {entries, MapSet.size(inserted_ids)}
+      end
+
+    if inserted_count > 0 do
+      :ok = UsageMeters.inc_notes_count(user.id, inserted_count)
+    end
+
+    %{entries: entries, inserted_count: inserted_count, was_empty: was_empty, now: now}
+  end
+
+  # Mirrors the single-note cap check, scaled to the batch's insert count.
+  # `check_limit/3` admits one insert when `current < limit`, so admitting N
+  # inserts requires `current + N - 1 < limit`.
+  defp check_batch_notes_cap!(_user, 0), do: :ok
+
+  defp check_batch_notes_cap!(user, to_insert) do
+    current_count = UsageMeters.notes_count(user.id)
+
+    case Billing.check_limit(user, :notes_cap, current_count + to_insert - 1) do
+      :ok ->
+        :ok
+
+      {:error, :limit_reached} ->
+        limit = Billing.effective_limit(user, :notes_cap)
+        Repo.rollback({:notes_cap_reached, limit, current_count})
+    end
+  end
+
+  defp process_batch_entry(%{result: nil} = entry, existing_by_hmac, user, vault, now, rows) do
+    case Map.get(existing_by_hmac, entry.path_hmac) do
+      nil ->
+        case build_batch_insert_row(entry, user, vault, now) do
+          {:ok, id, row} ->
+            info = %{id: id, version: 1, prev_hash: nil, updated_at: now}
+            {%{entry | result: {:ok, info}}, [row | rows]}
+
+          {:error, errors} ->
+            {%{entry | result: {:error, errors}}, rows}
+        end
+
+      existing ->
+        {%{entry | result: update_batch_entry(entry, existing, user)}, rows}
+    end
+  end
+
+  defp process_batch_entry(entry, _existing_by_hmac, _user, _vault, _now, rows),
+    do: {entry, rows}
+
+  defp update_batch_entry(entry, existing, user) do
+    if entry.client_version != nil and entry.client_version != existing.version do
+      {:conflict, existing}
+    else
+      base_attrs = batch_base_attrs(entry, user)
+
+      case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
+        {:ok, {prev_hash, updated}} ->
+          {:ok,
+           %{
+             id: updated.id,
+             version: updated.version,
+             prev_hash: prev_hash,
+             updated_at: updated.updated_at
+           }}
+
+        {:error, changeset} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  defp build_batch_insert_row(entry, user, vault, now) do
+    note_id =
+      case entry.client_id && Ecto.UUID.cast(entry.client_id) do
+        {:ok, valid_uuid} -> valid_uuid
+        _ -> mint_id()
+      end
+
+    base_attrs = batch_base_attrs(entry, user, vault)
+
+    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
+      phase_b =
+        inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, entry.tags)
+
+      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+      if changeset.valid? do
+        row =
+          changeset
+          |> Ecto.Changeset.apply_changes()
+          |> Map.take(@batch_insert_columns)
+          |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
+
+        {:ok, note_id, row}
+      else
+        {:error, changeset}
+      end
+    end
+  end
+
+  defp batch_base_attrs(entry, user, vault \\ nil) do
+    attrs = %{
+      kind: "note",
+      content: entry.content,
+      title: entry.title,
+      tags: entry.tags,
+      content_hash: entry.hash,
+      mtime: entry.mtime,
+      user_id: user.id
+    }
+
+    if vault, do: Map.put(attrs, :vault_id, vault.id), else: attrs
+  end
+
+  # Post-commit side effects: embed jobs (one Oban.insert_all), the digest
+  # broadcast, FTUX vault_populated, and the per-creation funnel events.
+  # Mirrors the single-note path; the digest replaces N note_changed events.
+  defp batch_upsert_side_effects(user, vault, state) do
+    ok_entries =
+      Enum.filter(state.entries, fn
+        %{result: {:ok, _}} -> true
+        _ -> false
+      end)
+
+    embed_jobs =
+      ok_entries
+      |> Enum.filter(fn %{hash: hash, result: {:ok, info}} -> info.prev_hash != hash end)
+      |> Enum.map(fn %{result: {:ok, info}} -> EmbedNote.new_debounced(info.id) end)
+
+    _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
+
+    _ =
+      if ok_entries != [] do
+        digest =
+          Enum.map(ok_entries, fn %{result: {:ok, info}} = entry ->
+            %{
+              "event_type" => "upsert",
+              "id" => info.id,
+              "path" => entry.path,
+              "title" => entry.title,
+              "folder" => entry.folder,
+              "tags" => entry.tags,
+              "mtime" => entry.mtime,
+              "version" => info.version,
+              "updated_at" => info.updated_at,
+              "content_hash" => entry.hash
+            }
+          end)
+
+        _ =
+          EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "notes.batch", %{
+            op: "upsert",
+            vault_id: vault.id,
+            notes: digest
+          })
+      end
+
+    created = Enum.filter(ok_entries, fn %{result: {:ok, info}} -> is_nil(info.prev_hash) end)
+
+    _ =
+      if state.was_empty and created != [] do
+        EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
+          vault_id: vault.id
+        })
+      end
+
+    distinct_id = PostHog.distinct_id_for(user)
+
+    Enum.each(created, fn _ ->
+      :ok =
+        PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
+    end)
+
+    :ok
+  end
+
+  defp batch_upsert_results(user, entries) do
+    Enum.map(entries, fn entry ->
+      case entry.result do
+        {:ok, info} ->
+          %{
+            path: entry.input_path,
+            status: :ok,
+            id: info.id,
+            version: info.version,
+            content_hash: entry.hash,
+            # Canonical (sanitized) path — differs from `path` when the
+            # sanitizer rewrote the input; clients rename local files to it.
+            server_path: entry.path
+          }
+
+        {:conflict, existing} ->
+          %{
+            path: entry.input_path,
+            status: :conflict,
+            server_note: decrypt_or_raise!(existing, user)
+          }
+
+        {:error, errors} ->
+          %{path: entry.input_path, status: :error, errors: errors}
+      end
+    end)
+  end
+
   # Resolve the note by id (ownership + cross-vault check) and delegate to
   # rename_note/4 with the recomposed path. rename_note takes the OLD path
   # string, sanitizes the new path, and pre-checks the unique
@@ -940,23 +1358,126 @@ defmodule Engram.Notes do
     changes =
       notes
       |> decrypt_or_raise!(user)
-      |> Enum.map(fn note ->
-        %{
-          id: note.id,
-          path: note.path,
-          title: note.title,
-          folder: note.folder,
-          tags: note.tags,
-          version: note.version,
-          mtime: note.mtime,
-          content: note.content,
-          deleted: not is_nil(note.deleted_at),
-          updated_at: note.updated_at
-        }
-      end)
+      |> Enum.map(&change_map/1)
 
     {:ok, changes}
   end
+
+  @changes_page_max_limit 500
+
+  @doc """
+  Keyset-paginated variant of `list_changes/4` (sync protocol rev).
+
+  Options:
+
+    * `limit:` — page size, clamped to 1..#{@changes_page_max_limit}
+      (default #{@changes_page_max_limit}).
+    * `cursor:` — opaque cursor from a previous page's `next_cursor`.
+      Encodes `(updated_at, id)`; rows are ordered by that pair so pages
+      never lose or duplicate rows even when timestamps collide.
+    * `fields: :meta` — skip the content column + its decrypt; entries carry
+      `content_hash` instead (`content: nil`). Clients fetch bodies
+      selectively for hashes they don't already hold.
+
+  Returns `{:ok, %{changes: [...], has_more: bool, next_cursor: binary | nil}}`
+  or `{:error, :invalid_cursor}`.
+  """
+  @spec list_changes_page(map(), map(), DateTime.t(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next_cursor: binary() | nil}}
+          | {:error, :invalid_cursor}
+  def list_changes_page(user, vault, since, opts \\ []) do
+    limit =
+      opts
+      |> Keyword.get(:limit, @changes_page_max_limit)
+      |> min(@changes_page_max_limit)
+      |> max(1)
+
+    fields = Keyword.get(opts, :fields, :all)
+
+    with {:ok, cursor} <- decode_changes_cursor(Keyword.get(opts, :cursor)) do
+      base =
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+              n.kind == "note",
+          order_by: [asc: n.updated_at, asc: n.id],
+          limit: ^(limit + 1)
+        )
+
+      base =
+        case cursor do
+          nil ->
+            base
+
+          {ts, id} ->
+            from(n in base,
+              where: n.updated_at > ^ts or (n.updated_at == ^ts and n.id > ^id)
+            )
+        end
+
+      query =
+        case fields do
+          :meta -> from(n in base, select: struct(n, @note_meta_fields))
+          :all -> base
+        end
+
+      {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+
+      {page, has_more} =
+        if length(notes) > limit do
+          {Enum.take(notes, limit), true}
+        else
+          {notes, false}
+        end
+
+      changes =
+        page
+        |> decrypt_or_raise!(user)
+        |> Enum.map(&change_map/1)
+
+      next_cursor =
+        if has_more do
+          last = List.last(page)
+          encode_changes_cursor(last.updated_at, last.id)
+        end
+
+      {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}}
+    end
+  end
+
+  defp change_map(note) do
+    %{
+      id: note.id,
+      path: note.path,
+      title: note.title,
+      folder: note.folder,
+      tags: note.tags,
+      version: note.version,
+      mtime: note.mtime,
+      content: note.content,
+      content_hash: note.content_hash,
+      deleted: not is_nil(note.deleted_at),
+      updated_at: note.updated_at
+    }
+  end
+
+  defp encode_changes_cursor(updated_at, id),
+    do: Base.url_encode64("#{DateTime.to_iso8601(updated_at)}|#{id}", padding: false)
+
+  defp decode_changes_cursor(nil), do: {:ok, nil}
+
+  defp decode_changes_cursor(cursor) when is_binary(cursor) do
+    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
+         [ts_str, id_str] <- String.split(raw, "|", parts: 2),
+         {:ok, ts, _} <- DateTime.from_iso8601(ts_str),
+         {:ok, id} <- Ecto.UUID.cast(id_str) do
+      {:ok, {ts, id}}
+    else
+      _ -> {:error, :invalid_cursor}
+    end
+  end
+
+  defp decode_changes_cursor(_), do: {:error, :invalid_cursor}
 
   @doc """
   Returns unique tags across all non-deleted notes for a user.
@@ -1948,7 +2469,15 @@ defmodule Engram.Notes do
     end
   end
 
-  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t(), Note.t()) :: :ok
+  @spec broadcast_change(
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          String.t(),
+          Note.t(),
+          keyword()
+        ) ::
+          :ok
   # Emits `vault_populated` only when this insert took the vault from 0
   # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
@@ -1982,21 +2511,37 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note) do
+  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts \\ []) do
+    # Protocol rev — dual-field transition: the payload carries BOTH
+    # `content` and `content_hash` for one release. `content` is dropped the
+    # release after the plugin min-version floor covers the hash-only
+    # handler (self-host backends and plugins update on independent
+    # cadences — do NOT remove early).
+    payload = %{
+      "event_type" => "upsert",
+      "id" => note.id,
+      "path" => path,
+      "vault_id" => vault_id,
+      "content" => note.content || "",
+      "content_hash" => note.content_hash,
+      "title" => note.title || "",
+      "folder" => note.folder || "",
+      "tags" => note.tags || [],
+      "mtime" => note.mtime,
+      "updated_at" => note.updated_at,
+      "version" => note.version
+    }
+
+    topic = "sync:#{user_id}:#{vault_id}"
+
     _ =
-      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
-        "event_type" => "upsert",
-        "id" => note.id,
-        "path" => path,
-        "vault_id" => vault_id,
-        "content" => note.content || "",
-        "title" => note.title || "",
-        "folder" => note.folder || "",
-        "tags" => note.tags || [],
-        "mtime" => note.mtime,
-        "updated_at" => note.updated_at,
-        "version" => note.version
-      })
+      case Keyword.get(opts, :broadcast_from) do
+        pid when is_pid(pid) ->
+          EngramWeb.Endpoint.broadcast_from(pid, topic, "note_changed", payload)
+
+        nil ->
+          EngramWeb.Endpoint.broadcast(topic, "note_changed", payload)
+      end
 
     :ok
   end

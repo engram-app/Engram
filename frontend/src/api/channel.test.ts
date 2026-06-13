@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QueryClient } from '@tanstack/react-query'
-import { __resetNoteChangeBatch, handleNoteChanged } from './channel'
+import { __resetNoteChangeBatch, handleNoteChanged, handleNotesBatch } from './channel'
 
 function mockQueryClient(foldersData?: unknown) {
   return {
@@ -147,5 +147,51 @@ describe('handleNoteChanged', () => {
       '7',
     )
     expect(qc.invalidateQueries).toHaveBeenCalled()
+  })
+})
+
+describe('handleNotesBatch', () => {
+  it('applies per-note invalidations for an upsert digest (bulk push)', () => {
+    const qc = mockQueryClient()
+    handleNotesBatch(
+      {
+        op: 'upsert',
+        vault_id: '7',
+        notes: [
+          { id: 'id-1', path: 'docs/a.md', folder: 'docs', content_hash: 'h1' },
+          { id: 'id-2', path: 'notes/b.md', folder: 'notes', content_hash: 'h2' },
+        ],
+      },
+      qc,
+      '7',
+    )
+
+    const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey)
+    expect(syncKeys).toContainEqual(['note', '7', 'id-1'])
+    expect(syncKeys).toContainEqual(['note', '7', 'docs/a.md'])
+    expect(syncKeys).toContainEqual(['note', '7', 'id-2'])
+
+    vi.advanceTimersByTime(250)
+
+    const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey)
+    expect(keys).toContainEqual(['folders', '7'])
+    expect(keys).toContainEqual(['folderNotes', '7', 'docs'])
+    expect(keys).toContainEqual(['folderNotes', '7', 'notes'])
+  })
+
+  it('ignores digests from a different vault', () => {
+    const qc = mockQueryClient()
+    handleNotesBatch(
+      { op: 'upsert', vault_id: 'other', notes: [{ id: 'x', path: 'a.md' }] },
+      qc,
+      '7',
+    )
+    expect(qc.invalidateQueries).not.toHaveBeenCalled()
+  })
+
+  it('ignores non-upsert ops', () => {
+    const qc = mockQueryClient()
+    handleNotesBatch({ op: 'delete', vault_id: '7' }, qc, '7')
+    expect(qc.invalidateQueries).not.toHaveBeenCalled()
   })
 })
