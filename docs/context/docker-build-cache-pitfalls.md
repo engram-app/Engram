@@ -63,6 +63,7 @@ The extra ~1 minute of compile time is worth the guarantee that the released ima
 - BuildKit cache mount IDs (`id=mix-build`) are shared across repositories on the same runner. A different project's build could theoretically pollute the mount — one more reason to avoid `_build` caching.
 - When debugging, `gh run view --log` truncates BuildKit output. Use `gh run download` and inspect `ci-*-stack.log` for the full build log.
 - The only safe cache for Elixir releases is `deps` (compiled dependencies). App beams must be rebuilt from source every time.
+- **Cross-runner image distribution (2026-06-13):** the `engram-ci:<hash>` image the `prebuild-ci-image` job builds is NOT visible to other runners just because they're "on the same VM" — the isolated pool is multi-host (runner-1..runner-N), each with its own docker daemon. The original design `docker tag`'d the image locally and the e2e jobs ran `up --no-build`; when prebuild and the e2e consumer landed on different hosts, compose found no local image, tried to pull bare `engram-ci:<hash>` from Docker Hub, got `pull access denied / No such image`, and the backend container never started — surfacing as EVERY e2e test erroring with `Connection refused` to the API. Fix: prebuild pushes `${LOCAL_REGISTRY}/engram-ci:<hash>` to the FastRaid registry (:5001, the same one the ci-pass markers use) and the e2e bring-up steps `docker pull` it first. Symptom to recognize in `docker-compose.log`: it's EMPTY (engram never ran) and `ci-*-stack.log` shows `No such image: engram-ci:<hash>`.
 
 ## References
 

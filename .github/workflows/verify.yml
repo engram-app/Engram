@@ -289,11 +289,18 @@ jobs:
             echo "Neither fingerprint cached — running full test suite"
           fi
 
-  # Build the CI engram image ONCE per CI run. All e2e-* jobs share the
-  # same docker daemon on this VM, so a single `docker tag` makes the
-  # image visible to every downstream runner without registry push.
-  # Image tag = content-stable hash of Dockerfile inputs; identical trees
-  # short-circuit via `docker image inspect`.
+  # Build the CI engram image ONCE per CI run and publish it to the FastRaid
+  # local registry (LOCAL_REGISTRY, :5001) so EVERY downstream runner can pull
+  # it. The isolated runner pool is multi-host (runner-1..runner-N), each with
+  # its OWN docker daemon — the old "single `docker tag` is visible to every
+  # downstream runner" assumption only held when prebuild and the e2e consumer
+  # happened to land on the same host. When they didn't, the consumer's
+  # `up --no-build` found no local image, fell back to pulling the bare
+  # `engram-ci:<hash>` tag from Docker Hub, and the backend never booted (every
+  # e2e test then erroring with "connection refused"). Publishing to :5001 —
+  # the same push-capable registry the ci-pass/ci-e2e-pass markers already use —
+  # makes the image host-independent. Image tag = content-stable hash of
+  # Dockerfile inputs; identical trees short-circuit via a registry HEAD probe.
   prebuild-ci-image:
     needs: fingerprint
     # Image consumed by e2e-clerk (any trigger, gated on e2e-cache-hit) and
@@ -316,12 +323,23 @@ jobs:
             mix.exs mix.lock \
             config lib priv frontend \
             | sha256sum | cut -c1-12)
-          IMAGE="engram-ci:${HASH}"
+          # Registry-qualified ref so any runner can pull it. LOCAL_REGISTRY is
+          # hard-set at the workflow level (:5001); guard anyway so a misconfig
+          # degrades to the legacy bare tag (same-host-only) instead of
+          # emitting a malformed `/engram-ci:...` ref.
+          if [ -n "${LOCAL_REGISTRY:-}" ]; then
+            IMAGE="${LOCAL_REGISTRY}/engram-ci:${HASH}"
+          else
+            echo "::warning::LOCAL_REGISTRY unset — falling back to local-only tag (cross-runner pulls will fail)"
+            IMAGE="engram-ci:${HASH}"
+          fi
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "Image tag: $IMAGE"
+          echo "Image: $IMAGE"
 
-      - name: Build image (skip if already cached on this daemon)
+      - name: Build + push CI image (skip if already in registry)
         env:
+          HASH: ${{ steps.tag.outputs.hash }}
           IMAGE: ${{ steps.tag.outputs.image }}
           # Use buildx's plain progress writer instead of the fancy tty printer.
           # The latter races on `--load`/LoadImage: a progress goroutine writes
@@ -330,14 +348,35 @@ jobs:
           # such goroutine.
           BUILDKIT_PROGRESS: plain
         run: |
-          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-            echo "::notice::Image $IMAGE already cached locally — skipping build"
-            exit 0
+          # Already published for this exact tree? Reuse — the registry is the
+          # cross-host source of truth, so probe IT (not the local daemon, which
+          # only reflects what this one runner happens to have built before).
+          if [ -n "${LOCAL_REGISTRY:-}" ]; then
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -I \
+              "http://${LOCAL_REGISTRY}/v2/engram-ci/manifests/${HASH}" || true)
+            if [ "$CODE" = "200" ]; then
+              echo "::notice::Image $IMAGE already in registry — skipping build+push"
+              exit 0
+            fi
           fi
-          ENGRAM_CI_IMAGE="$IMAGE" \
-            docker compose -f docker-compose.ci.yml build engram
-          docker image inspect "$IMAGE" >/dev/null
-          echo "Built and tagged $IMAGE"
+
+          # Build locally only if this daemon doesn't already have the layers.
+          IMAGE_LOCAL="engram-ci:${HASH}"
+          if ! docker image inspect "$IMAGE_LOCAL" >/dev/null 2>&1; then
+            ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
+              docker compose -f docker-compose.ci.yml build engram
+            docker image inspect "$IMAGE_LOCAL" >/dev/null
+          fi
+
+          # Publish so every runner can pull it. When LOCAL_REGISTRY is unset
+          # (degraded mode), IMAGE == IMAGE_LOCAL and there is nothing to push.
+          if [ "$IMAGE" != "$IMAGE_LOCAL" ]; then
+            docker tag "$IMAGE_LOCAL" "$IMAGE"
+            docker push "$IMAGE"
+            echo "Pushed $IMAGE"
+          else
+            echo "::warning::No registry — $IMAGE stays local to this runner"
+          fi
 
   # Compile Elixir code ONCE in both :dev and :test envs, cache deps and
   # _build artifacts. Downstream jobs (unit-tests, lint, e2e-browser) all
@@ -644,10 +683,15 @@ jobs:
             # Clean up stale CI collection on SlowRaid Qdrant before starting
             curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
-            # Image was already built by the `prebuild-ci-image` job.
+            # Pull the image `prebuild-ci-image` published to the FastRaid
+            # registry — this runner may be a different host than the one that
+            # built it. Explicit pull (vs relying on compose's pull-on-missing)
+            # keeps the failure legible: a registry miss fails here with the
+            # real ref instead of a confusing Docker Hub denial during `up`.
+            docker pull "$ENGRAM_CI_IMAGE"
             # ENGRAM_CI_IMAGE pins docker-compose.ci.yml's `image:` to that
-            # exact tag. `--no-build` makes startup fail loudly if the tag
-            # is missing (regression detector vs a silent rebuild).
+            # exact tag. `--no-build` keeps startup honest — never a silent
+            # rebuild; the image must already exist (now pulled above).
             docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" up -d --no-build --wait
 
             # Quick verification — compose --wait already confirmed healthcheck,
@@ -936,8 +980,12 @@ jobs:
           # Prune dangling images + volumes to reclaim disk
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
-          # Keep only the 3 most recent engram-ci cache tags
-          docker images --format '{{.Repository}}:{{.Tag}}' --filter "reference=engram-ci:*" \
+          # Keep only the 3 most recent engram-ci cache tags. Match BOTH the
+          # bare local build tag (engram-ci:<hash>) and the registry-qualified
+          # tag the e2e jobs now pull (${LOCAL_REGISTRY}/engram-ci:<hash>) —
+          # otherwise the pulled copies accumulate unbounded on each runner.
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            --filter "reference=engram-ci:*" --filter "reference=*/engram-ci:*" \
             | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
           # Clean up ci-artifacts and stale Bun native cache files
           rm -rf ci-artifacts/
@@ -1160,6 +1208,9 @@ jobs:
           CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
         run: |
           docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          # Pull the prebuilt image from the FastRaid registry — this runner
+          # may differ from the host that built it (see prebuild-ci-image).
+          docker pull "$ENGRAM_CI_IMAGE"
           # --no-build: reuse the image the prebuild-ci-image job already built.
           docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" up -d --no-build --wait
 
@@ -2084,9 +2135,12 @@ jobs:
           # Clean up stale Qdrant collection
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
-          # Image was already built by `prebuild-ci-image`. ENGRAM_CI_IMAGE
-          # pins docker-compose.ci.yml's `image:` to that tag and --no-build
-          # fails loudly if missing instead of silently rebuilding.
+          # Pull the prebuilt image from the FastRaid registry — this runner
+          # may differ from the host that built it (see prebuild-ci-image).
+          docker pull "$ENGRAM_CI_IMAGE"
+          # ENGRAM_CI_IMAGE pins docker-compose.ci.yml's `image:` to that tag;
+          # --no-build keeps startup honest (no silent rebuild) now that the
+          # image is guaranteed present via the pull above.
           docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
             -p "$CI_PROJECT" up -d --no-build --wait
 
