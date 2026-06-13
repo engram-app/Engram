@@ -79,6 +79,12 @@ services:
       # well above the prod default 10 req/60s/IP from the test runner's
       # single source IP — collisions yield flaky 429 "rate_limited" failures.
       # Mirrors the override in docker-compose.ci-local.yml.
+      # CI=true gates the override on (runtime.exs / Engram.RuntimeConfig): the
+      # backend only honors RATE_LIMIT_AUTH_OVERRIDE when CI=true, so a stray
+      # copy of this var can never weaken the limiter in prod. Inherited by the
+      # ci-local overlay. (The Playwright e2e job runs in the GitHub runner,
+      # which sets CI=true automatically.)
+      CI: "true"
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
