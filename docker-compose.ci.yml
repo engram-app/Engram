@@ -18,9 +18,11 @@ name: engram-ci
 
 services:
   engram:
-    # Pre-built tag from the CI `prebuild-ci-image` job — all e2e-* jobs
-    # share this image via the runner VM's shared docker daemon. Local dev
-    # falls back to `engram-ci:local` (built by `docker compose build`).
+    # Registry-qualified tag published by the CI `prebuild-ci-image` job
+    # (`${LOCAL_REGISTRY}/engram-ci:<hash>` on FastRaid :5001). The e2e jobs
+    # `docker pull` it before `up --no-build`, so it works regardless of which
+    # runner host they land on — the pool is multi-daemon, not shared. Local
+    # dev falls back to `engram-ci:local` (built by `docker compose build`).
     image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
     build:
       context: .
