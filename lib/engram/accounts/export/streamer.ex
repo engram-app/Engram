@@ -84,7 +84,7 @@ defmodule Engram.Accounts.Export.Streamer do
   # has no entries to emit. This is the MinIO/Garage gate — those
   # backends reject `CompleteMultipartUpload` on a zero-byte sole part.
   defp zip_vault(export, vault) do
-    case zip_entries(vault) do
+    case zip_entries(export, vault) do
       [] ->
         {[], 0}
 
@@ -128,12 +128,16 @@ defmodule Engram.Accounts.Export.Streamer do
   # moduledoc for why. Filenames use the row id so the zip remains
   # deterministic and `.obsidian/`-filtering work in Task 14 has clean
   # paths to match against once we decrypt.
-  defp zip_entries(%Vault{id: vault_id}) do
+  defp zip_entries(%Schema{user_id: user_id}, %Vault{id: vault_id}) do
     notes =
       Repo.all(
         from(n in Note,
+          # RLS is bypassed (skip_tenant_check), so the explicit user_id clause
+          # is the sole guarantee that one tenant's export never includes
+          # another tenant's rows — it MUST NOT be removed.
           where:
-            n.vault_id == ^vault_id and
+            n.user_id == ^user_id and
+              n.vault_id == ^vault_id and
               n.kind == "note" and
               is_nil(n.deleted_at),
           order_by: [asc: n.id]

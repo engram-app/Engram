@@ -95,6 +95,20 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert client.redirect_uris == uris
     end
 
+    test "rejects more than 10 redirect_uris", %{conn: conn} do
+      uris = for i <- 1..11, do: "https://app.example.com/cb#{i}"
+      conn = post(conn, "/oauth/register", %{"redirect_uris" => uris})
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_redirect_uri"
+    end
+
+    test "rejects an over-long redirect_uri", %{conn: conn} do
+      long = "https://app.example.com/" <> String.duplicate("a", 3000)
+      conn = post(conn, "/oauth/register", %{"redirect_uris" => [long]})
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_redirect_uri"
+    end
+
     test "persists software_id and software_version when provided", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{

@@ -705,11 +705,22 @@ defmodule Engram.Vaults do
   defp unwrap_register_transaction({:ok, {:error, reason}}), do: {:error, reason}
   defp unwrap_register_transaction({:error, _} = err), do: err
 
-  # Converts string-keyed maps to atom-keyed so atom merges don't produce mixed maps.
+  # Converts string-keyed maps to atom-keyed so atom merges don't produce mixed
+  # maps. `create/2` passes raw controller params, so an unknown string key
+  # must be dropped rather than crash on String.to_existing_atom — the
+  # downstream Vault.changeset cast already discards non-permitted fields, so
+  # dropping unrecognized keys here is behavior-preserving.
   defp atomize_keys(attrs) when is_map(attrs) do
-    Map.new(attrs, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} -> {k, v}
+    Enum.reduce(attrs, %{}, fn
+      {k, v}, acc when is_binary(k) ->
+        try do
+          Map.put(acc, String.to_existing_atom(k), v)
+        rescue
+          ArgumentError -> acc
+        end
+
+      {k, v}, acc ->
+        Map.put(acc, k, v)
     end)
   end
 

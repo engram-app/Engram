@@ -55,12 +55,22 @@ defmodule Engram.Workers.CleanupVault do
   def perform_cleanup(vault_id, user_id, opts \\ []) do
     force = Keyword.get(opts, :force, false)
     vault = Repo.get(Vault, vault_id, skip_tenant_check: true)
-    _ = user_id
 
     cond do
       is_nil(vault) ->
         Logger.info("CleanupVault: vault #{vault_id} not found — skipping")
         :ok
+
+      # Defense in depth: the load bypasses RLS (skip_tenant_check), so the
+      # job's user_id is the only owner check. A mismatch means the args were
+      # forged or wires got crossed — never hard-delete another tenant's vault.
+      to_string(vault.user_id) != to_string(user_id) ->
+        Logger.error(
+          "CleanupVault: owner mismatch for vault #{vault_id} " <>
+            "(job user_id=#{user_id}, vault owner=#{vault.user_id}) — discarding"
+        )
+
+        {:discard, :owner_mismatch}
 
       is_nil(vault.deleted_at) ->
         Logger.info("CleanupVault: vault #{vault_id} was restored — skipping")
