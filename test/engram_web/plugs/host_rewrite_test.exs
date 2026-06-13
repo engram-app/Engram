@@ -256,6 +256,25 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       refute out.halted
     end
 
+    # The Grafana Agent sidecar scrapes the bearer-guarded PromEx endpoint as
+    # `curl localhost:4000/metrics` (Host = localhost), which is neither
+    # api_host nor mcp_host. Without an exemption, reject_unknown_hosts=true
+    # 410s the scrape → up=0 → no app/BEAM metrics. /metrics must pass through
+    # on ANY host (MetricsAuth still guards it).
+    test "with reject_unknown_hosts=true, /metrics passes through on localhost (agent scrape)" do
+      opts =
+        HostRewrite.init(
+          api_host: "api.engram.page",
+          mcp_host: "mcp.engram.page",
+          reject_unknown_hosts: true
+        )
+
+      conn = conn(:get, "/metrics") |> Map.put(:host, "localhost")
+      out = HostRewrite.call(conn, opts)
+
+      refute out.halted
+    end
+
     test "with reject_unknown_hosts=true, non-health /api path on unknown host still 410s" do
       opts =
         HostRewrite.init(
