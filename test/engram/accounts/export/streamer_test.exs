@@ -178,5 +178,32 @@ defmodule Engram.Accounts.Export.StreamerTest do
       part_numbers = Enum.map(parts, & &1["part"])
       assert part_numbers == Enum.sort(part_numbers)
     end
+
+    test "excludes notes owned by another user even if they share the vault_id" do
+      user = insert(:user) |> as_pro()
+      vault = insert(:vault, user: user)
+      mine = insert(:note, user: user, vault: vault)
+
+      # A row whose user_id is a different tenant but whose vault_id collides.
+      # zip_entries bypasses RLS (skip_tenant_check), so the explicit user_id
+      # predicate is the only thing keeping this out of the owner's export.
+      other = insert(:user)
+      foreign = insert(:note, user: other, vault: vault)
+
+      {:ok, export} = Export.request(user)
+      assert {:ok, [%{"key" => key} | _], _total} = Streamer.run(Repo.reload!(export), [])
+
+      {:ok, zip_bytes} = InMemory.get(key)
+      {:ok, entries} = :zip.table(zip_bytes)
+
+      filenames =
+        Enum.flat_map(entries, fn
+          {:zip_file, name, _info, _comment, _offset, _size} -> [to_string(name)]
+          _ -> []
+        end)
+
+      assert "notes/note-#{mine.id}.md" in filenames
+      refute "notes/note-#{foreign.id}.md" in filenames
+    end
   end
 end
