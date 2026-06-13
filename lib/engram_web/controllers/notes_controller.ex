@@ -161,27 +161,64 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  def changes(conn, %{"since" => since_str}) do
+  # Protocol rev — keyset pagination. Requests without `limit` are still
+  # capped at the server max (500) and gain `has_more`/`next_cursor`; old
+  # plugins see a truncated-but-valid page and converge over successive
+  # polls because they advance `since = server_time`.
+  def changes(conn, %{"since" => since_str} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case DateTime.from_iso8601(since_str) do
-      {:ok, since, _} ->
-        {:ok, changes} = Notes.list_changes(user, vault, since)
+    with {:since, {:ok, since, _}} <- {:since, DateTime.from_iso8601(since_str)},
+         {:ok, limit} <- parse_changes_limit(params["limit"]),
+         {:ok, fields} <- parse_changes_fields(params["fields"]) do
+      opts = [limit: limit, fields: fields]
+      opts = if params["cursor"], do: Keyword.put(opts, :cursor, params["cursor"]), else: opts
 
-        json(conn, %{
-          changes: Enum.map(changes, &change_json/1),
-          server_time: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
+      case Notes.list_changes_page(user, vault, since, opts) do
+        {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}} ->
+          json(conn, %{
+            changes: Enum.map(changes, &change_json(&1, fields)),
+            server_time: DateTime.utc_now() |> DateTime.to_iso8601(),
+            has_more: has_more,
+            next_cursor: next_cursor
+          })
 
-      {:error, _} ->
+        {:error, :invalid_cursor} ->
+          conn |> put_status(400) |> json(%{error: "invalid_cursor"})
+      end
+    else
+      {:since, _} ->
         conn |> put_status(400) |> json(%{error: "invalid since timestamp"})
+
+      {:error, :invalid_limit} ->
+        conn |> put_status(400) |> json(%{error: "invalid_limit"})
+
+      {:error, :invalid_fields} ->
+        conn |> put_status(400) |> json(%{error: "invalid_fields"})
     end
   end
 
   def changes(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: since"})
   end
+
+  @changes_max_limit 500
+
+  defp parse_changes_limit(nil), do: {:ok, @changes_max_limit}
+
+  defp parse_changes_limit(limit) when is_binary(limit) do
+    case Integer.parse(limit) do
+      {n, ""} when n >= 1 -> {:ok, min(n, @changes_max_limit)}
+      _ -> {:error, :invalid_limit}
+    end
+  end
+
+  defp parse_changes_limit(_), do: {:error, :invalid_limit}
+
+  defp parse_changes_fields(nil), do: {:ok, :all}
+  defp parse_changes_fields("meta"), do: {:ok, :meta}
+  defp parse_changes_fields(_), do: {:error, :invalid_fields}
 
   # ---------------------------------------------------------------------------
   # Batch ops
@@ -380,7 +417,9 @@ defmodule EngramWeb.NotesController do
     }
   end
 
-  defp change_json(change) do
+  defp change_json(change, fields \\ :all)
+
+  defp change_json(change, :meta) do
     %{
       id: change.id,
       path: change.path,
@@ -389,10 +428,16 @@ defmodule EngramWeb.NotesController do
       tags: change.tags || [],
       version: change.version,
       mtime: change.mtime,
-      content: change.content || "",
+      content_hash: change.content_hash,
       deleted: change.deleted,
       updated_at: change.updated_at
     }
+  end
+
+  defp change_json(change, :all) do
+    change
+    |> change_json(:meta)
+    |> Map.put(:content, change.content || "")
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)

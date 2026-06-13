@@ -1302,23 +1302,126 @@ defmodule Engram.Notes do
     changes =
       notes
       |> decrypt_or_raise!(user)
-      |> Enum.map(fn note ->
-        %{
-          id: note.id,
-          path: note.path,
-          title: note.title,
-          folder: note.folder,
-          tags: note.tags,
-          version: note.version,
-          mtime: note.mtime,
-          content: note.content,
-          deleted: not is_nil(note.deleted_at),
-          updated_at: note.updated_at
-        }
-      end)
+      |> Enum.map(&change_map/1)
 
     {:ok, changes}
   end
+
+  @changes_page_max_limit 500
+
+  @doc """
+  Keyset-paginated variant of `list_changes/4` (sync protocol rev).
+
+  Options:
+
+    * `limit:` — page size, clamped to 1..#{@changes_page_max_limit}
+      (default #{@changes_page_max_limit}).
+    * `cursor:` — opaque cursor from a previous page's `next_cursor`.
+      Encodes `(updated_at, id)`; rows are ordered by that pair so pages
+      never lose or duplicate rows even when timestamps collide.
+    * `fields: :meta` — skip the content column + its decrypt; entries carry
+      `content_hash` instead (`content: nil`). Clients fetch bodies
+      selectively for hashes they don't already hold.
+
+  Returns `{:ok, %{changes: [...], has_more: bool, next_cursor: binary | nil}}`
+  or `{:error, :invalid_cursor}`.
+  """
+  @spec list_changes_page(map(), map(), DateTime.t(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next_cursor: binary() | nil}}
+          | {:error, :invalid_cursor}
+  def list_changes_page(user, vault, since, opts \\ []) do
+    limit =
+      opts
+      |> Keyword.get(:limit, @changes_page_max_limit)
+      |> min(@changes_page_max_limit)
+      |> max(1)
+
+    fields = Keyword.get(opts, :fields, :all)
+
+    with {:ok, cursor} <- decode_changes_cursor(Keyword.get(opts, :cursor)) do
+      base =
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
+              n.kind == "note",
+          order_by: [asc: n.updated_at, asc: n.id],
+          limit: ^(limit + 1)
+        )
+
+      base =
+        case cursor do
+          nil ->
+            base
+
+          {ts, id} ->
+            from(n in base,
+              where: n.updated_at > ^ts or (n.updated_at == ^ts and n.id > ^id)
+            )
+        end
+
+      query =
+        case fields do
+          :meta -> from(n in base, select: struct(n, @note_meta_fields))
+          :all -> base
+        end
+
+      {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+
+      {page, has_more} =
+        if length(notes) > limit do
+          {Enum.take(notes, limit), true}
+        else
+          {notes, false}
+        end
+
+      changes =
+        page
+        |> decrypt_or_raise!(user)
+        |> Enum.map(&change_map/1)
+
+      next_cursor =
+        if has_more do
+          last = List.last(page)
+          encode_changes_cursor(last.updated_at, last.id)
+        end
+
+      {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}}
+    end
+  end
+
+  defp change_map(note) do
+    %{
+      id: note.id,
+      path: note.path,
+      title: note.title,
+      folder: note.folder,
+      tags: note.tags,
+      version: note.version,
+      mtime: note.mtime,
+      content: note.content,
+      content_hash: note.content_hash,
+      deleted: not is_nil(note.deleted_at),
+      updated_at: note.updated_at
+    }
+  end
+
+  defp encode_changes_cursor(updated_at, id),
+    do: Base.url_encode64("#{DateTime.to_iso8601(updated_at)}|#{id}", padding: false)
+
+  defp decode_changes_cursor(nil), do: {:ok, nil}
+
+  defp decode_changes_cursor(cursor) when is_binary(cursor) do
+    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
+         [ts_str, id_str] <- String.split(raw, "|", parts: 2),
+         {:ok, ts, _} <- DateTime.from_iso8601(ts_str),
+         {:ok, id} <- Ecto.UUID.cast(id_str) do
+      {:ok, {ts, id}}
+    else
+      _ -> {:error, :invalid_cursor}
+    end
+  end
+
+  defp decode_changes_cursor(_), do: {:error, :invalid_cursor}
 
   @doc """
   Returns unique tags across all non-deleted notes for a user.
