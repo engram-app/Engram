@@ -90,9 +90,19 @@ defmodule EngramWeb.Plugs.HostRewrite do
   # them, tasks go unhealthy, and the deployment circuit breaker rolls back.
   @health_paths ~w(/api/health /api/health/deep)
 
+  # Same any-host requirement: the Grafana Agent sidecar scrapes the PromEx
+  # endpoint as `curl localhost:4000/metrics` (Host = localhost, an unknown
+  # host). Without this exemption reject_unknown_hosts=true 410s every scrape
+  # → up=0 → no app/BEAM metrics. The route stays bearer-guarded by
+  # EngramWeb.Plugs.MetricsAuth, so passing it through here is safe.
+  @metrics_path "/metrics"
+
   defp handle_unknown_host(conn, opts) do
     cond do
       conn.request_path in @health_paths ->
+        conn
+
+      conn.request_path == @metrics_path ->
         conn
 
       opts[:reject_unknown_hosts] && conn.host not in opts[:allowed_extra_hosts] ->
