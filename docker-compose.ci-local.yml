@@ -10,6 +10,9 @@ services:
       CLERK_ISSUER: ""
       # CI tests register many users rapidly from same IP
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
+      # Bulk/rapid E2E writes burst past PreAuthRateLimit's 600 req/60s default
+      # on /api/notes (test_77 bulk-sync, test_78 hash-update). CI=true gated.
+      PRE_AUTH_RATE_LIMIT_OVERRIDE: "10000"
       # Self-host default in production is invite_only; pin "open" here so the
       # API-only e2e fixtures (which register many users) don't need to seed
       # an admin + flip the gate before every test.
