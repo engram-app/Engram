@@ -3,6 +3,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 
 import NoteView from './note-view'
+import { ConfigProvider } from '../config-context'
+import type { EngramConfig } from '../config'
+
+// NoteView reads useIsFreeTier() -> useConfig(); mount a minimal config.
+const testConfig: EngramConfig = {
+  authProvider: 'clerk',
+  clerkPublishableKey: '',
+  billingEnabled: true,
+  clerkWaitlistMode: false,
+  apiBase: '',
+  wsBase: '',
+}
 
 // Counts actual ReactMarkdown renders — each one is a full remark/rehype
 // parse of the note in production, the dominant typing-latency cost.
@@ -43,7 +55,11 @@ function Harness() {
 describe('NoteView memoization', () => {
   it('does not re-run the markdown pipeline when parent re-renders with identical props', () => {
     markdownRenders = 0
-    render(<Harness />)
+    render(
+      <ConfigProvider config={testConfig}>
+        <Harness />
+      </ConfigProvider>,
+    )
     expect(markdownRenders).toBe(1)
 
     fireEvent.click(screen.getByText('tick'))

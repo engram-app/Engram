@@ -1174,6 +1174,7 @@ defmodule Engram.Notes do
       _ =
         EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "notes.batch", %{
           op: "upsert",
+          vault_id: vault.id,
           notes: digest
         })
     end

@@ -4,6 +4,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import AppLayout from './app-layout'
 import { ThemeProvider } from '../theme/theme-provider'
+import { ConfigProvider } from '../config-context'
+import type { EngramConfig } from '../config'
+
+// AppSidebarPanel reads the billing flag via useIsFreeTier() -> useConfig();
+// the layout tree won't mount without a ConfigProvider above it.
+const testConfig: EngramConfig = {
+  authProvider: 'clerk',
+  clerkPublishableKey: '',
+  billingEnabled: true,
+  clerkWaitlistMode: false,
+  apiBase: '',
+  wsBase: '',
+}
 
 vi.mock('../api/queries', async () => {
   const actual = await vi.importActual<typeof import('../api/queries')>('../api/queries')
@@ -22,6 +35,7 @@ vi.mock('../auth/use-auth-adapter', () => ({
 function renderLayout() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
+    <ConfigProvider config={testConfig}>
     <QueryClientProvider client={qc}>
       <ThemeProvider>
         <MemoryRouter initialEntries={['/']}>
@@ -32,7 +46,8 @@ function renderLayout() {
           </Routes>
         </MemoryRouter>
       </ThemeProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </ConfigProvider>,
   )
 }
 
