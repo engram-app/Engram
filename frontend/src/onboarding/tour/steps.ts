@@ -8,7 +8,6 @@ import type { Step } from 'react-joyride'
 export const GATED_STEPS: Record<number, string> = {
   0: 'engram:vault-switched',
   1: 'engram:note-opened',
-  2: 'engram:edit-mode-entered',
 }
 
 // react-joyride v3 renamed `disableBeacon` → `skipBeacon`. Lives in Options, so
@@ -41,21 +40,10 @@ export const tourSteps: Step[] = [
     blockTargetInteraction: false,
   },
   {
-    target: '[data-tour="note-tabs"]',
-    title: 'Swap between Preview and Edit mode',
-    content: 'Click Edit to keep going.',
-    placement: 'left',
-    skipBeacon: true,
-    // Gated on `engram:edit-mode-entered` — NotePage dispatches this when
-    // the tab switches to "edit". See controller.tsx + GATED_STEPS.
-    buttons: [],
-    blockTargetInteraction: false,
-  },
-  {
     target: '[data-tour="note-editor"]',
-    title: 'Edit in plain markdown',
+    title: 'Edit live, saved automatically',
     content:
-      'Type markdown directly. Saved changes sync everywhere your files live.',
+      'Notes are always editable — type markdown directly and changes save and sync on their own. No save button.',
     placement: 'left',
     skipBeacon: true,
   },

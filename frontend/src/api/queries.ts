@@ -212,6 +212,21 @@ export function useUpdateNote() {
   })
 }
 
+// Imperative content save for autosave. Returns the NEW version; throws
+// ApiError (status 409 on a version conflict) so callers can 3-way merge.
+export function useSaveNoteContent() {
+  const update = useUpdateNote()
+  return async (path: string, content: string, version: number): Promise<number> => {
+    const res = await update.mutateAsync({ path, content, version })
+    return res.note.version
+  }
+}
+
+// Fetch the freshest server copy of a note by id (used to rebase on a 409).
+export function useFetchNoteFresh() {
+  return (id: string): Promise<Note> => api.get<Note>(`/notes/by-id/${id}`)
+}
+
 export function useCreateNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()

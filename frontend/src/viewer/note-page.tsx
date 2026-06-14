@@ -1,54 +1,104 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { toast } from 'sonner'
-import { useNote, useUpdateNote } from '../api/queries'
+import { useNote, useSaveNoteContent, useFetchNoteFresh } from '../api/queries'
+import { subscribeToNoteChanges } from '../api/channel'
+import { useActiveVaultId } from '../api/active-vault'
+import { ApiError } from '../api/client'
 import { useRightSidebar } from '../layout/right-sidebar-context'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import NoteToc from './note-toc'
 import NoteView from './note-view'
-import { useRemoteUpdateBanner } from './use-remote-update-banner'
+import { merge3 } from './merge'
+import { useAutosave } from './use-autosave'
+import type { NoteEditorHandle } from './note-editor'
 
-// CodeMirror (language pkg + view) only loads when the user first opens
-// the Edit tab — most note views never do.
+// CodeMirror (language pkg + view) only loads when the editor first mounts.
 const NoteEditor = lazy(() => import('./note-editor'))
 
-type Mode = 'preview' | 'edit'
+type Mode = 'live' | 'reading'
 
 export default function NotePage() {
   const params = useParams()
   const idStr = params.id
   // Note ids are uuid strings — accept any non-empty value and let the
-  // backend reject malformed inputs with a 400. We don't pre-validate
-  // because the canonical shape (uuidv7) is opaque to the frontend.
+  // backend reject malformed inputs with a 400.
   const validId = idStr && idStr.length > 0 ? idStr : null
 
   const { data: note, isLoading, error } = useNote(validId)
-  const update = useUpdateNote()
+  const saveContent = useSaveNoteContent()
+  const fetchFresh = useFetchNoteFresh()
+  const vaultId = useActiveVaultId()
   const { setContent: setRightContent } = useRightSidebar()
 
-  const [mode, setMode] = useState<Mode>('preview')
-  const [draft, setDraft] = useState('')
-  // Latch: the edit pane is forceMounted to preserve editor state across
-  // tab switches, but the (lazy) editor itself shouldn't mount — or its
-  // chunk download — until the user first enters edit mode.
-  const [editorTouched, setEditorTouched] = useState(false)
+  const [mode, setMode] = useState<Mode>('live')
 
+  // `base` = last server-synced content; the common ancestor for 3-way merges.
+  const baseRef = useRef('')
+  // `doc` = latest local editor content (mirror, for merges before mount).
+  const docRef = useRef('')
+  const editorRef = useRef<NoteEditorHandle | null>(null)
+
+  // The editor is fed a per-note INITIAL value and keyed by path; live
+  // refetches must not reset it (that would clobber in-progress typing).
+  // Seeded once per note during render (ref mutation is render-safe).
+  const seededPath = useRef<string | null>(null)
+  const initialRef = useRef('')
+
+  // Persist content at a base version; resolve with the new version. On a 409
+  // (another device saved first) rebase via 3-way merge and retry.
+  const save = useCallback(
+    async (content: string, version: number): Promise<number> => {
+      if (!note) return version
+      try {
+        const v = await saveContent(note.path, content, version)
+        baseRef.current = content
+        return v
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          const fresh = await fetchFresh(note.id)
+          const { text: merged } = merge3(baseRef.current, content, fresh.content)
+          docRef.current = merged
+          editorRef.current?.applyRemote(merged)
+          const v = await saveContent(note.path, merged, fresh.version)
+          baseRef.current = merged
+          return v
+        }
+        throw e
+      }
+    },
+    [note, saveContent, fetchFresh],
+  )
+
+  const autosave = useAutosave({ save, version: note?.version ?? 0 })
+  const { onEdit, flush } = autosave
+
+  // Seed base/doc/initial when navigating to a different note (render-time).
+  if (note && seededPath.current !== note.path) {
+    seededPath.current = note.path
+    baseRef.current = note.content
+    docRef.current = note.content
+    initialRef.current = note.content
+  }
+
+  // Apply incoming remote edits to the open note via 3-way merge. The merged
+  // text re-enters the editor, whose onChange schedules an autosave so the
+  // reconciliation persists.
   useEffect(() => {
-    if (mode === 'edit') setEditorTouched(true)
-  }, [mode])
+    if (!note) return
+    return subscribeToNoteChanges((p) => {
+      if (p.id !== note.id || p.vault_id !== vaultId || p.content == null) return
+      const local = editorRef.current?.getDoc() ?? docRef.current
+      const { text, conflict } = merge3(baseRef.current, local, p.content)
+      baseRef.current = p.content
+      docRef.current = text
+      editorRef.current?.applyRemote(text)
+      if (conflict) toast.message('Merged a conflicting change from another device')
+    })
+  }, [note?.id, vaultId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync draft only when the user navigates to a different note. Re-syncing
-  // on every `note.content` change would clobber in-progress edits whenever
-  // React Query refetched (window focus, channel-driven invalidation, etc.).
-  useEffect(() => {
-    if (note) setDraft(note.content)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note?.path])
-
-  // Signal the onboarding tour that the user opened a note. The controller
-  // listens for this on window and advances any gated step bound to it.
+  // Signal the onboarding tour that the user opened a note (step 1 gate).
   useEffect(() => {
     if (!note?.path) return
     window.dispatchEvent(
@@ -56,133 +106,81 @@ export default function NotePage() {
     )
   }, [note?.path])
 
-  // Signal the tour that the user switched into Edit mode for the first
-  // time. Gated step "Rendered live" listens for this and advances.
+  // ToC in both modes.
   useEffect(() => {
-    if (mode !== 'edit') return
-    window.dispatchEvent(new CustomEvent('engram:edit-mode-entered'))
-  }, [mode])
-
-  // Push the ToC into the app-shell right sidebar while we're in preview;
-  // clear it when leaving the page or switching to edit mode.
-  useEffect(() => {
-    if (!note || mode !== 'preview') {
+    if (!note) {
       setRightContent(null)
       return
     }
     setRightContent(<NoteToc content={note.content} />)
     return () => setRightContent(null)
-  }, [note?.path, note?.content, mode, setRightContent])
+  }, [note?.path, note?.content, setRightContent])
 
-  // Must run on every render — calling after the early returns below would
-  // change hook count between the loading/loaded states and crash React.
-  const remoteUpdate = useRemoteUpdateBanner(note?.content ?? '', draft)
-
-  if (validId === null) {
-    return <p className="p-6 text-destructive">Invalid note id.</p>
-  }
-  if (isLoading) {
-    return <p className="p-6 text-muted-foreground">Loading note…</p>
-  }
-  if (error) {
-    return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>
-  }
-  if (!note) {
-    return <p className="p-6 text-muted-foreground">Note not found</p>
-  }
-
-  const dirty = draft !== note.content
-  const saving = update.isPending
-
-  const handleSave = async () => {
-    try {
-      await update.mutateAsync({ path: note.path, content: draft, version: note.version })
-      toast.success('Note saved')
-      setMode('preview')
-    } catch (err) {
-      toast.error('Failed to save note', {
-        description: err instanceof Error ? err.message : String(err),
-      })
+  // Flush pending edits before switching notes or unmounting.
+  useEffect(() => {
+    return () => {
+      void flush()
     }
-  }
+  }, [note?.path, flush]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onEditorChange = useCallback(
+    (next: string) => {
+      docRef.current = next
+      onEdit(next)
+    },
+    [onEdit],
+  )
+
+  if (validId === null) return <p className="p-6 text-destructive">Invalid note id.</p>
+  if (isLoading) return <p className="p-6 text-muted-foreground">Loading note…</p>
+  if (error) return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>
+  if (!note) return <p className="p-6 text-muted-foreground">Note not found</p>
+
+  const statusLabel =
+    autosave.status === 'saving'
+      ? 'Saving…'
+      : autosave.status === 'error'
+        ? 'Retry'
+        : autosave.status === 'saved'
+          ? 'Saved'
+          : ''
 
   return (
-    <Tabs
-      value={mode}
-      onValueChange={(v) => setMode(v as Mode)}
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl"
-    >
+    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
-        <TabsList variant="line" data-tour="note-tabs">
-          <TabsTrigger value="preview">Preview</TabsTrigger>
-          <TabsTrigger value="edit">Edit</TabsTrigger>
-        </TabsList>
-        {mode === 'edit' && (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setDraft(note.content)}
-              disabled={!dirty || saving}
-            >
-              Revert
-            </Button>
-            <Button size="sm" onClick={handleSave} disabled={!dirty || saving}>
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setMode((m) => (m === 'live' ? 'reading' : 'live'))}
+        >
+          {mode === 'live' ? '↗ Reading view' : '✎ Edit'}
+        </Button>
+        <span className="text-xs text-muted-foreground" aria-live="polite">
+          {statusLabel}
+        </span>
       </div>
 
-      <TabsContent
-        value="preview"
-        forceMount
-        className="min-h-0 flex-1 data-[state=inactive]:hidden"
-      >
-        <ScrollArea className="h-full">
+      <ScrollArea className="h-full">
+        {mode === 'reading' ? (
           <NoteView
             content={note.content}
             title={note.title}
             tags={note.tags}
             updatedAt={note.updated_at}
           />
-        </ScrollArea>
-      </TabsContent>
-      <TabsContent
-        value="edit"
-        forceMount
-        className="min-h-0 flex-1 data-[state=inactive]:hidden"
-      >
-        {mode === 'edit' && remoteUpdate.show && (
-          <div
-            role="status"
-            className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-200"
-          >
-            <span>This note was updated elsewhere. Your unsaved edits are still here.</span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setDraft(remoteUpdate.remoteContent)}
-              >
-                Discard mine &amp; reload
-              </Button>
-              <Button variant="outline" size="sm" onClick={remoteUpdate.acknowledge}>
-                Keep mine
-              </Button>
-            </div>
+        ) : (
+          <div className="px-6 py-6 lg:px-8 lg:py-8" data-tour="note-editor">
+            <Suspense fallback={<p className="text-muted-foreground">Loading editor…</p>}>
+              <NoteEditor
+                key={note.path}
+                ref={editorRef}
+                value={initialRef.current}
+                onChange={onEditorChange}
+              />
+            </Suspense>
           </div>
         )}
-        <ScrollArea className="h-full">
-          <div className="px-6 py-6 lg:px-8 lg:py-8" data-tour="note-editor">
-            {editorTouched && (
-              <Suspense fallback={<p className="text-muted-foreground">Loading editor…</p>}>
-                <NoteEditor value={draft} onChange={setDraft} />
-              </Suspense>
-            )}
-          </div>
-        </ScrollArea>
-      </TabsContent>
-    </Tabs>
+      </ScrollArea>
+    </section>
   )
 }

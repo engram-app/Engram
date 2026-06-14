@@ -33,6 +33,7 @@
         "lucide-react": "^1.17.0",
         "mermaid": "^11.15.0",
         "next-themes": "^0.4.6",
+        "node-diff3": "^3.2.1",
         "phoenix": "^1.8.7",
         "posthog-js": "^1.379.0",
         "radix-ui": "^1.4.3",
@@ -1722,6 +1723,8 @@
     "next-themes": ["next-themes@0.4.6", "http://10.0.20.214:4873/next-themes/-/next-themes-0.4.6.tgz", { "peerDependencies": { "react": "^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc", "react-dom": "^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc" } }, "sha512-pZvgD5L0IEvX5/9GWyHMf3m8BKiVQwsCMHfoFosXtXBMnaS0ZnIJ9ST4b4NqLVKDEm8QBxoNNGNaBv2JNF6XNA=="],
 
     "nice-try": ["nice-try@1.0.5", "http://10.0.20.214:4873/nice-try/-/nice-try-1.0.5.tgz", {}, "sha512-1nh45deeb5olNY7eX82BkPO7SSxR5SSYJiPTrTdFUVYwAl8CKMA5N9PjTYkHiRjisVcxcQ1HXdLhx2qxxJzLNQ=="],
+
+    "node-diff3": ["node-diff3@3.2.1", "http://10.0.20.214:4873/node-diff3/-/node-diff3-3.2.1.tgz", {}, "sha512-eKZcJ8RtMQ3cIaA15EgmtwG927fYnRlhtdA4Q9HAcCpAZPQhhU2XptnTH9GeAkMiX2bAXxlJSAFa9shFbztPgw=="],
 
     "node-domexception": ["node-domexception@1.0.0", "http://10.0.20.214:4873/node-domexception/-/node-domexception-1.0.0.tgz", {}, "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ=="],
 
