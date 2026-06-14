@@ -64,12 +64,18 @@ function DesktopLayout() {
         >
           <AppSidebarPanel />
         </ResizablePanel>
-        <ResizableHandle withHandle />
+        <ResizableHandle />
         <ResizablePanel id="main" defaultSize="60%" minSize="30%">
           <main
             className="relative flex h-full flex-col overflow-hidden bg-muted/40 text-foreground"
             data-tour="note-viewer"
           >
+            {/* Brand grid texture on the muted backdrop, behind the centered
+                document card. No corner glows — grid only. */}
+            <div
+              aria-hidden="true"
+              className="grid-overlay pointer-events-none absolute inset-0 z-0 opacity-30"
+            />
             <TrialBanner />
             {hasRight && rightCollapsed && (
               <Button
@@ -83,12 +89,12 @@ function DesktopLayout() {
                 <PanelRightOpen />
               </Button>
             )}
-            <div className="flex-1 overflow-hidden p-6">
+            <div className="relative z-10 flex-1 overflow-hidden p-6">
               <Outlet />
             </div>
           </main>
         </ResizablePanel>
-        <ResizableHandle withHandle />
+        <ResizableHandle />
         <ResizablePanel
           id="right-sidebar"
           panelRef={rightRef}

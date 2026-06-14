@@ -5,6 +5,7 @@ import {
   type NoteSummary,
 } from '../api/queries'
 import { EmptyVaultState } from '../layout/empty-vault-state'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
@@ -96,16 +97,22 @@ export default function Dashboard() {
   return (
     <section
       aria-label="Welcome"
-      className="flex h-full flex-col items-center justify-center text-center"
+      className="flex h-full flex-col items-center justify-center"
       data-tour="dashboard-root"
     >
-      <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Welcome to Engram</h2>
-      <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-        Select a folder from the sidebar to browse your notes.
-      </p>
-      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-        Use the <strong className="font-semibold text-gray-700 dark:text-gray-200">Search</strong> icon in the sidebar to find notes by keyword or semantic query.
-      </p>
+      <Card className="max-w-md text-center">
+        <CardHeader>
+          <CardTitle className="text-xl">Welcome to Engram</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm text-muted-foreground">
+          <p>Select a folder from the sidebar to browse your notes.</p>
+          <p>
+            Use the{' '}
+            <strong className="font-semibold text-foreground">Search</strong> icon in the
+            sidebar to find notes by keyword or semantic query.
+          </p>
+        </CardContent>
+      </Card>
     </section>
   )
 }

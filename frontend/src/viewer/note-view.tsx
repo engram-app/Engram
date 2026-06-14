@@ -16,9 +16,7 @@ import MermaidBlock from './mermaid-block'
 
 interface NoteViewProps {
   content: string
-  title: string
   tags: string[]
-  updatedAt: string
 }
 
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
@@ -60,7 +58,7 @@ const TEXT_EMBED = /\.(md|canvas)$/i
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
+function NoteView({ content, tags }: NoteViewProps) {
   const isFreeTier = useIsFreeTier()
   const { frontmatter, body } = useMemo(() => {
     try {
@@ -74,14 +72,10 @@ function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
   const frontmatterEntries = Object.entries(frontmatter).filter(([, v]) => v != null && v !== '')
 
   return (
-    <article className="w-full px-4 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10">
-      <header className="mb-6 border-b border-border pb-4">
-        <h1 className="mb-1 text-3xl font-bold tracking-tight text-foreground">{title}</h1>
-        <p className="text-xs text-muted-foreground">
-          Updated {new Date(updatedAt).toLocaleString()}
-        </p>
+    <article className="w-full">
+      <header className="mb-6 empty:hidden">
         {tags.length > 0 && (
-          <ul className="mt-3 flex flex-wrap gap-1.5">
+          <ul className="flex flex-wrap gap-1.5">
             {tags.map((tag) => (
               <li
                 key={tag}
@@ -103,7 +97,7 @@ function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
           </dl>
         )}
       </header>
-      <section className="prose prose-neutral max-w-none dark:prose-invert lg:prose-lg">
+      <section className="prose prose-neutral max-w-none dark:prose-invert">
         <ReactMarkdown
           remarkPlugins={remarkPlugins as never}
           rehypePlugins={rehypePlugins as never}

@@ -1,26 +1,32 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { useEngramTree, treeStructureKey } from './use-engram-tree'
 import type { Folder, NoteSummary } from '../../api/queries'
 
 describe('treeStructureKey', () => {
   it('changes when a folder count changes (so a move rebuilds the tree)', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0 }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 1 }], [], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 1, parent_id: null }], [], 'name-asc')
+    expect(after).not.toBe(before)
+  })
+
+  it('changes when a folder is reparented (folder move rebuilds the tree)', () => {
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: 'p2' }], [], 'name-asc')
     expect(after).not.toBe(before)
   })
 
   it('changes when root notes change', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0 }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 0 }], ['n1'], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], ['n1'], 'name-asc')
     expect(after).not.toBe(before)
   })
 
   it('is stable when nothing structural changes', () => {
-    expect(treeStructureKey([{ id: 'f1', count: 2 }], ['n1'], 'name-asc')).toBe(
-      treeStructureKey([{ id: 'f1', count: 2 }], ['n1'], 'name-asc'),
-    )
+    expect(
+      treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'),
+    ).toBe(treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'))
   })
 })
 
@@ -44,5 +50,31 @@ describe('useEngramTree', () => {
     expect(result.current.tree).toBeDefined()
     expect(result.current.virtualizer).toBeDefined()
     expect(Array.isArray(result.current.items)).toBe(true)
+  })
+
+  it('rebuilds the tree when a folder-notes-by-id list changes', async () => {
+    const qc = new QueryClient()
+    const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }))
+    const spy = vi.spyOn(result.current.tree, 'rebuildTree')
+
+    // A note op (move/delete/create) mutates a by-id list. The tree must
+    // rebuild from that change alone — its folder structure key is unchanged.
+    act(() => {
+      qc.setQueryData(['folder-notes-by-id', 'v', '1'], [
+        {
+          id: 'n1',
+          path: 'Projects/n1.md',
+          title: 'n1',
+          folder: 'Projects',
+          tags: [],
+          version: 1,
+          mtime: '',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    })
+
+    await waitFor(() => expect(spy).toHaveBeenCalled())
   })
 })

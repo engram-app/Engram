@@ -46,12 +46,7 @@ vi.mock('./mermaid-block', () => ({
 
 function renderNote(content: string) {
   return render(
-    <NoteView
-      content={content}
-      title="Test"
-      tags={[]}
-      updatedAt={new Date('2026-06-07').toISOString()}
-    />,
+    <NoteView content={content} tags={[]} />,
   )
 }
 

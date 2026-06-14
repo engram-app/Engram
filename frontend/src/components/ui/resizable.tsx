@@ -1,4 +1,3 @@
-import { GripVertical } from "lucide-react"
 import type { ComponentProps } from "react"
 import * as ResizablePrimitive from "react-resizable-panels"
 
@@ -20,29 +19,23 @@ function ResizablePanelGroup({
 const ResizablePanel = ResizablePrimitive.Panel
 
 function ResizableHandle({
-  withHandle,
   className,
   ...props
-}: ComponentProps<typeof ResizablePrimitive.Separator> & {
-  withHandle?: boolean
-}) {
+}: ComponentProps<typeof ResizablePrimitive.Separator>) {
   return (
     <ResizablePrimitive.Separator
       data-slot="resizable-handle"
       className={cn(
-        "group/handle relative flex w-1 items-center justify-center bg-border transition-colors hover:bg-primary/40 active:bg-primary focus-visible:bg-primary/60 focus-visible:outline-hidden cursor-col-resize",
-        "aria-[orientation=horizontal]:h-1 aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:cursor-row-resize",
-        "[&[aria-orientation=horizontal]>div]:rotate-90",
+        // 2px hairline; a transparent `before` overlay widens the grab zone
+        // without changing layout or the visible width.
+        "relative w-0.5 bg-border transition-colors hover:bg-primary/40 active:bg-primary focus-visible:bg-primary/60 focus-visible:outline-hidden cursor-col-resize",
+        "before:absolute before:inset-y-0 before:left-1/2 before:w-3 before:-translate-x-1/2 before:content-['']",
+        "aria-[orientation=horizontal]:h-0.5 aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:cursor-row-resize",
+        "aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:inset-y-auto aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-3 aria-[orientation=horizontal]:before:w-full aria-[orientation=horizontal]:before:-translate-x-0 aria-[orientation=horizontal]:before:-translate-y-1/2",
         className,
       )}
       {...props}
-    >
-      {withHandle && (
-        <div className="z-10 flex h-8 w-4 items-center justify-center rounded-md border border-border bg-card shadow-sm transition group-hover/handle:border-primary/60 group-active/handle:border-primary group-active/handle:bg-primary/10">
-          <GripVertical className="size-3 text-muted-foreground group-hover/handle:text-foreground group-active/handle:text-primary" />
-        </div>
-      )}
-    </ResizablePrimitive.Separator>
+    />
   )
 }
 

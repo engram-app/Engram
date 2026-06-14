@@ -11,6 +11,10 @@ vi.mock('sonner', () => ({
   },
 }))
 
+// queries.ts pulls useNavigate from react-router (useCreateNote). Stub it so
+// the hooks render without a Router in these unit tests.
+vi.mock('react-router', () => ({ useNavigate: () => () => {} }))
+
 // Pin the active vault id so cache keys are deterministic for the
 // optimistic-update tests below. The hook reads from a module-scoped
 // store + localStorage; setting localStorage before module import is
@@ -45,6 +49,7 @@ import {
   useBatchMoveNotes,
   useCancelSubscription,
   useConfirmPlanChange,
+  useCreateNote,
   useDeleteFolder,
   useDeleteNote,
   useDuplicateNote,
@@ -312,6 +317,52 @@ describe('useDuplicateNote', () => {
     await expect(
       result.current.mutateAsync({ src_path: 'a.md', new_path: 'a (copy).md' }),
     ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('mirrors the optimistic placeholder into the tree by-id list', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: 'f9', parent_id: null, name: 'dst', count: 1 }],
+    })
+    seedFolderNotesById('f9', [{ id: 'a', path: 'dst/a.md' }])
+    qc.setQueryData(['folderNotes', '42', 'dst'], { notes: [] })
+
+    get.mockResolvedValue({ content: 'x' })
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useDuplicateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ src_path: 'dst/a.md', new_path: 'dst/a copy.md' })
+    })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string; path: string }>>([
+        'folder-notes-by-id',
+        '42',
+        'f9',
+      ])
+      expect(byId?.some((n) => n.path === 'dst/a copy.md')).toBe(true)
+    })
+
+    resolvePost({
+      note: {
+        id: 'real',
+        path: 'dst/a copy.md',
+        title: 'a copy',
+        folder: 'dst',
+        tags: [],
+        version: 1,
+        mtime: '',
+        created_at: '',
+        updated_at: '',
+      },
+    })
+
+    // After success the placeholder id is swapped for the server id.
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId?.some((n) => n.id === 'real')).toBe(true)
+    })
   })
 })
 
@@ -845,6 +896,112 @@ describe('useBatchDeleteNotes', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folder-notes-by-id', '42'] })
   })
+
+  it('optimistically strips deleted root notes from the folderNotes cache', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+        { id: '2', path: 'b.md', title: 'b', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'] })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes.map((n) => n.id)).toEqual(['2'])
+    })
+
+    resolvePost({ deleted: 1 })
+  })
+
+  it('rolls back the folderNotes cache when the server rejects', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+    post.mockRejectedValue(new ApiError(500, 'boom'))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: ['1'] })
+      } catch {
+        // expected
+      }
+    })
+
+    const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+    expect(root?.notes.map((n) => n.id)).toEqual(['1'])
+  })
+})
+
+describe('useCreateNote — optimistic placeholder', () => {
+  it('inserts a placeholder at root then swaps it for the real note', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useCreateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ folder: '' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string; title: string }> }>([
+        'folderNotes',
+        '42',
+        '',
+      ])
+      expect(root?.notes).toHaveLength(1)
+      expect(root?.notes[0]?.id).toMatch(/^optimistic-/)
+      expect(root?.notes[0]?.title).toBe('Untitled')
+    })
+
+    resolvePost({ note: { id: 'real-1' } })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes[0]?.id).toBe('real-1')
+    })
+  })
+
+  it('inserts a placeholder into the by-id list for a subfolder', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: 'f9', parent_id: null, name: 'sub', count: 0 }],
+    })
+    qc.setQueryData(['folder-notes-by-id', '42', 'f9'], [])
+    qc.setQueryData(['folderNotes', '42', 'sub'], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useCreateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ folder: 'sub' })
+    })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId).toHaveLength(1)
+      expect(byId?.[0]?.id).toMatch(/^optimistic-/)
+    })
+
+    resolvePost({ note: { id: 'real-2' } })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId?.[0]?.id).toBe('real-2')
+    })
+  })
 })
 
 describe('useBatchMoveNotes', () => {
@@ -902,6 +1059,118 @@ describe('useBatchMoveNotes', () => {
 
     const src = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '5'])
     expect(src?.map((n) => n.id).sort()).toEqual(['1', '2', '3'])
+  })
+
+  it('optimistically updates folder counts so the tree rebuilds on a move', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [
+        { id: '5', parent_id: null, name: 'src', count: 3 },
+        { id: '9', parent_id: null, name: 'dst', count: 1 },
+      ],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }, { id: '3' }])
+    seedFolderNotesById('9', [{ id: '4' }])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1', '2'], target_folder_id: '9' })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+      const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]))
+      expect(byId['5']).toBe(1) // 3 source notes - 2 moved
+      expect(byId['9']).toBe(3) // 1 target note + 2 moved
+    })
+
+    resolvePost({ moved: 2 })
+  })
+
+  it('rolls back folder counts on server error', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [
+        { id: '5', parent_id: null, name: 'src', count: 3 },
+        { id: '9', parent_id: null, name: 'dst', count: 1 },
+      ],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }, { id: '3' }])
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: ['1', '2'], target_folder_id: '9' })
+      } catch {
+        // expected
+      }
+    })
+
+    const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+    const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]))
+    expect(byId['5']).toBe(3)
+    expect(byId['9']).toBe(1)
+  })
+
+  it('moves notes to the vault root: appends to the root list, strips the source', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: '5', parent_id: null, name: 'src', count: 2 }],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }])
+    qc.setQueryData(['folderNotes', '42', ''], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder_id: 'root' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string; folder: string }> }>([
+        'folderNotes',
+        '42',
+        '',
+      ])
+      expect(root?.notes.map((n) => n.id)).toContain('1')
+      expect(root?.notes.find((n) => n.id === '1')?.folder).toBe('')
+      const src = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '5'])
+      expect(src?.map((n) => n.id)).toEqual(['2'])
+    })
+
+    resolvePost({ moved: 1 })
+  })
+
+  it('moves a note FROM the root into a folder (strips the root list)', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: '9', parent_id: null, name: 'dst', count: 0 }],
+    })
+    qc.setQueryData(['folder-notes-by-id', '42', '9'], [])
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder_id: '9' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes.map((n) => n.id)).toEqual([])
+      const dst = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '9'])
+      expect(dst?.map((n) => n.id)).toContain('1')
+    })
+
+    resolvePost({ moved: 1 })
   })
 })
 

@@ -35,17 +35,19 @@ type Data = LoaderItem
 
 /**
  * Stable structural fingerprint that drives `rebuildTree()`. Includes each
- * folder's `count` (not just its id) so a move/create/delete — which changes
- * counts but no folder ids — still changes the key and rebuilds the tree.
- * Without the count, headless-tree keeps a stale per-folder child list after a
- * move until the user manually collapses/expands the folder.
+ * folder's `count` AND `parent_id` (not just its id) so both kinds of move
+ * rebuild the tree:
+ *  - a note move bumps the source/target folder `count` (see useBatchMoveNotes),
+ *  - a folder move reparents it, changing `parent_id`.
+ * Without these, headless-tree keeps a stale per-folder child list after a move
+ * until the user manually collapses/expands the folder.
  */
 export function treeStructureKey(
-  folders: Pick<Folder, 'id' | 'count'>[],
+  folders: Pick<Folder, 'id' | 'count' | 'parent_id'>[],
   rootNoteIds: string[],
   sort: SortKey,
 ): string {
-  const folderKey = folders.map((f) => `${f.id}:${f.count}`).join('|')
+  const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ''}`).join('|')
   return `${folderKey}::${rootNoteIds.join('|')}::${sort}`
 }
 
@@ -174,6 +176,36 @@ export function useEngramTree(deps: Deps) {
     lastKey.current = structureKey
     tree.rebuildTree()
   }, [tree, structureKey])
+
+  // The structure key above only tracks the `folders` cache + root note ids, so
+  // it's blind to per-folder note-list changes. Optimistic note ops (move,
+  // delete, create, duplicate) mutate the `folder-notes-by-id` lists the loader
+  // reads — without this, the tree wouldn't rebuild until a refetch or a manual
+  // collapse/expand. Subscribe to those cache writes and rebuild (coalesced via
+  // a microtask so a batch op that patches many lists triggers a single pass).
+  useEffect(() => {
+    const cache = deps.qc.getQueryCache()
+    let scheduled = false
+    const schedule = () => {
+      if (scheduled) return
+      scheduled = true
+      queueMicrotask(() => {
+        scheduled = false
+        treeRef.current?.rebuildTree()
+      })
+    }
+    const unsubscribe = cache.subscribe((event) => {
+      const key = event.query.queryKey
+      if (!Array.isArray(key) || key[0] !== 'folder-notes-by-id' || key[1] !== deps.vaultId) {
+        return
+      }
+      // Data presence/content changes only — ignore fetch-status churn
+      // (pending/error) that would rebuild for no structural reason.
+      if (event.type === 'added' || event.type === 'removed') schedule()
+      else if (event.type === 'updated' && event.action.type === 'success') schedule()
+    })
+    return unsubscribe
+  }, [deps.qc, deps.vaultId])
 
   const items = tree.getItems()
 

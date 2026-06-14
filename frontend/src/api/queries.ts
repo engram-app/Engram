@@ -185,9 +185,15 @@ export function useNote(id: string | null) {
   const vaultId = useActiveVaultId()
   return useQuery({
     queryKey: ['note', vaultId, id],
-    queryFn: () => api.get<Note>(`/notes/by-id/${id}`),
+    queryFn: () => fetchNoteById(id as string),
     enabled: id != null,
   })
+}
+
+// Single source for the by-id note fetch — shared by useNote's queryFn and the
+// 409-rebase path (useFetchNoteFresh) so the endpoint lives in one place.
+function fetchNoteById(id: string): Promise<Note> {
+  return api.get<Note>(`/notes/by-id/${id}`)
 }
 
 export function useUpdateNote() {
@@ -212,21 +218,112 @@ export function useUpdateNote() {
   })
 }
 
+// Imperative content save for autosave. Returns the NEW version; throws
+// ApiError (status 409 on a version conflict) so callers can 3-way merge.
+//
+// Unlike useUpdateNote (shared with onboarding) this does NOT invalidate the
+// note or folder listings: a content save can't change a note's tree position
+// or title (title derives from the filename), so refetching the note + folder
+// lists on every debounced keystroke is pure waste. Instead it patches the
+// note cache in place so a later note-switch round-trip still reads fresh
+// content. Tree tag/mtime staleness reconciles on the next navigation.
+export function useSaveNoteContent() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return async (path: string, content: string, version: number): Promise<number> => {
+    const { note } = await api.post<{ note: Note }>('/notes', {
+      path,
+      content,
+      version,
+      mtime: Date.now() / 1000,
+    })
+    if (note?.id) {
+      qc.setQueryData<Note>(['note', vaultId, note.id], (prev) =>
+        prev
+          ? {
+              ...prev,
+              content,
+              version: note.version,
+              mtime: note.mtime ?? prev.mtime,
+              updated_at: note.updated_at ?? prev.updated_at,
+            }
+          : prev,
+      )
+    }
+    return note.version
+  }
+}
+
+// Fetch the freshest server copy of a note by id (used to rebase on a 409).
+export function useFetchNoteFresh() {
+  return fetchNoteById
+}
+
+type NoteListShape = 'legacy' | 'byId'
+
+interface CreateNoteContext {
+  key: readonly unknown[]
+  shape: NoteListShape
+  snapshot: unknown
+  placeholderId: string
+}
+
+// Replace the row whose id === `id` in a note-list cache, handling both shapes
+// the tree reads: path-keyed `{ notes }` (root/legacy) and id-keyed
+// `NoteSummary[]` (subfolders). Used to swap an optimistic placeholder for the
+// server row. No-op when the list isn't cached.
+function patchRowInList(
+  qc: QueryClient,
+  key: readonly unknown[],
+  shape: NoteListShape,
+  id: string,
+  patch: Partial<NoteSummary>,
+): void {
+  if (shape === 'legacy') {
+    const cur = qc.getQueryData<{ notes: NoteSummary[] }>(key)
+    if (cur) {
+      qc.setQueryData<{ notes: NoteSummary[] }>(key, {
+        notes: cur.notes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      })
+    }
+  } else {
+    const cur = qc.getQueryData<NoteSummary[]>(key)
+    if (cur) {
+      qc.setQueryData<NoteSummary[]>(
+        key,
+        cur.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      )
+    }
+  }
+}
+
+// Filenames in a note list, ignoring our own optimistic placeholders (so a
+// freshly-inserted placeholder doesn't bump the name the server picks).
+function realFilenames(notes: NoteSummary[]): Set<string> {
+  return new Set(
+    notes
+      .filter((n) => !n.id.startsWith('optimistic-'))
+      .map((n) => n.path.split('/').pop() ?? n.path),
+  )
+}
+
 export function useCreateNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()
   const navigate = useNavigate()
 
-  return useMutation<{ path: string; id: string }, ApiError, { folder: string }>({
+  return useMutation<
+    { path: string; id: string },
+    ApiError,
+    { folder: string },
+    CreateNoteContext | undefined
+  >({
     mutationFn: async ({ folder }) => {
       const existingNotes =
         qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
-      const existingNames = new Set(
-        existingNotes.map((n) => {
-          const segments = n.path.split('/')
-          return segments[segments.length - 1] ?? n.path
-        }),
-      )
+      // Exclude optimistic placeholders so the server name matches the one we
+      // showed optimistically (no needless "Untitled 1" bump from our own row).
+      const existingNames = realFilenames(existingNotes)
 
       const MAX_RACES = 5
       for (let attempt = 0; attempt < MAX_RACES; attempt++) {
@@ -249,12 +346,75 @@ export function useCreateNote() {
       }
       throw new ApiError(500, 'useCreateNote: exceeded race retries')
     },
-    onSuccess: ({ id }, vars) => {
+    // Drop a placeholder row into the cache the tree reads so a new note shows
+    // instantly (on-disk feel), then swap it for the server row on success.
+    onMutate: async ({ folder }) => {
+      // Root notes live in the path-keyed list; subfolders in the by-id list.
+      let key: readonly unknown[]
+      let shape: 'legacy' | 'byId'
+      if (folder === '') {
+        key = ['folderNotes', vaultId, '']
+        shape = 'legacy'
+      } else {
+        const f = qc
+          .getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+          ?.folders.find((x) => x.name === folder)
+        if (!f) return undefined
+        key = ['folder-notes-by-id', vaultId, f.id]
+        shape = 'byId'
+      }
+      await qc.cancelQueries({ queryKey: key })
+
+      const snapshot = qc.getQueryData(key)
+      // Not cached (e.g. an unexpanded subfolder) — skip; it surfaces on expand.
+      if (snapshot === undefined) return undefined
+
+      const existing: NoteSummary[] =
+        shape === 'legacy' ? (snapshot as { notes: NoteSummary[] }).notes : (snapshot as NoteSummary[])
+      const name = collideBump(realFilenames(existing), 'Untitled.md', { cap: 1000 })
+      const path = folder ? `${folder}/${name}` : name
+      const now = new Date().toISOString()
+      const placeholderId = `optimistic-${crypto.randomUUID()}`
+      const placeholder: NoteSummary = {
+        id: placeholderId,
+        path,
+        title: name.replace(/\.md$/, ''),
+        folder,
+        tags: [],
+        version: 1,
+        mtime: now,
+        created_at: now,
+        updated_at: now,
+      }
+
+      if (shape === 'legacy') {
+        qc.setQueryData<{ notes: NoteSummary[] }>(key, {
+          notes: [...(snapshot as { notes: NoteSummary[] }).notes, placeholder],
+        })
+      } else {
+        qc.setQueryData<NoteSummary[]>(key, [...(snapshot as NoteSummary[]), placeholder])
+      }
+      return { key, shape, snapshot, placeholderId }
+    },
+    onSuccess: ({ id, path }, vars, ctx) => {
+      // Swap the placeholder for the server-assigned id/path.
+      if (ctx) {
+        const filename = path.split('/').pop() ?? path
+        patchRowInList(qc, ctx.key, ctx.shape, ctx.placeholderId, {
+          id,
+          path,
+          title: filename.replace(/\.md$/, ''),
+        })
+      }
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
+      // Only the target folder's by-id list changed — no need to stale the
+      // whole prefix (which would force every folder to refetch on next expand).
+      if (ctx?.shape === 'byId') qc.invalidateQueries({ queryKey: ctx.key })
       navigate(`/note/${id}`)
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.snapshot)
       if (err instanceof ApiError && err.status === 402) {
         toast.error("You've hit your note limit — upgrade to add more.")
       } else if (err instanceof ApiError && err.status === 403) {
@@ -1062,7 +1222,7 @@ export function useRenameNote() {
             // can rely on tree shape here.
             next = [
               ...next,
-              { id: `optimistic-${Date.now()}`, parent_id: null, name: newFolder, count: 1 },
+              { id: `optimistic-${crypto.randomUUID()}`, parent_id: null, name: newFolder, count: 1 },
             ]
           } else {
             // Root files don't get a synthetic '' entry — folders() filters
@@ -1380,6 +1540,10 @@ interface DuplicateNoteContext {
   newFolder: string
   newFolderNotes: { notes: NoteSummary[] } | undefined
   placeholderId: string
+  // The id-keyed list the tree reads (set only for a non-root target folder
+  // whose list is cached), plus its snapshot for rollback.
+  byIdKey?: readonly unknown[]
+  byIdNotes?: NoteSummary[]
 }
 
 export function useDuplicateNote() {
@@ -1407,7 +1571,7 @@ export function useDuplicateNote() {
       // Placeholder id — the real one arrives with the POST response.
       // `optimistic-` prefix avoids collisions with real backend uuids;
       // onSuccess swaps it for the server-assigned id in the cached list.
-      const placeholderId = `optimistic-${Date.now()}`
+      const placeholderId = `optimistic-${crypto.randomUUID()}`
       const ctx: DuplicateNoteContext = {
         newFolder,
         newFolderNotes: qc.getQueryData<{ notes: NoteSummary[] }>(listKey),
@@ -1437,41 +1601,61 @@ export function useDuplicateNote() {
           notes: [...prev.notes.filter((n) => n.path !== new_path), placeholder],
         }))
       }
+
+      // Mirror into the id-keyed list the tree actually reads (subfolders).
+      // Root targets (newFolder === '') have no folders-cache row and surface
+      // via the rootNotes path above. Only patch when the list is cached;
+      // otherwise the dupe lands on the next expand fetch.
+      if (newFolder) {
+        const targetFolder = qc
+          .getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+          ?.folders.find((f) => f.name === newFolder)
+        if (targetFolder) {
+          const byIdKey = ['folder-notes-by-id', vaultId, targetFolder.id] as const
+          // Cancel before reading+writing so an in-flight refetch of this list
+          // can't resolve afterwards and clobber the optimistic placeholder.
+          await qc.cancelQueries({ queryKey: byIdKey })
+          const byIdNotes = qc.getQueryData<NoteSummary[]>(byIdKey)
+          if (byIdNotes) {
+            ctx.byIdKey = byIdKey
+            ctx.byIdNotes = byIdNotes
+            qc.setQueryData<NoteSummary[]>(byIdKey, [
+              ...byIdNotes.filter((n) => n.path !== new_path),
+              placeholder,
+            ])
+          }
+        }
+      }
       return ctx
     },
     onSuccess: (data, _vars, ctx) => {
       if (!ctx) return
       const real = data.note
       if (!real?.id) return
-      // Swap the placeholder row for the real server-assigned id so
-      // any tree consumer using `n.id` as a stable key transitions
-      // smoothly. onSettled below also invalidates, but the swap
-      // avoids a momentary "missing note" flash for the placeholder.
-      const listKey = ['folderNotes', vaultId, ctx.newFolder]
-      const curr = qc.getQueryData<{ notes: NoteSummary[] }>(listKey)
-      if (!curr) return
-      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, {
-        notes: curr.notes.map((n) =>
-          n.id === ctx.placeholderId
-            ? {
-                ...n,
-                id: real.id,
-                path: real.path ?? n.path,
-                title: real.title ?? n.title,
-                folder: real.folder ?? n.folder,
-                tags: real.tags ?? n.tags,
-                version: real.version ?? n.version,
-                mtime: real.mtime ?? n.mtime,
-                created_at: real.created_at ?? n.created_at,
-                updated_at: real.updated_at ?? n.updated_at,
-              }
-            : n,
-        ),
-      })
+      // Swap the placeholder for the real server row in BOTH lists the tree may
+      // read (path-keyed root/legacy + id-keyed subfolder), so a tree consumer
+      // keying on `n.id` transitions smoothly. onSettled also invalidates; the
+      // swap avoids a momentary "missing note" flash.
+      const patch: Partial<NoteSummary> = {
+        id: real.id,
+        path: real.path,
+        title: real.title,
+        folder: real.folder,
+        tags: real.tags,
+        version: real.version,
+        mtime: real.mtime,
+        created_at: real.created_at,
+        updated_at: real.updated_at,
+      }
+      patchRowInList(qc, ['folderNotes', vaultId, ctx.newFolder], 'legacy', ctx.placeholderId, patch)
+      if (ctx.byIdKey) patchRowInList(qc, ctx.byIdKey, 'byId', ctx.placeholderId, patch)
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.newFolderNotes !== undefined) {
         qc.setQueryData(['folderNotes', vaultId, ctx.newFolder], ctx.newFolderNotes)
+      }
+      if (ctx?.byIdKey && ctx.byIdNotes !== undefined) {
+        qc.setQueryData(ctx.byIdKey, ctx.byIdNotes)
       }
       if (err.status === 409) {
         toast.error('A note with that name already exists.')
@@ -1482,6 +1666,7 @@ export function useDuplicateNote() {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
     },
   })
 }
@@ -1516,6 +1701,12 @@ interface BatchNotesContext {
   // Every by-id list we patched. We keep the snapshot map ordered by the
   // QueryClient cache scan so rollback restores under the same key.
   noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>
+  // Folders cache snapshot — present only when a move patched folder counts
+  // (so the tree's structure key changes and it rebuilds). Used for rollback.
+  folders?: { folders: Folder[] }
+  // Path-keyed folderNotes snapshots (root notes live here, not in by-id
+  // lists). Patched by batch delete so a root note disappears optimistically.
+  legacyListSnapshots?: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>
 }
 
 export function useBatchDeleteNotes() {
@@ -1535,6 +1726,7 @@ export function useBatchDeleteNotes() {
       ),
     onMutate: async ({ ids }) => {
       await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
       const idSet = new Set(ids)
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
@@ -1551,17 +1743,33 @@ export function useBatchDeleteNotes() {
         )
       }
 
+      // Root notes (and any legacy path-keyed consumers) live in
+      // ['folderNotes', vaultId, folder] as { notes }, not the by-id lists —
+      // strip them here too so a deleted root note disappears optimistically.
+      const legacyListSnapshots: BatchNotesContext['legacyListSnapshots'] = []
+      for (const q of qc.getQueryCache().findAll({ queryKey: ['folderNotes', vaultId] })) {
+        const data = qc.getQueryData<{ notes: NoteSummary[] }>(q.queryKey)
+        if (!data) continue
+        legacyListSnapshots.push({ key: q.queryKey, data })
+        qc.setQueryData<{ notes: NoteSummary[] }>(q.queryKey, {
+          notes: data.notes.filter((n) => !idSet.has(n.id)),
+        })
+      }
+
       // Drop any cached note body for the deleted ids so a stale
       // useNote(id) subscriber 404s on remount instead of rendering.
       for (const id of ids) {
         qc.removeQueries({ queryKey: ['note', vaultId, id] })
       }
 
-      return { noteListSnapshots: snapshots }
+      return { noteListSnapshots: snapshots, legacyListSnapshots }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
       for (const snap of ctx.noteListSnapshots) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      for (const snap of ctx.legacyListSnapshots ?? []) {
         qc.setQueryData(snap.key, snap.data)
       }
       toast.error('Batch delete failed.')
@@ -1591,25 +1799,29 @@ export function useBatchMoveNotes() {
       ),
     onMutate: async ({ ids, target_folder_id }) => {
       await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
+      await qc.cancelQueries({ queryKey: ['folders', vaultId] })
       const idSet = new Set(ids)
 
-      // Resolve the target folder's path so we can patch `folder` /
-      // `path` fields on the moved NoteSummaries. If the folders cache
-      // isn't seeded we just skip those fields — they'll reconcile on
-      // the success invalidation.
+      // Destination path: a real folder's name, or '' for the vault root
+      // (target_folder_id === 'root', the backend sentinel — no folders row).
       const foldersCache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
-      const targetFolderName =
-        foldersCache?.folders.find((f) => f.id === target_folder_id)?.name ?? null
+      const targetIsRoot = target_folder_id === 'root'
+      const targetFolderName = targetIsRoot
+        ? ''
+        : (foldersCache?.folders.find((f) => f.id === target_folder_id)?.name ?? null)
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
+      const legacyListSnapshots: BatchNotesContext['legacyListSnapshots'] = []
       const moved: NoteSummary[] = []
-      const queries = qc
-        .getQueryCache()
-        .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
+      // How many notes left each source folder — used to decrement folder
+      // counts below so the tree's structure key changes and it rebuilds.
+      const removedPerFolder = new Map<string, number>()
 
-      // First pass: strip moved notes from every source list (capture the
-      // rows so we can re-attach them to the target list).
-      for (const q of queries) {
+      // First pass: strip moved notes from every source list (capture the rows
+      // so we can re-attach them to the target). Subfolders live in by-id lists;
+      // root notes live in the path-keyed folderNotes[''] list.
+      for (const q of qc.getQueryCache().findAll({ queryKey: ['folder-notes-by-id', vaultId] })) {
         const data = qc.getQueryData<NoteSummary[]>(q.queryKey)
         if (!data) continue
         snapshots.push({ key: q.queryKey, data })
@@ -1618,35 +1830,61 @@ export function useBatchMoveNotes() {
         for (const n of data) {
           if (idSet.has(n.id) && folderId !== target_folder_id) {
             moved.push(n)
+            if (typeof folderId === 'string') {
+              removedPerFolder.set(folderId, (removedPerFolder.get(folderId) ?? 0) + 1)
+            }
           } else {
             keep.push(n)
           }
         }
         qc.setQueryData<NoteSummary[]>(q.queryKey, keep)
       }
+      for (const q of qc.getQueryCache().findAll({ queryKey: ['folderNotes', vaultId] })) {
+        const data = qc.getQueryData<{ notes: NoteSummary[] }>(q.queryKey)
+        if (!data) continue
+        const sourcePath = q.queryKey[2] as string | undefined
+        // Skip the destination list itself (a same-list move is a no-op).
+        if (targetIsRoot && sourcePath === '') continue
+        legacyListSnapshots.push({ key: q.queryKey, data })
+        const keep: NoteSummary[] = []
+        for (const n of data.notes) {
+          if (idSet.has(n.id)) moved.push(n)
+          else keep.push(n)
+        }
+        qc.setQueryData<{ notes: NoteSummary[] }>(q.queryKey, { notes: keep })
+      }
 
-      // Second pass: append the moved rows to the target list (if
-      // cached). Rewrite `folder` + `path` so the row looks at-home.
-      const targetKey = ['folder-notes-by-id', vaultId, target_folder_id] as const
-      const targetData = qc.getQueryData<NoteSummary[]>(targetKey)
-      if (targetData && moved.length > 0) {
+      // Second pass: append the moved rows to the destination list (if cached),
+      // rewriting folder + path so each row looks at-home.
+      if (moved.length > 0 && targetFolderName !== null) {
+        const dest = targetFolderName
         const patched = moved.map<NoteSummary>((n) => {
           const filename = n.path.includes('/')
             ? n.path.slice(n.path.lastIndexOf('/') + 1)
             : n.path
-          const nextFolder = targetFolderName ?? n.folder
-          return {
-            ...n,
-            folder: nextFolder,
-            path: nextFolder ? `${nextFolder}/${filename}` : filename,
-          }
+          return { ...n, folder: dest, path: dest ? `${dest}/${filename}` : filename }
         })
-        qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched])
+        if (targetIsRoot) {
+          const rootKey = ['folderNotes', vaultId, ''] as const
+          const rootData = qc.getQueryData<{ notes: NoteSummary[] }>(rootKey)
+          if (rootData) {
+            legacyListSnapshots.push({ key: rootKey, data: rootData })
+            qc.setQueryData<{ notes: NoteSummary[] }>(rootKey, {
+              notes: [...rootData.notes, ...patched],
+            })
+          }
+        } else {
+          const targetKey = ['folder-notes-by-id', vaultId, target_folder_id] as const
+          const targetData = qc.getQueryData<NoteSummary[]>(targetKey)
+          if (targetData) qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched])
+        }
       }
 
-      // Patch the individual `['note', vaultId, id]` caches so an open
-      // viewer reflects the new folder. Path/folder shift; id stable.
+      // Patch the individual `['note', vaultId, id]` caches so an open viewer
+      // reflects the new folder. Path/folder shift; id stable. Applies to root
+      // targets too (dest === '').
       if (targetFolderName !== null) {
+        const dest = targetFolderName
         for (const id of ids) {
           const note = qc.getQueryData<Note>(['note', vaultId, id])
           if (!note) continue
@@ -1655,19 +1893,48 @@ export function useBatchMoveNotes() {
             : note.path
           qc.setQueryData<Note>(['note', vaultId, id], {
             ...note,
-            folder: targetFolderName,
-            path: targetFolderName ? `${targetFolderName}/${filename}` : filename,
+            folder: dest,
+            path: dest ? `${dest}/${filename}` : filename,
           })
         }
       }
 
-      return { noteListSnapshots: snapshots }
+      // Bump folder counts: each source loses what it shed, the target gains
+      // the total moved. Two reasons, both load-bearing: (1) keeps the folder
+      // count value accurate (used by the delete-confirm child count) without a
+      // refetch, and (2) flips the folders cache so the tree's structure key
+      // (id:count:parent_id) changes and it rebuilds. The by-id cache write
+      // also rebuilds via the useEngramTree subscription, so this is belt-and-
+      // suspenders for rebuild but the SOLE optimistic source for the count.
+      // Snapshot for rollback. Skipped when nothing moved; for a root target
+      // ('root' has no folder row) sources still decrement.
+      let foldersSnapshot: { folders: Folder[] } | undefined
+      if (moved.length > 0 || removedPerFolder.size > 0) {
+        const cache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+        if (cache) {
+          foldersSnapshot = cache
+          const patched = cache.folders.map((f) => {
+            let count = f.count
+            const removed = removedPerFolder.get(f.id)
+            if (removed) count -= removed
+            if (f.id === target_folder_id) count += moved.length
+            return count === f.count ? f : { ...f, count }
+          })
+          qc.setQueryData<{ folders: Folder[] }>(['folders', vaultId], { folders: patched })
+        }
+      }
+
+      return { noteListSnapshots: snapshots, legacyListSnapshots, folders: foldersSnapshot }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
       for (const snap of ctx.noteListSnapshots) {
         qc.setQueryData(snap.key, snap.data)
       }
+      for (const snap of ctx.legacyListSnapshots ?? []) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
       toast.error('Batch move failed.')
     },
     onSuccess: () => {
