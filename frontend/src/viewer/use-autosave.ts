@@ -6,24 +6,47 @@ interface UseAutosaveArgs {
   // Persist content at the given base version; resolve with the NEW version.
   save: (content: string, version: number) => Promise<number>
   version: number
+  // Identity of the note being edited. A change resets the tracked version to
+  // `version` (a different note has its own version line); within one note the
+  // version only advances, so a stale refetch can't regress it under a save.
+  noteId: string | null
+  onError?: (err: unknown) => void
   debounceMs?: number
 }
 
-export function useAutosave({ save, version, debounceMs = 800 }: UseAutosaveArgs) {
+export function useAutosave({ save, version, noteId, onError, debounceMs = 800 }: UseAutosaveArgs) {
   const [status, setStatus] = useState<SaveStatus>('idle')
   const [dirty, setDirty] = useState(false)
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pending = useRef<string | null>(null) // latest unsaved content
   const versionRef = useRef(version)
+  const lastNoteId = useRef(noteId)
   const saveRef = useRef(save)
+  const onErrorRef = useRef(onError)
 
   useEffect(() => {
-    versionRef.current = version
-  }, [version])
+    // Reset on note switch; otherwise only move forward — never clobber a
+    // version a just-completed save advanced past the (lagging) prop.
+    if (noteId !== lastNoteId.current) {
+      lastNoteId.current = noteId
+      versionRef.current = version
+    } else if (version > versionRef.current) {
+      versionRef.current = version
+    }
+  }, [noteId, version])
   useEffect(() => {
     saveRef.current = save
   }, [save])
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  // Explicitly advance the tracked version — e.g. after a remote merge applied
+  // a newer server revision, so the next save bases off it instead of 409ing.
+  const setVersion = useCallback((v: number) => {
+    if (v > versionRef.current) versionRef.current = v
+  }, [])
 
   const runSave = useCallback(async () => {
     if (pending.current == null) return
@@ -38,10 +61,11 @@ export function useAutosave({ save, version, debounceMs = 800 }: UseAutosaveArgs
         setDirty(false)
         setStatus('saved')
       }
-    } catch {
+    } catch (err) {
       pending.current = content // requeue for retry/flush
       setDirty(true)
       setStatus('error')
+      onErrorRef.current?.(err)
     }
   }, [])
 
@@ -72,5 +96,5 @@ export function useAutosave({ save, version, debounceMs = 800 }: UseAutosaveArgs
     return () => window.removeEventListener('beforeunload', handler)
   }, [flush])
 
-  return { status, dirty, onEdit, flush }
+  return { status, dirty, onEdit, flush, setVersion, retry: flush }
 }

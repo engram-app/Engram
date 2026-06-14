@@ -2,7 +2,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { Prec } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import CodeMirror from '@uiw/react-codemirror'
-import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react'
 import { useTheme } from '../theme/theme-provider'
 import { computeReplacement } from './merge'
 
@@ -77,6 +77,18 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
 ) {
   const { resolved } = useTheme()
   const viewRef = useRef<EditorView | null>(null)
+  // True while applyRemote is dispatching, so the resulting (synchronous)
+  // onChange isn't echoed back as a local edit — which would schedule a
+  // redundant autosave of the just-merged text at a stale version (409 loop).
+  const applyingRemote = useRef(false)
+
+  const handleChange = useCallback(
+    (next: string) => {
+      if (applyingRemote.current) return
+      onChange(next)
+    },
+    [onChange],
+  )
 
   useImperativeHandle(ref, () => ({
     applyRemote(nextText: string) {
@@ -85,7 +97,12 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
       const cur = view.state.doc.toString()
       if (cur === nextText) return
       const { from, to, insert } = computeReplacement(cur, nextText)
-      view.dispatch({ changes: { from, to, insert } })
+      applyingRemote.current = true
+      try {
+        view.dispatch({ changes: { from, to, insert } })
+      } finally {
+        applyingRemote.current = false
+      }
     },
     getDoc() {
       return viewRef.current?.state.doc.toString() ?? value
@@ -95,7 +112,7 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
   return (
     <CodeMirror
       value={value}
-      onChange={onChange}
+      onChange={handleChange}
       onCreateEditor={(view) => {
         viewRef.current = view
       }}

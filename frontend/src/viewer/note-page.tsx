@@ -59,7 +59,18 @@ export default function NotePage() {
         return v
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {
-          const fresh = await fetchFresh(note.id)
+          let fresh: Awaited<ReturnType<typeof fetchFresh>>
+          try {
+            fresh = await fetchFresh(note.id)
+          } catch (fe) {
+            // The note was deleted on another device mid-edit: there's nothing
+            // to rebase onto. Surface it specifically instead of a generic
+            // retry loop, then let the save settle into the error state.
+            if (fe instanceof ApiError && fe.status === 404) {
+              toast.error('This note was deleted on another device.')
+            }
+            throw fe
+          }
           const { text: merged } = merge3(baseRef.current, content, fresh.content)
           docRef.current = merged
           editorRef.current?.applyRemote(merged)
@@ -73,8 +84,17 @@ export default function NotePage() {
     [note, saveContent, fetchFresh],
   )
 
-  const autosave = useAutosave({ save, version: note?.version ?? 0 })
-  const { onEdit, flush } = autosave
+  const autosave = useAutosave({
+    save,
+    version: note?.version ?? 0,
+    noteId: note?.id ?? null,
+    onError: (e) => {
+      // 404 (deleted) is toasted specifically in `save`; avoid double-toasting.
+      if (e instanceof ApiError && e.status === 404) return
+      toast.error('Couldn’t save your changes — use Retry to try again.')
+    },
+  })
+  const { onEdit, flush, setVersion } = autosave
 
   // Seed base/doc when navigating to a different note (render-time).
   if (note && seededPath.current !== note.path) {
@@ -83,9 +103,10 @@ export default function NotePage() {
     docRef.current = note.content
   }
 
-  // Apply incoming remote edits to the open note via 3-way merge. The merged
-  // text re-enters the editor, whose onChange schedules an autosave so the
-  // reconciliation persists.
+  // Apply incoming remote edits to the open note via 3-way merge. applyRemote
+  // no longer echoes through onChange (see note-editor), so persist any merged-
+  // in local edits explicitly: adopt the remote version as the new base, then
+  // schedule a save of the merged text only when it differs from the remote.
   useEffect(() => {
     if (!note) return
     return subscribeToNoteChanges((p) => {
@@ -95,6 +116,8 @@ export default function NotePage() {
       baseRef.current = p.content
       docRef.current = text
       editorRef.current?.applyRemote(text)
+      if (p.version != null) setVersion(p.version)
+      if (text !== p.content) onEdit(text)
       if (conflict) toast.message('Merged a conflicting change from another device')
     })
   }, [note?.id, vaultId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -140,11 +163,9 @@ export default function NotePage() {
   const statusLabel =
     autosave.status === 'saving'
       ? 'Saving…'
-      : autosave.status === 'error'
-        ? 'Retry'
-        : autosave.status === 'saved'
-          ? 'Saved'
-          : ''
+      : autosave.status === 'saved'
+        ? 'Saved'
+        : ''
 
   // folder/file path for the header; long paths ellipsis from the LEFT
   // (dir=rtl below) so the filename end stays visible: ".../folder/file".
@@ -154,7 +175,17 @@ export default function NotePage() {
     <section className="mx-auto -my-6 flex h-[calc(100%+3rem)] min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-x border-border bg-card text-card-foreground">
       <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" aria-live="polite">
-          {statusLabel}
+          {autosave.status === 'error' ? (
+            <button
+              type="button"
+              onClick={() => void autosave.retry()}
+              className="font-medium text-destructive underline-offset-2 hover:underline"
+            >
+              Save failed — Retry
+            </button>
+          ) : (
+            statusLabel
+          )}
         </span>
         <h2
           dir="rtl"

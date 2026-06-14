@@ -10,17 +10,21 @@ import NoteEditor, { type NoteEditorHandle } from './note-editor'
 // reconfigures continuously while typing.
 const capturedExtensions: unknown[] = []
 let lastDispatch: ReturnType<typeof vi.fn>
+let lastOnChange: ((value: string) => void) | undefined
 
 vi.mock('@uiw/react-codemirror', () => ({
   default: (props: {
     extensions: unknown
     value: string
+    onChange?: (value: string) => void
     onCreateEditor?: (view: unknown) => void
   }) => {
     capturedExtensions.push(props.extensions)
-    lastDispatch = vi.fn()
-    // Hand back a minimal EditorView-shaped object so the imperative handle
-    // can read the doc + dispatch a change.
+    lastOnChange = props.onChange
+    // Real @uiw fires onChange synchronously from the update listener on every
+    // dispatch (unless the txn carries its ExternalChange annotation). Mirror
+    // that so we can prove applyRemote's echo is suppressed.
+    lastDispatch = vi.fn(() => props.onChange?.('echoed-from-dispatch'))
     const fakeView = {
       state: { doc: { toString: () => props.value } },
       dispatch: lastDispatch,
@@ -69,5 +73,26 @@ describe('NoteEditor imperative applyRemote', () => {
     ref.current!.applyRemote('same')
 
     expect(lastDispatch).not.toHaveBeenCalled()
+  })
+
+  it('suppresses the onChange echo from applyRemote (no autosave feedback loop)', () => {
+    const onChange = vi.fn()
+    const ref = createRef<NoteEditorHandle>()
+    render(<NoteEditor ref={ref} value="abc" onChange={onChange} />)
+
+    // applyRemote -> dispatch -> @uiw fires onChange; the wrapper must swallow it.
+    ref.current!.applyRemote('abXc')
+
+    expect(lastDispatch).toHaveBeenCalledTimes(1)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('passes genuine user edits through onChange', () => {
+    const onChange = vi.fn()
+    render(<NoteEditor value="a" onChange={onChange} />)
+
+    lastOnChange?.('typed by user')
+
+    expect(onChange).toHaveBeenCalledWith('typed by user')
   })
 })
