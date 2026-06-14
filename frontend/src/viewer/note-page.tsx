@@ -12,7 +12,17 @@ import NoteToc from './note-toc'
 import NoteView from './note-view'
 import { merge3 } from './merge'
 import { useAutosave } from './use-autosave'
+import { ConflictBar } from './conflict-bar'
 import type { NoteEditorHandle } from './note-editor'
+
+// A remote change that conflicts with the open draft (line-level overlap).
+// We hold the three candidate texts so the user can pick a resolution from
+// the non-blocking ConflictBar instead of having markers written silently.
+interface PendingConflict {
+  mine: string
+  theirs: string
+  merged: string
+}
 
 // CodeMirror (language pkg + view) only loads when the editor first mounts.
 const NoteEditor = lazy(() => import('./note-editor'))
@@ -33,6 +43,8 @@ export default function NotePage() {
   const { setContent: setRightContent } = useRightSidebar()
 
   const [mode, setMode] = useState<Mode>('live')
+  // Non-null while a conflicting remote change is awaiting the user's choice.
+  const [conflict, setConflict] = useState<PendingConflict | null>(null)
 
   // `base` = last server-synced content; the common ancestor for 3-way merges.
   const baseRef = useRef('')
@@ -107,20 +119,59 @@ export default function NotePage() {
   // no longer echoes through onChange (see note-editor), so persist any merged-
   // in local edits explicitly: adopt the remote version as the new base, then
   // schedule a save of the merged text only when it differs from the remote.
+  //
+  // On a CLEAN merge this stays silent (the draft + remote fold together). On a
+  // TRUE conflict (line-level overlap) we do NOT write git-style markers into
+  // the doc; instead we keep the local draft visible and surface the
+  // non-blocking ConflictBar so the user picks the resolution. base/version
+  // still advance to the remote so a subsequent save rebases onto it.
   useEffect(() => {
     if (!note) return
     return subscribeToNoteChanges((p) => {
       if (p.id !== note.id || p.vault_id !== vaultId || p.content == null) return
+      const remote = p.content
       const local = editorRef.current?.getDoc() ?? docRef.current
-      const { text, conflict } = merge3(baseRef.current, local, p.content)
-      baseRef.current = p.content
-      docRef.current = text
-      editorRef.current?.applyRemote(text)
+      const { text, conflict: hasConflict } = merge3(baseRef.current, local, remote)
+      baseRef.current = remote
       if (p.version != null) setVersion(p.version)
-      if (text !== p.content) onEdit(text)
-      if (conflict) toast.message('Merged a conflicting change from another device')
+      if (hasConflict) {
+        // Keep the draft in the editor untouched; offer the choice.
+        setConflict({ mine: local, theirs: remote, merged: text })
+      } else {
+        docRef.current = text
+        editorRef.current?.applyRemote(text)
+        if (text !== remote) onEdit(text)
+      }
     })
   }, [note?.id, vaultId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resolve an open conflict with the user's explicit choice. The local draft
+  // is never silently discarded: 'mine' persists the live draft over the new
+  // remote base, 'theirs' adopts the remote, 'merge' writes the marker'd text
+  // for manual cleanup. base/version already advanced when the conflict was
+  // raised, so each path saves at the right version.
+  const resolveConflict = useCallback(
+    (choice: 'mine' | 'theirs' | 'merge') => {
+      if (!conflict) return
+      if (choice === 'theirs') {
+        docRef.current = conflict.theirs
+        editorRef.current?.applyRemote(conflict.theirs)
+        // Matches the remote base already saved elsewhere — no save needed.
+      } else if (choice === 'merge') {
+        docRef.current = conflict.merged
+        editorRef.current?.applyRemote(conflict.merged)
+        onEdit(conflict.merged)
+      } else {
+        // Keep mine: persist whatever is currently in the editor (the draft,
+        // plus any keystrokes since the conflict was raised).
+        const live = editorRef.current?.getDoc() ?? conflict.mine
+        docRef.current = live
+        onEdit(live)
+      }
+      setConflict(null)
+    },
+    [conflict, onEdit],
+  )
 
   // Signal the onboarding tour that the user opened a note (step 1 gate).
   useEffect(() => {
@@ -204,6 +255,15 @@ export default function NotePage() {
           </Button>
         </div>
       </div>
+
+      {conflict && (
+        <ConflictBar
+          onKeepMine={() => resolveConflict('mine')}
+          onTakeTheirs={() => resolveConflict('theirs')}
+          onViewMerge={() => resolveConflict('merge')}
+          onDismiss={() => resolveConflict('mine')}
+        />
+      )}
 
       {mode === 'reading' ? (
         <ScrollArea className="min-h-0 flex-1">
