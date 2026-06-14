@@ -103,7 +103,7 @@ function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
           </dl>
         )}
       </header>
-      <section className="prose prose-neutral max-w-none dark:prose-invert lg:prose-lg">
+      <section className="prose prose-neutral max-w-none dark:prose-invert">
         <ReactMarkdown
           remarkPlugins={remarkPlugins as never}
           rehypePlugins={rehypePlugins as never}

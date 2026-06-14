@@ -48,11 +48,11 @@
      dense list-heavy notes still feel cramped because prose only targets
      paragraphs and headings, not <li> or fenced code. */
   .prose {
-    line-height: 1.8;
+    line-height: 1.65;
   }
   .prose :where(p, ul, ol, blockquote, pre, table):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-    margin-top: 1.15em;
-    margin-bottom: 1.15em;
+    margin-top: 1em;
+    margin-bottom: 1em;
   }
   /* Fenced code wraps long lines instead of scrolling horizontally. */
   .prose :where(pre, pre code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
