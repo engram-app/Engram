@@ -2438,7 +2438,7 @@ jobs:
     needs: [fingerprint, ci]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      # Markers live in LOCAL_REGISTRY (FastRaid 10.0.20.214:5000) as tiny
+      # Markers live in LOCAL_REGISTRY (FastRaid 10.0.20.214:5001) as tiny
       # `FROM scratch` images, NOT actions/cache — see fingerprint job for
       # the ref-scoping bug that motivated the switch. A scratch image with
       # a single file is ~few KB; the registry GCs orphan blobs but keeps
