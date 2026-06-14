@@ -146,18 +146,23 @@ export default function NotePage() {
           : ''
 
   return (
-    <section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setMode((m) => (m === 'live' ? 'reading' : 'live'))}
-        >
-          {mode === 'live' ? '↗ Reading view' : '✎ Edit'}
-        </Button>
-        <span className="text-xs text-muted-foreground" aria-live="polite">
+    <section className="mx-auto -my-6 flex h-[calc(100%+3rem)] min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-x border-border bg-card text-card-foreground">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" aria-live="polite">
           {statusLabel}
         </span>
+        <h2 className="min-w-0 flex-1 truncate text-center text-sm font-medium" title={note.title}>
+          {note.title}
+        </h2>
+        <div className="flex min-w-0 flex-1 justify-end">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setMode((m) => (m === 'live' ? 'reading' : 'live'))}
+          >
+            {mode === 'live' ? '↗ Reading view' : '✎ Edit'}
+          </Button>
+        </div>
       </div>
 
       {mode === 'reading' ? (

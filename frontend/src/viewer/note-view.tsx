@@ -60,7 +60,7 @@ const TEXT_EMBED = /\.(md|canvas)$/i
 // the preview stays force-mounted with identical props; react-markdown has
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
-function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
+function NoteView({ content, tags, updatedAt }: NoteViewProps) {
   const isFreeTier = useIsFreeTier()
   const { frontmatter, body } = useMemo(() => {
     try {
@@ -76,7 +76,6 @@ function NoteView({ content, title, tags, updatedAt }: NoteViewProps) {
   return (
     <article className="w-full">
       <header className="mb-6 border-b border-border pb-4">
-        <h1 className="mb-1 text-3xl font-bold tracking-tight text-foreground">{title}</h1>
         <p className="text-xs text-muted-foreground">
           Updated {new Date(updatedAt).toLocaleString()}
         </p>
