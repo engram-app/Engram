@@ -78,6 +78,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
         className={rowClass(instance)}
         style={{ paddingLeft: `${folderPad}px` }}
       >
+        <IndentGuides depth={depth} />
         <Chevron open={instance.isExpanded()} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
       </button>
@@ -107,6 +108,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
       className={rowClass(instance)}
       style={{ paddingLeft: `${notePad}px` }}
     >
+      <IndentGuides depth={depth} />
       <span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
       {item.ext && item.ext !== 'md' && (
         <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">{item.ext}</span>
@@ -123,7 +125,8 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
   return [
     // w-full so the folder <button> stretches like the note <a> (form controls
     // shrink to content by default) — gives both the same full-width hover hit.
-    'flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left',
+    // relative anchors the absolutely-positioned indent guides.
+    'relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left',
     instance.isSelected()
       ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
       : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800',
@@ -138,6 +141,28 @@ function leafName(item: TreeItem): string {
 
 function noteLabel(item: Extract<TreeItem, { kind: 'note' }>): string {
   return item.title || item.path.split('/').pop() || item.path
+}
+
+// Obsidian-style vertical indentation guides. A row at depth d draws one line
+// per ancestor level, each in the 4px gutter just left of that level's chevron.
+// Each line spans the full row height, so stacked rows form continuous lines
+// down a folder's children without tracking where the folder ends.
+const INDENT_STEP = 12
+
+function IndentGuides({ depth }: { depth: number }) {
+  if (depth <= 0) return null
+  return (
+    <>
+      {Array.from({ length: depth }, (_, i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
+          style={{ left: `${(i + 1) * INDENT_STEP}px` }}
+        />
+      ))}
+    </>
+  )
 }
 
 function Chevron({ open }: { open: boolean }) {
