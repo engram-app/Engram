@@ -37,6 +37,18 @@ const notesByFolder: Record<string, NoteSummary[]> = {
   ],
 }
 
+const rootNote: NoteSummary = {
+  id: '300',
+  path: 'top.md',
+  title: 'top',
+  folder: '',
+  tags: [],
+  version: 1,
+  mtime: '2026-01-03T00:00:00Z',
+  created_at: '2026-01-03T00:00:00Z',
+  updated_at: '2026-01-03T00:00:00Z',
+}
+
 function makeQc(): QueryClient {
   const qc = new QueryClient()
   qc.setQueryData(['folder-notes-by-id', 'v', '1'], notesByFolder['1'])
@@ -45,14 +57,23 @@ function makeQc(): QueryClient {
 }
 
 describe('buildLoader', () => {
-  it('root returns top-level folders + any root notes, sorted', () => {
-    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+  it('root returns top-level folders + root notes from the by-id root cache, sorted', () => {
+    const qc = makeQc()
+    // Root notes live in the one id-keyed cache under the 'root' sentinel.
+    qc.setQueryData(['folder-notes-by-id', 'v', 'root'], [rootNote])
+    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey })
+    const children = loader.getChildren('root')
+    expect(children.map(c => c.itemId)).toEqual(['f:1', 'n:300'])
+  })
+
+  it('root with no cached root list returns folders only', () => {
+    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey })
     const children = loader.getChildren('root')
     expect(children.map(c => c.itemId)).toEqual(['f:1'])
   })
 
   it('folder children return child folders first then notes', () => {
-    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey })
     const children = loader.getChildren('f:1')
     expect(children.map(c => c.itemId)).toEqual(['f:2', 'n:100'])
   })
@@ -68,7 +89,6 @@ describe('buildLoader', () => {
       qc,
       vaultId: 'v',
       sort: 'name-asc' as SortKey,
-      rootNotes: [],
       fetchFolderNotes,
     })
     const children = loader.getChildren('f:2')
@@ -84,22 +104,36 @@ describe('buildLoader', () => {
     expect(fetchFolderNotes).toHaveBeenCalledWith('2')
   })
 
+  it('root cache miss triggers a fetch for the root sentinel', () => {
+    const qc = new QueryClient()
+    const fetchFolderNotes = vi.fn(() => Promise.resolve<NoteSummary[]>([]))
+    const fetchSpy = vi.spyOn(qc, 'fetchQuery')
+    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey, fetchFolderNotes })
+    loader.getChildren('root')
+    expect(fetchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      queryKey: ['folder-notes-by-id', 'v', 'root'],
+    }))
+    const call = fetchSpy.mock.calls[0]?.[0] as unknown as { queryFn: () => Promise<NoteSummary[]> }
+    void call.queryFn()
+    expect(fetchFolderNotes).toHaveBeenCalledWith('root')
+  })
+
   it('cache miss without fetcher returns [] and does not fetch', () => {
     const qc = new QueryClient()
     const fetchSpy = vi.spyOn(qc, 'fetchQuery')
-    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+    const loader = buildLoader({ folders, qc, vaultId: 'v', sort: 'name-asc' as SortKey })
     const children = loader.getChildren('f:2')
     expect(children).toEqual([])
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('getItem returns shaped TreeItem for a folder id', () => {
-    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey, rootNotes: [] })
+    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'name-asc' as SortKey })
     expect(loader.getItem('f:1')?.item).toMatchObject({ kind: 'folder', id: '1', path: 'Projects', name: 'Projects' })
   })
 
   it('note sort by modified-desc', () => {
-    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'modified-desc' as SortKey, rootNotes: [] })
+    const loader = buildLoader({ folders, qc: makeQc(), vaultId: 'v', sort: 'modified-desc' as SortKey })
     const children = loader.getChildren('f:1')
     // Notes only; folders sorted by name. Here just 1 note.
     expect(children.map(c => c.itemId)).toContain('n:100')

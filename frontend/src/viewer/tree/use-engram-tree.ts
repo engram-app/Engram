@@ -16,11 +16,10 @@ import type { QueryClient } from '@tanstack/react-query'
 import { buildLoader, type SortKey, type LoaderItem } from './loader'
 import { ROOT_ID } from './types'
 import { resolveDropMove } from './drop-redirect'
-import type { Folder, NoteSummary } from '../../api/queries'
+import { ROOT_FOLDER_ID, type Folder, type NoteSummary } from '../../api/queries'
 
 interface Deps {
   folders: Folder[]
-  rootNotes: NoteSummary[]
   qc: QueryClient
   vaultId: string
   sort: SortKey
@@ -41,14 +40,17 @@ type Data = LoaderItem
  *  - a folder move reparents it, changing `parent_id`.
  * Without these, headless-tree keeps a stale per-folder child list after a move
  * until the user manually collapses/expands the folder.
+ *
+ * Note-list changes (including root notes, now keyed under ROOT_FOLDER_ID) are
+ * covered separately by the QueryCache subscription below, so they don't need
+ * to be fingerprinted here.
  */
 export function treeStructureKey(
   folders: Pick<Folder, 'id' | 'count' | 'parent_id'>[],
-  rootNoteIds: string[],
   sort: SortKey,
 ): string {
   const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ''}`).join('|')
-  return `${folderKey}::${rootNoteIds.join('|')}::${sort}`
+  return `${folderKey}::${sort}`
 }
 
 export function useEngramTree(deps: Deps) {
@@ -59,17 +61,18 @@ export function useEngramTree(deps: Deps) {
       qc: deps.qc,
       vaultId: deps.vaultId,
       sort: deps.sort,
-      rootNotes: deps.rootNotes,
       fetchFolderNotes: deps.fetchFolderNotes,
       onChildrenLoaded: (folderId) => {
         const t = treeRef.current
         if (!t) return
-        const inst = t.getItemInstance(`f:${folderId}`)
+        // Root notes hang off the ROOT_ID container, not an `f:<id>` marker.
+        const itemId = folderId === ROOT_FOLDER_ID ? ROOT_ID : `f:${folderId}`
+        const inst = t.getItemInstance(itemId)
         // invalidateChildrenIds returns a promise but we don't need to await
         inst?.invalidateChildrenIds()
       },
     }),
-    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.rootNotes, deps.fetchFolderNotes],
+    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.fetchFolderNotes],
   )
 
   // Bridge our LoaderItem-returning loader to HT's TreeDataLoader<T> shape
@@ -165,11 +168,7 @@ export function useEngramTree(deps: Deps) {
   // data shape changes — keyed on stable structural fingerprints so we never
   // re-trigger from spurious identity churn (rebuildTree → setState → render
   // would otherwise spin into a max-update-depth loop).
-  const structureKey = treeStructureKey(
-    deps.folders,
-    deps.rootNotes.map((n) => n.id),
-    deps.sort,
-  )
+  const structureKey = treeStructureKey(deps.folders, deps.sort)
   const lastKey = useRef('')
   useEffect(() => {
     if (lastKey.current === structureKey) return

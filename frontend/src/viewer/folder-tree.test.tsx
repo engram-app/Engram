@@ -54,14 +54,11 @@ vi.mock('../api/queries', async () => {
       isLoading: mock.loading,
       isError: false,
     }),
-    // Root notes for the by-id loader (legacy useFolderNotes('') compat)
-    useFolderNotes: (folder: string) => {
-      if (folder === '') {
+    useFolderNotesById: (folderId: string | null) => {
+      // Root notes share the one id-keyed cache under the 'root' sentinel.
+      if (folderId === 'root') {
         return { data: mock.rootNotes, isLoading: false }
       }
-      return { data: [], isLoading: false }
-    },
-    useFolderNotesById: (folderId: string | null) => {
       if (folderId === '1') {
         return {
           data: [
@@ -94,6 +91,10 @@ vi.mock('../api/queries', async () => {
 
 function renderTree() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // The loader reads note lists straight from the query cache. Root notes key
+  // under the 'root' sentinel; useActiveVaultId is unset in tests, so the tree
+  // resolves vaultId to ''. Seed it so root notes render without a fetch.
+  qc.setQueryData(['folder-notes-by-id', '', 'root'], mock.rootNotes)
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>

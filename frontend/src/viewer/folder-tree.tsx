@@ -5,10 +5,11 @@ import { toast } from 'sonner'
 import {
   type Folder,
   FOLDER_NOTES_STALE_MS,
+  fetchNotesForFolderId,
   type Note,
-  type NoteSummary,
+  ROOT_FOLDER_ID,
   useFolders,
-  useFolderNotes,
+  useFolderNotesById,
   useBatchDeleteNotes,
   useBatchMoveNotes,
   useBatchDeleteFolders,
@@ -17,7 +18,6 @@ import {
   useRenameFolder,
   useDuplicateNote,
 } from '../api/queries'
-import { api } from '../api/client'
 import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
 import { useEngramTree } from './tree/use-engram-tree'
@@ -52,10 +52,11 @@ type DialogState =
 
 export default function FolderTree() {
   const { data: folders, isLoading, isError } = useFolders()
-  // Root notes still come via the legacy path-keyed endpoint — the by-id
-  // hook requires a non-null folderId. The loader stitches these into
-  // the tree under ROOT.
-  const { data: rootNotes = [] } = useFolderNotes('', { enabled: true })
+  // Root notes share the one id-keyed cache under the ROOT_FOLDER_ID sentinel
+  // (its fetcher hits the path-keyed list endpoint, since the by-id endpoint
+  // needs a real folder id). Subscribing here gives root an observer so
+  // invalidations refetch it; the loader stitches the rows under ROOT.
+  const { data: rootNotes = [] } = useFolderNotesById(ROOT_FOLDER_ID)
   const { sort } = useFolderTreeState()
   const vaultId = useActiveVaultId()
   const qc = useQueryClient()
@@ -115,14 +116,12 @@ export default function FolderTree() {
     if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
   }
 
-  // The loader fires this on cache-miss when a folder is expanded. Mirrors
-  // the queryFn inside `useFolderNotesById` so react-query treats both as
-  // the same query (cache key + fetcher shape).
+  // The loader fires this on cache-miss when a folder is expanded. Shares the
+  // single fetcher with `useFolderNotesById` so react-query treats both as the
+  // same query (cache key + fetcher shape) — and so a 'root' id routes to the
+  // path-keyed list endpoint instead of the non-existent by-id/root route.
   const fetchFolderNotes = useCallback(
-    (folderId: string) =>
-      api
-        .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)
-        .then((r) => r.notes),
+    (folderId: string) => fetchNotesForFolderId(folderId),
     [],
   )
 
@@ -154,7 +153,6 @@ export default function FolderTree() {
 
   const { tree, virtualizer, items } = useEngramTree({
     folders: folders ?? EMPTY_FOLDERS,
-    rootNotes,
     qc,
     vaultId: vaultId ?? '',
     sort,

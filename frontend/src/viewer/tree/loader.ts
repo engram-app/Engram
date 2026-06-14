@@ -1,5 +1,10 @@
 import { QueryClient } from '@tanstack/react-query'
-import { FOLDER_NOTES_STALE_MS, type Folder, type NoteSummary } from '../../api/queries'
+import {
+  FOLDER_NOTES_STALE_MS,
+  ROOT_FOLDER_ID,
+  type Folder,
+  type NoteSummary,
+} from '../../api/queries'
 import type { TreeItem } from './types'
 import { ROOT_ID, formatItemId, parseItemId } from './types'
 
@@ -13,7 +18,6 @@ interface LoaderDeps {
   qc: QueryClient
   vaultId: string
   sort: SortKey
-  rootNotes: NoteSummary[]
   fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>
   onChildrenLoaded?: (folderId: string) => void
 }
@@ -60,11 +64,8 @@ function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined 
 }
 
 function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
-  // Root notes live in deps.rootNotes (the by-id endpoint requires a
-  // non-null folder id, so root uses the path-keyed hook upstream).
-  const rootHit = deps.rootNotes.find(n => n.id === id)
-  if (rootHit) return { itemId: formatItemId({ kind: 'note', id }), item: noteToTreeItem(rootHit), isFolder: false }
-  // Otherwise the note lives in some cached folder-notes-by-id list.
+  // Every note list — root (keyed under ROOT_FOLDER_ID) and subfolders — lives
+  // in the one id-keyed cache, so a single scan finds the note.
   for (const [, list] of deps.qc.getQueriesData<NoteSummary[]>({ queryKey: ['folder-notes-by-id'] })) {
     const hit = list?.find(n => n.id === id)
     if (hit) return { itemId: formatItemId({ kind: 'note', id }), item: noteToTreeItem(hit), isFolder: false }
@@ -72,35 +73,21 @@ function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
   return undefined
 }
 
-function rootChildren(deps: LoaderDeps): LoaderItem[] {
-  const tops = deps.folders
-    .filter(f => f.parent_id == null)
+function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderItem[] {
+  return deps.folders
+    .filter(f => f.parent_id === parentId)
     .sort((a, b) => folderCmp(a, b, deps.sort))
     .map(f => ({
       itemId: formatItemId({ kind: 'folder', id: f.id }),
       item: { kind: 'folder' as const, id: f.id, path: f.name, name: f.name.split('/').pop() ?? f.name, count: f.count },
       isFolder: true,
     }))
-
-  const noteItems = sortNotes(deps.rootNotes, deps.sort).map(n => ({
-    itemId: formatItemId({ kind: 'note', id: n.id }),
-    item: noteToTreeItem(n),
-    isFolder: false,
-  }))
-
-  return [...tops, ...noteItems]
 }
 
-function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
-  const childFolders = deps.folders
-    .filter(f => f.parent_id === folderId)
-    .sort((a, b) => folderCmp(a, b, deps.sort))
-    .map(f => ({
-      itemId: formatItemId({ kind: 'folder', id: f.id }),
-      item: { kind: 'folder' as const, id: f.id, path: f.name, name: f.name.split('/').pop() ?? f.name, count: f.count },
-      isFolder: true,
-    }))
-
+// Note children for a folder id (ROOT_FOLDER_ID for the vault root). Reads the
+// id-keyed cache; on a miss, lazily fetches and asks HT to refetch the branch.
+// Returns null on a cache miss so callers can render folders-only meanwhile.
+function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null {
   const cached = deps.qc.getQueryData<NoteSummary[]>(['folder-notes-by-id', deps.vaultId, folderId])
   if (!cached) {
     if (deps.fetchFolderNotes) {
@@ -116,16 +103,25 @@ function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
         .then(() => deps.onChildrenLoaded?.(folderId))
         .catch(() => {})
     }
-    return childFolders
+    return null
   }
-
-  const noteItems = sortNotes(cached, deps.sort).map(n => ({
+  return sortNotes(cached, deps.sort).map(n => ({
     itemId: formatItemId({ kind: 'note', id: n.id }),
     item: noteToTreeItem(n),
     isFolder: false,
   }))
+}
 
-  return [...childFolders, ...noteItems]
+function rootChildren(deps: LoaderDeps): LoaderItem[] {
+  const tops = folderLoaderItems(deps, null)
+  const noteItems = noteChildItems(deps, ROOT_FOLDER_ID) ?? []
+  return [...tops, ...noteItems]
+}
+
+function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
+  const childFolders = folderLoaderItems(deps, folderId)
+  const noteItems = noteChildItems(deps, folderId)
+  return noteItems ? [...childFolders, ...noteItems] : childFolders
 }
 
 function folderCmp(a: Folder, b: Folder, sort: SortKey): number {

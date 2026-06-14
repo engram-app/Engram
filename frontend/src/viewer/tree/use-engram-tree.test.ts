@@ -6,37 +6,33 @@ import type { Folder, NoteSummary } from '../../api/queries'
 
 describe('treeStructureKey', () => {
   it('changes when a folder count changes (so a move rebuilds the tree)', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 1, parent_id: null }], [], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 1, parent_id: null }], 'name-asc')
     expect(after).not.toBe(before)
   })
 
   it('changes when a folder is reparented (folder move rebuilds the tree)', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: 'p2' }], [], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: 'p2' }], 'name-asc')
     expect(after).not.toBe(before)
   })
 
-  it('changes when root notes change', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], ['n1'], 'name-asc')
-    expect(after).not.toBe(before)
-  })
+  // Root-note changes no longer flow through the structure key — they live in
+  // the id-keyed cache under 'root' and rebuild via the QueryCache subscription
+  // (see the 'rebuilds … by-id list changes' test below).
 
   it('is stable when nothing structural changes', () => {
     expect(
-      treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'),
-    ).toBe(treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'))
+      treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], 'name-asc'),
+    ).toBe(treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], 'name-asc'))
   })
 })
 
 describe('useEngramTree', () => {
   const folders: Folder[] = [{ id: '1', parent_id: null, name: 'Projects', count: 1 }]
-  const rootNotes: NoteSummary[] = []
   const scrollRef = { current: null as HTMLDivElement | null }
   const baseDeps = {
     folders,
-    rootNotes,
     qc: new QueryClient(),
     vaultId: 'v',
     sort: 'name-asc' as const,
@@ -73,6 +69,30 @@ describe('useEngramTree', () => {
           updated_at: '',
         },
       ])
+    })
+
+    await waitFor(() => expect(spy).toHaveBeenCalled())
+  })
+
+  it('rebuilds the tree when the root note list (by-id "root") changes', async () => {
+    const qc = new QueryClient()
+    const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }))
+    const spy = vi.spyOn(result.current.tree, 'rebuildTree')
+
+    // Root notes now live in the same id-keyed cache under the 'root' sentinel.
+    const note: NoteSummary = {
+      id: 'r1',
+      path: 'r1.md',
+      title: 'r1',
+      folder: '',
+      tags: [],
+      version: 1,
+      mtime: '',
+      created_at: '',
+      updated_at: '',
+    }
+    act(() => {
+      qc.setQueryData(['folder-notes-by-id', 'v', 'root'], [note])
     })
 
     await waitFor(() => expect(spy).toHaveBeenCalled())
