@@ -26,11 +26,29 @@ const editorTheme = EditorView.theme({
   // Transparent so the card (bg-card) shows through — the editor background
   // matches its container instead of the @uiw theme's own surface color.
   '&': { height: '100%', backgroundColor: 'transparent' },
-  '.cm-scroller': { fontFamily: 'inherit', overflow: 'auto', backgroundColor: 'transparent' },
+  // Scrollbar mirrors the reading view's Radix ScrollArea: a 10px gutter with a
+  // ~8px rounded bg-border thumb over a transparent track. Firefox uses
+  // scrollbar-color; WebKit/Blink uses the ::-webkit-scrollbar pseudos below.
+  '.cm-scroller': {
+    fontFamily: 'inherit',
+    overflow: 'auto',
+    backgroundColor: 'transparent',
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'var(--border) transparent',
+  },
+  '.cm-scroller::-webkit-scrollbar': { width: '10px', height: '10px' },
+  '.cm-scroller::-webkit-scrollbar-track': { backgroundColor: 'transparent' },
+  '.cm-scroller::-webkit-scrollbar-thumb': {
+    backgroundColor: 'var(--border)',
+    borderRadius: '9999px',
+    border: '1px solid transparent',
+    backgroundClip: 'padding-box',
+  },
   '.cm-gutters': { backgroundColor: 'transparent', border: 'none' },
-  // Vertical only — horizontal gutters come from the card wrapper. The large
-  // bottom padding keeps the empty space below the text clickable (caret-to-end).
-  '.cm-content': { fontSize: '16px', padding: '20px 0 30vh' },
+  // 20px side gutters live here (not the wrapper) so .cm-scroller spans the full
+  // width and its scrollbar sits at the card edge like the reading view. The
+  // large bottom padding keeps the space below the text clickable (caret-to-end).
+  '.cm-content': { fontSize: '16px', padding: '20px 20px 30vh' },
 })
 
 // Module scope: react-codemirror reconfigures the editor whenever the

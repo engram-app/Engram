@@ -180,9 +180,12 @@ export default function NotePage() {
           </div>
         </ScrollArea>
       ) : (
-        // Full-height editor: the 700px column fills the pane so clicking
-        // anywhere in it (even below the text) places the caret and edits.
-        <div className="min-h-0 flex-1 overflow-hidden px-5" data-tour="note-editor">
+        // Full-height editor: fills the pane so clicking anywhere (even below
+        // the text) places the caret. No horizontal padding here — the text
+        // gutter lives on .cm-content so the scroller (and its scrollbar) spans
+        // the full width and the scrollbar sits at the card edge, matching the
+        // reading view's ScrollArea.
+        <div className="min-h-0 flex-1 overflow-hidden" data-tour="note-editor">
           <Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
             <NoteEditor
               key={note.path}
