@@ -1,4 +1,5 @@
 import type React from 'react'
+import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router'
 import type { ItemInstance } from '@headless-tree/core'
 import type { LoaderItem } from './loader'
@@ -30,7 +31,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
   const item = data.item
   const depth = instance.getItemMeta()?.level ?? 0
   const folderPad = depth * 12 + 4
-  const notePad = folderPad + 12 // align note label past where a folder chevron would sit
+  const notePad = folderPad + 20 // align note label under folder name (chevron 16px + gap 4px)
 
   if (instance.isRenaming()) {
     const tree = instance.getTree()
@@ -78,7 +79,6 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
         style={{ paddingLeft: `${folderPad}px` }}
       >
         <Chevron open={instance.isExpanded()} />
-        <FolderIcon open={instance.isExpanded()} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
       </button>
     )
@@ -107,7 +107,6 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
       className={rowClass(instance)}
       style={{ paddingLeft: `${notePad}px` }}
     >
-      <FileIcon />
       <span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
       {item.ext && item.ext !== 'md' && (
         <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">{item.ext}</span>
@@ -122,7 +121,9 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
   const dragOver =
     (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false
   return [
-    'flex items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left',
+    // w-full so the folder <button> stretches like the note <a> (form controls
+    // shrink to content by default) — gives both the same full-width hover hit.
+    'flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left',
     instance.isSelected()
       ? 'bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300'
       : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800',
@@ -141,43 +142,11 @@ function noteLabel(item: Extract<TreeItem, { kind: 'note' }>): string {
 
 function Chevron({ open }: { open: boolean }) {
   return (
-    <span
+    <ChevronRight
       aria-hidden="true"
-      className={`shrink-0 text-[10px] text-gray-400 dark:text-gray-500 transition-transform ${
+      className={`h-4 w-4 shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${
         open ? 'rotate-90' : ''
       }`}
-    >
-      ▶
-    </span>
-  )
-}
-
-function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-500 dark:text-gray-400"
-      fill="currentColor"
-    >
-      {open ? (
-        <path d="M2 4a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293L8.707 4.6A1 1 0 0 0 9.414 5H13a1 1 0 0 1 1 1H2V4zm0 3h12.5a.5.5 0 0 1 .49.598l-1 5A.5.5 0 0 1 13.5 13h-11a.5.5 0 0 1-.49-.402l-1-5A.5.5 0 0 1 1.5 7H2z" />
-      ) : (
-        <path d="M2 4a1 1 0 0 1 1-1h3.586a1 1 0 0 1 .707.293L8.707 4.6A1 1 0 0 0 9.414 5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4z" />
-      )}
-    </svg>
-  )
-}
-
-function FileIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500"
-      fill="currentColor"
-    >
-      <path d="M4 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.414a1 1 0 0 0-.293-.707L9.293 1.293A1 1 0 0 0 8.586 1H4zm5 0v4a1 1 0 0 0 1 1h3" />
-    </svg>
+    />
   )
 }
