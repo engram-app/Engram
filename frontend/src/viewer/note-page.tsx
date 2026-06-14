@@ -146,7 +146,7 @@ export default function NotePage() {
           : ''
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl">
+    <section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden bg-card text-card-foreground shadow-sm ring-1 ring-border/60 md:rounded-2xl">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
         <Button
           variant="ghost"
@@ -160,27 +160,31 @@ export default function NotePage() {
         </span>
       </div>
 
-      <ScrollArea className="h-full">
-        {mode === 'reading' ? (
-          <NoteView
-            content={note.content}
-            title={note.title}
-            tags={note.tags}
-            updatedAt={note.updated_at}
-          />
-        ) : (
-          <div className="px-6 py-6 lg:px-8 lg:py-8" data-tour="note-editor">
-            <Suspense fallback={<p className="text-muted-foreground">Loading editor…</p>}>
-              <NoteEditor
-                key={note.path}
-                ref={editorRef}
-                value={initialRef.current}
-                onChange={onEditorChange}
-              />
-            </Suspense>
+      {mode === 'reading' ? (
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="w-full px-5 py-5">
+            <NoteView
+              content={note.content}
+              title={note.title}
+              tags={note.tags}
+              updatedAt={note.updated_at}
+            />
           </div>
-        )}
-      </ScrollArea>
+        </ScrollArea>
+      ) : (
+        // Full-height editor: the 700px column fills the pane so clicking
+        // anywhere in it (even below the text) places the caret and edits.
+        <div className="min-h-0 flex-1 overflow-hidden px-5" data-tour="note-editor">
+          <Suspense fallback={<p className="py-5 text-muted-foreground">Loading editor…</p>}>
+            <NoteEditor
+              key={note.path}
+              ref={editorRef}
+              value={initialRef.current}
+              onChange={onEditorChange}
+            />
+          </Suspense>
+        </div>
+      )}
     </section>
   )
 }

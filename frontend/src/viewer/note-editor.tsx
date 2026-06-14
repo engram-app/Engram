@@ -1,4 +1,5 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { Prec } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import CodeMirror from '@uiw/react-codemirror'
 import { forwardRef, useImperativeHandle, useRef } from 'react'
@@ -17,11 +18,19 @@ interface NoteEditorProps {
   onChange: (next: string) => void
 }
 
+// Fill the parent so the editor spans the full pane height — clicking anywhere
+// (including the empty space below the text) lands the caret at the doc end.
 // 16px on .cm-content prevents iOS Safari from auto-zooming when the soft
 // keyboard opens. lineWrapping stays on.
-const mobileSafeTheme = EditorView.theme({
-  '.cm-content': { fontSize: '16px' },
-  '.cm-scroller': { fontFamily: 'inherit' },
+const editorTheme = EditorView.theme({
+  // Transparent so the card (bg-card) shows through — the editor background
+  // matches its container instead of the @uiw theme's own surface color.
+  '&': { height: '100%', backgroundColor: 'transparent' },
+  '.cm-scroller': { fontFamily: 'inherit', overflow: 'auto', backgroundColor: 'transparent' },
+  '.cm-gutters': { backgroundColor: 'transparent', border: 'none' },
+  // Vertical only — horizontal gutters come from the card wrapper. The large
+  // bottom padding keeps the empty space below the text clickable (caret-to-end).
+  '.cm-content': { fontSize: '16px', padding: '20px 0 30vh' },
 })
 
 // Module scope: react-codemirror reconfigures the editor whenever the
@@ -31,7 +40,9 @@ const mobileSafeTheme = EditorView.theme({
 const extensions = [
   markdown({ base: markdownLanguage }),
   EditorView.lineWrapping,
-  mobileSafeTheme,
+  // Prec.highest so our transparent background + layout beat the @uiw theme's
+  // own surface color (otherwise the editor keeps the theme's background).
+  Prec.highest(editorTheme),
 ]
 
 const basicSetup = {
@@ -73,7 +84,8 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
       theme={resolved}
       extensions={extensions}
       basicSetup={basicSetup}
-      className="min-h-[70vh] rounded-md border border-border bg-muted/30"
+      height="100%"
+      className="h-full"
     />
   )
 })
