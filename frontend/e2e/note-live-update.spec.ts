@@ -6,11 +6,13 @@ import { test, expect, type Page } from '@playwright/test'
  * Both tests bootstrap a user + vault + note via the REST API, open the note
  * in a browser, then mutate the note via a second REST call (simulating
  * another client — plugin push, MCP write, or another browser tab). The
- * Phoenix channel must propagate `note_changed` and trigger React Query
- * invalidation so the viewer re-renders without a manual reload.
+ * Phoenix channel must propagate `note_changed` so the open note reflects the
+ * change without a manual reload.
  *
- * Editor-mode coverage verifies the `useRemoteUpdateBanner` hook surfaces a
- * banner instead of clobbering the user's unsaved draft.
+ * The note view defaults to the editor (plain markdown source). A remote
+ * update is applied into the live CodeMirror doc via a 3-way merge, so an
+ * in-progress local draft is preserved rather than clobbered (no banner —
+ * the merge is silent).
  */
 
 const PASS = 'E2eTestPass!99'
@@ -141,21 +143,21 @@ test.describe('SPA viewer live-update (#277)', () => {
     const page = await ctx.newPage()
     await signInForNote(page, email, vault.id, noteId)
 
-    // `forceMount` on both Tabs.Content means the Edit panel is in the DOM
-    // alongside Preview; scope assertions to the visible Preview panel.
-    const preview = page.getByRole('tabpanel', { name: 'Preview' })
-    await expect(preview.getByText('First body.')).toBeVisible({ timeout: 10_000 })
+    // The note opens in the editor (plain markdown source) by default.
+    const editor = page.locator('.cm-content')
+    await expect(editor).toContainText('First body.', { timeout: 10_000 })
 
     // Remote upsert (simulates plugin push / MCP write / other web tab Save).
     await upsertNote(baseURL!, token, vault.id, path, '# Initial\n\nSecond body remote.')
 
-    await expect(preview.getByText('Second body remote.')).toBeVisible({ timeout: 5_000 })
-    await expect(preview.getByText('First body.')).toBeHidden()
+    // The channel propagates the change into the open editor — no reload.
+    await expect(editor).toContainText('Second body remote.', { timeout: 5_000 })
+    await expect(editor).not.toContainText('First body.')
 
     await ctx.close()
   })
 
-  test('editor mode shows remote-update banner without losing local draft', async ({
+  test('a remote update merges into the editor without losing the local draft', async ({
     browser,
     baseURL,
   }) => {
@@ -175,23 +177,25 @@ test.describe('SPA viewer live-update (#277)', () => {
     const page = await ctx.newPage()
     await signInForNote(page, email, vault.id, noteId)
 
-    const preview = page.getByRole('tabpanel', { name: 'Preview' })
-    const editPanel = page.getByRole('tabpanel', { name: 'Edit' })
-    await expect(preview.getByText('original text.')).toBeVisible({ timeout: 10_000 })
-
-    // Switch into edit mode and type a local unsaved edit into CodeMirror.
-    await page.getByRole('tab', { name: 'Edit' }).click()
-    const editor = editPanel.locator('.cm-content')
+    // Editor is the default mode; type a local unsaved edit into CodeMirror.
+    const editor = page.locator('.cm-content')
+    await expect(editor).toContainText('original text.', { timeout: 10_000 })
     await editor.click()
     await page.keyboard.press('Control+End')
-    await page.keyboard.type(' local-unsaved-edit')
+    await page.keyboard.type(' draft-edit')
 
-    // Remote client lands an update while the editor is dirty.
-    await upsertNote(baseURL!, token, vault.id, path, '# Initial\n\noriginal text. remote-edit')
+    // Remote client lands an update (on a separate line) while the editor is
+    // dirty — the 3-way merge keeps the local draft AND folds in the remote.
+    await upsertNote(
+      baseURL!,
+      token,
+      vault.id,
+      path,
+      '# Initial\n\noriginal text.\n\nremote-added-line',
+    )
 
-    // Banner appears; draft is preserved (local-unsaved-edit still in editor).
-    await expect(editPanel.getByText(/updated elsewhere/i)).toBeVisible({ timeout: 5_000 })
-    await expect(editPanel.getByText('local-unsaved-edit')).toBeVisible()
+    await expect(editor).toContainText('remote-added-line', { timeout: 5_000 })
+    await expect(editor).toContainText('draft-edit')
 
     await ctx.close()
   })
