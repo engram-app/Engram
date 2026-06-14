@@ -227,21 +227,40 @@ export function useFetchNoteFresh() {
   return (id: string): Promise<Note> => api.get<Note>(`/notes/by-id/${id}`)
 }
 
+interface CreateNoteContext {
+  key: readonly unknown[]
+  shape: 'legacy' | 'byId'
+  snapshot: unknown
+  placeholderId: string
+}
+
+// Filenames in a note list, ignoring our own optimistic placeholders (so a
+// freshly-inserted placeholder doesn't bump the name the server picks).
+function realFilenames(notes: NoteSummary[]): Set<string> {
+  return new Set(
+    notes
+      .filter((n) => !n.id.startsWith('optimistic-'))
+      .map((n) => n.path.split('/').pop() ?? n.path),
+  )
+}
+
 export function useCreateNote() {
   const qc = useQueryClient()
   const vaultId = useActiveVaultId()
   const navigate = useNavigate()
 
-  return useMutation<{ path: string; id: string }, ApiError, { folder: string }>({
+  return useMutation<
+    { path: string; id: string },
+    ApiError,
+    { folder: string },
+    CreateNoteContext | undefined
+  >({
     mutationFn: async ({ folder }) => {
       const existingNotes =
         qc.getQueryData<{ notes: NoteSummary[] }>(['folderNotes', vaultId, folder])?.notes ?? []
-      const existingNames = new Set(
-        existingNotes.map((n) => {
-          const segments = n.path.split('/')
-          return segments[segments.length - 1] ?? n.path
-        }),
-      )
+      // Exclude optimistic placeholders so the server name matches the one we
+      // showed optimistically (no needless "Untitled 1" bump from our own row).
+      const existingNames = realFilenames(existingNotes)
 
       const MAX_RACES = 5
       for (let attempt = 0; attempt < MAX_RACES; attempt++) {
@@ -264,12 +283,85 @@ export function useCreateNote() {
       }
       throw new ApiError(500, 'useCreateNote: exceeded race retries')
     },
-    onSuccess: ({ id }, vars) => {
+    // Drop a placeholder row into the cache the tree reads so a new note shows
+    // instantly (on-disk feel), then swap it for the server row on success.
+    onMutate: async ({ folder }) => {
+      // Root notes live in the path-keyed list; subfolders in the by-id list.
+      let key: readonly unknown[]
+      let shape: 'legacy' | 'byId'
+      if (folder === '') {
+        key = ['folderNotes', vaultId, '']
+        shape = 'legacy'
+      } else {
+        const f = qc
+          .getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+          ?.folders.find((x) => x.name === folder)
+        if (!f) return undefined
+        key = ['folder-notes-by-id', vaultId, f.id]
+        shape = 'byId'
+      }
+      await qc.cancelQueries({ queryKey: key })
+
+      const snapshot = qc.getQueryData(key)
+      // Not cached (e.g. an unexpanded subfolder) — skip; it surfaces on expand.
+      if (snapshot === undefined) return undefined
+
+      const existing: NoteSummary[] =
+        shape === 'legacy' ? (snapshot as { notes: NoteSummary[] }).notes : (snapshot as NoteSummary[])
+      const name = collideBump(realFilenames(existing), 'Untitled.md', { cap: 1000 })
+      const path = folder ? `${folder}/${name}` : name
+      const now = new Date().toISOString()
+      const placeholderId = `optimistic-${Date.now()}`
+      const placeholder: NoteSummary = {
+        id: placeholderId,
+        path,
+        title: name.replace(/\.md$/, ''),
+        folder,
+        tags: [],
+        version: 1,
+        mtime: now,
+        created_at: now,
+        updated_at: now,
+      }
+
+      if (shape === 'legacy') {
+        qc.setQueryData<{ notes: NoteSummary[] }>(key, {
+          notes: [...(snapshot as { notes: NoteSummary[] }).notes, placeholder],
+        })
+      } else {
+        qc.setQueryData<NoteSummary[]>(key, [...(snapshot as NoteSummary[]), placeholder])
+      }
+      return { key, shape, snapshot, placeholderId }
+    },
+    onSuccess: ({ id, path }, vars, ctx) => {
+      // Swap the placeholder for the server-assigned id/path.
+      if (ctx) {
+        const filename = path.split('/').pop() ?? path
+        const patch = { id, path, title: filename.replace(/\.md$/, '') }
+        if (ctx.shape === 'legacy') {
+          const cur = qc.getQueryData<{ notes: NoteSummary[] }>(ctx.key)
+          if (cur) {
+            qc.setQueryData<{ notes: NoteSummary[] }>(ctx.key, {
+              notes: cur.notes.map((n) => (n.id === ctx.placeholderId ? { ...n, ...patch } : n)),
+            })
+          }
+        } else {
+          const cur = qc.getQueryData<NoteSummary[]>(ctx.key)
+          if (cur) {
+            qc.setQueryData<NoteSummary[]>(
+              ctx.key,
+              cur.map((n) => (n.id === ctx.placeholderId ? { ...n, ...patch } : n)),
+            )
+          }
+        }
+      }
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
       navigate(`/note/${id}`)
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.snapshot)
       if (err instanceof ApiError && err.status === 402) {
         toast.error("You've hit your note limit — upgrade to add more.")
       } else if (err instanceof ApiError && err.status === 403) {

@@ -11,6 +11,10 @@ vi.mock('sonner', () => ({
   },
 }))
 
+// queries.ts pulls useNavigate from react-router (useCreateNote). Stub it so
+// the hooks render without a Router in these unit tests.
+vi.mock('react-router', () => ({ useNavigate: () => () => {} }))
+
 // Pin the active vault id so cache keys are deterministic for the
 // optimistic-update tests below. The hook reads from a module-scoped
 // store + localStorage; setting localStorage before module import is
@@ -45,6 +49,7 @@ import {
   useBatchMoveNotes,
   useCancelSubscription,
   useConfirmPlanChange,
+  useCreateNote,
   useDeleteFolder,
   useDeleteNote,
   useDuplicateNote,
@@ -935,6 +940,67 @@ describe('useBatchDeleteNotes', () => {
 
     const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
     expect(root?.notes.map((n) => n.id)).toEqual(['1'])
+  })
+})
+
+describe('useCreateNote — optimistic placeholder', () => {
+  it('inserts a placeholder at root then swaps it for the real note', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useCreateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ folder: '' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string; title: string }> }>([
+        'folderNotes',
+        '42',
+        '',
+      ])
+      expect(root?.notes).toHaveLength(1)
+      expect(root?.notes[0]?.id).toMatch(/^optimistic-/)
+      expect(root?.notes[0]?.title).toBe('Untitled')
+    })
+
+    resolvePost({ note: { id: 'real-1' } })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes[0]?.id).toBe('real-1')
+    })
+  })
+
+  it('inserts a placeholder into the by-id list for a subfolder', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: 'f9', parent_id: null, name: 'sub', count: 0 }],
+    })
+    qc.setQueryData(['folder-notes-by-id', '42', 'f9'], [])
+    qc.setQueryData(['folderNotes', '42', 'sub'], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useCreateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ folder: 'sub' })
+    })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId).toHaveLength(1)
+      expect(byId?.[0]?.id).toMatch(/^optimistic-/)
+    })
+
+    resolvePost({ note: { id: 'real-2' } })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId?.[0]?.id).toBe('real-2')
+    })
   })
 })
 
