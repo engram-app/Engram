@@ -11,6 +11,19 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert get_resp_header(conn, "access-control-allow-origin") != []
   end
 
+  test "preflight allows the X-Vault-ID header the SPA sends on every request" do
+    # The web SPA sets X-Vault-ID (api/client.ts) to scope requests to a vault.
+    # If it is not in access-control-allow-headers the browser blocks the
+    # preflight and every authenticated call fails with a CORS error.
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> options("/api/health")
+
+    [allow_headers] = get_resp_header(conn, "access-control-allow-headers")
+    assert String.contains?(String.downcase(allow_headers), "x-vault-id")
+  end
+
   test "non-OPTIONS requests also receive the CORS origin header" do
     # The plug runs before the router on all requests, not just preflight.
     conn =
