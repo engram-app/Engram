@@ -1,6 +1,7 @@
 import { Socket, Channel } from 'phoenix'
 import type { QueryClient } from '@tanstack/react-query'
 import { getWsBase, joinWsUrl } from './base'
+import { ROOT_FOLDER_ID } from './queries'
 
 let socket: Socket | null = null
 let channel: Channel | null = null
@@ -78,6 +79,11 @@ function flushBatch(batch: PendingBatch): void {
 
   for (const folder of folders) {
     queryClient.invalidateQueries({ queryKey: ['folderNotes', vaultId, folder] })
+    // Root has no folder marker; its id-keyed list keys under the sentinel.
+    if (folder === '') {
+      queryClient.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId, ROOT_FOLDER_ID] })
+      continue
+    }
     const entry = cached?.folders?.find((f) => f.name === folder)
     if (entry) {
       queryClient.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId, entry.id] })

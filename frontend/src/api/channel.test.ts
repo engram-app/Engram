@@ -105,6 +105,20 @@ describe('handleNoteChanged', () => {
     expect(keys).not.toContainEqual(['folder-notes-by-id', '7', 'f2'])
   })
 
+  it('targets the by-id root sentinel for a root note (no folder marker)', () => {
+    const qc = mockQueryClient({ folders: [] })
+
+    // Root note: no folder in the payload, derived as '' from the path.
+    handleNoteChanged({ event_type: 'upsert', path: 'top.md', vault_id: '7' }, qc, '7')
+    vi.advanceTimersByTime(250)
+
+    const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey)
+    expect(keys).toContainEqual(['folderNotes', '7', ''])
+    expect(keys).toContainEqual(['folder-notes-by-id', '7', 'root'])
+    // Root must NOT fall back to the broad whole-prefix invalidation.
+    expect(keys).not.toContainEqual(['folder-notes-by-id', '7'])
+  })
+
   it('falls back to broad folder-notes-by-id invalidation when the folder is not in cache', () => {
     const qc = mockQueryClient({ folders: [] })
 
