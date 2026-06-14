@@ -36,7 +36,6 @@ vi.mock('./attachment-img', () => ({ default: () => null }))
 vi.mock('./mermaid-block', () => ({ default: () => null }))
 
 const EMPTY_TAGS: string[] = []
-const UPDATED_AT = new Date('2026-06-07').toISOString()
 
 // Simulates NotePage while typing: parent state changes every keystroke,
 // but the preview's props stay referentially identical.
@@ -47,7 +46,7 @@ function Harness() {
       <button type="button" onClick={() => setTick((t) => t + 1)}>
         tick
       </button>
-      <NoteView content="# Hello" title="T" tags={EMPTY_TAGS} updatedAt={UPDATED_AT} />
+      <NoteView content="# Hello" tags={EMPTY_TAGS} />
     </>
   )
 }

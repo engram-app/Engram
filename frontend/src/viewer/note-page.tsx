@@ -145,14 +145,22 @@ export default function NotePage() {
           ? 'Saved'
           : ''
 
+  // folder/file path for the header; long paths ellipsis from the LEFT
+  // (dir=rtl below) so the filename end stays visible: ".../folder/file".
+  const titlePath = note.folder ? `${note.folder}/${note.title}` : note.title
+
   return (
     <section className="mx-auto -my-6 flex h-[calc(100%+3rem)] min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-x border-border bg-card text-card-foreground">
       <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" aria-live="polite">
           {statusLabel}
         </span>
-        <h2 className="min-w-0 flex-1 truncate text-center text-sm font-medium" title={note.title}>
-          {note.title}
+        <h2
+          dir="rtl"
+          className="min-w-0 flex-1 truncate text-center text-sm font-medium"
+          title={titlePath}
+        >
+          {titlePath}
         </h2>
         <div className="flex min-w-0 flex-1 justify-end">
           <Button
@@ -168,12 +176,7 @@ export default function NotePage() {
       {mode === 'reading' ? (
         <ScrollArea className="min-h-0 flex-1">
           <div className="w-full px-5 py-5">
-            <NoteView
-              content={note.content}
-              title={note.title}
-              tags={note.tags}
-              updatedAt={note.updated_at}
-            />
+            <NoteView content={note.content} tags={note.tags} />
           </div>
         </ScrollArea>
       ) : (
