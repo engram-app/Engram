@@ -64,7 +64,7 @@ function DesktopLayout() {
         >
           <AppSidebarPanel />
         </ResizablePanel>
-        <ResizableHandle withHandle />
+        <ResizableHandle />
         <ResizablePanel id="main" defaultSize="60%" minSize="30%">
           <main
             className="relative flex h-full flex-col overflow-hidden bg-muted/40 text-foreground"
@@ -94,7 +94,7 @@ function DesktopLayout() {
             </div>
           </main>
         </ResizablePanel>
-        <ResizableHandle withHandle />
+        <ResizableHandle />
         <ResizablePanel
           id="right-sidebar"
           panelRef={rightRef}
