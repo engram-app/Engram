@@ -10,7 +10,12 @@ set -euo pipefail
 
 echo "=== Engram CI Runner Setup ==="
 
-DOCKER_REGISTRY="10.0.20.214:5000"
+# Push-capable OCI distribution registry (registry:2) on :5001 — the same
+# LOCAL_REGISTRY the CI workflow seeds/pulls from. NOT the rpardini
+# pull-through proxy on :5000: that's a read-only MITM cache, so a
+# `docker push` to it fails (and used to abort this whole bootstrap). See
+# engram-infra#315.
+DOCKER_REGISTRY="10.0.20.214:5001"
 NPM_REGISTRY="http://10.0.20.214:4873"
 
 # ── System dependencies for e2e tests ───────────────────────────────────
