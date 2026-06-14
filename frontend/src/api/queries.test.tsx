@@ -1113,6 +1113,65 @@ describe('useBatchMoveNotes', () => {
     expect(byId['5']).toBe(3)
     expect(byId['9']).toBe(1)
   })
+
+  it('moves notes to the vault root: appends to the root list, strips the source', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: '5', parent_id: null, name: 'src', count: 2 }],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }])
+    qc.setQueryData(['folderNotes', '42', ''], { notes: [] })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder_id: 'root' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string; folder: string }> }>([
+        'folderNotes',
+        '42',
+        '',
+      ])
+      expect(root?.notes.map((n) => n.id)).toContain('1')
+      expect(root?.notes.find((n) => n.id === '1')?.folder).toBe('')
+      const src = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '5'])
+      expect(src?.map((n) => n.id)).toEqual(['2'])
+    })
+
+    resolvePost({ moved: 1 })
+  })
+
+  it('moves a note FROM the root into a folder (strips the root list)', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: '9', parent_id: null, name: 'dst', count: 0 }],
+    })
+    qc.setQueryData(['folder-notes-by-id', '42', '9'], [])
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder_id: '9' })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes.map((n) => n.id)).toEqual([])
+      const dst = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '9'])
+      expect(dst?.map((n) => n.id)).toContain('1')
+    })
+
+    resolvePost({ moved: 1 })
+  })
 })
 
 describe('useBatchDeleteFolders', () => {

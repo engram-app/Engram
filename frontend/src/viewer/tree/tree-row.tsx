@@ -149,20 +149,26 @@ function noteLabel(item: Extract<TreeItem, { kind: 'note' }>): string {
 // down a folder's children without tracking where the folder ends.
 const INDENT_STEP = 12
 
+// The guide spans for a given depth are static, so build them once per depth
+// and reuse — every visible row re-renders on rebuild/hover/selection, and the
+// elements are immutable.
+const guideCache = new Map<number, React.ReactNode>()
+
 function IndentGuides({ depth }: { depth: number }) {
   if (depth <= 0) return null
-  return (
-    <>
-      {Array.from({ length: depth }, (_, i) => (
-        <span
-          key={i}
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
-          style={{ left: `${(i + 1) * INDENT_STEP}px` }}
-        />
-      ))}
-    </>
-  )
+  let guides = guideCache.get(depth)
+  if (!guides) {
+    guides = Array.from({ length: depth }, (_, i) => (
+      <span
+        key={i}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
+        style={{ left: `${(i + 1) * INDENT_STEP}px` }}
+      />
+    ))
+    guideCache.set(depth, guides)
+  }
+  return <>{guides}</>
 }
 
 function Chevron({ open }: { open: boolean }) {
