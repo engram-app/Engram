@@ -165,6 +165,7 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/dev-iteration-loop.md` | Local dev loop, hot reload, IEx tricks |
 | `docs/context/quality-tooling-baseline.md` | Phase 1-6 lint ratchet history + threshold rationale |
 | `docs/context/encryption-operations.md` | Runbooks: master-key rotation, per-user DEK rotation (T3.7), AAD rebind, half-state recovery |
+| `docs/context/disaster-recovery.md` | Launch-minimum DR runbook: prod backup posture (RDS 7d snapshots, S3 versioning, Qdrant reindex fallback) + per-scenario recovery linking to rotation runbooks (#255) |
 | `docs/context/mcp-oauth.md` | OAuth 2.1 + DCR on `/api/mcp`: wire flow, endpoints, token model, scope grammar, schema |
 | `docs/context/paddle-integration.md` | Paddle MoR integration: webhook signature, event lifecycle, `custom_data` contract, affiliate flow |
 | `docs/context/billing-tier-frontend-contract.md` | `tier` values (default `free`, not `none`); consumers must handle every tier + gate on `!active` |
