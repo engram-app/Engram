@@ -891,6 +891,51 @@ describe('useBatchDeleteNotes', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folder-notes-by-id', '42'] })
   })
+
+  it('optimistically strips deleted root notes from the folderNotes cache', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+        { id: '2', path: 'b.md', title: 'b', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'] })
+    })
+
+    await waitFor(() => {
+      const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+      expect(root?.notes.map((n) => n.id)).toEqual(['2'])
+    })
+
+    resolvePost({ deleted: 1 })
+  })
+
+  it('rolls back the folderNotes cache when the server rejects', async () => {
+    qc.setQueryData(['folderNotes', '42', ''], {
+      notes: [
+        { id: '1', path: 'a.md', title: 'a', folder: '', tags: [], version: 1, mtime: '', created_at: '', updated_at: '' },
+      ],
+    })
+    post.mockRejectedValue(new ApiError(500, 'boom'))
+
+    const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: ['1'] })
+      } catch {
+        // expected
+      }
+    })
+
+    const root = qc.getQueryData<{ notes: Array<{ id: string }> }>(['folderNotes', '42', ''])
+    expect(root?.notes.map((n) => n.id)).toEqual(['1'])
+  })
 })
 
 describe('useBatchMoveNotes', () => {

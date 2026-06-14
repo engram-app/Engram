@@ -1568,6 +1568,9 @@ interface BatchNotesContext {
   // Folders cache snapshot — present only when a move patched folder counts
   // (so the tree's structure key changes and it rebuilds). Used for rollback.
   folders?: { folders: Folder[] }
+  // Path-keyed folderNotes snapshots (root notes live here, not in by-id
+  // lists). Patched by batch delete so a root note disappears optimistically.
+  legacyListSnapshots?: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>
 }
 
 export function useBatchDeleteNotes() {
@@ -1587,6 +1590,7 @@ export function useBatchDeleteNotes() {
       ),
     onMutate: async ({ ids }) => {
       await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      await qc.cancelQueries({ queryKey: ['folderNotes', vaultId] })
       const idSet = new Set(ids)
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
@@ -1603,17 +1607,33 @@ export function useBatchDeleteNotes() {
         )
       }
 
+      // Root notes (and any legacy path-keyed consumers) live in
+      // ['folderNotes', vaultId, folder] as { notes }, not the by-id lists —
+      // strip them here too so a deleted root note disappears optimistically.
+      const legacyListSnapshots: BatchNotesContext['legacyListSnapshots'] = []
+      for (const q of qc.getQueryCache().findAll({ queryKey: ['folderNotes', vaultId] })) {
+        const data = qc.getQueryData<{ notes: NoteSummary[] }>(q.queryKey)
+        if (!data) continue
+        legacyListSnapshots.push({ key: q.queryKey, data })
+        qc.setQueryData<{ notes: NoteSummary[] }>(q.queryKey, {
+          notes: data.notes.filter((n) => !idSet.has(n.id)),
+        })
+      }
+
       // Drop any cached note body for the deleted ids so a stale
       // useNote(id) subscriber 404s on remount instead of rendering.
       for (const id of ids) {
         qc.removeQueries({ queryKey: ['note', vaultId, id] })
       }
 
-      return { noteListSnapshots: snapshots }
+      return { noteListSnapshots: snapshots, legacyListSnapshots }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
       for (const snap of ctx.noteListSnapshots) {
+        qc.setQueryData(snap.key, snap.data)
+      }
+      for (const snap of ctx.legacyListSnapshots ?? []) {
         qc.setQueryData(snap.key, snap.data)
       }
       toast.error('Batch delete failed.')
