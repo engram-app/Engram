@@ -159,7 +159,7 @@ test.describe('SPA viewer live-update (#277)', () => {
     await ctx.close()
   })
 
-  test('a remote update merges into the editor without losing the local draft', async ({
+  test('a non-overlapping remote update merges silently without losing the local draft', async ({
     browser,
     baseURL,
   }) => {
@@ -172,32 +172,34 @@ test.describe('SPA viewer live-update (#277)', () => {
       token,
       vault.id,
       path,
-      '# Initial\n\noriginal text.',
+      '# Initial\n\nintro.\n\noriginal text.',
     )
 
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
     await signInForNote(page, email, vault.id, noteId)
 
-    // Editor is the default mode; type a local unsaved edit into CodeMirror.
+    // Editor is the default mode; type a local unsaved edit at the END.
     const editor = page.locator('.cm-content')
     await expect(editor).toContainText('original text.', { timeout: 10_000 })
     await editor.click()
     await page.keyboard.press('Control+End')
     await page.keyboard.type(' draft-edit')
 
-    // Remote client lands an update (on a separate line) while the editor is
-    // dirty — the 3-way merge keeps the local draft AND folds in the remote.
+    // Remote edits a DIFFERENT region (the heading, far from the local edit),
+    // so the 3-way merge is clean: it folds in silently — no conflict bar —
+    // and keeps the local draft.
     await upsertNote(
       baseURL!,
       token,
       vault.id,
       path,
-      '# Initial\n\noriginal text.\n\nremote-added-line',
+      '# Heading remote\n\nintro.\n\noriginal text.',
     )
 
-    await expect(editor).toContainText('remote-added-line', { timeout: 5_000 })
+    await expect(editor).toContainText('Heading remote', { timeout: 5_000 })
     await expect(editor).toContainText('draft-edit')
+    await expect(page.getByTestId('conflict-bar')).toBeHidden()
 
     await ctx.close()
   })
