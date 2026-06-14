@@ -259,11 +259,42 @@ export function useFetchNoteFresh() {
   return fetchNoteById
 }
 
+type NoteListShape = 'legacy' | 'byId'
+
 interface CreateNoteContext {
   key: readonly unknown[]
-  shape: 'legacy' | 'byId'
+  shape: NoteListShape
   snapshot: unknown
   placeholderId: string
+}
+
+// Replace the row whose id === `id` in a note-list cache, handling both shapes
+// the tree reads: path-keyed `{ notes }` (root/legacy) and id-keyed
+// `NoteSummary[]` (subfolders). Used to swap an optimistic placeholder for the
+// server row. No-op when the list isn't cached.
+function patchRowInList(
+  qc: QueryClient,
+  key: readonly unknown[],
+  shape: NoteListShape,
+  id: string,
+  patch: Partial<NoteSummary>,
+): void {
+  if (shape === 'legacy') {
+    const cur = qc.getQueryData<{ notes: NoteSummary[] }>(key)
+    if (cur) {
+      qc.setQueryData<{ notes: NoteSummary[] }>(key, {
+        notes: cur.notes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      })
+    }
+  } else {
+    const cur = qc.getQueryData<NoteSummary[]>(key)
+    if (cur) {
+      qc.setQueryData<NoteSummary[]>(
+        key,
+        cur.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      )
+    }
+  }
 }
 
 // Filenames in a note list, ignoring our own optimistic placeholders (so a
@@ -369,27 +400,17 @@ export function useCreateNote() {
       // Swap the placeholder for the server-assigned id/path.
       if (ctx) {
         const filename = path.split('/').pop() ?? path
-        const patch = { id, path, title: filename.replace(/\.md$/, '') }
-        if (ctx.shape === 'legacy') {
-          const cur = qc.getQueryData<{ notes: NoteSummary[] }>(ctx.key)
-          if (cur) {
-            qc.setQueryData<{ notes: NoteSummary[] }>(ctx.key, {
-              notes: cur.notes.map((n) => (n.id === ctx.placeholderId ? { ...n, ...patch } : n)),
-            })
-          }
-        } else {
-          const cur = qc.getQueryData<NoteSummary[]>(ctx.key)
-          if (cur) {
-            qc.setQueryData<NoteSummary[]>(
-              ctx.key,
-              cur.map((n) => (n.id === ctx.placeholderId ? { ...n, ...patch } : n)),
-            )
-          }
-        }
+        patchRowInList(qc, ctx.key, ctx.shape, ctx.placeholderId, {
+          id,
+          path,
+          title: filename.replace(/\.md$/, ''),
+        })
       }
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId, vars.folder] })
-      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      // Only the target folder's by-id list changed — no need to stale the
+      // whole prefix (which would force every folder to refetch on next expand).
+      if (ctx?.shape === 'byId') qc.invalidateQueries({ queryKey: ctx.key })
       navigate(`/note/${id}`)
     },
     onError: (err, _vars, ctx) => {
@@ -1611,35 +1632,23 @@ export function useDuplicateNote() {
       if (!ctx) return
       const real = data.note
       if (!real?.id) return
-      // Swap the placeholder row for the real server-assigned id so
-      // any tree consumer using `n.id` as a stable key transitions
-      // smoothly. onSettled below also invalidates, but the swap
-      // avoids a momentary "missing note" flash for the placeholder.
-      const listKey = ['folderNotes', vaultId, ctx.newFolder]
-      const curr = qc.getQueryData<{ notes: NoteSummary[] }>(listKey)
-      if (!curr) return
-      const swap = (n: NoteSummary): NoteSummary =>
-        n.id === ctx.placeholderId
-          ? {
-              ...n,
-              id: real.id,
-              path: real.path ?? n.path,
-              title: real.title ?? n.title,
-              folder: real.folder ?? n.folder,
-              tags: real.tags ?? n.tags,
-              version: real.version ?? n.version,
-              mtime: real.mtime ?? n.mtime,
-              created_at: real.created_at ?? n.created_at,
-              updated_at: real.updated_at ?? n.updated_at,
-            }
-          : n
-      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, { notes: curr.notes.map(swap) })
-
-      // Same placeholder→real swap in the tree's id-keyed list.
-      if (ctx.byIdKey) {
-        const byIdCurr = qc.getQueryData<NoteSummary[]>(ctx.byIdKey)
-        if (byIdCurr) qc.setQueryData<NoteSummary[]>(ctx.byIdKey, byIdCurr.map(swap))
+      // Swap the placeholder for the real server row in BOTH lists the tree may
+      // read (path-keyed root/legacy + id-keyed subfolder), so a tree consumer
+      // keying on `n.id` transitions smoothly. onSettled also invalidates; the
+      // swap avoids a momentary "missing note" flash.
+      const patch: Partial<NoteSummary> = {
+        id: real.id,
+        path: real.path,
+        title: real.title,
+        folder: real.folder,
+        tags: real.tags,
+        version: real.version,
+        mtime: real.mtime,
+        created_at: real.created_at,
+        updated_at: real.updated_at,
       }
+      patchRowInList(qc, ['folderNotes', vaultId, ctx.newFolder], 'legacy', ctx.placeholderId, patch)
+      if (ctx.byIdKey) patchRowInList(qc, ctx.byIdKey, 'byId', ctx.placeholderId, patch)
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.newFolderNotes !== undefined) {
