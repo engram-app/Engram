@@ -11,8 +11,10 @@ import { test, expect, type Page } from '@playwright/test'
  *
  * The note view defaults to the editor (plain markdown source). A remote
  * update is applied into the live CodeMirror doc via a 3-way merge, so an
- * in-progress local draft is preserved rather than clobbered (no banner —
- * the merge is silent).
+ * in-progress local draft is preserved rather than clobbered. A CLEAN merge is
+ * silent; a TRUE conflict (line-level overlap) does NOT write markers silently
+ * — it surfaces a non-blocking ConflictBar (Keep mine / Take theirs / View
+ * merge) and keeps the draft until the user chooses.
  */
 
 const PASS = 'E2eTestPass!99'
@@ -157,7 +159,7 @@ test.describe('SPA viewer live-update (#277)', () => {
     await ctx.close()
   })
 
-  test('a remote update merges into the editor without losing the local draft', async ({
+  test('a non-overlapping remote update merges silently without losing the local draft', async ({
     browser,
     baseURL,
   }) => {
@@ -170,32 +172,76 @@ test.describe('SPA viewer live-update (#277)', () => {
       token,
       vault.id,
       path,
-      '# Initial\n\noriginal text.',
+      '# Initial\n\nintro.\n\noriginal text.',
     )
 
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
     await signInForNote(page, email, vault.id, noteId)
 
-    // Editor is the default mode; type a local unsaved edit into CodeMirror.
+    // Editor is the default mode; type a local unsaved edit at the END.
     const editor = page.locator('.cm-content')
     await expect(editor).toContainText('original text.', { timeout: 10_000 })
     await editor.click()
     await page.keyboard.press('Control+End')
     await page.keyboard.type(' draft-edit')
 
-    // Remote client lands an update (on a separate line) while the editor is
-    // dirty — the 3-way merge keeps the local draft AND folds in the remote.
+    // Remote edits a DIFFERENT region (the heading, far from the local edit),
+    // so the 3-way merge is clean: it folds in silently — no conflict bar —
+    // and keeps the local draft.
     await upsertNote(
       baseURL!,
       token,
       vault.id,
       path,
-      '# Initial\n\noriginal text.\n\nremote-added-line',
+      '# Heading remote\n\nintro.\n\noriginal text.',
     )
 
-    await expect(editor).toContainText('remote-added-line', { timeout: 5_000 })
+    await expect(editor).toContainText('Heading remote', { timeout: 5_000 })
     await expect(editor).toContainText('draft-edit')
+    await expect(page.getByTestId('conflict-bar')).toBeHidden()
+
+    await ctx.close()
+  })
+
+  test('a true conflict surfaces a non-blocking bar and keeps the draft until resolved', async ({
+    browser,
+    baseURL,
+  }) => {
+    const email = `e2e-live-conflict-${Date.now()}@test.com`
+    const token = await registerAndLogin(baseURL!, email)
+    const vault = await createVault(baseURL!, token, `liveconflict-${Date.now()}`)
+    const path = 'live-conflict.md'
+    // Single line so the local + remote edits provably land on the same line
+    // (a line-level overlap is what makes node-diff3 report a conflict).
+    const { id: noteId } = await upsertNote(baseURL!, token, vault.id, path, 'shared line')
+
+    const ctx = await browser.newContext()
+    const page = await ctx.newPage()
+    await signInForNote(page, email, vault.id, noteId)
+
+    const editor = page.locator('.cm-content')
+    await expect(editor).toContainText('shared line', { timeout: 10_000 })
+
+    // Local draft: append to the shared line (do NOT save).
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(' MINE')
+
+    // Remote client changes the SAME line — a true conflict.
+    await upsertNote(baseURL!, token, vault.id, path, 'shared line REMOTE')
+
+    // The non-blocking bar appears; the draft is NOT silently overwritten.
+    const bar = page.getByTestId('conflict-bar')
+    await expect(bar).toBeVisible({ timeout: 5_000 })
+    await expect(editor).toContainText('MINE')
+    await expect(editor).not.toContainText('REMOTE')
+
+    // Resolve with "Take theirs": the editor adopts the remote and the bar closes.
+    await bar.getByRole('button', { name: 'Take theirs' }).click()
+    await expect(bar).toBeHidden()
+    await expect(editor).toContainText('shared line REMOTE')
+    await expect(editor).not.toContainText('MINE')
 
     await ctx.close()
   })
