@@ -36,15 +36,17 @@ export default function NotePage() {
 
   // `base` = last server-synced content; the common ancestor for 3-way merges.
   const baseRef = useRef('')
-  // `doc` = latest local editor content (mirror, for merges before mount).
+  // `doc` = latest local editor content. Mirrors the live doc (updated on every
+  // edit and remote merge) and is the value the editor (re)mounts with — so a
+  // mode toggle that unmounts/remounts the editor restores in-progress edits
+  // rather than the stale per-note initial content.
   const docRef = useRef('')
   const editorRef = useRef<NoteEditorHandle | null>(null)
 
-  // The editor is fed a per-note INITIAL value and keyed by path; live
-  // refetches must not reset it (that would clobber in-progress typing).
-  // Seeded once per note during render (ref mutation is render-safe).
+  // The editor is keyed by path; live refetches must not reset it (that would
+  // clobber in-progress typing). Seeded once per note during render (ref
+  // mutation is render-safe).
   const seededPath = useRef<string | null>(null)
-  const initialRef = useRef('')
 
   // Persist content at a base version; resolve with the new version. On a 409
   // (another device saved first) rebase via 3-way merge and retry.
@@ -74,12 +76,11 @@ export default function NotePage() {
   const autosave = useAutosave({ save, version: note?.version ?? 0 })
   const { onEdit, flush } = autosave
 
-  // Seed base/doc/initial when navigating to a different note (render-time).
+  // Seed base/doc when navigating to a different note (render-time).
   if (note && seededPath.current !== note.path) {
     seededPath.current = note.path
     baseRef.current = note.content
     docRef.current = note.content
-    initialRef.current = note.content
   }
 
   // Apply incoming remote edits to the open note via 3-way merge. The merged
@@ -190,7 +191,7 @@ export default function NotePage() {
             <NoteEditor
               key={note.path}
               ref={editorRef}
-              value={initialRef.current}
+              value={docRef.current}
               onChange={onEditorChange}
             />
           </Suspense>
