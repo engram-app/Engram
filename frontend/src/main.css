@@ -54,6 +54,14 @@
     margin-top: 1.15em;
     margin-bottom: 1.15em;
   }
+  /* Fenced code wraps long lines instead of scrolling horizontally. */
+  .prose :where(pre, pre code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .prose :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    overflow-x: hidden;
+  }
   .prose :where(li):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     margin-top: 0.5em;
     margin-bottom: 0.5em;
