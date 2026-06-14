@@ -903,6 +903,59 @@ describe('useBatchMoveNotes', () => {
     const src = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '5'])
     expect(src?.map((n) => n.id).sort()).toEqual(['1', '2', '3'])
   })
+
+  it('optimistically updates folder counts so the tree rebuilds on a move', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [
+        { id: '5', parent_id: null, name: 'src', count: 3 },
+        { id: '9', parent_id: null, name: 'dst', count: 1 },
+      ],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }, { id: '3' }])
+    seedFolderNotesById('9', [{ id: '4' }])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1', '2'], target_folder_id: '9' })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+      const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]))
+      expect(byId['5']).toBe(1) // 3 source notes - 2 moved
+      expect(byId['9']).toBe(3) // 1 target note + 2 moved
+    })
+
+    resolvePost({ moved: 2 })
+  })
+
+  it('rolls back folder counts on server error', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [
+        { id: '5', parent_id: null, name: 'src', count: 3 },
+        { id: '9', parent_id: null, name: 'dst', count: 1 },
+      ],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }, { id: '3' }])
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    await act(async () => {
+      try {
+        await result.current.mutateAsync({ ids: ['1', '2'], target_folder_id: '9' })
+      } catch {
+        // expected
+      }
+    })
+
+    const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+    const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]))
+    expect(byId['5']).toBe(3)
+    expect(byId['9']).toBe(1)
+  })
 })
 
 describe('useBatchDeleteFolders', () => {

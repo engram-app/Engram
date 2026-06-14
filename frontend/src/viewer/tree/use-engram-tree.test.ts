@@ -6,21 +6,27 @@ import type { Folder, NoteSummary } from '../../api/queries'
 
 describe('treeStructureKey', () => {
   it('changes when a folder count changes (so a move rebuilds the tree)', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0 }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 1 }], [], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 1, parent_id: null }], [], 'name-asc')
+    expect(after).not.toBe(before)
+  })
+
+  it('changes when a folder is reparented (folder move rebuilds the tree)', () => {
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: 'p2' }], [], 'name-asc')
     expect(after).not.toBe(before)
   })
 
   it('changes when root notes change', () => {
-    const before = treeStructureKey([{ id: 'f1', count: 0 }], [], 'name-asc')
-    const after = treeStructureKey([{ id: 'f1', count: 0 }], ['n1'], 'name-asc')
+    const before = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], [], 'name-asc')
+    const after = treeStructureKey([{ id: 'f1', count: 0, parent_id: null }], ['n1'], 'name-asc')
     expect(after).not.toBe(before)
   })
 
   it('is stable when nothing structural changes', () => {
-    expect(treeStructureKey([{ id: 'f1', count: 2 }], ['n1'], 'name-asc')).toBe(
-      treeStructureKey([{ id: 'f1', count: 2 }], ['n1'], 'name-asc'),
-    )
+    expect(
+      treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'),
+    ).toBe(treeStructureKey([{ id: 'f1', count: 2, parent_id: null }], ['n1'], 'name-asc'))
   })
 })
 

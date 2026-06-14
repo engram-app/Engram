@@ -1531,6 +1531,9 @@ interface BatchNotesContext {
   // Every by-id list we patched. We keep the snapshot map ordered by the
   // QueryClient cache scan so rollback restores under the same key.
   noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>
+  // Folders cache snapshot — present only when a move patched folder counts
+  // (so the tree's structure key changes and it rebuilds). Used for rollback.
+  folders?: { folders: Folder[] }
 }
 
 export function useBatchDeleteNotes() {
@@ -1606,6 +1609,7 @@ export function useBatchMoveNotes() {
       ),
     onMutate: async ({ ids, target_folder_id }) => {
       await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
+      await qc.cancelQueries({ queryKey: ['folders', vaultId] })
       const idSet = new Set(ids)
 
       // Resolve the target folder's path so we can patch `folder` /
@@ -1618,6 +1622,9 @@ export function useBatchMoveNotes() {
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
       const moved: NoteSummary[] = []
+      // How many notes left each source folder — used to decrement folder
+      // counts below so the tree's structure key changes and it rebuilds.
+      const removedPerFolder = new Map<string, number>()
       const queries = qc
         .getQueryCache()
         .findAll({ queryKey: ['folder-notes-by-id', vaultId] })
@@ -1633,6 +1640,9 @@ export function useBatchMoveNotes() {
         for (const n of data) {
           if (idSet.has(n.id) && folderId !== target_folder_id) {
             moved.push(n)
+            if (typeof folderId === 'string') {
+              removedPerFolder.set(folderId, (removedPerFolder.get(folderId) ?? 0) + 1)
+            }
           } else {
             keep.push(n)
           }
@@ -1676,13 +1686,36 @@ export function useBatchMoveNotes() {
         }
       }
 
-      return { noteListSnapshots: snapshots }
+      // Bump folder counts: each source loses what it shed, the target gains
+      // the total moved. This flips the folders cache, which changes the tree's
+      // structure key (id:count:parent_id) so it rebuilds and shows the move
+      // immediately instead of after a manual collapse/expand. Snapshot for
+      // rollback. Skipped when nothing moved or the target is the vault root
+      // ('root' has no folder row — sources still decrement).
+      let foldersSnapshot: { folders: Folder[] } | undefined
+      if (moved.length > 0 || removedPerFolder.size > 0) {
+        const cache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+        if (cache) {
+          foldersSnapshot = cache
+          const patched = cache.folders.map((f) => {
+            let count = f.count
+            const removed = removedPerFolder.get(f.id)
+            if (removed) count -= removed
+            if (f.id === target_folder_id) count += moved.length
+            return count === f.count ? f : { ...f, count }
+          })
+          qc.setQueryData<{ folders: Folder[] }>(['folders', vaultId], { folders: patched })
+        }
+      }
+
+      return { noteListSnapshots: snapshots, folders: foldersSnapshot }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
       for (const snap of ctx.noteListSnapshots) {
         qc.setQueryData(snap.key, snap.data)
       }
+      if (ctx.folders !== undefined) qc.setQueryData(['folders', vaultId], ctx.folders)
       toast.error('Batch move failed.')
     },
     onSuccess: () => {

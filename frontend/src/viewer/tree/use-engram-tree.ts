@@ -35,17 +35,19 @@ type Data = LoaderItem
 
 /**
  * Stable structural fingerprint that drives `rebuildTree()`. Includes each
- * folder's `count` (not just its id) so a move/create/delete — which changes
- * counts but no folder ids — still changes the key and rebuilds the tree.
- * Without the count, headless-tree keeps a stale per-folder child list after a
- * move until the user manually collapses/expands the folder.
+ * folder's `count` AND `parent_id` (not just its id) so both kinds of move
+ * rebuild the tree:
+ *  - a note move bumps the source/target folder `count` (see useBatchMoveNotes),
+ *  - a folder move reparents it, changing `parent_id`.
+ * Without these, headless-tree keeps a stale per-folder child list after a move
+ * until the user manually collapses/expands the folder.
  */
 export function treeStructureKey(
-  folders: Pick<Folder, 'id' | 'count'>[],
+  folders: Pick<Folder, 'id' | 'count' | 'parent_id'>[],
   rootNoteIds: string[],
   sort: SortKey,
 ): string {
-  const folderKey = folders.map((f) => `${f.id}:${f.count}`).join('|')
+  const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ''}`).join('|')
   return `${folderKey}::${rootNoteIds.join('|')}::${sort}`
 }
 
