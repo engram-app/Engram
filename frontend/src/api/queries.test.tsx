@@ -313,6 +313,52 @@ describe('useDuplicateNote', () => {
       result.current.mutateAsync({ src_path: 'a.md', new_path: 'a (copy).md' }),
     ).rejects.toMatchObject({ status: 409 })
   })
+
+  it('mirrors the optimistic placeholder into the tree by-id list', async () => {
+    qc.setQueryData(['folders', '42'], {
+      folders: [{ id: 'f9', parent_id: null, name: 'dst', count: 1 }],
+    })
+    seedFolderNotesById('f9', [{ id: 'a', path: 'dst/a.md' }])
+    qc.setQueryData(['folderNotes', '42', 'dst'], { notes: [] })
+
+    get.mockResolvedValue({ content: 'x' })
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useDuplicateNote(), { wrapper })
+    act(() => {
+      result.current.mutate({ src_path: 'dst/a.md', new_path: 'dst/a copy.md' })
+    })
+
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string; path: string }>>([
+        'folder-notes-by-id',
+        '42',
+        'f9',
+      ])
+      expect(byId?.some((n) => n.path === 'dst/a copy.md')).toBe(true)
+    })
+
+    resolvePost({
+      note: {
+        id: 'real',
+        path: 'dst/a copy.md',
+        title: 'a copy',
+        folder: 'dst',
+        tags: [],
+        version: 1,
+        mtime: '',
+        created_at: '',
+        updated_at: '',
+      },
+    })
+
+    // After success the placeholder id is swapped for the server id.
+    await waitFor(() => {
+      const byId = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', 'f9'])
+      expect(byId?.some((n) => n.id === 'real')).toBe(true)
+    })
+  })
 })
 
 describe('useDeleteFolder', () => {

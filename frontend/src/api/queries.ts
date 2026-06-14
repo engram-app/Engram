@@ -1395,6 +1395,10 @@ interface DuplicateNoteContext {
   newFolder: string
   newFolderNotes: { notes: NoteSummary[] } | undefined
   placeholderId: string
+  // The id-keyed list the tree reads (set only for a non-root target folder
+  // whose list is cached), plus its snapshot for rollback.
+  byIdKey?: readonly unknown[]
+  byIdNotes?: NoteSummary[]
 }
 
 export function useDuplicateNote() {
@@ -1452,6 +1456,28 @@ export function useDuplicateNote() {
           notes: [...prev.notes.filter((n) => n.path !== new_path), placeholder],
         }))
       }
+
+      // Mirror into the id-keyed list the tree actually reads (subfolders).
+      // Root targets (newFolder === '') have no folders-cache row and surface
+      // via the rootNotes path above. Only patch when the list is cached;
+      // otherwise the dupe lands on the next expand fetch.
+      if (newFolder) {
+        const targetFolder = qc
+          .getQueryData<{ folders: Folder[] }>(['folders', vaultId])
+          ?.folders.find((f) => f.name === newFolder)
+        if (targetFolder) {
+          const byIdKey = ['folder-notes-by-id', vaultId, targetFolder.id] as const
+          const byIdNotes = qc.getQueryData<NoteSummary[]>(byIdKey)
+          if (byIdNotes) {
+            ctx.byIdKey = byIdKey
+            ctx.byIdNotes = byIdNotes
+            qc.setQueryData<NoteSummary[]>(byIdKey, [
+              ...byIdNotes.filter((n) => n.path !== new_path),
+              placeholder,
+            ])
+          }
+        }
+      }
       return ctx
     },
     onSuccess: (data, _vars, ctx) => {
@@ -1465,28 +1491,35 @@ export function useDuplicateNote() {
       const listKey = ['folderNotes', vaultId, ctx.newFolder]
       const curr = qc.getQueryData<{ notes: NoteSummary[] }>(listKey)
       if (!curr) return
-      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, {
-        notes: curr.notes.map((n) =>
-          n.id === ctx.placeholderId
-            ? {
-                ...n,
-                id: real.id,
-                path: real.path ?? n.path,
-                title: real.title ?? n.title,
-                folder: real.folder ?? n.folder,
-                tags: real.tags ?? n.tags,
-                version: real.version ?? n.version,
-                mtime: real.mtime ?? n.mtime,
-                created_at: real.created_at ?? n.created_at,
-                updated_at: real.updated_at ?? n.updated_at,
-              }
-            : n,
-        ),
-      })
+      const swap = (n: NoteSummary): NoteSummary =>
+        n.id === ctx.placeholderId
+          ? {
+              ...n,
+              id: real.id,
+              path: real.path ?? n.path,
+              title: real.title ?? n.title,
+              folder: real.folder ?? n.folder,
+              tags: real.tags ?? n.tags,
+              version: real.version ?? n.version,
+              mtime: real.mtime ?? n.mtime,
+              created_at: real.created_at ?? n.created_at,
+              updated_at: real.updated_at ?? n.updated_at,
+            }
+          : n
+      qc.setQueryData<{ notes: NoteSummary[] }>(listKey, { notes: curr.notes.map(swap) })
+
+      // Same placeholder→real swap in the tree's id-keyed list.
+      if (ctx.byIdKey) {
+        const byIdCurr = qc.getQueryData<NoteSummary[]>(ctx.byIdKey)
+        if (byIdCurr) qc.setQueryData<NoteSummary[]>(ctx.byIdKey, byIdCurr.map(swap))
+      }
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.newFolderNotes !== undefined) {
         qc.setQueryData(['folderNotes', vaultId, ctx.newFolder], ctx.newFolderNotes)
+      }
+      if (ctx?.byIdKey && ctx.byIdNotes !== undefined) {
+        qc.setQueryData(ctx.byIdKey, ctx.byIdNotes)
       }
       if (err.status === 409) {
         toast.error('A note with that name already exists.')
@@ -1497,6 +1530,7 @@ export function useDuplicateNote() {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folder-notes-by-id', vaultId] })
     },
   })
 }
