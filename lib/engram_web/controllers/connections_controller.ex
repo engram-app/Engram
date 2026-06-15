@@ -103,6 +103,7 @@ defmodule EngramWeb.ConnectionsController do
       software_version: row.software_version,
       verified: row.verified,
       logo: row.logo,
+      slug: row.slug,
       vault_id: row.vault_id,
       vault_name: row.vault_name,
       scope: row.scope,

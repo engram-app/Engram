@@ -53,6 +53,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
       mcp = Enum.find(body, fn r -> r["kind"] == "mcp" end)
       assert mcp["name"] == "Claude Desktop"
       assert mcp["verified"] == true
+      assert mcp["slug"] == "claude"
       assert mcp["client_id"] == client.client_id
 
       pat = Enum.find(body, fn r -> r["kind"] == "pat" end)
