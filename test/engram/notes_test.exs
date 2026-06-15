@@ -23,6 +23,95 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # write-rejection / divergence logging — silent drops are the worst incident
+  # class; every reject/rewrite/conflict must leave a queryable server trace.
+  # ---------------------------------------------------------------------------
+
+  describe "write-rejection logging" do
+    import ExUnit.CaptureLog
+
+    test "logs when the sanitizer rewrites the path (silent divergence risk)", %{
+      user: user,
+      vault: vault
+    } do
+      log =
+        capture_log(fn ->
+          {:ok, note} =
+            Notes.upsert_note(user, vault, %{
+              "path" => "Test/Dirty?.md",
+              "content" => "# Dirty",
+              "mtime" => 1_000.0
+            })
+
+          assert note.path == "Test/Dirty.md"
+        end)
+
+      assert log =~ "note_path_rewritten"
+      assert log =~ "user_id=#{user.id}"
+      assert log =~ "note_id="
+    end
+
+    test "does NOT log a rewrite when the path is already clean", %{user: user, vault: vault} do
+      log =
+        capture_log(fn ->
+          {:ok, _} =
+            Notes.upsert_note(user, vault, %{
+              "path" => "Test/Clean.md",
+              "content" => "# Clean",
+              "mtime" => 1_000.0
+            })
+        end)
+
+      refute log =~ "note_path_rewritten"
+    end
+
+    test "logs a version conflict with note_id and both versions", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Conflict.md",
+          "content" => "# v1",
+          "mtime" => 1_000.0
+        })
+
+      log =
+        capture_log(fn ->
+          assert {:error, :version_conflict, _server} =
+                   Notes.upsert_note(user, vault, %{
+                     "path" => "Test/Conflict.md",
+                     "content" => "# v2",
+                     "mtime" => 2_000.0,
+                     "version" => 99
+                   })
+        end)
+
+      assert log =~ "note_version_conflict"
+      assert log =~ "note_id=#{note.id}"
+      assert log =~ "client_version=99"
+      assert log =~ "server_version=1"
+    end
+
+    test "logs a summary when a batch upsert partially rejects entries", %{
+      user: user,
+      vault: vault
+    } do
+      log =
+        capture_log(fn ->
+          {:ok, %{results: _}} =
+            Notes.batch_upsert_notes(user, vault, [
+              %{"path" => "Batch/A.md", "content" => "# A", "mtime" => 1_000.0},
+              # Duplicate sanitized path within the batch → rejected entry.
+              %{"path" => "Batch/A.md", "content" => "# A dup", "mtime" => 1_001.0}
+            ])
+        end)
+
+      assert log =~ "note_batch_partial_reject"
+      assert log =~ "user_id=#{user.id}"
+      assert log =~ "failed_count=1"
+      assert log =~ "total_count=2"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # upsert_note/3
   # ---------------------------------------------------------------------------
 
