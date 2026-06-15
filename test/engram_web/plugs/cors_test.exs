@@ -24,6 +24,21 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert String.contains?(String.downcase(allow_headers), "x-vault-id")
   end
 
+  test "preflight allows PATCH — the SPA verb for /onboarding/profile and friends" do
+    # The web SPA's api client (api/client.ts) exposes patch (no put), and
+    # several routes use PATCH: /onboarding/profile, /me, /vaults/:id,
+    # /registration, /users/:id. If PATCH is absent from
+    # access-control-allow-methods the browser blocks the preflight and
+    # onboarding (and every PATCH call) fails with a CORS error in prod.
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> options("/api/health")
+
+    [allow_methods] = get_resp_header(conn, "access-control-allow-methods")
+    assert String.contains?(String.upcase(allow_methods), "PATCH")
+  end
+
   test "non-OPTIONS requests also receive the CORS origin header" do
     # The plug runs before the router on all requests, not just preflight.
     conn =
