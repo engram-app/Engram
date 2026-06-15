@@ -62,15 +62,19 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
   }
 
   if (item.kind === 'folder') {
-    const hoverPrefetch = onFolderHover
-      ? () => onFolderHover(item.id)
-      : undefined
+    // Synthetic folders (id prefix 'syn:') are UI-only scaffolding for
+    // attachment-only dirs — they have no backend record, so rename/delete/move
+    // and note-prefetch don't apply. Drop their action affordances; expansion
+    // (to reveal the attachments inside) still works.
+    const isSynthetic = item.id.startsWith('syn:')
+    const hoverPrefetch =
+      onFolderHover && !isSynthetic ? () => onFolderHover(item.id) : undefined
     return (
       <button
         type="button"
         {...instance.getProps()}
-        {...longPressProps}
-        onContextMenu={contextMenuHandler}
+        {...(isSynthetic ? {} : longPressProps)}
+        onContextMenu={isSynthetic ? undefined : contextMenuHandler}
         onPointerEnter={hoverPrefetch}
         onFocus={hoverPrefetch}
         aria-expanded={instance.isExpanded()}

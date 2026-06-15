@@ -88,6 +88,8 @@ export default function FolderTree() {
   // existing item path's folder + new leaf name.
   const onRenameCommit = (itemId: string, newName: string) => {
     const p = parseItemId(itemId)
+    // Synthetic folders have no backend record — nothing to rename.
+    if (p.kind === 'folder' && p.id.startsWith('syn:')) return
     if (p.kind === 'note') {
       const item = qc.getQueryCache().findAll({ queryKey: ['folder-notes-by-id', vaultId] })
         .flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? [])
@@ -112,9 +114,15 @@ export default function FolderTree() {
   const onMove = (sourceIds: string[], targetItemId: string) => {
     const target = parseItemId(targetItemId)
     if (target.kind !== 'folder' && target.kind !== 'root') return
+    // Synthetic folders (id prefix 'syn:') are UI-only scaffolding for
+    // attachment-only dirs — they have no backend record, so they can be
+    // neither a move destination nor a moved source.
+    if (target.kind === 'folder' && target.id.startsWith('syn:')) return
     const parsed = sourceIds.map(parseItemId)
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
-    const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
+    const folderIds = parsed
+      .filter((p) => p.kind === 'folder' && !(p as { id: string }).id.startsWith('syn:'))
+      .map((p) => (p as { id: string }).id)
     // 'root' is the backend sentinel for the vault root; a folder target uses
     // its marker id. Note→root has no optimistic patch (root notes live under a
     // different cache key than the by-id folder lists), so a moved note briefly

@@ -165,6 +165,19 @@ describe('TreeRow', () => {
     expect(onContextMenu).toHaveBeenCalledWith('f:1', 42, 99)
   })
 
+  it('does not invoke onContextMenu on a synthetic (syn:) folder row', () => {
+    const onContextMenu = vi.fn()
+    const synthetic: TreeItem = { kind: 'folder', id: 'syn:pics', path: 'pics', name: 'pics', count: 0 }
+    const instance = mockInstance({ data: synthetic })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('button'), { clientX: 42, clientY: 99 })
+    expect(onContextMenu).not.toHaveBeenCalled()
+  })
+
   it('invokes onContextMenu with item id + clientX/Y on right-click of a note row', () => {
     const onContextMenu = vi.fn()
     const instance = mockInstance({ data: noteItem })
