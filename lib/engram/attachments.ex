@@ -210,11 +210,12 @@ defmodule Engram.Attachments do
 
           {:error, reason} ->
             require Logger
+            reason_str = inspect(reason)
 
-            Logger.error("attachment storage GET failed",
+            Logger.error("attachment storage GET failed: #{reason_str}",
               attachment_id: att.id,
               storage_key: key,
-              reason: inspect(reason)
+              reason: reason_str
             )
 
             {:error, {:storage, reason}}
@@ -426,10 +427,13 @@ defmodule Engram.Attachments do
 
       {:error, reason} ->
         require Logger
+        reason_str = inspect(reason)
 
-        Logger.error("attachment storage PUT failed",
+        # Reason is inlined into the message (not only metadata) so it's visible
+        # in dev too — config/dev.exs strips Logger metadata from the formatter.
+        Logger.error("attachment storage PUT failed: #{reason_str}",
           storage_key: key,
-          reason: inspect(reason)
+          reason: reason_str
         )
 
         {:error, {:storage, reason}}
