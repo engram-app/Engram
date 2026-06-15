@@ -135,12 +135,20 @@ defmodule Engram.Billing do
 
   # ── Tier & Status Queries ──────────────────────────────────────
 
+  # Subscription statuses that entitle a user to their paid tier. A trial
+  # is a paid plan with a deferred first charge (card-on-file) — the whole
+  # point is to give full paid access during the window, so `trialing`
+  # counts. `past_due`/`paused`/`canceled` do NOT: a lapsed payer drops to
+  # Free until the subscription recovers.
+  @entitled_statuses ~w(active trialing)
+
   @doc """
   Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
-  Only an `active` paid subscription resolves to `:starter` or `:pro`.
+  An `active` OR `trialing` paid subscription resolves to `:starter` or
+  `:pro` (a trial grants the paid tier — see `@entitled_statuses`).
   Everyone else — un-onboarded users, self-host, canceled / past_due /
-  trialing subscriptions — resolves to `:free`. Always returns an atom
+  paused subscriptions — resolves to `:free`. Always returns an atom
   (never `nil`); the un-onboarded path is gated upstream by
   `RequireOnboarding` but a Free default keeps `effective_limit/2` and
   `default_for/2` total.
@@ -148,8 +156,8 @@ defmodule Engram.Billing do
   @spec tier(Engram.Accounts.User.t()) :: :free | :starter | :pro
   def tier(%Engram.Accounts.User{} = user) do
     case get_subscription(user) do
-      %Subscription{status: "active", tier: "starter"} -> :starter
-      %Subscription{status: "active", tier: "pro"} -> :pro
+      %Subscription{status: s, tier: "starter"} when s in @entitled_statuses -> :starter
+      %Subscription{status: s, tier: "pro"} when s in @entitled_statuses -> :pro
       _ -> :free
     end
   end

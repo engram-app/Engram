@@ -126,9 +126,14 @@ defmodule Engram.BillingTest do
       assert Billing.tier(user) == :free
     end
 
-    test "returns :free when subscription is trialing (pricing v3: only active counts)" do
+    test "returns :pro when subscription is trialing (trial grants the paid tier)" do
       user = build(:user) |> with_subscription(tier: "pro", status: "trialing")
-      assert Billing.tier(user) == :free
+      assert Billing.tier(user) == :pro
+    end
+
+    test "returns :starter when subscription is trialing on starter" do
+      user = build(:user) |> with_subscription(tier: "starter", status: "trialing")
+      assert Billing.tier(user) == :starter
     end
 
     test "returns :free when subscription is past_due (pricing v3: only active counts)" do
