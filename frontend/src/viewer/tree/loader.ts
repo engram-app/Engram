@@ -37,7 +37,8 @@ export function buildLoader(deps: LoaderDeps) {
       const p = parseItemId(itemId)
       if (p.kind === 'root') return undefined
       if (p.kind === 'folder') return folderLoaderItem(deps, p.id)
-      return noteLoaderItem(deps, p.id)
+      if (p.kind === 'note') return noteLoaderItem(deps, p.id)
+      return attachmentLoaderItem(deps, p.path)
     },
 
     getChildren(itemId: string): LoaderItem[] {
@@ -122,6 +123,19 @@ function attachmentDir(path: string): string {
 
 function attachmentToTreeItem(a: AttachmentSummary): Extract<TreeItem, { kind: 'attachment' }> {
   return { kind: 'attachment', path: a.path, mime: a.mime_type, size: a.size_bytes }
+}
+
+// Resolve an attachment item id back to its row. The HT bridge caches rows from
+// getChildren, so this is only hit for ids HT knows before enumerating (rare),
+// but it keeps getItem total over the whole TreeItem union.
+function attachmentLoaderItem(deps: LoaderDeps, path: string): LoaderItem | undefined {
+  const a = (deps.attachments ?? []).find((x) => x.path === path)
+  if (!a) return undefined
+  return {
+    itemId: formatItemId({ kind: 'attachment', path }),
+    item: attachmentToTreeItem(a),
+    isFolder: false,
+  }
 }
 
 function attachmentItemsForDir(deps: LoaderDeps, dir: string): LoaderItem[] {

@@ -118,11 +118,7 @@ it('does not leak a subfolder attachment into its parent', () => {
 
 it('shows attachments even while folder notes are still loading (cache miss)', () => {
   const folders = [{ id: 'f1', parent_id: null, name: 'img', count: 0 }]
-  const loader = buildLoader({
-    folders, qc, vaultId: 'v1', sort: 'name-asc',
-    attachments: [att('img/a.png')],
-    // no fetchFolderNotes, no seeded cache -> noteChildItems returns null
-  })
+  // A fresh client with no seeded notes cache -> noteChildItems returns null.
   const freshQc = new QueryClient()
   const loaderFresh = buildLoader({
     folders, qc: freshQc, vaultId: 'v1', sort: 'name-asc',

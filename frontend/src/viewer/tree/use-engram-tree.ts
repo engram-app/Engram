@@ -134,7 +134,9 @@ export function useEngramTree(deps: Deps) {
       const d = item.getItemData()
       if (!d) return ''
       const t = d.item
-      return t.kind === 'folder' ? t.name : t.title
+      if (t.kind === 'folder') return t.name
+      if (t.kind === 'attachment') return t.path.split('/').pop() ?? t.path
+      return t.title
     },
     isItemFolder: (item: ItemInstance<Data>) => {
       const d = item.getItemData()

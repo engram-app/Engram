@@ -1,3 +1,4 @@
+import { describe, it, expect } from 'vitest'
 import { synthesizeFolders } from './synthesize-folders'
 import type { AttachmentSummary, Folder } from '../../api/queries'
 
