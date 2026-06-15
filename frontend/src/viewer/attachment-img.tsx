@@ -10,7 +10,7 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
     let cancelled = false
     const encoded = path.split('/').map(encodeURIComponent).join('/')
     api
-      .getBlob(`/attachments/${encoded}`)
+      .getBlob(`/attachments/${encoded}?raw=1`)
       .then((blob) => {
         if (cancelled) return
         const url = URL.createObjectURL(blob)
