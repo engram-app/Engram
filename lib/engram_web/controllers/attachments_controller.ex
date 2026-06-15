@@ -119,6 +119,7 @@ defmodule EngramWeb.AttachmentsController do
       attachments:
         Enum.map(atts, fn a ->
           %{
+            id: a.id,
             path: a.path,
             mime_type: a.mime_type,
             size_bytes: a.size_bytes,

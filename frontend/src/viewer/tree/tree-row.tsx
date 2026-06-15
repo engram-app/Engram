@@ -93,7 +93,6 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
     const filename = item.path.split('/').pop() ?? item.path
     const dot = filename.lastIndexOf('.')
     const ext = dot > 0 ? filename.slice(dot + 1).toLowerCase() : null
-    const encoded = item.path.split('/').map(encodeURIComponent).join('/')
     const Icon = item.mime.startsWith('image/')
       ? Image
       : item.mime === 'application/pdf'
@@ -102,9 +101,12 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
     // Phase 1 is display + preview only: attachments wire no context menu /
     // long-press, so the file action menu (rename/move/delete) — all no-ops for
     // an attachment — never surfaces. Pure navigation.
+    // Routed by uuid under the unified /note/:id (VaultItemPage resolves
+    // note-vs-file) so the URL survives a rename/move. The HT itemId stays
+    // path-keyed (internal tree machinery).
     return (
       <Link
-        to={`/attachment/${encoded}`}
+        to={`/note/${item.id}`}
         {...instance.getProps()}
         aria-selected={instance.isSelected()}
         className={rowClass(instance)}

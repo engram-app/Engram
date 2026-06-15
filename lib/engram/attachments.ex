@@ -297,7 +297,13 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
     |> case do
       {:ok, atts} ->
-        {:ok, Enum.map(atts, fn att -> Map.delete(decrypt_metadata(att, user), :deleted_at) end)}
+        {:ok,
+         Enum.map(atts, fn att ->
+           att
+           |> decrypt_metadata(user)
+           |> Map.delete(:deleted_at)
+           |> Map.put(:id, att.id)
+         end)}
 
       err ->
         err

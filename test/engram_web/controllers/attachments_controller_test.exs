@@ -483,6 +483,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert a["size_bytes"] == 3
       assert Map.has_key?(a, "updated_at")
+      assert is_binary(a["id"])
     end
 
     test "returns empty list for a vault with no attachments", %{conn: conn} do

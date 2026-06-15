@@ -220,6 +220,7 @@ describe('FolderTree (HT)', () => {
     mock.rootNotes = []
     mock.attachments = [
       {
+        id: 'cover-1',
         path: 'cover.png',
         mime_type: 'image/png',
         size_bytes: 1,

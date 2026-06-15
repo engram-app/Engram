@@ -60,7 +60,7 @@ function makeQc(): QueryClient {
 const qc = new QueryClient()
 
 const att = (path: string): AttachmentSummary => ({
-  path, mime_type: path.endsWith('.pdf') ? 'application/pdf' : 'image/png',
+  id: `att:${path}`, path, mime_type: path.endsWith('.pdf') ? 'application/pdf' : 'image/png',
   size_bytes: 1, mtime: 0, updated_at: '',
 })
 

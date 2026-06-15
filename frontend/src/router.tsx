@@ -22,8 +22,9 @@ import { Outlet } from 'react-router'
 // (sign-in/up, layouts, guards) stay eager; everything behind navigation
 // loads on demand.
 const Dashboard = lazy(() => import('./viewer/dashboard'))
-const NotePage = lazy(() => import('./viewer/note-page'))
-const AttachmentPage = lazy(() => import('./viewer/attachment-page'))
+// /note/:id resolves to the note OR attachment viewer (VaultItemPage owns the
+// lazy NotePage/AttachmentPage chunks).
+const VaultItemPage = lazy(() => import('./viewer/vault-item-page'))
 const BillingPage = lazy(() => import('./billing/billing-page'))
 const AdminPanel = lazy(() => import('./features/admin/AdminPanel'))
 const ResetPasswordPage = lazy(() => import('./features/auth/ResetPasswordPage'))
@@ -141,8 +142,7 @@ export function createAppRouter(config: EngramConfig): AppRouter {
                   element: <AppLayout />,
                   children: [
                     { path: ROUTES.HOME, element: suspended(<Dashboard />) },
-                    { path: '/note/:id', element: suspended(<NotePage />) },
-                    { path: '/attachment/*', element: suspended(<AttachmentPage />) },
+                    { path: '/note/:id', element: suspended(<VaultItemPage />) },
                     {
                       path: 'settings',
                       element: <SettingsLayout />,

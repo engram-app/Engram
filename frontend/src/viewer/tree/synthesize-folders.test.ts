@@ -3,7 +3,7 @@ import { synthesizeFolders } from './synthesize-folders'
 import type { AttachmentSummary, Folder } from '../../api/queries'
 
 const att = (path: string): AttachmentSummary => ({
-  path, mime_type: 'image/png', size_bytes: 1, mtime: 0, updated_at: '',
+  id: `att:${path}`, path, mime_type: 'image/png', size_bytes: 1, mtime: 0, updated_at: '',
 })
 
 describe('synthesizeFolders', () => {

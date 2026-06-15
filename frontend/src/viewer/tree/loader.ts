@@ -122,7 +122,7 @@ function attachmentDir(path: string): string {
 }
 
 function attachmentToTreeItem(a: AttachmentSummary): Extract<TreeItem, { kind: 'attachment' }> {
-  return { kind: 'attachment', path: a.path, mime: a.mime_type, size: a.size_bytes }
+  return { kind: 'attachment', id: a.id, path: a.path, mime: a.mime_type, size: a.size_bytes }
 }
 
 // Resolve an attachment item id back to its row. The HT bridge caches rows from

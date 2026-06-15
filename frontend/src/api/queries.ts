@@ -167,6 +167,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 export const FOLDER_NOTES_STALE_MS = 60_000
 
 export interface AttachmentSummary {
+  id: string
   path: string
   mime_type: string
   size_bytes: number

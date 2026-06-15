@@ -9,7 +9,7 @@ import type { LoaderItem } from './loader'
 const folderItem: TreeItem = { kind: 'folder', id: '1', path: 'Projects', name: 'Projects', count: 3 }
 const noteItem: TreeItem = { kind: 'note', id: '100', path: 'Projects/a.md', title: 'a', ext: 'md' }
 const orgNote: TreeItem = { kind: 'note', id: '101', path: 'Projects/b.org', title: 'b', ext: 'org' }
-const attachmentItem: TreeItem = { kind: 'attachment', path: 'img/a.png', mime: 'image/png', size: 10 }
+const attachmentItem: TreeItem = { kind: 'attachment', id: 'att-1', path: 'img/a.png', mime: 'image/png', size: 10 }
 
 interface InstanceOverrides {
   data?: TreeItem
@@ -277,7 +277,7 @@ describe('TreeRow', () => {
     expect(clearData).toHaveBeenCalledWith('text/plain')
   })
 
-  it('renders attachment as link to /attachment/:encoded-path', () => {
+  it('renders attachment as a link to /note/:id (uuid, not path)', () => {
     const instance = mockInstance({ data: attachmentItem })
     render(
       <MemoryRouter>
@@ -285,7 +285,7 @@ describe('TreeRow', () => {
       </MemoryRouter>,
     )
     const link = screen.getByRole('link') as HTMLAnchorElement
-    expect(link.getAttribute('href')).toBe('/attachment/img/a.png')
+    expect(link.getAttribute('href')).toBe('/note/att-1')
     expect(screen.getByText('a.png')).toBeInTheDocument()
   })
 

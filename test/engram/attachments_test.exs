@@ -313,6 +313,7 @@ defmodule Engram.AttachmentsTest do
       assert a.mime_type == "image/png"
       assert a.size_bytes == byte_size("PNGDATA")
       assert Map.has_key?(a, :updated_at)
+      assert a.id != nil
       refute Map.has_key?(a, :deleted_at)
     end
 

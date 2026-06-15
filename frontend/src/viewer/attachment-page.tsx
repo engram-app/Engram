@@ -1,24 +1,30 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { api } from '../api/client'
+import { useAttachments } from '../api/queries'
 
 // pdf.js is heavy — only pull its chunk when a PDF is actually opened, never
 // for image/other previews.
 const PdfView = lazy(() => import('./pdf-view'))
 
-// Read-only preview for a single attachment. The path is the route splat
-// (`/attachment/*`). Fetches raw bytes (?raw=1) as a typed Blob so the browser
-// renders images / PDFs natively; unsupported types fall back to a download link.
+// Read-only preview for a single attachment, routed by uuid (/attachment/:id) —
+// like notes, so the URL survives a rename/move. Resolves the id to its path +
+// mime from the already-loaded attachments list (the tree sidebar keeps it
+// warm), then streams raw bytes (?raw=1) as a typed Blob so the browser renders
+// images / PDFs natively; unsupported types fall back to a download link.
 export default function AttachmentPage() {
-  const params = useParams()
-  const path = params['*'] ?? ''
+  const { id } = useParams()
+  const { data: attachments, isLoading } = useAttachments()
+  const att = attachments?.find((a) => a.id === id)
+  const path = att?.path ?? ''
   const filename = path.split('/').pop() ?? path
+  const mime = att?.mime_type ?? ''
 
   const [url, setUrl] = useState<string | null>(null)
-  const [mime, setMime] = useState<string>('')
   const [error, setError] = useState(false)
 
   useEffect(() => {
+    if (!path) return
     let revoke: string | null = null
     let cancelled = false
     setUrl(null)
@@ -30,7 +36,6 @@ export default function AttachmentPage() {
         if (cancelled) return
         const objectUrl = URL.createObjectURL(blob)
         revoke = objectUrl
-        setMime(blob.type)
         setUrl(objectUrl)
       })
       .catch(() => !cancelled && setError(true))
@@ -40,6 +45,22 @@ export default function AttachmentPage() {
     }
   }, [path])
 
+  // Attachment list still loading and the id isn't resolved yet.
+  if (!att && isLoading) {
+    return (
+      <section className="p-6">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </section>
+    )
+  }
+  // List loaded but no attachment with this id (deleted, or a stale link).
+  if (!att) {
+    return (
+      <section className="p-6">
+        <p className="text-sm text-destructive">Attachment not found.</p>
+      </section>
+    )
+  }
   if (error) {
     return (
       <section className="p-6">
