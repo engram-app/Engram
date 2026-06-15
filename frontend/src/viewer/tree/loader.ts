@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query'
 import {
   FOLDER_NOTES_STALE_MS,
   ROOT_FOLDER_ID,
+  type AttachmentSummary,
   type Folder,
   type NoteSummary,
 } from '../../api/queries'
@@ -18,6 +19,7 @@ interface LoaderDeps {
   qc: QueryClient
   vaultId: string
   sort: SortKey
+  attachments?: AttachmentSummary[]
   fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>
   onChildrenLoaded?: (folderId: string) => void
 }
@@ -112,16 +114,42 @@ function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null
   }))
 }
 
+function attachmentDir(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
+
+function attachmentToTreeItem(a: AttachmentSummary): Extract<TreeItem, { kind: 'attachment' }> {
+  return { kind: 'attachment', path: a.path, mime: a.mime_type, size: a.size_bytes }
+}
+
+function attachmentItemsForDir(deps: LoaderDeps, dir: string): LoaderItem[] {
+  const list = (deps.attachments ?? []).filter((a) => attachmentDir(a.path) === dir)
+  const sign = deps.sort.endsWith('-desc') ? -1 : 1
+  const fname = (p: string) => p.split('/').pop() ?? p
+  return list
+    .sort((a, b) => sign * fname(a.path).localeCompare(fname(b.path)))
+    .map((a) => ({
+      itemId: formatItemId({ kind: 'attachment', path: a.path }),
+      item: attachmentToTreeItem(a),
+      isFolder: false,
+    }))
+}
+
 function rootChildren(deps: LoaderDeps): LoaderItem[] {
   const tops = folderLoaderItems(deps, null)
   const noteItems = noteChildItems(deps, ROOT_FOLDER_ID) ?? []
-  return [...tops, ...noteItems]
+  const attItems = attachmentItemsForDir(deps, '')
+  return [...tops, ...noteItems, ...attItems]
 }
 
 function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
   const childFolders = folderLoaderItems(deps, folderId)
   const noteItems = noteChildItems(deps, folderId)
-  return noteItems ? [...childFolders, ...noteItems] : childFolders
+  const folder = deps.folders.find((f) => f.id === folderId)
+  const attItems = folder ? attachmentItemsForDir(deps, folder.name) : []
+  const notes = noteItems ?? []
+  return [...childFolders, ...notes, ...attItems]
 }
 
 function folderCmp(a: Folder, b: Folder, sort: SortKey): number {
