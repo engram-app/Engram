@@ -76,13 +76,22 @@ defmodule Engram.Connections.LogoAllowlist do
 
   def lookup(_), do: @empty
 
+  # Only a vendor-owned HTTPS host with no userinfo grants verification. A
+  # custom-scheme redirect (`com.evil.app://claude.ai/cb`) or `http://` host
+  # parses to host "claude.ai" but delivers the auth code to an attacker-
+  # controlled handler, so the un-spoofability argument does not hold — reject
+  # both. Hosts are case-insensitive (RFC 3986 §3.2.2).
   defp lookup_by_host(uris) when is_list(uris) do
     Enum.find_value(uris, @empty, fn uri ->
-      host = URI.parse(uri).host
+      case URI.parse(uri) do
+        %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
+          case Map.get(@redirect_host, String.downcase(host)) do
+            nil -> nil
+            entry -> Map.merge(%{verified: true}, entry)
+          end
 
-      case host && Map.get(@redirect_host, host) do
-        nil -> nil
-        entry -> Map.merge(%{verified: true}, entry)
+        _ ->
+          nil
       end
     end)
   end

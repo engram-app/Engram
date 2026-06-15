@@ -38,6 +38,26 @@ defmodule Engram.Connections.LogoAllowlistTest do
     assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, ["cursor://anyscheme"])
   end
 
+  test "resolve does not verify a custom-scheme redirect pointing at a vendor host" do
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["com.evil.app://claude.ai/callback"])
+  end
+
+  test "resolve does not verify a non-https redirect to a vendor host" do
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["http://claude.ai/api/mcp/auth_callback"])
+  end
+
+  test "resolve does not verify when vendor host is in userinfo, not the host" do
+    assert %{verified: false, slug: nil} =
+             LogoAllowlist.resolve(nil, ["https://claude.ai@evil.com/cb"])
+  end
+
+  test "resolve matches the vendor host case-insensitively" do
+    assert %{verified: true, slug: "claude"} =
+             LogoAllowlist.resolve(nil, ["https://CLAUDE.AI/api/mcp/auth_callback"])
+  end
+
   test "resolve handles nil/empty redirect list" do
     assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, nil)
     assert %{verified: false, slug: nil} = LogoAllowlist.resolve(nil, [])
