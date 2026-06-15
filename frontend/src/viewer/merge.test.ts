@@ -27,6 +27,47 @@ describe('merge3', () => {
     expect(r.conflict).toBe(false)
     expect(r.text).toBe('a\nB\n')
   })
+
+  // The behavior the true-conflict gate fixes: node-diff3's own `conflict` flag
+  // groups an edited line + an adjacent remote insertion into one "conflict"
+  // even though they touch disjoint base lines.
+  it('merges an edited line + an adjacent remote insertion cleanly (no markers)', () => {
+    const base = '# Initial\n\noriginal text.'
+    const local = '# Initial\n\noriginal text. draft-edit' // edits the last line
+    const remote = '# Initial\n\noriginal text.\n\nremote-added-line' // appends after it
+    const r = merge3(base, local, remote)
+    expect(r.conflict).toBe(false)
+    expect(r.text).toBe('# Initial\n\noriginal text. draft-edit\n\nremote-added-line')
+    expect(r.text).not.toContain('<<<<<<<')
+  })
+
+  it('merges far-apart edits on the same document cleanly', () => {
+    const base = 'A\nB\nC\nD\nE'
+    const local = 'A2\nB\nC\nD\nE' // top
+    const remote = 'A\nB\nC\nD\nE2' // bottom
+    const r = merge3(base, local, remote)
+    expect(r.conflict).toBe(false)
+    expect(r.text).toBe('A2\nB\nC\nD\nE2')
+  })
+
+  it('flags competing insertions at the same boundary as a conflict', () => {
+    const base = 'x\ny'
+    const local = 'x\nMINE\ny'
+    const remote = 'x\nTHEIRS\ny'
+    const r = merge3(base, local, remote)
+    expect(r.conflict).toBe(true)
+    expect(r.text).toContain('MINE')
+    expect(r.text).toContain('THEIRS')
+  })
+
+  it('does not flag a benign concurrent edit (local end, remote heading)', () => {
+    const base = '# H\n\nintro.\n\norig.'
+    const local = '# H\n\nintro.\n\norig. draft'
+    const remote = '# Hremote\n\nintro.\n\norig.'
+    const r = merge3(base, local, remote)
+    expect(r.conflict).toBe(false)
+    expect(r.text).toBe('# Hremote\n\nintro.\n\norig. draft')
+  })
 })
 
 describe('computeReplacement', () => {
