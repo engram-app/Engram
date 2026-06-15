@@ -99,11 +99,13 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
       : item.mime === 'application/pdf'
         ? FileText
         : File
+    // Phase 1 is display + preview only: attachments wire no context menu /
+    // long-press, so the file action menu (rename/move/delete) — all no-ops for
+    // an attachment — never surfaces. Pure navigation.
     return (
       <Link
         to={`/attachment/${encoded}`}
         {...instance.getProps()}
-        onContextMenu={contextMenuHandler}
         aria-selected={instance.isSelected()}
         className={rowClass(instance)}
         style={{ paddingLeft: `${notePad}px` }}

@@ -339,7 +339,10 @@ export default function FolderTree() {
     for (const id of itemIds) {
       const p = parseItemId(id)
       if (p.kind === 'note') noteIds.push(p.id)
-      else if (p.kind === 'folder') folderIds.push(p.id)
+      // Synthetic folders (syn:) have no backend record — never send their id
+      // to a batch mutation. Unreachable today (their rows expose no menu), but
+      // a guard here keeps any future bulk-select path from 404ing.
+      else if (p.kind === 'folder' && !p.id.startsWith('syn:')) folderIds.push(p.id)
     }
     return { noteIds, folderIds }
   }

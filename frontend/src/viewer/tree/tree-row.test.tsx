@@ -178,6 +178,18 @@ describe('TreeRow', () => {
     expect(onContextMenu).not.toHaveBeenCalled()
   })
 
+  it('does not invoke onContextMenu on an attachment row (display-only in Phase 1)', () => {
+    const onContextMenu = vi.fn()
+    const instance = mockInstance({ data: attachmentItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('link'), { clientX: 42, clientY: 99 })
+    expect(onContextMenu).not.toHaveBeenCalled()
+  })
+
   it('invokes onContextMenu with item id + clientX/Y on right-click of a note row', () => {
     const onContextMenu = vi.fn()
     const instance = mockInstance({ data: noteItem })
