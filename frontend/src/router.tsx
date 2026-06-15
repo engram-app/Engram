@@ -23,6 +23,7 @@ import { Outlet } from 'react-router'
 // loads on demand.
 const Dashboard = lazy(() => import('./viewer/dashboard'))
 const NotePage = lazy(() => import('./viewer/note-page'))
+const AttachmentPage = lazy(() => import('./viewer/attachment-page'))
 const BillingPage = lazy(() => import('./billing/billing-page'))
 const AdminPanel = lazy(() => import('./features/admin/AdminPanel'))
 const ResetPasswordPage = lazy(() => import('./features/auth/ResetPasswordPage'))
@@ -141,6 +142,7 @@ export function createAppRouter(config: EngramConfig): AppRouter {
                   children: [
                     { path: ROUTES.HOME, element: suspended(<Dashboard />) },
                     { path: '/note/:id', element: suspended(<NotePage />) },
+                    { path: '/attachment/*', element: suspended(<AttachmentPage />) },
                     {
                       path: 'settings',
                       element: <SettingsLayout />,
