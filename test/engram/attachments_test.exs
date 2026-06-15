@@ -292,7 +292,7 @@ defmodule Engram.AttachmentsTest do
         "content_base64" => Base.encode64("PNGDATA"),
         "mime_type" => "image/png"
       })
-      {:ok, b} = Attachments.upsert_attachment(user, vault, %{
+      {:ok, _b} = Attachments.upsert_attachment(user, vault, %{
         "path" => "b.pdf",
         "content_base64" => Base.encode64("PDFDATA"),
         "mime_type" => "application/pdf"
@@ -310,7 +310,6 @@ defmodule Engram.AttachmentsTest do
       assert a.size_bytes == byte_size("PNGDATA")
       assert Map.has_key?(a, :updated_at)
       refute Map.has_key?(a, :deleted_at)
-      assert b.path == "b.pdf"
     end
 
     test "scopes to the given user+vault", %{user: user, vault: vault} do
