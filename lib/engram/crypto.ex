@@ -11,6 +11,7 @@ defmodule Engram.Crypto do
   alias Engram.Accounts.User
   alias Engram.Crypto.{DekCache, Envelope, KeyProvider}
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Logger.DecryptFailure
   alias Engram.Repo
 
   require Logger
@@ -610,9 +611,7 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       {:error, reason} ->
-        Logger.error(
-          "qdrant decrypt: failed to load DEK for user_id=#{user.id} reason=#{inspect(reason)}"
-        )
+        DecryptFailure.log("qdrant_decrypt_dek_load_failed", reason, user_id: user.id)
 
         {:error, :decrypt_failed}
     end

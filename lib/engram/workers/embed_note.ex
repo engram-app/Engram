@@ -29,6 +29,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
+  alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
@@ -95,6 +96,12 @@ defmodule Engram.Workers.EmbedNote do
         end
     end
   end
+
+  # Voyage/Qdrant non-2xx surface as {status, body}; pull the bounded HTTP
+  # status (401 vs 429 vs 500 vs 503 is the on-call triage signal). nil for a
+  # transport error (timeout/closed), which error_kind names by struct instead.
+  defp embed_error_status({status, _body}) when is_integer(status), do: status
+  defp embed_error_status(_), do: nil
 
   # Pricing v2 §A — block embeds for unverified-phone users when the gate is
   # enabled. Default false so self-host and pre-launch cloud are unaffected.
@@ -210,12 +217,35 @@ defmodule Engram.Workers.EmbedNote do
                 {:snooze, snooze_seconds_on_429()}
 
               {:error, reason} ->
+                # Per-attempt failure (Voyage non-429 / Qdrant). Previously
+                # silent until the terminal discard after 5 retries — log it now
+                # so the stall is visible on the first attempt, with a bounded
+                # error_kind (no upstream body / token in the message).
+                error_kind = Engram.Telemetry.error_kind(reason)
+                status = embed_error_status(reason)
+
+                :telemetry.execute(
+                  [:engram, :embed, :failed],
+                  %{count: 1},
+                  %{error_kind: error_kind, status: status}
+                )
+
+                Logger.warning("embed_attempt_failed",
+                  category: :embed,
+                  user_id: note.user_id,
+                  vault_id: note.vault_id,
+                  note_id: note.id,
+                  error_kind: error_kind,
+                  status: status
+                )
+
                 {:error, reason}
             end
 
           {:error, reason} ->
-            Logger.error(
-              "EmbedNote decrypt failed: user_id=#{note.user_id} note_id=#{note.id} reason=#{inspect(reason)}"
+            DecryptFailure.log("embed_decrypt_failed", reason,
+              user_id: note.user_id,
+              note_id: note.id
             )
 
             {:error, reason}

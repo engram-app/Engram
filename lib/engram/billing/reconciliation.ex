@@ -23,6 +23,7 @@ defmodule Engram.Billing.Reconciliation do
 
   alias Engram.Billing.Subscription
   alias Engram.Repo
+  alias Engram.Telemetry
 
   require Logger
 
@@ -96,9 +97,15 @@ defmodule Engram.Billing.Reconciliation do
         diff(paddle_subs, reason)
 
       {:error, reason} ->
+        # NEVER inspect(reason) here: a Paddle error is {:paddle_error, status,
+        # body} (body is echoed Paddle JSON that can carry customer PII) or a
+        # raw Req transport error, and :reason is NOT in RedactFilter's
+        # sensitive-key set. Surface only a bounded error_kind + the HTTP status
+        # (401 vs 429 vs 500 is the on-call triage signal).
         Logger.error("paddle_reconcile_fetch_failed",
           category: :paddle_reconcile,
-          reason: inspect(reason)
+          error_kind: Telemetry.error_kind(reason),
+          status: paddle_error_status(reason)
         )
 
         # Distinguish a fetch failure from a clean run in the return
@@ -115,6 +122,11 @@ defmodule Engram.Billing.Reconciliation do
     end
   end
 
+  # The HTTP status from a Paddle non-2xx — a bounded integer, safe to log.
+  # nil for transport errors (timeout, closed) that have no status.
+  defp paddle_error_status({:paddle_error, status, _body}), do: status
+  defp paddle_error_status(_), do: nil
+
   defp diff(paddle_subs, skipped_reason) do
     paddle_ids = Enum.map(paddle_subs, & &1["id"])
     local_subs = local_subscriptions_for(paddle_ids)
@@ -129,7 +141,11 @@ defmodule Engram.Billing.Reconciliation do
       Logger.error("paddle_reconciliation_drift",
         category: :paddle_reconcile,
         drift_kind: entry.kind,
-        paddle_subscription_id: entry.subscription_id
+        paddle_subscription_id: entry.subscription_id,
+        # The affected customer. nil only for :missing_local (Paddle has a sub
+        # we have no local row for) — otherwise it saves a Paddle-dashboard
+        # reverse-lookup under incident pressure.
+        user_id: entry.user_id
       )
     end)
 
@@ -163,13 +179,22 @@ defmodule Engram.Billing.Reconciliation do
 
     cond do
       is_nil(local) ->
-        [%{subscription_id: id, kind: :missing_local, paddle: paddle_sub, local: nil}]
+        [
+          %{
+            subscription_id: id,
+            kind: :missing_local,
+            user_id: nil,
+            paddle: paddle_sub,
+            local: nil
+          }
+        ]
 
       paddle_sub["status"] != local.status ->
         [
           %{
             subscription_id: id,
             kind: :status_mismatch,
+            user_id: local.user_id,
             paddle: paddle_sub["status"],
             local: local.status
           }
@@ -180,6 +205,7 @@ defmodule Engram.Billing.Reconciliation do
           %{
             subscription_id: id,
             kind: :tier_mismatch,
+            user_id: local.user_id,
             paddle: Engram.Billing.tier_from_subscription(paddle_sub),
             local: local.tier
           }
@@ -190,6 +216,7 @@ defmodule Engram.Billing.Reconciliation do
           %{
             subscription_id: id,
             kind: :period_mismatch,
+            user_id: local.user_id,
             paddle: get_in(paddle_sub, ["current_billing_period", "ends_at"]),
             local: local.current_period_end
           }

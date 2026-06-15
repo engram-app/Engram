@@ -187,6 +187,28 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {500, _}} = perform_job(EmbedNote, %{note_id: note.id})
     end
 
+    test "logs the per-attempt failure with note_id + bounded error_kind (not silent until discard)",
+         %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts ->
+        {:error, {500, %{"detail" => "secret-internal-detail"}}}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {500, _}} = perform_job(EmbedNote, %{note_id: note.id})
+        end)
+
+      assert log =~ "embed_attempt_failed"
+      assert log =~ "note_id=#{note.id}"
+      # The HTTP status is the triage signal (401 vs 429 vs 500 vs 503).
+      assert log =~ "status=500"
+      # The raw upstream body never lands in the log.
+      refute log =~ "secret-internal-detail"
+    end
+
     test "discards job when note is soft-deleted", %{user: user} do
       note = insert(:note, user: user, deleted_at: DateTime.utc_now())
       assert {:discard, _} = perform_job(EmbedNote, %{note_id: note.id})

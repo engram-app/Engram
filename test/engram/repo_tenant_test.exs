@@ -99,5 +99,46 @@ defmodule Engram.RepoTenantTest do
       notes = Repo.all(Note, skip_tenant_check: true)
       assert notes == []
     end
+
+    test "emits a tenant_guard_violation telemetry event + error log before raising" do
+      test_pid = self()
+      handler = {__MODULE__, :guard, test_pid}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :tenant_guard_violation],
+        fn _e, m, meta, _ -> send(test_pid, {:guard_violation, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert_raise Engram.TenantError, fn -> Repo.all(Note) end
+        end)
+
+      assert_received {:guard_violation, %{count: 1}, %{table: "notes"}}
+      assert log =~ "tenant_guard_violation"
+      assert log =~ "table=notes"
+    end
+
+    test "emits a tenant_check_skipped telemetry event when a bypass is honored" do
+      test_pid = self()
+      handler = {__MODULE__, :skip, test_pid}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :tenant_check_skipped],
+        fn _e, m, meta, _ -> send(test_pid, {:check_skipped, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      Repo.all(Note, skip_tenant_check: true)
+
+      assert_received {:check_skipped, %{count: 1}, %{table: "notes"}}
+    end
   end
 end

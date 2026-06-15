@@ -13,12 +13,18 @@ defmodule Engram.Telemetry do
   through `Engram.Logger.RedactFilter`. Every caller that puts a failure reason
   into telemetry metadata must route it through here so only a bounded atom (an
   error class or exception module) escapes. The `is_atom/1` guard on the tuple
-  clause is load-bearing: a `{non_atom, _}` falls through to `:other` rather
-  than leaking the inner term.
+  clause is load-bearing: a tuple whose leading element is not an atom (e.g.
+  `{"secret", _}`) falls through to `:other` rather than leaking the inner term.
+  Only the leading tag escapes — every other element (a status body, bound
+  params, a token) is dropped, whatever the tuple's size.
   """
   @spec error_kind(term()) :: atom()
   def error_kind(reason) when is_atom(reason), do: reason
-  def error_kind({kind, _}) when is_atom(kind), do: kind
+
+  def error_kind(reason)
+      when is_tuple(reason) and tuple_size(reason) > 0 and is_atom(elem(reason, 0)),
+      do: elem(reason, 0)
+
   def error_kind(%{__exception__: true} = e), do: e.__struct__
   def error_kind(_), do: :other
 end

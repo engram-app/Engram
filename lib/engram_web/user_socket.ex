@@ -1,6 +1,8 @@
 defmodule EngramWeb.UserSocket do
   use Phoenix.Socket
 
+  require Logger
+
   channel "sync:*", EngramWeb.SyncChannel
   channel "user:*", EngramWeb.UserChannel
 
@@ -21,7 +23,11 @@ defmodule EngramWeb.UserSocket do
       {:ok, user, api_key} ->
         {:ok, assign(socket, %{current_user: user, current_api_key: api_key})}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        # Previously silent — during a Clerk break every SPA reconnect storms
+        # this path with no log and no metric. Mirror the HTTP plug.
+        label = Engram.Auth.emit_rejected(reason, :socket)
+        Logger.info("auth rejected", reason: label)
         :error
     end
   end

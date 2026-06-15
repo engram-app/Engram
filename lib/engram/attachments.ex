@@ -209,6 +209,15 @@ defmodule Engram.Attachments do
             {:error, {:storage, :blob_missing}}
 
           {:error, reason} ->
+            require Logger
+            reason_str = inspect(reason)
+
+            Logger.error("attachment storage GET failed: #{reason_str}",
+              attachment_id: att.id,
+              storage_key: key,
+              reason: reason_str
+            )
+
             {:error, {:storage, reason}}
         end
 
@@ -413,8 +422,21 @@ defmodule Engram.Attachments do
 
   defp store_external(key, binary, mime) do
     case Storage.adapter().put(key, binary, content_type: mime) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:storage, reason}}
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+        reason_str = inspect(reason)
+
+        # Reason is inlined into the message (not only metadata) so it's visible
+        # in dev too — config/dev.exs strips Logger metadata from the formatter.
+        Logger.error("attachment storage PUT failed: #{reason_str}",
+          storage_key: key,
+          reason: reason_str
+        )
+
+        {:error, {:storage, reason}}
     end
   end
 

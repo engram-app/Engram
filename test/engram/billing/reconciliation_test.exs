@@ -203,6 +203,61 @@ defmodule Engram.Billing.ReconciliationTest do
       assert log =~ "[error]"
     end
 
+    test "fetch failure logs bounded error_kind + status, never the raw response body" do
+      # A Paddle non-2xx surfaces as {:paddle_error, status, body}; the body is
+      # echoed Paddle JSON that can carry customer PII. The old code dumped
+      # inspect(reason) into the un-redacted :reason metadata key.
+      secret = "leaked-customer-XYZZYZ@example.com"
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:error, {:paddle_error, 401, %{"error" => secret}}}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconcile_fetch_failed"
+      assert log =~ "error_kind=paddle_error"
+      assert log =~ "status=401"
+      refute log =~ secret
+    end
+
+    test "drift log carries user_id so an operator can find the affected customer" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_corr",
+        paddle_customer_id: "ctm_corr",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_corr",
+             "customer_id" => "ctm_corr",
+             "status" => "past_due"
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: [%{kind: :status_mismatch}]} = Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconciliation_drift"
+      assert log =~ "user_id=#{user.id}"
+    end
+
     test "reports only the highest-priority drift kind when multiple apply (status > tier > period)" do
       user = insert(:user)
 

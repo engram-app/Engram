@@ -155,6 +155,15 @@ defmodule EngramWeb.SyncChannel do
 
             {:reply, {:ok, reply}, socket}
 
+          {:error, :version_conflict, server_note} ->
+            # The client pushed against a stale version. Mirror the HTTP 409
+            # path: hand back the server's copy so the plugin can 3-way merge.
+            # Without this clause the 3-tuple falls through to a CaseClauseError
+            # and the pusher gets no reply at all.
+            {:reply,
+             {:error, %{reason: "version_conflict", server_note: serialize_note(server_note)}},
+             socket}
+
           {:error, changeset} ->
             {:reply, {:error, %{"reason" => format_errors(changeset)}}, socket}
         end
@@ -287,7 +296,10 @@ defmodule EngramWeb.SyncChannel do
 
   defp sync_status({:reply, {:ok, _}, _}), do: :ok
   defp sync_status({:reply, {:error, _}, _}), do: :error
-  defp sync_status(_), do: :ok
+  # Default unknown reply shapes to :error, not :ok — a handler that returns
+  # something unexpected (or a future reply shape we forgot to classify) must
+  # not be silently counted as a success in the sync metrics.
+  defp sync_status(_), do: :error
 
   # ---------------------------------------------------------------------------
   # Private helpers

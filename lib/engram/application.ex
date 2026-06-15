@@ -139,6 +139,7 @@ defmodule Engram.Application do
           metadata: [
             :category,
             :drift_kind,
+            :error_kind,
             :event_id,
             :event_type,
             :file,
@@ -146,12 +147,14 @@ defmodule Engram.Application do
             :kind,
             :line,
             :module,
+            :note_id,
             :paddle_price_id,
             :paddle_subscription_id,
             :queue,
             :reason,
             :reason_label,
             :request_id,
+            :route,
             :status,
             :user_id,
             :worker

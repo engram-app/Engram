@@ -7,8 +7,8 @@
   # caller-side `binary()` parameter type fail to match.
   # NOTE: dialyxir 1.4.x line-matches the `@spec` line, not `@doc`. Keep these
   # in sync if you re-order or add lines above the AAD helpers.
-  {"lib/engram/crypto.ex", :contract_supertype, 84},
-  {"lib/engram/crypto.ex", :contract_supertype, 93},
+  {"lib/engram/crypto.ex", :contract_supertype, 85},
+  {"lib/engram/crypto.ex", :contract_supertype, 94},
 
   # Dialyzer's success typing for `Path.rootname/1` (and possibly Regex helpers
   # called inside extract_title/2) reports a phantom `{integer(), integer()}`

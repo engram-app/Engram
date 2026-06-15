@@ -19,32 +19,40 @@ defmodule EngramWeb.RequestLogger do
   require Logger
 
   @handler_id :engram_request_logger
-  @event [:phoenix, :endpoint, :stop]
+  @stop_event [:phoenix, :endpoint, :stop]
+  # Fires when a matched controller/action raises (e.g. a TenantError or
+  # DBConnection.ConnectionError from a query inside the action). The :stop
+  # event does NOT carry these — its before_send never runs on a raise — so the
+  # structured request line would otherwise be missing for the very requests
+  # that 500.
+  @exception_event [:phoenix, :router_dispatch, :exception]
 
   @doc """
-  Attach (or re-attach) the telemetry handler. Idempotent — detaches first
+  Attach (or re-attach) the telemetry handlers. Idempotent — detaches first
   so repeated boots don't accumulate stale handlers.
   """
   def attach do
     _ = :telemetry.detach(@handler_id)
 
     :ok =
-      :telemetry.attach(
+      :telemetry.attach_many(
         @handler_id,
-        @event,
+        [@stop_event, @exception_event],
         &__MODULE__.handle_event/4,
         nil
       )
   end
 
   @doc false
-  def handle_event(@event, %{duration: duration}, %{conn: conn}, _config) do
+  def handle_event(@stop_event, %{duration: duration}, %{conn: conn}, _config) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
-    Logger.info(
+    Logger.log(
+      level_for_status(conn.status),
       "#{conn.method} #{conn.status} in #{duration_ms}ms",
       method: conn.method,
       status: conn.status,
+      route: route(conn),
       request_path: conn.request_path,
       request_query: conn.query_string,
       user_id: current_user_id(conn),
@@ -52,10 +60,45 @@ defmodule EngramWeb.RequestLogger do
     )
   end
 
+  def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
+    Logger.error(
+      "request exception",
+      method: conn.method,
+      status: conn.status,
+      route: route(conn),
+      user_id: current_user_id(conn),
+      kind: metadata[:kind],
+      # Bounded: the reason can be a Postgrex/DBConnection error wrapping bound
+      # params or creds — only the struct/atom class escapes.
+      error_kind: Engram.Telemetry.error_kind(metadata[:reason]),
+      request_path: conn.request_path
+    )
+  end
+
   def handle_event(_, _, _, _), do: :ok
+
+  # A 5xx flood must elevate above :info so level-keyed alerting sees it; a 4xx
+  # is a client error worth a :warning; everything else stays :info.
+  defp level_for_status(status) when status >= 500, do: :error
+  defp level_for_status(status) when status >= 400, do: :warning
+  defp level_for_status(_), do: :info
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil
+
+  # The matched controller/action, as "Module#action" — the endpoint shape an
+  # operator needs to triage. Phoenix sets these in conn.private after routing.
+  # Unlike request_path (which the redact filter scrubs because wildcard routes
+  # like `/notes/*path` embed note titles), the controller+action pair is fixed
+  # by the route table and never contains user data — safe to log in the clear.
+  # nil for unmatched requests (static assets, 404s, plug-only endpoints).
+  defp route(%Plug.Conn{private: private}) do
+    case {private[:phoenix_controller], private[:phoenix_action]} do
+      {nil, _} -> nil
+      {_, nil} -> nil
+      {controller, action} -> "#{inspect(controller)}##{action}"
+    end
+  end
 
   # x-amzn-mtls-clientcert-subject is injected by ALB when its HTTPS
   # listener has mutual_authentication set to "passthrough" or "verify"

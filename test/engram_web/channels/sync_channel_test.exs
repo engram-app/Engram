@@ -165,6 +165,35 @@ defmodule EngramWeb.SyncChannelTest do
       assert note["version"] == 1
     end
 
+    test "replies with version_conflict instead of crashing when client version is stale", %{
+      socket: socket
+    } do
+      ref =
+        push(socket, "push_note", %{
+          "path" => "Test/Conflict.md",
+          "content" => "# v1",
+          "mtime" => 1_000.0
+        })
+
+      assert_reply ref, :ok, %{"note" => note}
+      assert note["version"] == 1
+
+      # Push again with a stale client version. upsert_note returns the 3-tuple
+      # {:error, :version_conflict, server_note}; the channel must translate it
+      # into an error reply carrying the server's copy — not raise CaseClauseError.
+      ref2 =
+        push(socket, "push_note", %{
+          "path" => "Test/Conflict.md",
+          "content" => "# v2 from a stale client",
+          "mtime" => 2_000.0,
+          "version" => 99
+        })
+
+      assert_reply ref2, :error, %{reason: "version_conflict", server_note: server_note}
+      assert server_note["path"] == "Test/Conflict.md"
+      assert server_note["version"] == 1
+    end
+
     test "broadcasts note_changed to other subscribers", %{
       socket: socket,
       user: user,

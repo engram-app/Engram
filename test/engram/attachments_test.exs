@@ -46,6 +46,32 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "storage failure surfacing" do
+    test "logs the underlying storage reason when the S3 PUT fails", %{
+      user: user,
+      vault: vault
+    } do
+      # A storage PUT failure (e.g. SignatureDoesNotMatch on a misconfigured
+      # MinIO secret) becomes a 502 to the client. Without a log line the
+      # operator has no way to tell why — the reason must hit the server log.
+      expect(Engram.MockStorage, :put, fn _key, _binary, _opts ->
+        {:error, {:http_error, 403, "SignatureDoesNotMatch"}}
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:storage, _reason}} =
+                   Attachments.upsert_attachment(user, vault, %{
+                     "path" => @path,
+                     "content_base64" => @valid_content
+                   })
+        end)
+
+      assert log =~ "attachment storage"
+      assert log =~ "SignatureDoesNotMatch"
+    end
+  end
+
   describe "upsert_attachment/3 transaction shape" do
     test "S3 PUT runs outside the row transaction on the common path", %{
       user: user,

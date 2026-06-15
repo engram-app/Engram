@@ -470,7 +470,12 @@ defmodule EngramWeb.NotesController do
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
 
-  defp classify_reason(reason) when is_atom(reason), do: reason
+  # Delegate to the bounded, total error classifier. The single is_atom clause
+  # this replaced raised FunctionClauseError on the very %Ecto.Changeset{} /
+  # %Postgrex.Error{} reasons the branch above documents it can receive — the
+  # error logger crashing itself. error_kind/1 is total and leak-safe (only a
+  # bounded atom escapes; a %Note{} buried in a reason tuple never does).
+  defp classify_reason(reason), do: Engram.Telemetry.error_kind(reason)
 
   defp parse_int_list(list) when is_list(list) do
     Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->

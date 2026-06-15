@@ -9,9 +9,11 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Logger.DecryptFailure
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Observability.PostHog
   alias Engram.Repo
+  alias Engram.Telemetry
   alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
 
@@ -289,6 +291,7 @@ defmodule Engram.Notes do
             end
 
           note = decrypt_or_raise!(note, user)
+          maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
 
           if is_nil(prev_hash) do
@@ -310,6 +313,17 @@ defmodule Engram.Notes do
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
+          # A stale-version write that we refused — silent on the client's happy
+          # path, so log it server-side with the ids + versions for triage.
+          Logger.warning("note_version_conflict",
+            category: :notes,
+            user_id: user.id,
+            vault_id: vault.id,
+            note_id: existing.id,
+            client_version: client_version,
+            server_version: existing.version
+          )
+
           # Phase B.3: virtual path/folder/tags need to be populated from
           # ciphertext before the controller serializes the conflict response.
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
@@ -375,6 +389,38 @@ defmodule Engram.Notes do
               {:error, changeset}
           end
         end
+    end
+  end
+
+  # PathSanitizer can silently rewrite an input path (drop `..`, strip illegal
+  # chars, truncate). The note then lives at a path the client never asked for,
+  # and the next pull's path_hmac won't match — the edit appears to "vanish".
+  # Log it (note_id lets an operator pull the stored row) so the divergence is
+  # not invisible. Plaintext paths stay out — they embed note titles/folders.
+  defp maybe_log_path_rewrite(user, vault, original, sanitized, note_id) do
+    if sanitized != original do
+      Logger.warning("note_path_rewritten",
+        category: :notes,
+        user_id: user.id,
+        vault_id: vault.id,
+        note_id: note_id
+      )
+    end
+  end
+
+  # A batch upsert reports per-entry status in its 200 body but logs nothing,
+  # so partial drops (dup path/id, conflict, validation) are silent server-side.
+  # Emit one summary so the failure is detectable + sized without grepping bodies.
+  defp maybe_log_batch_rejects(user, results) do
+    failed = Enum.count(results, &(&1.status != :ok))
+
+    if failed > 0 do
+      Logger.warning("note_batch_partial_reject",
+        category: :notes,
+        user_id: user.id,
+        failed_count: failed,
+        total_count: length(results)
+      )
     end
   end
 
@@ -934,7 +980,9 @@ defmodule Engram.Notes do
       case Repo.with_tenant(user.id, fn -> run_batch_upsert(user, vault, entries) end) do
         {:ok, state} ->
           batch_upsert_side_effects(user, vault, state)
-          {:ok, %{results: batch_upsert_results(user, state.entries)}}
+          results = batch_upsert_results(user, state.entries)
+          maybe_log_batch_rejects(user, results)
+          {:ok, %{results: results}}
 
         {:error, reason} ->
           {:error, reason}
@@ -2408,11 +2456,10 @@ defmodule Engram.Notes do
         decrypted
 
       {:error, reason} ->
-        Logger.error(
-          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
-        )
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: note.id)
 
-        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        raise "Phase B note decryption failed (user_id=#{user.id} " <>
+                "note_id=#{note.id} error_kind=#{Telemetry.error_kind(reason)})"
     end
   end
 
@@ -2425,11 +2472,10 @@ defmodule Engram.Notes do
         decrypted
 
       {{:error, reason}, note} ->
-        Logger.error(
-          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
-        )
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: note.id)
 
-        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        raise "Phase B note decryption failed (user_id=#{user.id} " <>
+                "note_id=#{note.id} error_kind=#{Telemetry.error_kind(reason)})"
     end)
   end
 

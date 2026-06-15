@@ -47,29 +47,32 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
     queue = metadata[:queue]
     job = metadata[:job] || %{}
 
-    # The `reason` value (typically an exception struct) is intentionally
-    # NOT interpolated into the message body. `Engram.Logger.RedactFilter`
-    # scrubs metadata but not message strings, so a raw `inspect(reason)`
-    # here would leak any Voyage Bearer token carried in a `Req.TransportError`
-    # or any Postgrex bound params carried in a `Postgrex.Error`. `:reason`
-    # IS in the filter's sensitive-keys set, so passing it as metadata would
-    # still be redacted at render time, but the safest pattern is to not
-    # forward it at all from a warning-level emit. Operators who need the
-    # full reason should attach a debug-level handler to the same Oban event.
+    # The raw `reason` (typically an exception struct or connection-error term)
+    # is NEVER forwarded — not into the message body and not as metadata.
+    # `:reason` is NOT in `Engram.Logger.RedactFilter`'s sensitive-keys set
+    # (it carries safe atoms at most call sites), and the filter never touches
+    # message strings anyway, so a raw `inspect(reason)` here would leak any
+    # Voyage Bearer token in a `Req.TransportError` or Postgrex bound params in
+    # a `Postgrex.Error`. Instead we surface a bounded `error_kind` atom via
+    # `Engram.Telemetry.error_kind/1` — the exception module or leading error
+    # atom — so operators get the root-cause class without the secret payload.
+    error_kind = Engram.Telemetry.error_kind(metadata[:reason])
+
     Logger.warning(
-      "Oban job discarded after max_attempts: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))}",
+      "Oban job discarded after max_attempts: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind}",
       worker: worker,
       queue: queue,
       job_id: Map.get(job, :id),
       attempt: Map.get(job, :attempt),
       max_attempts: Map.get(job, :max_attempts),
+      error_kind: error_kind,
       reason_label: :oban_discarded
     )
 
     :telemetry.execute(
       [:engram, :oban, :discarded],
       %{count: 1},
-      %{worker: worker, queue: queue, job_id: Map.get(job, :id)}
+      %{worker: worker, queue: queue, job_id: Map.get(job, :id), error_kind: error_kind}
     )
   end
 
