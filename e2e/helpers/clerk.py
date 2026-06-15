@@ -13,6 +13,8 @@ import random
 import time
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,23 @@ class ClerkClient:
         self.session.headers["Authorization"] = f"Bearer {secret_key}"
         self.session.headers["Content-Type"] = "application/json"
         self.base_url = "https://api.clerk.dev/v1"
+        # Clerk rate-limits the Backend API (429). Without backoff, a burst of
+        # e2e runs fails create/delete hard mid-suite — which then skips the
+        # per-test cleanup and leaks users (compounding the quota problem).
+        # Retry 429 + transient 5xx with exponential backoff, honoring the
+        # Retry-After header. POST/DELETE are included: a 429'd request was
+        # rejected (not processed), and create_user already handles the
+        # idempotent "identifier taken" case, so retrying is safe.
+        retry = Retry(
+            total=5,
+            backoff_factor=1.0,  # 1s, 2s, 4s, 8s, 16s
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "POST", "DELETE"}),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("https://", adapter)
 
     def find_user_by_email(self, email: str) -> str | None:
         """Find a Clerk user ID by email address. Returns user_id or None."""
@@ -111,7 +130,22 @@ class ClerkClient:
         # Block until Clerk's session endpoint can see this user. Without
         # this, every downstream caller (create_session_token, JWT mint,
         # etc.) races Clerk's propagation lag — see #193.
-        self._wait_until_session_ready(user_id)
+        #
+        # If readiness fails (timeout, rate-limit), the user already exists in
+        # Clerk but the id never reaches the caller's try/finally — so it would
+        # orphan and leak. Delete it best-effort before propagating the error.
+        try:
+            self._wait_until_session_ready(user_id)
+        except Exception:
+            logger.warning(
+                "session-ready failed for %s (%s) — deleting to avoid orphan",
+                user_id, email,
+            )
+            try:
+                self.delete_user(user_id)
+            except Exception as del_err:
+                logger.error("orphan cleanup failed for %s: %s", user_id, del_err)
+            raise
         return user_id
 
     def _wait_until_session_ready(self, user_id: str) -> None:

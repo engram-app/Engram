@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from helpers.clerk_constants import is_e2e_clerk_email
+
 logger = logging.getLogger(__name__)
 
 VAULT_PATHS = [
@@ -92,9 +94,6 @@ def cleanup_clerk_users(clerk_client, clerk_user_ids: list[str]) -> None:
             logger.warning("Failed to delete Clerk user %s: %s", user_id, e)
 
 
-_E2E_EMAIL_PREFIXES = ("e2e-sync-", "e2e-iso-", "e2e-vault-iso-", "e2e-oauth-", "e2e-clerk-")
-
-
 def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
     """Find and delete e2e-* users in the Clerk instance.
 
@@ -125,8 +124,7 @@ def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
             break
         for user in batch:
             emails = [ea["email_address"] for ea in user.get("email_addresses", [])]
-            is_e2e = any(e.startswith(pfx) for e in emails for pfx in _E2E_EMAIL_PREFIXES)
-            if not is_e2e:
+            if not any(is_e2e_clerk_email(e) for e in emails):
                 continue
             if run_marker is not None and not any(run_marker in e for e in emails):
                 continue
