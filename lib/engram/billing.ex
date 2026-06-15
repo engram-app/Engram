@@ -627,15 +627,32 @@ defmodule Engram.Billing do
     # so the cached pass verdict must re-derive.
     :ok = Engram.Onboarding.GateCache.evict(user_id)
 
+    # Carry the full plan snapshot so the plugin can re-gate attachments the
+    # instant the subscription flips, without a follow-up fetch. `tier` stays
+    # the string form (`sub.tier`, e.g. "pro") that the web frontend type and
+    # existing consumers expect, so we take only the attachment limit fields
+    # from plan_state (allowlist) — a future field added to plan_state/1 can't
+    # silently leak into the broadcast, and this branch stays symmetric with
+    # the fallback below. The attachment limit fields are the new payload.
+    plan_fields =
+      case Engram.Accounts.get_user(user_id) do
+        %Engram.Accounts.User{} = u ->
+          plan_state(u)
+          |> Map.take([:attachments_text_only, :max_file_bytes, :attachment_bytes_cap])
+
+        _ ->
+          %{attachments_text_only: nil, max_file_bytes: nil, attachment_bytes_cap: nil}
+      end
+
     _ =
       EngramWeb.Endpoint.broadcast(
         "user:#{user_id}",
         "subscription_activated",
-        %{
+        Map.merge(plan_fields, %{
           tier: sub.tier,
           status: sub.status,
           subscription_id: sub.paddle_subscription_id
-        }
+        })
       )
 
     :ok

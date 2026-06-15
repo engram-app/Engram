@@ -687,6 +687,16 @@ defmodule Engram.BillingTest do
       assert payload.status == "trialing"
       assert payload.tier == "starter"
       assert payload.subscription_id == "sub_broadcast_1"
+
+      # Plan snapshot is merged in so the plugin can re-gate attachments the
+      # instant the subscription flips, without a follow-up fetch. The fields
+      # mirror Billing.plan_state/1 (sans tier, which stays the string form).
+      reloaded = Engram.Accounts.get_user(user.id)
+      plan = Engram.Billing.plan_state(reloaded)
+      assert payload.attachments_text_only == plan.attachments_text_only
+      assert payload.max_file_bytes == plan.max_file_bytes
+      assert payload.attachment_bytes_cap == plan.attachment_bytes_cap
+      assert is_boolean(payload.attachments_text_only)
     end
 
     test "subscription.updated broadcasts subscription_activated on user:{id} topic" do
