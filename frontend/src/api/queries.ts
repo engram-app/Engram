@@ -779,6 +779,7 @@ export interface Connection {
   software_version: string | null
   verified: boolean
   logo: string | null
+  slug: string | null
   vault_id: string | null
   vault_name: string | null
   scope: string | null

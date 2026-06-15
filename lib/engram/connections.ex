@@ -158,6 +158,7 @@ defmodule Engram.Connections do
           software_version: String.t() | nil,
           verified: boolean(),
           logo: String.t() | nil,
+          slug: String.t() | nil,
           vault_id: integer() | nil,
           vault_name: String.t() | nil,
           scope: String.t() | nil,
@@ -195,17 +196,18 @@ defmodule Engram.Connections do
     )
     |> Repo.all()
     |> Enum.map(fn {t, c} ->
-      logo = LogoAllowlist.lookup(c.software_id)
+      identity = LogoAllowlist.resolve(c.software_id, c.redirect_uris)
 
       %{
         kind: String.to_existing_atom(c.kind),
         client_id: c.client_id,
         key_id: nil,
-        name: logo.display_name || c.client_name,
+        name: identity.display_name || c.client_name,
         software_id: c.software_id,
         software_version: c.software_version,
-        verified: logo.verified,
-        logo: logo.logo,
+        verified: identity.verified,
+        logo: identity.logo,
+        slug: identity.slug,
         vault_id: t.vault_id,
         scope: t.scope,
         last_used_at: t.last_used_at,
@@ -240,6 +242,7 @@ defmodule Engram.Connections do
         software_version: nil,
         verified: false,
         logo: nil,
+        slug: nil,
         vault_id: nil,
         scope: nil,
         last_used_at: k.last_used,
@@ -276,6 +279,7 @@ defmodule Engram.Connections do
         software_version: nil,
         verified: true,
         logo: "/assets/clients/engram-vault-sync.svg",
+        slug: nil,
         vault_id: rt.vault_id,
         scope: nil,
         # Device flow does not stamp last_used_at on each access-token refresh.

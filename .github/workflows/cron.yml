@@ -72,8 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # The script imports `helpers.clerk_constants` (the shared e2e-email
+          # predicate, added for #558), so the helpers package must be checked
+          # out too — sparse-checkout omitting it crashed the reaper with
+          # ModuleNotFoundError, leaving the quota to fill (#558).
           sparse-checkout: |
             e2e/scripts/cleanup_clerk_users.py
+            e2e/helpers/__init__.py
+            e2e/helpers/clerk_constants.py
 
       - name: Ensure requests is available
         # --break-system-packages: isolated runner VM runs Python 3.12
