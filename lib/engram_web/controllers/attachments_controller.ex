@@ -140,8 +140,20 @@ defmodule EngramWeb.AttachmentsController do
 
       {:ok, att} ->
         if params["raw"] == "1" do
+          # Raw bytes are served from the API origin. nosniff (set on the :api
+          # pipeline) stops content-type confusion, but a declared text/html or
+          # image/svg+xml still renders inline — and SVG can carry script — if a
+          # user navigates straight to the raw URL. Force those to download;
+          # everything else (images, PDF) may render inline for preview.
+          disposition =
+            if att.mime_type in ["text/html", "image/svg+xml"], do: "attachment", else: "inline"
+
           conn
           |> put_resp_content_type(att.mime_type || "application/octet-stream")
+          |> put_resp_header(
+            "content-disposition",
+            ~s(#{disposition}; filename="#{Path.basename(att.path)}")
+          )
           |> send_resp(200, att.content)
         else
           json(conn, %{

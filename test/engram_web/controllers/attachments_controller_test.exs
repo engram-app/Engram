@@ -506,21 +506,41 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
   describe "GET /attachments/*path?raw=1" do
     test "streams raw bytes with the attachment Content-Type", %{conn: conn} do
-      conn
-      |> post("/api/attachments", %{path: "p.png", content_base64: Base.encode64("RAWBYTES"), mtime: 1.0})
-      |> json_response(200)
+      _ =
+        conn
+        |> post("/api/attachments", %{path: "p.png", content_base64: Base.encode64("RAWBYTES"), mtime: 1.0})
+        |> json_response(200)
 
-      conn = get(conn, "/api/attachments/p.png?raw=1")
+      resp = get(conn, "/api/attachments/p.png?raw=1")
 
-      assert conn.status == 200
-      assert response_content_type(conn, :png) =~ "image/png"
-      assert conn.resp_body == "RAWBYTES"
+      assert resp.status == 200
+      assert response_content_type(resp, :png) =~ "image/png"
+      assert resp.resp_body == "RAWBYTES"
+      assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="p.png")]
+    end
+
+    test "forces download for inline-script types (svg)", %{conn: conn} do
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "diagram.svg",
+          content_base64: Base.encode64("<svg/>"),
+          mime_type: "image/svg+xml",
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/diagram.svg?raw=1")
+
+      assert resp.status == 200
+      assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="diagram.svg")]
     end
 
     test "without raw still returns JSON with content_base64", %{conn: conn} do
-      conn
-      |> post("/api/attachments", %{path: "q.png", content_base64: Base.encode64("BYTES"), mtime: 1.0})
-      |> json_response(200)
+      _ =
+        conn
+        |> post("/api/attachments", %{path: "q.png", content_base64: Base.encode64("BYTES"), mtime: 1.0})
+        |> json_response(200)
 
       resp = conn |> get("/api/attachments/q.png") |> json_response(200)
       assert resp["content_base64"] == Base.encode64("BYTES")
