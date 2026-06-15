@@ -158,6 +158,46 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
+  # #590: note-metadata fields that leaked as plaintext into payloads written
+  # before the fix. Canonical list — the mix task and prod rpc both go through
+  # delete_leaked_plaintext_keys/1 so this never drifts.
+  @leaked_plaintext_keys ["source_path", "folder", "tags"]
+
+  @doc """
+  #590 backfill convenience: strip the known leaked plaintext keys
+  (#{inspect(@leaked_plaintext_keys)}) from every existing point.
+
+  Lives here (not in the Mix task) so it is callable from a release rpc,
+  where `Mix` is not loaded:
+
+      /app/bin/engram rpc 'Engram.Vector.Qdrant.delete_leaked_plaintext_keys() |> IO.inspect()'
+  """
+  def delete_leaked_plaintext_keys(col \\ nil),
+    do: delete_payload_keys(col, @leaked_plaintext_keys)
+
+  @doc """
+  #590 backfill: delete the named payload keys from EVERY point in the
+  collection (match-all filter). Vectors and all other payload keys are
+  untouched — the cost-free way to strip leaked plaintext
+  (`source_path`/`folder`/`tags`) from points written before the fix.
+  Empty `keys` is a no-op.
+  """
+  def delete_payload_keys(col \\ nil, keys)
+  def delete_payload_keys(_col, []), do: :ok
+
+  def delete_payload_keys(col, keys) when is_list(keys) do
+    col = col || collection()
+    opts = [json: %{keys: keys, filter: %{must: []}}] ++ req_opts()
+
+    instrument(:delete_payload, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
   @doc """
   Delete all points for a given user+vault+path-hmac combination.
 
@@ -348,6 +388,10 @@ defmodule Engram.Vector.Qdrant do
               text: Map.get(payload, "text"),
               title: Map.get(payload, "title"),
               heading_path: Map.get(payload, "heading_path"),
+              # #590: new points carry no plaintext source_path/tags — these
+              # read nil/[] and Search.rehydrate_display_fields/2 refills them
+              # from the encrypted notes row. Kept as a fallback for old points
+              # not yet stripped by the backfill (delete_leaked_plaintext_keys).
               source_path: Map.get(payload, "source_path"),
               tags: Map.get(payload, "tags") || [],
               vault_id: Map.get(payload, "vault_id"),

@@ -241,6 +241,60 @@ defmodule Engram.IndexingTest do
       end)
     end
 
+    test "#590: payload carries no plaintext source_path/folder/tags",
+         %{bypass: bypass, user: user} do
+      DekCache.invalidate_all()
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault = insert(:vault, user: user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "PrivateFolder/diary-secret.md",
+          "content" => "---\ntags: [confidential, privatetag]\n---\n# Diary\n\nBody.",
+          "mtime" => 1_000.0
+        })
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      test_pid = self()
+
+      Bypass.expect(bypass, fn conn ->
+        if String.contains?(conn.request_path, "/points") and conn.method == "PUT" do
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(test_pid, {:upsert_body, body})
+          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+        else
+          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+        end
+      end)
+
+      assert {:ok, _} = Indexing.index_note(note, vault)
+      assert_received {:upsert_body, raw_body}
+
+      # Belt-and-suspenders: NO plaintext metadata anywhere in the wire body.
+      refute raw_body =~ "PrivateFolder"
+      refute raw_body =~ "diary-secret"
+      refute raw_body =~ "confidential"
+      refute raw_body =~ "privatetag"
+
+      Enum.each(Jason.decode!(raw_body)["points"], fn p ->
+        payload = p["payload"]
+        # Plaintext display fields dropped entirely (rehydrated from PG at read).
+        refute Map.has_key?(payload, "source_path")
+        refute Map.has_key?(payload, "folder")
+        refute Map.has_key?(payload, "tags")
+        # HMAC filter fields retained — scoped vector search must keep working.
+        assert Map.has_key?(payload, "path_hmac")
+        assert Map.has_key?(payload, "folder_hmac")
+        assert Map.has_key?(payload, "tags_hmac")
+        # Encrypted display field retained (title still rendered from payload).
+        assert Map.has_key?(payload, "title_nonce")
+      end)
+    end
+
     test "Phase B: payload includes base64-encoded path/folder/tags hmacs",
          %{bypass: bypass, user: user} do
       DekCache.invalidate_all()

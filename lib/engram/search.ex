@@ -157,7 +157,10 @@ defmodule Engram.Search do
                    collection()
                  ) do
             rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
-            rerank_module.rerank(query, decrypted, limit)
+
+            with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
+              {:ok, rehydrate_display_fields(ranked, user)}
+            end
           end
         end
 
@@ -215,5 +218,28 @@ defmodule Engram.Search do
       |> Enum.uniq()
 
     Engram.Vaults.list_for_ids(user, vault_ids)
+  end
+
+  # #590: Qdrant payloads no longer carry plaintext source_path/tags. Refill
+  # them on the final (post-rerank) result set from the encrypted `notes`
+  # rows, keyed by qdrant_point_id. Candidates whose note row is missing keep
+  # whatever the payload provided (nil), rather than dropping the hit.
+  defp rehydrate_display_fields([], _user), do: []
+
+  defp rehydrate_display_fields(results, user) do
+    qdrant_ids =
+      results |> Enum.map(&Map.get(&1, :qdrant_id)) |> Enum.reject(&is_nil/1)
+
+    fields_by_qid = Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids)
+
+    Enum.map(results, fn result ->
+      case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
+        %{source_path: source_path, tags: tags} ->
+          result |> Map.put(:source_path, source_path) |> Map.put(:tags, tags)
+
+        nil ->
+          result
+      end
+    end)
   end
 end

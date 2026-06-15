@@ -25,7 +25,7 @@ import logging
 import os
 import time
 
-from helpers.crypto_probe import wait_for_qdrant_indexed
+from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
@@ -66,6 +66,11 @@ class TestFilteredSearchOnEncryptedVault:
             (f"journal/today-{ts}.md", ["personal"], "Daily journal fingerprint entry"),
         ]
 
+        # Capture each note's path_hmac immediately after its insert — #590
+        # dropped plaintext source_path from Qdrant, so indexing is confirmed
+        # by the non-sensitive path_hmac. Recency (DESC LIMIT 1) is unambiguous
+        # only right after the row lands, so read it inside the loop.
+        path_hmacs = {}
         for path, tags, body in note_specs:
             resp = client.session.post(
                 f"{API_URL}/notes",
@@ -79,10 +84,11 @@ class TestFilteredSearchOnEncryptedVault:
             assert resp.ok, (
                 f"upsert {path} failed: {resp.status_code} {resp.text[:300]}"
             )
+            path_hmacs[path] = latest_note_path_hmac(vault_id)
 
         # 3. Wait for the embed worker to land all three in Qdrant
         for path, _, _ in note_specs:
-            wait_for_qdrant_indexed(vault_id, path, timeout=90)
+            wait_for_qdrant_indexed(vault_id, path_hmacs[path], path, timeout=90)
 
         # 3a. Sanity — confirm frontmatter parsing landed `target_tag` on the
         #     target note. Without this guard, a future regression in
