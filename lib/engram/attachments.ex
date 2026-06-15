@@ -209,6 +209,14 @@ defmodule Engram.Attachments do
             {:error, {:storage, :blob_missing}}
 
           {:error, reason} ->
+            require Logger
+
+            Logger.error("attachment storage GET failed",
+              attachment_id: att.id,
+              storage_key: key,
+              reason: inspect(reason)
+            )
+
             {:error, {:storage, reason}}
         end
 
@@ -413,8 +421,18 @@ defmodule Engram.Attachments do
 
   defp store_external(key, binary, mime) do
     case Storage.adapter().put(key, binary, content_type: mime) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:storage, reason}}
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.error("attachment storage PUT failed",
+          storage_key: key,
+          reason: inspect(reason)
+        )
+
+        {:error, {:storage, reason}}
     end
   end
 
