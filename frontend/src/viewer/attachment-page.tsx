@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { api } from '../api/client'
+
+// pdf.js is heavy — only pull its chunk when a PDF is actually opened, never
+// for image/other previews.
+const PdfView = lazy(() => import('./pdf-view'))
 
 // Read-only preview for a single attachment. The path is the route splat
 // (`/attachment/*`). Fetches raw bytes (?raw=1) as a typed Blob so the browser
@@ -58,7 +62,17 @@ export default function AttachmentPage() {
     )
   }
   if (mime === 'application/pdf') {
-    return <iframe title={filename} src={url} className="h-full w-full border-0" />
+    return (
+      <Suspense
+        fallback={
+          <section className="p-6">
+            <p className="text-sm text-muted-foreground">Loading viewer…</p>
+          </section>
+        }
+      >
+        <PdfView url={url} filename={filename} />
+      </Suspense>
+    )
   }
   return (
     <section className="p-6">

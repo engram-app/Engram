@@ -4,6 +4,12 @@ import { beforeAll, expect, it, vi } from 'vitest'
 import AttachmentPage from './attachment-page'
 import { api } from '../api/client'
 
+// Stub the heavy pdf.js viewer — this suite only verifies routing-by-mime, not
+// pdf.js rendering (covered in pdf-view.test.tsx).
+vi.mock('./pdf-view', () => ({
+  default: ({ filename }: { filename: string }) => <div data-testid="pdf-view">pdf {filename}</div>,
+}))
+
 beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:fake')
   URL.revokeObjectURL = vi.fn()
@@ -26,10 +32,11 @@ it('renders an <img> for an image attachment', async () => {
   expect(api.getBlob).toHaveBeenCalledWith('/attachments/img/a.png?raw=1')
 })
 
-it('renders an iframe for a pdf attachment', async () => {
+it('renders the pdf.js viewer for a pdf attachment', async () => {
   vi.spyOn(api, 'getBlob').mockResolvedValueOnce(new Blob(['x'], { type: 'application/pdf' }))
   renderAt('doc.pdf')
-  await waitFor(() => expect(screen.getByTitle('doc.pdf')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByTestId('pdf-view')).toBeInTheDocument())
+  expect(screen.getByTestId('pdf-view')).toHaveTextContent('doc.pdf')
 })
 
 it('renders a download fallback for unsupported types', async () => {
