@@ -48,7 +48,7 @@ config :engram, Engram.PromEx,
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 
-# Storage adapter — S3-compatible object storage (MinIO local, Tigris prod).
+# Storage adapter — S3-compatible object storage (MinIO local, AWS S3 prod).
 config :engram, :storage, Engram.Storage.S3
 
 # Oban job queue (per-env overrides in dev/test/prod configs)

@@ -60,7 +60,7 @@ CREATE TABLE attachments (
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, path)
-  -- content stored in Tigris (SaaS) or local filesystem (self-hosted), NOT in DB
+  -- content stored in AWS S3 (SaaS) or local filesystem (self-hosted), NOT in DB
 );
 
 CREATE TABLE api_keys (

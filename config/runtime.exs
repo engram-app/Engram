@@ -35,7 +35,7 @@ config :engram, EngramWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() != :test do
-  # Storage backend. Default "s3" is the SaaS/prod path (Fly Tigris) and the
+  # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the
   # standard self-host path (MinIO). "database" is a self-host-only convenience
   # (#297) that stores attachment bytes in Postgres `bytea` so a minified stack
   # can drop MinIO — not for scale (that's why BYTEA was removed for SaaS in
@@ -46,7 +46,7 @@ if config_env() != :test do
       config :engram, :storage, Engram.Storage.S3
       config :engram, :storage_bucket, System.get_env("STORAGE_BUCKET", "engram-attachments")
 
-      # Explicit static creds (Tigris, MinIO, self-host) — only set
+      # Explicit static creds (MinIO, non-AWS S3, self-host) — only set
       # when STORAGE_ACCESS_KEY_ID is present. On AWS ECS Fargate
       # leaving these unset lets ex_aws fall back to the task role via
       # the AWS_CONTAINER_CREDENTIALS_RELATIVE_URI metadata endpoint.
@@ -60,7 +60,7 @@ if config_env() != :test do
           region: System.get_env("STORAGE_REGION", System.get_env("AWS_REGION", "us-east-1"))
       end
 
-      # Endpoint override (Tigris, MinIO) — only when STORAGE_HOST is
+      # Endpoint override (MinIO, non-AWS S3) — only when STORAGE_HOST is
       # set. AWS-native S3 leaves this unset so ex_aws uses its default
       # regional endpoint.
       if System.get_env("STORAGE_HOST") do
@@ -76,7 +76,7 @@ if config_env() != :test do
     other ->
       raise """
       Unknown STORAGE_BACKEND=#{inspect(other)} — supported values are
-      "s3" (default; SaaS Tigris / self-host MinIO) and "database"
+      "s3" (default; AWS S3 prod / self-host MinIO) and "database"
       (self-host-only Postgres bytea, #297).
       """
   end
@@ -484,10 +484,10 @@ if config_env() != :test do
       aws_kms_region: System.fetch_env!("AWS_REGION")
 
     # Scoped to :ex_aws, :kms so KMS creds don't overwrite the global
-    # :ex_aws creds that the S3 storage backend (Fly Tigris / MinIO)
+    # :ex_aws creds that the S3 storage backend (AWS S3 / MinIO)
     # may have configured above.
     #
-    # Explicit static creds (Fly with an AWS access key for KMS, local
+    # Explicit static creds (a non-task-role AWS access key for KMS, local
     # dev) — only set when AWS_ACCESS_KEY_ID is present. On AWS ECS
     # Fargate leaving these unset lets ex_aws fall back to the task
     # role via AWS_CONTAINER_CREDENTIALS_RELATIVE_URI.

@@ -38,7 +38,7 @@ If you'd like to encrypt, ask in your first email and we'll arrange a key.
 - Third-party services we integrate with — please report directly upstream:
   - Clerk (auth) — `security@clerk.com`
   - Paddle (billing) — Paddle's responsible disclosure program
-  - Fly.io, Qdrant Cloud, Voyage AI, AWS — their respective programs
+  - AWS, Qdrant Cloud, Voyage AI — their respective programs
 - Findings that require physical access, a compromised endpoint, or social
   engineering of an Engram employee
 - Denial-of-service from sustained load against shared infrastructure (a
