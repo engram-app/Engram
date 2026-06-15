@@ -45,6 +45,7 @@ defmodule EngramWeb.RequestLogger do
       "#{conn.method} #{conn.status} in #{duration_ms}ms",
       method: conn.method,
       status: conn.status,
+      route: route(conn),
       request_path: conn.request_path,
       request_query: conn.query_string,
       user_id: current_user_id(conn),
@@ -56,6 +57,22 @@ defmodule EngramWeb.RequestLogger do
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil
+
+  # The matched controller/action, as "Module#action" — the endpoint shape an
+  # operator needs to triage. Phoenix sets these in conn.private after routing.
+  # Unlike request_path (which the redact filter scrubs because wildcard routes
+  # like `/notes/*path` embed note titles), the controller+action pair is fixed
+  # by the route table and never contains user data — safe to log in the clear.
+  # nil for unmatched requests (static assets, 404s, plug-only endpoints).
+  defp route(%Plug.Conn{private: private}) do
+    case {private[:phoenix_controller], private[:phoenix_action]} do
+      {controller, action} when not is_nil(controller) and not is_nil(action) ->
+        "#{inspect(controller)}##{action}"
+
+      _ ->
+        nil
+    end
+  end
 
   # x-amzn-mtls-clientcert-subject is injected by ALB when its HTTPS
   # listener has mutual_authentication set to "passthrough" or "verify"

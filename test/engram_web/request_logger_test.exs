@@ -179,6 +179,56 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:mtls_clientcert_subject] == nil
   end
 
+  test "records the matched controller#action as route metadata so the endpoint is visible" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: @sentinel_path,
+      query_string: @sentinel_query,
+      status: 200,
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :show}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :endpoint, :stop],
+          %{duration: 1_000_000},
+          %{conn: conn}
+        )
+      end)
+
+    event = find_request_event(events)
+    assert event
+
+    # The route is the matched template, not the actual path — never carries
+    # user content (unlike request_path, which legitimately embeds note titles).
+    assert event.meta[:route] == "EngramWeb.NotesController#show"
+    refute inspect(event.meta[:route]) =~ "XYZZYZ"
+  end
+
+  test "route metadata is nil when no controller matched (static / 404 / plug-only)" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/nope",
+      query_string: "",
+      status: 404,
+      private: %{}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :endpoint, :stop],
+          %{duration: 100_000},
+          %{conn: conn}
+        )
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:route] == nil
+  end
+
   defp find_request_event(events) do
     Enum.find(events, fn e ->
       msg = render_msg(e.msg)
