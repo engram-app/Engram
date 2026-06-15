@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, File, FileText, Image } from 'lucide-react'
 import { Link } from 'react-router'
 import type { ItemInstance } from '@headless-tree/core'
 import type { LoaderItem } from './loader'
@@ -82,6 +82,35 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
         <Chevron open={instance.isExpanded()} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
       </button>
+    )
+  }
+
+  if (item.kind === 'attachment') {
+    const filename = item.path.split('/').pop() ?? item.path
+    const dot = filename.lastIndexOf('.')
+    const ext = dot > 0 ? filename.slice(dot + 1).toLowerCase() : null
+    const encoded = item.path.split('/').map(encodeURIComponent).join('/')
+    const Icon = item.mime.startsWith('image/')
+      ? Image
+      : item.mime === 'application/pdf'
+        ? FileText
+        : File
+    return (
+      <Link
+        to={`/attachment/${encoded}`}
+        {...instance.getProps()}
+        onContextMenu={contextMenuHandler}
+        aria-selected={instance.isSelected()}
+        className={rowClass(instance)}
+        style={{ paddingLeft: `${notePad}px` }}
+      >
+        <IndentGuides depth={depth} />
+        <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
+        <span className="min-w-0 flex-1 truncate">{filename}</span>
+        {ext && (
+          <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">{ext}</span>
+        )}
+      </Link>
     )
   }
 
