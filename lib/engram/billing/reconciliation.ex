@@ -23,6 +23,7 @@ defmodule Engram.Billing.Reconciliation do
 
   alias Engram.Billing.Subscription
   alias Engram.Repo
+  alias Engram.Telemetry
 
   require Logger
 
@@ -96,9 +97,15 @@ defmodule Engram.Billing.Reconciliation do
         diff(paddle_subs, reason)
 
       {:error, reason} ->
+        # NEVER inspect(reason) here: a Paddle error is {:paddle_error, status,
+        # body} (body is echoed Paddle JSON that can carry customer PII) or a
+        # raw Req transport error, and :reason is NOT in RedactFilter's
+        # sensitive-key set. Surface only a bounded error_kind + the HTTP status
+        # (401 vs 429 vs 500 is the on-call triage signal).
         Logger.error("paddle_reconcile_fetch_failed",
           category: :paddle_reconcile,
-          reason: inspect(reason)
+          error_kind: Telemetry.error_kind(reason),
+          status: paddle_error_status(reason)
         )
 
         # Distinguish a fetch failure from a clean run in the return
@@ -114,6 +121,11 @@ defmodule Engram.Billing.Reconciliation do
         }
     end
   end
+
+  # The HTTP status from a Paddle non-2xx — a bounded integer, safe to log.
+  # nil for transport errors (timeout, closed) that have no status.
+  defp paddle_error_status({:paddle_error, status, _body}), do: status
+  defp paddle_error_status(_), do: nil
 
   defp diff(paddle_subs, skipped_reason) do
     paddle_ids = Enum.map(paddle_subs, & &1["id"])
