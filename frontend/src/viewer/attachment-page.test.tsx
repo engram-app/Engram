@@ -43,3 +43,10 @@ it('shows an error state when the fetch fails', async () => {
   renderAt('missing.png')
   await waitFor(() => expect(screen.getByText(/couldn.t load/i)).toBeInTheDocument())
 })
+
+it('shows a loading state before the fetch resolves', () => {
+  // A promise that never resolves keeps the component in its loading branch.
+  vi.spyOn(api, 'getBlob').mockReturnValueOnce(new Promise<Blob>(() => {}))
+  renderAt('slow.png')
+  expect(screen.getByText(/loading slow\.png/i)).toBeInTheDocument()
+})
