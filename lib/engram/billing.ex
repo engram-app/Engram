@@ -155,6 +155,29 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  Plan/limit snapshot the Obsidian plugin needs to pre-gate attachments and
+  recover after an upgrade. Sent on `user:{id}` channel join and on the
+  `subscription_activated` broadcast. Numeric `:unlimited` limits serialize to
+  `nil` (JSON null) so the wire shape stays `number | null`.
+  """
+  def plan_state(%Engram.Accounts.User{} = user) do
+    %{
+      tier: tier(user),
+      attachments_text_only: effective_limit(user, :attachments_text_only) == true,
+      max_file_bytes: numeric_limit(user, :max_file_bytes),
+      attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap)
+    }
+  end
+
+  defp numeric_limit(user, key) do
+    case effective_limit(user, key) do
+      :unlimited -> nil
+      n when is_integer(n) -> n
+      _ -> nil
+    end
+  end
+
+  @doc """
   Returns true when the user is not suspended. Tier defaults to `:free`
   for un-onboarded users — see `tier/1`. Account access is gated by
   suspension only; tier-based feature gating happens via

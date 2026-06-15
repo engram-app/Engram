@@ -137,6 +137,24 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "plan_state/1" do
+    test "free user: text-only true, numeric caps present" do
+      user = build(:user, free_tier_accepted_at: nil)
+      state = Billing.plan_state(user)
+      assert state.tier == :free
+      assert state.attachments_text_only == true
+      assert is_integer(state.max_file_bytes)
+      assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
+    end
+
+    test "pro user: text-only false" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "active")
+      state = Billing.plan_state(user)
+      assert state.tier == :pro
+      assert state.attachments_text_only == false
+    end
+  end
+
   describe "active?/1 (re-purposed: suspension-only)" do
     test "true for Free user (no subscription, not suspended)" do
       user = build(:user, free_tier_accepted_at: nil, suspended_at: nil)
