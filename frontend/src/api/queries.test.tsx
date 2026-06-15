@@ -1366,6 +1366,6 @@ describe('useAttachments', () => {
     await waitFor(() => expect(result.current.data).toBeDefined())
 
     expect(get).toHaveBeenCalledWith('/attachments')
-    expect(result.current.data?.[0].path).toBe('a.png')
+    expect(result.current.data?.[0]?.path).toBe('a.png')
   })
 })

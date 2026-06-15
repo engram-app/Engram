@@ -5,9 +5,7 @@ import { api } from '../api/client'
 
 beforeAll(() => {
   // jsdom lacks createObjectURL/revokeObjectURL
-  // @ts-expect-error test shim
   URL.createObjectURL = vi.fn(() => 'blob:fake')
-  // @ts-expect-error test shim
   URL.revokeObjectURL = vi.fn()
 })
 
