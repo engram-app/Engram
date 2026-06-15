@@ -127,6 +127,38 @@ describe('ChecklistWidget — per-tool rows', () => {
     expect(screen.getByText(/connect cursor/i)).toBeInTheDocument()
   })
 
+  it('auto-clears a tool row when a matching MCP connection exists', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude', 'cursor'] }
+    connectionsValue = {
+      data: [
+        {
+          kind: 'mcp',
+          slug: 'claude',
+          client_id: 'c1',
+          key_id: null,
+          name: 'Claude',
+          software_id: null,
+          software_version: null,
+          verified: true,
+          logo: '/assets/clients/claude.svg',
+          vault_id: null,
+          vault_name: null,
+          scope: 'mcp',
+          last_used_at: null,
+          connected_at: null,
+          first_user_agent: null,
+          first_ip: null,
+          redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+        },
+      ],
+      isLoading: false,
+    }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    expect(screen.queryByText(/connect claude/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/connect cursor/i)).toBeInTheDocument()
+  })
+
   it('per-tool row CTA links to the mapped marketing doc URL', () => {
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude'] }
     render(wrap(<ChecklistWidget onStartTour={() => {}} />))
