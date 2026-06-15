@@ -468,11 +468,13 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
   describe "GET /attachments (index)" do
     test "lists non-deleted attachments", %{conn: conn} do
-      post(conn, "/api/attachments", %{
+      conn
+      |> post("/api/attachments", %{
         path: "diagrams/arch.png",
         content_base64: Base.encode64("PNG"),
         mtime: 1_000.0
       })
+      |> json_response(200)
 
       resp = conn |> get("/api/attachments") |> json_response(200)
 
