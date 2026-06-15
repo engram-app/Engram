@@ -525,6 +525,12 @@ class CdpClient:
                 const p = {PLUGIN_PATH};
                 if (p.__origRunSyncFromChoice) return 'already-installed';
                 p.__origRunSyncFromChoice = p.runSyncFromChoice.bind(p);
+                // runSyncWithProgress wraps runSyncFromChoice with a live
+                // progress modal. Bypass it under the spy so the dispatch test
+                // doesn't leave a (never-completing, swallowed) progress modal
+                // mounted across parametrized runs.
+                p.__origRunSyncWithProgress = p.runSyncWithProgress.bind(p);
+                p.runSyncWithProgress = async (choice) => p.runSyncFromChoice(choice);
                 p.__lastSyncChoice = null;
                 const swallow = {swallow_js};
                 p.runSyncFromChoice = async (choice) => {{
@@ -552,6 +558,10 @@ class CdpClient:
                 const p = {PLUGIN_PATH};
                 if (!p.__origRunSyncFromChoice) return 'not-installed';
                 p.runSyncFromChoice = p.__origRunSyncFromChoice;
+                if (p.__origRunSyncWithProgress) {{
+                    p.runSyncWithProgress = p.__origRunSyncWithProgress;
+                    delete p.__origRunSyncWithProgress;
+                }}
                 delete p.__origRunSyncFromChoice;
                 delete p.__lastSyncChoice;
                 return 'removed';
@@ -1352,10 +1362,11 @@ class CdpClient:
     #     data-category, data-count, data-path, data-action, data-status,
     #     .engram-ignored-item, .engram-restore, .engram-activity-entry,
     #     .engram-clear-activity) that do not exist in source.
-    #   - Source uses: .engram-sync-center-group, .engram-sync-center-issue-row,
-    #     .engram-sync-center-activity-row, .engram-sync-center-group-head
-    #     (text contains category label + count), button text "Open"/"Ignore"
-    #     /"Restore", .engram-sync-center-activity-action, etc.
+    #   - Source uses: .engram-sync-center-card (needs-attention, title in
+    #     .engram-sync-center-card-title), .engram-sync-center-issue-row,
+    #     .engram-sync-center-activity-row (text contains category label +
+    #     count), button text "Open"/"Ignore"/"Restore",
+    #     .engram-sync-center-activity-action, etc.
     #   - Data attributes (data-category, data-count, data-path, data-action,
     #     data-status) are ABSENT from the plugin source — helpers below use
     #     structural/text queries instead. Tests that depend on .dataset will
@@ -1371,18 +1382,19 @@ class CdpClient:
     async def get_issue_groups(self) -> list[dict]:
         """Return [{category, count, items: [{path, actions:[...]}]}].
 
-        Falls back to structural parsing since source has no data-category /
-        data-count / data-path attributes. category is taken from the h4
-        heading text; count from issues in the list; path from the
-        .engram-sync-center-issue-path div text.
+        The Sync Center "Needs attention" area renders one card per failure
+        reason (.engram-sync-center-card): category from the card title, file
+        rows from .engram-sync-center-issue-row inside (in a collapsed "Show
+        files" expander — still in the DOM). Source has no data-* attributes,
+        so we parse structurally.
         """
         return await self.evaluate(
             "Array.from(document.querySelectorAll("
-            "'.engram-sync-center .engram-sync-center-group')).map(g => ({"
-            "category: g.querySelector('.engram-sync-center-group-head')?.firstChild"
+            "'.engram-sync-center .engram-sync-center-card')).map(c => ({"
+            "category: c.querySelector('.engram-sync-center-card-title')"
             "?.textContent?.trim() || '',"
-            "count: g.querySelectorAll('.engram-sync-center-issue-row').length,"
-            "items: Array.from(g.querySelectorAll('.engram-sync-center-issue-row')).map(i => ({"
+            "count: c.querySelectorAll('.engram-sync-center-issue-row').length,"
+            "items: Array.from(c.querySelectorAll('.engram-sync-center-issue-row')).map(i => ({"
             "path: i.querySelector('.engram-sync-center-issue-path')?.textContent?.trim() || '',"
             "actions: Array.from(i.querySelectorAll('.engram-sync-center-issue-actions button'))"
             ".map(b => b.textContent.trim())}))"

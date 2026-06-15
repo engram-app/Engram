@@ -27,30 +27,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 CLERK_API = "https://api.clerk.dev/v1"
-E2E_EMAIL_PREFIXES = (
-    "e2e-sync-",
-    "e2e-iso-",
-    "e2e-vault-iso-",
-    "e2e-oauth-",
-    "e2e-clerk-",
-    # Playwright frontend e2e (frontend/e2e/global-setup.ts) self-cleans
-    # its own prefix at setup, but only when the job runs successfully.
-    # When e2e-browser fails (Clerk quota, runner OOM, etc.) those users
-    # leak; this reaper is the safety net. The 1h --older-than filter
-    # protects in-flight Playwright runs from being culled.
-    "e2e-browser-",
-    # Onboarding wizard tests from the signup wizard work (PR #142 era).
-    # The test code is gone but Clerk users persist; 70+ accumulated
-    # since 2026-05-15 and ate most of the dev-tier 100-user cap.
-    "e2e-onboard-",
-    # Free-tier launch suite (PR #502): attachment quota, signup-on-free,
-    # cancel-into-free. Each test fixture creates its own Clerk user that
-    # leaks when the job fails post-create; ~100 accumulated by 2026-06-09
-    # and re-hit the dev-tier 100-user cap.
-    "e2e-free-att-",
-    "e2e-free-signup-",
-    "e2e-cancel-free-",
-)
+
+# Identify e2e users via the shared predicate (e2e- local part + +clerk_test
+# tag) rather than a per-suite prefix list — the old hard-coded lists kept
+# missing new suites (e2e-conn-, …), leaking users until the 100-user cap (#558).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from helpers.clerk_constants import is_e2e_clerk_email  # noqa: E402
 
 
 def get_all_users(session: requests.Session) -> list[dict]:
@@ -77,11 +59,10 @@ def get_all_users(session: requests.Session) -> list[dict]:
 
 def is_e2e_user(user: dict) -> bool:
     """Check if a Clerk user was created by E2E tests."""
-    for ea in user.get("email_addresses", []):
-        email = ea.get("email_address", "")
-        if any(email.startswith(prefix) for prefix in E2E_EMAIL_PREFIXES):
-            return True
-    return False
+    return any(
+        is_e2e_clerk_email(ea.get("email_address", ""))
+        for ea in user.get("email_addresses", [])
+    )
 
 
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$")
