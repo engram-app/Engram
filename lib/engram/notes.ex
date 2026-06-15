@@ -9,6 +9,8 @@ defmodule Engram.Notes do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Logger.DecryptFailure
+  alias Engram.Telemetry
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Observability.PostHog
   alias Engram.Repo
@@ -2408,11 +2410,10 @@ defmodule Engram.Notes do
         decrypted
 
       {:error, reason} ->
-        Logger.error(
-          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
-        )
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: note.id)
 
-        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        raise "Phase B note decryption failed (user_id=#{user.id} " <>
+                "note_id=#{note.id} error_kind=#{Telemetry.error_kind(reason)})"
     end
   end
 
@@ -2425,11 +2426,10 @@ defmodule Engram.Notes do
         decrypted
 
       {{:error, reason}, note} ->
-        Logger.error(
-          "decrypt_failed user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
-        )
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: note.id)
 
-        raise "Phase B note decryption failed: user_id=#{user.id} note_id=#{note.id} reason=#{inspect(reason)}"
+        raise "Phase B note decryption failed (user_id=#{user.id} " <>
+                "note_id=#{note.id} error_kind=#{Telemetry.error_kind(reason)})"
     end)
   end
 
