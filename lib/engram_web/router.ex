@@ -353,6 +353,7 @@ defmodule EngramWeb.Router do
 
     # Attachments
     post "/attachments", AttachmentsController, :upload
+    get "/attachments", AttachmentsController, :index
     get "/attachments/changes", AttachmentsController, :changes
     get "/attachments/*path", AttachmentsController, :show
     delete "/attachments/*path", AttachmentsController, :delete

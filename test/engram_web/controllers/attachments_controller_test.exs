@@ -463,6 +463,42 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # GET /attachments — List (index)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /attachments (index)" do
+    test "lists non-deleted attachments", %{conn: conn} do
+      post(conn, "/api/attachments", %{
+        path: "diagrams/arch.png",
+        content_base64: Base.encode64("PNG"),
+        mtime: 1_000.0
+      })
+
+      resp = conn |> get("/api/attachments") |> json_response(200)
+
+      assert [%{"path" => "diagrams/arch.png", "mime_type" => "image/png"} = a] =
+               resp["attachments"]
+
+      assert a["size_bytes"] == 3
+      assert Map.has_key?(a, "updated_at")
+    end
+
+    test "returns empty list for a vault with no attachments", %{conn: conn} do
+      resp = conn |> get("/api/attachments") |> json_response(200)
+      assert resp["attachments"] == []
+    end
+
+    test "returns 401 without auth", %{conn: conn} do
+      conn =
+        conn
+        |> delete_req_header("authorization")
+        |> get("/api/attachments")
+
+      assert conn.status in [401, 403]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Multi-tenant isolation
   # ---------------------------------------------------------------------------
 

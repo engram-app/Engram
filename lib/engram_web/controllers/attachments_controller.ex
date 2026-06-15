@@ -109,6 +109,26 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  def index(conn, _params) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    {:ok, atts} = Attachments.list_attachments(user, vault)
+
+    json(conn, %{
+      attachments:
+        Enum.map(atts, fn a ->
+          %{
+            path: a.path,
+            mime_type: a.mime_type,
+            size_bytes: a.size_bytes,
+            mtime: a.mtime,
+            updated_at: a.updated_at
+          }
+        end)
+    })
+  end
+
   def show(conn, %{"path" => path_parts}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
