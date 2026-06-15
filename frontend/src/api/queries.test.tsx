@@ -43,6 +43,7 @@ import {
   type Folder,
   type Note,
   useAcceptTerms,
+  useAttachments,
   useBatchDeleteFolders,
   useBatchDeleteNotes,
   useBatchMoveFolders,
@@ -1350,5 +1351,21 @@ describe('useSearch', () => {
 
     expect(result.current.data).toEqual(firstResults)
     expect(result.current.isPlaceholderData).toBe(true)
+  })
+})
+
+describe('useAttachments', () => {
+  it('fetches /attachments and returns the attachments array', async () => {
+    get.mockResolvedValue({
+      attachments: [
+        { path: 'a.png', mime_type: 'image/png', size_bytes: 10, mtime: 1, updated_at: '2026-06-10T00:00:00Z' },
+      ],
+    })
+
+    const { result } = renderHook(() => useAttachments(), { wrapper })
+    await waitFor(() => expect(result.current.data).toBeDefined())
+
+    expect(get).toHaveBeenCalledWith('/attachments')
+    expect(result.current.data?.[0].path).toBe('a.png')
   })
 })
