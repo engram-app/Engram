@@ -141,7 +141,11 @@ defmodule Engram.Billing.Reconciliation do
       Logger.error("paddle_reconciliation_drift",
         category: :paddle_reconcile,
         drift_kind: entry.kind,
-        paddle_subscription_id: entry.subscription_id
+        paddle_subscription_id: entry.subscription_id,
+        # The affected customer. nil only for :missing_local (Paddle has a sub
+        # we have no local row for) — otherwise it saves a Paddle-dashboard
+        # reverse-lookup under incident pressure.
+        user_id: entry.user_id
       )
     end)
 
@@ -175,13 +179,14 @@ defmodule Engram.Billing.Reconciliation do
 
     cond do
       is_nil(local) ->
-        [%{subscription_id: id, kind: :missing_local, paddle: paddle_sub, local: nil}]
+        [%{subscription_id: id, kind: :missing_local, user_id: nil, paddle: paddle_sub, local: nil}]
 
       paddle_sub["status"] != local.status ->
         [
           %{
             subscription_id: id,
             kind: :status_mismatch,
+            user_id: local.user_id,
             paddle: paddle_sub["status"],
             local: local.status
           }
@@ -192,6 +197,7 @@ defmodule Engram.Billing.Reconciliation do
           %{
             subscription_id: id,
             kind: :tier_mismatch,
+            user_id: local.user_id,
             paddle: Engram.Billing.tier_from_subscription(paddle_sub),
             local: local.tier
           }
@@ -202,6 +208,7 @@ defmodule Engram.Billing.Reconciliation do
           %{
             subscription_id: id,
             kind: :period_mismatch,
+            user_id: local.user_id,
             paddle: get_in(paddle_sub, ["current_billing_period", "ends_at"]),
             local: local.current_period_end
           }

@@ -225,6 +225,39 @@ defmodule Engram.Billing.ReconciliationTest do
       refute log =~ secret
     end
 
+    test "drift log carries user_id so an operator can find the affected customer" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_corr",
+        paddle_customer_id: "ctm_corr",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_corr",
+             "customer_id" => "ctm_corr",
+             "status" => "past_due"
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: [%{kind: :status_mismatch}]} = Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconciliation_drift"
+      assert log =~ "user_id=#{user.id}"
+    end
+
     test "reports only the highest-priority drift kind when multiple apply (status > tier > period)" do
       user = insert(:user)
 
