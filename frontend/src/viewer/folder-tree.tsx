@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  type AttachmentSummary,
   type Folder,
   FOLDER_NOTES_STALE_MS,
   fetchNotesForFolderId,
   type Note,
   ROOT_FOLDER_ID,
+  useAttachments,
   useFolders,
   useFolderNotesById,
   useBatchDeleteNotes,
@@ -18,6 +20,7 @@ import {
   useRenameFolder,
   useDuplicateNote,
 } from '../api/queries'
+import { synthesizeFolders } from './tree/synthesize-folders'
 import { useActiveVaultId } from '../api/active-vault'
 import { useFolderTreeState } from '../layout/folder-tree-context'
 import { useEngramTree } from './tree/use-engram-tree'
@@ -38,10 +41,11 @@ type MoveRow =
   | { kind: 'file'; path: string }
   | { kind: 'folder'; path: string }
 
-// Module-level stable empty array — passing `folders ?? []` creates a new
-// reference each render while the query is loading, which spins up an
-// infinite re-render loop in useEngramTree's rebuildTree effect.
+// Module-level stable empty arrays — passing `folders ?? []` / `attachments ?? []`
+// creates a new reference each render while the query is loading, which spins
+// up an infinite re-render loop in useEngramTree's rebuildTree effect.
 const EMPTY_FOLDERS: Folder[] = []
+const EMPTY_ATTACHMENTS: AttachmentSummary[] = []
 
 type DialogState =
   | { kind: 'none' }
@@ -57,6 +61,11 @@ export default function FolderTree() {
   // needs a real folder id). Subscribing here gives root an observer so
   // invalidations refetch it; the loader stitches the rows under ROOT.
   const { data: rootNotes = [] } = useFolderNotesById(ROOT_FOLDER_ID)
+  const { data: attachments = EMPTY_ATTACHMENTS } = useAttachments()
+  const allFolders = useMemo(
+    () => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
+    [folders, attachments],
+  )
   const { sort } = useFolderTreeState()
   const vaultId = useActiveVaultId()
   const qc = useQueryClient()
@@ -102,7 +111,7 @@ export default function FolderTree() {
   // matching batch hook. Drop target must be a folder or the vault root.
   const onMove = (sourceIds: string[], targetItemId: string) => {
     const target = parseItemId(targetItemId)
-    if (target.kind === 'note') return
+    if (target.kind !== 'folder' && target.kind !== 'root') return
     const parsed = sourceIds.map(parseItemId)
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
     const folderIds = parsed.filter((p) => p.kind === 'folder').map((p) => (p as { id: string }).id)
@@ -152,7 +161,8 @@ export default function FolderTree() {
   }, [folders, prefetchFolderNotes])
 
   const { tree, virtualizer, items } = useEngramTree({
-    folders: folders ?? EMPTY_FOLDERS,
+    folders: allFolders,
+    attachments,
     qc,
     vaultId: vaultId ?? '',
     sort,
@@ -366,7 +376,7 @@ export default function FolderTree() {
   // Empty only when there are neither folders nor root-level notes. A vault
   // with root notes but no folders (e.g. a freshly created "Untitled" at root)
   // must still render the tree — the loader stitches rootNotes under ROOT.
-  if (!folders || (folders.length === 0 && rootNotes.length === 0)) {
+  if (!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0)) {
     return (
       <p data-testid="folder-tree-root" className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
         No notes yet.
