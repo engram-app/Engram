@@ -18,7 +18,7 @@ _Last verified: 2026-05-05 (post-B.3)_
 **Two parallel surfaces — different rules:**
 
 - **Notes (Phase 1-6, PRs #37/#38/#43/#50):** per-user opt-in toggle, encryption-at-rest in Postgres + Qdrant payload. Toggle/cooldown semantics described below still apply. Will be retired under Tier 2 Phase E.
-- **Attachments (Tier 2 Phase A complete, PRs #58→#62, 0.5.19):** **mandatory at-rest encryption** for every user, no toggle. Bytes live in S3-compatible storage only (MinIO local / Tigris prod). The legacy BYTEA `content` column was dropped in PR #62. `STORAGE_BACKEND=s3` is the only accepted value at boot.
+- **Attachments (Tier 2 Phase A complete, PRs #58→#62, 0.5.19):** **mandatory at-rest encryption** for every user, no toggle. Bytes live in S3-compatible storage only (MinIO local / AWS S3 prod). The legacy BYTEA `content` column was dropped in PR #62. `STORAGE_BACKEND=s3` is the only accepted value at boot.
 
 The toggle described in this runbook governs **notes only**. Attachments encrypt unconditionally — no operator action needed.
 
@@ -108,7 +108,7 @@ The 24-hour `decrypt_pending` window is **cancellable**: the user can `DELETE /a
 | Qdrant payload | `text`, `title`, `heading_path` | ✅ ciphertext (Jina/Voyage never sees plaintext for encrypted vaults) |
 | Postgres `attachments` | `content` column | ✅ **dropped entirely** (PR #62) — bytes live in S3 only |
 | Postgres `attachments` | `name` / `path` | ❌ plaintext (Tier 2 Phase B pending) |
-| Tigris/S3 attachment bytes | binary blob | ✅ ciphertext (mandatory, AES-GCM via per-user DEK; PR #58→#62) |
+| S3 attachment bytes | binary blob | ✅ ciphertext (mandatory, AES-GCM via per-user DEK; PR #58→#62) |
 
 **Remaining plaintext surfaces under Tier 2:** attachment paths/names, note source paths, folder names, tags. These get HMAC fingerprints + encrypted display values in Phase B. Until Phase B ships, communicate this honestly in support contexts — bytes are sealed, but field names that index them are not.
 
@@ -394,7 +394,7 @@ Recovery steps:
        SELECT id, vault_id, storage_key, dek_version, dek_version_pending FROM attachments
         WHERE user_id = :user_id AND dek_version_pending IS NOT NULL;
 
-2. For each `storage_key`, restore the previous version from S3 versioning (the version BEFORE the failed PUT). The Tigris/S3 admin UI exposes the version history.
+2. For each `storage_key`, restore the previous version from S3 versioning (the version BEFORE the failed PUT). The AWS S3 console exposes the version history.
 
 3. Once all S3 blobs are restored, clear the pending column and the user lock in one transaction:
 
