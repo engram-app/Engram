@@ -55,6 +55,33 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
 
+    test "populates the keyword index (notes_fts) after embedding", %{
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      # The note body is "# Hello\n\nWorld." — a keyword the dense vector leg
+      # might miss must now be findable via the tsvector leg.
+      assert {:ok, hits} =
+               Engram.KeywordIndex.Postgres.search(
+                 "World",
+                 %{user_id: user.id, vault_id: vault.id},
+                 limit: 5
+               )
+
+      assert note.id in Enum.map(hits, fn {id, _rank} -> id end)
+    end
+
     test "stamps embed_hash on success", %{bypass: bypass, note: note} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn texts ->

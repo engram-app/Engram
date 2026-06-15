@@ -29,6 +29,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
+  alias Engram.KeywordIndex
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -201,6 +202,7 @@ defmodule Engram.Workers.EmbedNote do
 
             case Indexing.index_note(decrypted_note, vault) do
               {:ok, _count} ->
+                index_keywords(decrypted_note)
                 stamp_embed_hash(note)
                 :ok
 
@@ -250,6 +252,35 @@ defmodule Engram.Workers.EmbedNote do
 
             {:error, reason}
         end
+    end
+  end
+
+  # #595 — keyword (tsvector) leg, written in the same decrypted pass that
+  # embedded the note. Best-effort by design: a keyword-index failure must NOT
+  # fail an otherwise-successful embed (which would trigger a wasteful Voyage
+  # re-embed on the next Oban attempt). The failure is surfaced via telemetry +
+  # log so a stuck leg is visible; a missing notes_fts row is repaired by the
+  # backfill/reconcile path, not by re-running the expensive embed.
+  defp index_keywords(decrypted_note) do
+    case KeywordIndex.module().upsert(decrypted_note) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        :telemetry.execute(
+          [:engram, :keyword_index, :upsert_failed],
+          %{count: 1},
+          %{user_id: decrypted_note.user_id, note_id: decrypted_note.id}
+        )
+
+        Logger.warning("keyword_index_upsert_failed",
+          category: :embed,
+          user_id: decrypted_note.user_id,
+          note_id: decrypted_note.id,
+          error_kind: Engram.Telemetry.error_kind(reason)
+        )
+
+        :ok
     end
   end
 
