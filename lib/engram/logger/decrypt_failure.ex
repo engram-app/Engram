@@ -15,9 +15,9 @@ defmodule Engram.Logger.DecryptFailure do
   `error_kind` atom from `Engram.Telemetry.error_kind/1` is allowed to escape.
   """
 
-  require Logger
-
   alias Engram.Telemetry
+
+  require Logger
 
   @doc """
   Emit an `:error`-level decrypt-failure log.

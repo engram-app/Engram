@@ -66,11 +66,9 @@ defmodule EngramWeb.RequestLogger do
   # nil for unmatched requests (static assets, 404s, plug-only endpoints).
   defp route(%Plug.Conn{private: private}) do
     case {private[:phoenix_controller], private[:phoenix_action]} do
-      {controller, action} when not is_nil(controller) and not is_nil(action) ->
-        "#{inspect(controller)}##{action}"
-
-      _ ->
-        nil
+      {nil, _} -> nil
+      {_, nil} -> nil
+      {controller, action} -> "#{inspect(controller)}##{action}"
     end
   end
 

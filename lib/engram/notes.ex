@@ -10,10 +10,10 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
-  alias Engram.Telemetry
   alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Observability.PostHog
   alias Engram.Repo
+  alias Engram.Telemetry
   alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
 
