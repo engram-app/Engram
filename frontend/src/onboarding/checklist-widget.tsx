@@ -66,7 +66,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
   const ob = useOnboardingActions()
   const status = useOnboardingStatus()
   const profile = status.data?.profile
-  const connections = useConnections({ enabled: !!profile?.uses_obsidian })
+  const connections = useConnections()
   const isFreeTier = useIsFreeTier()
   const qc = useQueryClient()
 
@@ -103,6 +103,14 @@ export function ChecklistWidget({ onStartTour }: Props) {
   const tools = (profile?.tools ?? []).filter((t) => t !== 'web_only')
   const isDismissed = (key: string) => dismissed.has(key)
   const hasObsidianConnection = (connections.data ?? []).some((c) => c.kind === 'obsidian')
+  // A tool row auto-completes once a live MCP connection resolves to its slug
+  // (backend LogoAllowlist matches claude.ai by redirect host).
+  const connectedSlugs = new Set(
+    (connections.data ?? [])
+      .filter((c) => c.kind === 'mcp')
+      .map((c) => c.slug)
+      .filter((s): s is string => !!s),
+  )
 
   const items: Item[] = [
     {
@@ -136,7 +144,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
       (slug): Item => ({
         key: slug,
         label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
-        done: isDismissed(slug),
+        done: isDismissed(slug) || connectedSlugs.has(slug),
         docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
         dismissible: true,
       }),

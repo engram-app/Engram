@@ -151,6 +151,30 @@ defmodule Engram.ConnectionsTest do
       assert vid == vault.id
     end
 
+    test "identifies claude.ai connector by redirect host" do
+      user = insert_user()
+
+      client =
+        insert(:oauth_client,
+          kind: "mcp",
+          software_id: nil,
+          client_name: "Claude",
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"]
+        )
+
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      assert [
+               %{
+                 kind: :mcp,
+                 name: "Claude",
+                 verified: true,
+                 slug: "claude",
+                 logo: "/assets/clients/claude.svg"
+               }
+             ] = Connections.list_for_user(user)
+    end
+
     test "includes PATs as kind=:pat" do
       user = insert_user()
       insert(:api_key, user: user, name: "my-script")
