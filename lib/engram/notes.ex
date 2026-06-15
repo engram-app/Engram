@@ -10,7 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
-  alias Engram.Notes.{Enqueue, Helpers, Note, PathSanitizer}
+  alias Engram.Notes.{Chunk, Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Telemetry
@@ -30,6 +30,51 @@ defmodule Engram.Notes do
   @spec notes_only() :: Ecto.Query.t()
   def notes_only do
     from(n in Note, where: n.kind == "note")
+  end
+
+  @doc """
+  #590: maps Qdrant point ids → the owning note's decrypted display fields
+  (`source_path`, `tags`).
+
+  Search payloads no longer carry plaintext `source_path`/`folder`/`tags`
+  (Qdrant Cloud is a separate breach surface). The canonical values live
+  only in the encrypted `notes` row, so search rehydrates them here keyed by
+  the `chunks.qdrant_point_id → note_id` mapping. Tenant-scoped + decrypted
+  as one instrumented batch. Point ids with no live note row are omitted —
+  the caller leaves such candidates' display fields untouched.
+  """
+  @spec display_fields_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
+          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]}}
+  def display_fields_by_qdrant_points(_user, []), do: %{}
+
+  def display_fields_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
+    uuids =
+      for id <- qdrant_ids, is_binary(id), {:ok, u} <- [Ecto.UUID.cast(id)], uniq: true, do: u
+
+    {:ok, pairs} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(c in Chunk,
+            join: n in ^notes_only(),
+            on: n.id == c.note_id,
+            where: c.qdrant_point_id in ^uuids,
+            select: {c.qdrant_point_id, n}
+          )
+        )
+      end)
+
+    {qids, notes} = Enum.unzip(pairs)
+
+    notes
+    |> Crypto.decrypt_notes_batch(user)
+    |> Enum.zip(qids)
+    |> Enum.reduce(%{}, fn
+      {{:ok, note}, qid}, acc ->
+        Map.put(acc, to_string(qid), %{source_path: note.path, tags: note.tags || []})
+
+      {{:error, _}, _qid}, acc ->
+        acc
+    end)
   end
 
   @doc """

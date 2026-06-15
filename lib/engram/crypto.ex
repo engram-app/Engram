@@ -525,8 +525,10 @@ defmodule Engram.Crypto do
   Encrypts `text`, `title`, `heading_path` in the Qdrant payload map using
   the user's DEK. Adds `text_nonce`, `title_nonce`, `heading_path_nonce`
   keys; all six crypto fields are base64-encoded binaries. Other keys
-  (user_id, vault_id, source_path, folder, tags, chunk_index) are
-  untouched.
+  (user_id, vault_id, chunk_index, and the `*_hmac` filter fields) are
+  untouched. As of #590 the payload carries NO plaintext
+  source_path/folder/tags — those display values are rehydrated from the
+  encrypted `notes` row at search time.
 
   Phase B.4: encryption is mandatory. Does NOT call `ensure_user_dek/1` —
   Qdrant indexing only runs after a note has been written through

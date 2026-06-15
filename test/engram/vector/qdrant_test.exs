@@ -113,6 +113,56 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "delete_payload_keys/2 (#590 backfill)" do
+    test "posts a key-delete over a match-all filter", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        assert Enum.sort(decoded["keys"]) == ["folder", "source_path", "tags"]
+        # Match-all selector: strip the keys from every existing point.
+        assert decoded["filter"] == %{"must" => []}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "completed"}}))
+      end)
+
+      assert :ok = Qdrant.delete_payload_keys("test_col", ["source_path", "folder", "tags"])
+    end
+
+    test "returns :ok on empty key list without HTTP call", %{bypass: bypass} do
+      Bypass.stub(bypass, "POST", "/collections/test_col/points/payload/delete", fn _ ->
+        flunk("delete_payload_keys must not call Qdrant for empty key list")
+      end)
+
+      assert :ok = Qdrant.delete_payload_keys("test_col", [])
+    end
+
+    test "delete_leaked_plaintext_keys/1 strips exactly source_path/folder/tags",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Enum.sort(Jason.decode!(body)["keys"]) == ["folder", "source_path", "tags"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "completed"}}))
+      end)
+
+      assert :ok = Qdrant.delete_leaked_plaintext_keys("test_col")
+    end
+
+    test "returns error on non-200 response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload/delete", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+      end)
+
+      assert {:error, {500, _}} = Qdrant.delete_payload_keys("test_col", ["source_path"])
+    end
+  end
+
   describe "delete_by_vault/3" do
     test "posts correct filter with user_id and vault_id must conditions", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->

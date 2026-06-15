@@ -68,6 +68,77 @@ defmodule Engram.SearchTest do
       assert hd(results).text == "Ferritin levels."
     end
 
+    test "#590: rehydrates source_path/tags from PG when payload omits them",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # A real note carries the canonical path/tags; the Qdrant payload no
+      # longer does (#590). The chunk row maps the point id back to the note.
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Health/iron.md",
+          "content" => "---\ntags: [labs]\n---\n# Iron\n\nFerritin levels.",
+          "mtime" => 1_000.0
+        })
+
+      point_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          %Engram.Notes.Chunk{}
+          |> Engram.Notes.Chunk.changeset(%{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: 10,
+            qdrant_point_id: point_id
+          })
+          |> Engram.Repo.insert!()
+        end)
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin levels.", title: "Iron", heading_path: "Iron"},
+          user,
+          "engram_notes",
+          point_id
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => point_id,
+            "score" => 0.9,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+              # NB: no "source_path", no "tags" — that's the #590 fix.
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      assert {:ok, [result]} = Search.search(user, vault, "iron")
+      assert result.source_path == "Health/iron.md"
+      assert result.tags == ["labs"]
+    end
+
     test "includes vault_id filter in Qdrant request", %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)

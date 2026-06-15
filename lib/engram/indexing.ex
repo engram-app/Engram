@@ -194,16 +194,16 @@ defmodule Engram.Indexing do
         base_payload = %{
           user_id: to_string(note.user_id),
           vault_id: to_string(note.vault_id),
-          source_path: note.path,
           title: note.title,
-          folder: note.folder || "",
-          tags: note.tags || [],
           heading_path: chunk.heading_path,
           text: chunk.text,
           chunk_index: chunk.position,
-          # Phase B.2.4 (additive): write hmacs alongside plaintext so the
-          # B.2.5 backfill worker has a target shape and B.2.3 read switch
-          # can flip atomically once existing points are rewritten.
+          # #590: source_path/folder/tags plaintext intentionally NOT stored.
+          # Qdrant Cloud is a separate breach surface; the cleartext leaked
+          # every user's folder tree + tags. Display values (path/title/tags)
+          # are rehydrated from the `notes` row at search time, keyed by the
+          # chunk's note_id. The *_hmac fields below carry all filter load
+          # (folder/tags/path scoping) without exposing plaintext.
           path_hmac: encode_hmac(note.path_hmac),
           folder_hmac: encode_hmac(note.folder_hmac),
           tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1)
