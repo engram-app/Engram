@@ -108,7 +108,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
         <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
         <span className="min-w-0 flex-1 truncate">{filename}</span>
         {ext && (
-          <span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">{ext}</span>
+          <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">{ext.toUpperCase()}</span>
         )}
       </Link>
     )

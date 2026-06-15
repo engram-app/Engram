@@ -271,8 +271,7 @@ describe('TreeRow', () => {
         <TreeRow instance={instance} />
       </MemoryRouter>,
     )
-    const badge = screen.getByText('png')
+    const badge = screen.getByText('PNG')
     expect(badge).toBeInTheDocument()
-    expect(badge.className).toMatch(/uppercase/)
   })
 })
