@@ -129,7 +129,7 @@ defmodule EngramWeb.AttachmentsController do
     })
   end
 
-  def show(conn, %{"path" => path_parts}) do
+  def show(conn, %{"path" => path_parts} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     path = Path.join(path_parts)
@@ -139,16 +139,22 @@ defmodule EngramWeb.AttachmentsController do
         conn |> put_status(404) |> json(%{error: "attachment not found"})
 
       {:ok, att} ->
-        json(conn, %{
-          id: att.id,
-          path: att.path,
-          mime_type: att.mime_type,
-          size_bytes: att.size_bytes,
-          mtime: att.mtime,
-          content_base64: Base.encode64(att.content),
-          created_at: att.created_at,
-          updated_at: att.updated_at
-        })
+        if params["raw"] == "1" do
+          conn
+          |> put_resp_content_type(att.mime_type || "application/octet-stream")
+          |> send_resp(200, att.content)
+        else
+          json(conn, %{
+            id: att.id,
+            path: att.path,
+            mime_type: att.mime_type,
+            size_bytes: att.size_bytes,
+            mtime: att.mtime,
+            content_base64: Base.encode64(att.content),
+            created_at: att.created_at,
+            updated_at: att.updated_at
+          })
+        end
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
