@@ -24,12 +24,15 @@ defmodule Engram.KeywordIndex.PostgresTest do
 
   describe "upsert/1 then search/3" do
     test "recalls a note by an exact identifier in its body", %{user: user, vault: vault} do
-      note = decrypted(user, vault, "The deploy secret is PADDLE_API_KEY=sk_live_abc123", "Secrets")
+      note =
+        decrypted(user, vault, "The deploy secret is PADDLE_API_KEY=sk_live_abc123", "Secrets")
 
       assert :ok = Postgres.upsert(note)
 
       assert {:ok, results} =
-               Postgres.search("PADDLE_API_KEY", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+               Postgres.search("PADDLE_API_KEY", %{user_id: user.id, vault_id: vault.id},
+                 limit: 5
+               )
 
       assert note.id in Enum.map(results, fn {note_id, _rank} -> note_id end)
     end
@@ -39,7 +42,9 @@ defmodule Engram.KeywordIndex.PostgresTest do
       assert :ok = Postgres.upsert(note)
 
       assert {:ok, results} =
-               Postgres.search("PADDLE_API_KEY", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+               Postgres.search("PADDLE_API_KEY", %{user_id: user.id, vault_id: vault.id},
+                 limit: 5
+               )
 
       refute note.id in Enum.map(results, fn {note_id, _rank} -> note_id end)
     end
@@ -51,10 +56,14 @@ defmodule Engram.KeywordIndex.PostgresTest do
       # Same note id, new content — must overwrite, not insert a second row.
       assert :ok = Postgres.upsert(%{note | content: "second body mentions bravo"})
 
-      assert {:ok, gone} = Postgres.search("alpha", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+      assert {:ok, gone} =
+               Postgres.search("alpha", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+
       refute note.id in Enum.map(gone, fn {id, _} -> id end)
 
-      assert {:ok, hit} = Postgres.search("bravo", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+      assert {:ok, hit} =
+               Postgres.search("bravo", %{user_id: user.id, vault_id: vault.id}, limit: 5)
+
       assert note.id in Enum.map(hit, fn {id, _} -> id end)
     end
   end

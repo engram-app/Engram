@@ -10,8 +10,7 @@ defmodule Engram.Repo.Migrations.CreateNotesFts do
 
   def change do
     create table(:notes_fts, primary_key: false) do
-      add :note_id, references(:notes, type: :uuid, on_delete: :delete_all),
-        primary_key: true
+      add :note_id, references(:notes, type: :uuid, on_delete: :delete_all), primary_key: true
 
       add :user_id, references(:users, type: :uuid, on_delete: :delete_all), null: false
       add :vault_id, references(:vaults, type: :uuid, on_delete: :delete_all), null: false
