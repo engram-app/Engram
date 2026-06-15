@@ -136,8 +136,13 @@ defmodule Engram.BillingTest do
       assert Billing.tier(user) == :starter
     end
 
-    test "returns :free when subscription is past_due (pricing v3: only active counts)" do
+    test "returns :pro when subscription is past_due (grace window keeps access)" do
       user = build(:user) |> with_subscription(tier: "pro", status: "past_due")
+      assert Billing.tier(user) == :pro
+    end
+
+    test "returns :free when subscription is paused" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "paused")
       assert Billing.tier(user) == :free
     end
   end
