@@ -282,6 +282,29 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Lists non-deleted attachment metadata for a vault (no content).
+  """
+  def list_attachments(user, vault) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      from(a in Attachment,
+        where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
+        order_by: [asc: a.updated_at]
+      )
+      |> Repo.all()
+    end)
+    |> unwrap_tenant()
+    |> case do
+      {:ok, atts} ->
+        {:ok, Enum.map(atts, fn att -> Map.delete(decrypt_metadata(att, user), :deleted_at) end)}
+
+      err ->
+        err
+    end
+  end
+
+  @doc """
   Lists attachment changes since a given timestamp. Returns metadata only (no content).
   """
   def list_changes(user, vault, since) do
@@ -299,21 +322,7 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
     |> case do
       {:ok, atts} ->
-        changes =
-          Enum.map(atts, fn att ->
-            {:ok, decrypted} = Crypto.maybe_decrypt_attachment_fields(att, user)
-
-            %{
-              path: decrypted.path,
-              mime_type: decrypted.mime_type,
-              size_bytes: decrypted.size_bytes,
-              mtime: decrypted.mtime,
-              updated_at: decrypted.updated_at,
-              deleted_at: decrypted.deleted_at
-            }
-          end)
-
-        {:ok, changes}
+        {:ok, Enum.map(atts, &decrypt_metadata(&1, user))}
 
       err ->
         err
@@ -468,6 +477,19 @@ defmodule Engram.Attachments do
       {:ok, binary} -> {:ok, binary}
       :error -> {:error, :invalid_base64}
     end
+  end
+
+  defp decrypt_metadata(att, user) do
+    {:ok, decrypted} = Crypto.maybe_decrypt_attachment_fields(att, user)
+
+    %{
+      path: decrypted.path,
+      mime_type: decrypted.mime_type,
+      size_bytes: decrypted.size_bytes,
+      mtime: decrypted.mtime,
+      updated_at: decrypted.updated_at,
+      deleted_at: decrypted.deleted_at
+    }
   end
 
   defp unwrap_tenant({:ok, {:ok, result}}), do: {:ok, result}

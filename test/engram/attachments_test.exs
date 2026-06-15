@@ -280,6 +280,53 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "list_attachments/2" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "returns non-deleted attachment metadata for the vault", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "img/a.png",
+        "content_base64" => Base.encode64("PNGDATA"),
+        "mime_type" => "image/png"
+      })
+      {:ok, b} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "b.pdf",
+        "content_base64" => Base.encode64("PDFDATA"),
+        "mime_type" => "application/pdf"
+      })
+      :ok = Attachments.delete_attachment(user, vault, "b.pdf")
+
+      {:ok, list} = Attachments.list_attachments(user, vault)
+
+      paths = Enum.map(list, & &1.path)
+      assert "img/a.png" in paths
+      refute "b.pdf" in paths
+
+      a = Enum.find(list, &(&1.path == "img/a.png"))
+      assert a.mime_type == "image/png"
+      assert a.size_bytes == byte_size("PNGDATA")
+      assert Map.has_key?(a, :updated_at)
+      refute Map.has_key?(a, :deleted_at)
+      assert b.path == "b.pdf"
+    end
+
+    test "scopes to the given user+vault", %{user: user, vault: vault} do
+      other = insert(:user)
+      other_vault = insert(:vault, user: other)
+      {:ok, _} = Attachments.upsert_attachment(other, other_vault, %{
+        "path" => "secret.png",
+        "content_base64" => Base.encode64("X"),
+        "mime_type" => "image/png"
+      })
+
+      {:ok, list} = Attachments.list_attachments(user, vault)
+      refute Enum.any?(list, &(&1.path == "secret.png"))
+    end
+  end
+
   describe "encrypted S3 storage path" do
     setup do
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
