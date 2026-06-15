@@ -88,7 +88,8 @@ function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderIte
 
 // Note children for a folder id (ROOT_FOLDER_ID for the vault root). Reads the
 // id-keyed cache; on a miss, lazily fetches and asks HT to refetch the branch.
-// Returns null on a cache miss so callers can render folders-only meanwhile.
+// Returns null on a cache miss so callers can render folders + attachments
+// (but not notes) while the fetch is in flight.
 function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null {
   const cached = deps.qc.getQueryData<NoteSummary[]>(['folder-notes-by-id', deps.vaultId, folderId])
   if (!cached) {
@@ -127,8 +128,15 @@ function attachmentItemsForDir(deps: LoaderDeps, dir: string): LoaderItem[] {
   const list = (deps.attachments ?? []).filter((a) => attachmentDir(a.path) === dir)
   const sign = deps.sort.endsWith('-desc') ? -1 : 1
   const fname = (p: string) => p.split('/').pop() ?? p
+  // Honor the temporal sort key via `mtime` so attachments order consistently
+  // with notes under modified-*. Attachments carry no created_at, so created-*
+  // (and name-*) fall back to filename.
+  const cmp =
+    deps.sort.startsWith('modified')
+      ? (a: AttachmentSummary, b: AttachmentSummary) => sign * (a.mtime - b.mtime)
+      : (a: AttachmentSummary, b: AttachmentSummary) => sign * fname(a.path).localeCompare(fname(b.path))
   return list
-    .sort((a, b) => sign * fname(a.path).localeCompare(fname(b.path)))
+    .sort(cmp)
     .map((a) => ({
       itemId: formatItemId({ kind: 'attachment', path: a.path }),
       item: attachmentToTreeItem(a),

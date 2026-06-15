@@ -75,6 +75,20 @@ it('lists root attachments under ROOT', () => {
   expect(a?.itemId).toBe('a:cover.png')
 })
 
+it('orders root attachments by mtime under modified-desc', () => {
+  const older: AttachmentSummary = { ...att('old.png'), mtime: 100 }
+  const newer: AttachmentSummary = { ...att('new.png'), mtime: 200 }
+  const loader = buildLoader({
+    folders: [], qc, vaultId: 'v1', sort: 'modified-desc',
+    attachments: [older, newer],
+  })
+  const paths = loader
+    .getChildren('root')
+    .filter((k) => k.item.kind === 'attachment')
+    .map((k) => (k.item as { path: string }).path)
+  expect(paths).toEqual(['new.png', 'old.png'])
+})
+
 it('buckets an attachment under its folder', () => {
   const folders = [{ id: 'f1', parent_id: null, name: 'img', count: 0 }]
   const loader = buildLoader({
