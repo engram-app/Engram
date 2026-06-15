@@ -287,16 +287,20 @@ defmodule Engram.AttachmentsTest do
     end
 
     test "returns non-deleted attachment metadata for the vault", %{user: user, vault: vault} do
-      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "img/a.png",
-        "content_base64" => Base.encode64("PNGDATA"),
-        "mime_type" => "image/png"
-      })
-      {:ok, _b} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "b.pdf",
-        "content_base64" => Base.encode64("PDFDATA"),
-        "mime_type" => "application/pdf"
-      })
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => Base.encode64("PNGDATA"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, _b} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "b.pdf",
+          "content_base64" => Base.encode64("PDFDATA"),
+          "mime_type" => "application/pdf"
+        })
+
       :ok = Attachments.delete_attachment(user, vault, "b.pdf")
 
       {:ok, list} = Attachments.list_attachments(user, vault)
@@ -315,11 +319,13 @@ defmodule Engram.AttachmentsTest do
     test "scopes to the given user+vault", %{user: user, vault: vault} do
       other = insert(:user)
       other_vault = insert(:vault, user: other)
-      {:ok, _} = Attachments.upsert_attachment(other, other_vault, %{
-        "path" => "secret.png",
-        "content_base64" => Base.encode64("X"),
-        "mime_type" => "image/png"
-      })
+
+      {:ok, _} =
+        Attachments.upsert_attachment(other, other_vault, %{
+          "path" => "secret.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png"
+        })
 
       {:ok, list} = Attachments.list_attachments(user, vault)
       refute Enum.any?(list, &(&1.path == "secret.png"))
