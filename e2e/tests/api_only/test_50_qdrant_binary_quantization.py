@@ -14,6 +14,8 @@ import time
 import pytest
 import requests
 
+from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
+
 ENGRAM_API_URL = os.environ.get("ENGRAM_API_URL", "http://localhost:8100/api")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
@@ -57,9 +59,13 @@ def seeded_note(api_sync):
     note = scoped.create_note(path, content)
     assert note is not None, "Note creation should succeed"
 
+    # #590: Qdrant no longer stores plaintext source_path; identify this note's
+    # points by its non-sensitive path_hmac, read from the notes row.
+    path_hmac = latest_note_path_hmac(vault_id)
+
     _wait_for_collection()
 
-    return {"path": path, "api": scoped}
+    return {"path": path, "api": scoped, "vault_id": vault_id, "path_hmac": path_hmac}
 
 
 class TestQdrantConfig:
@@ -97,35 +103,12 @@ class TestSearchRoundTrip:
     def test_embed_and_search(self, seeded_note):
         """Full pipeline: wait for indexing, embed via Ollama, search Qdrant."""
         note_path = seeded_note["path"]
+        path_hmac = seeded_note["path_hmac"]
 
         # Step 1: Wait for THIS note to be indexed in Qdrant (not just any points).
-        # Other api_only tests may index notes first, so poll by source_path filter.
-        deadline = time.monotonic() + 60
-        found = False
-        while time.monotonic() < deadline:
-            try:
-                scroll_resp = requests.post(
-                    f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-                    json={
-                        "filter": {
-                            "must": [{"key": "source_path", "match": {"value": note_path}}]
-                        },
-                        "limit": 1,
-                        "with_payload": True,
-                    },
-                    timeout=10,
-                )
-                if scroll_resp.status_code == 200:
-                    pts = scroll_resp.json().get("result", {}).get("points", [])
-                    if pts:
-                        found = True
-                        break
-            except (requests.ConnectionError, requests.HTTPError):
-                pass
-            time.sleep(3)
-
-        assert found, (
-            f"Seeded note '{note_path}' was not indexed in Qdrant within 60s."
+        # #590: source_path is no longer in the payload — match by path_hmac.
+        wait_for_qdrant_indexed(
+            seeded_note["vault_id"], path_hmac, note_path, timeout=60
         )
 
         # Step 2: Embed query directly via Ollama
@@ -158,10 +141,12 @@ class TestSearchRoundTrip:
         if isinstance(result, dict):
             result = result.get("points", [])
 
-        paths = [r.get("payload", {}).get("source_path", "?") for r in result]
-        assert any(note_path in p for p in paths), (
-            f"Expected '{note_path}' in Qdrant results. "
-            f"Got {len(result)} results with paths: {paths}"
+        # #590: raw Qdrant payload carries path_hmac (non-sensitive), not the
+        # plaintext source_path. Match the seeded note's point by path_hmac.
+        hmacs = [r.get("payload", {}).get("path_hmac", "?") for r in result]
+        assert path_hmac in hmacs, (
+            f"Expected path_hmac for '{note_path}' in Qdrant results. "
+            f"Got {len(result)} results with path_hmacs: {hmacs}"
         )
 
 
@@ -178,31 +163,11 @@ class TestSearchAPI:
         api = seeded_note["api"]
         note_path = seeded_note["path"]
 
-        # Wait for the note to be indexed (reuse scroll check from earlier test)
-        deadline = time.monotonic() + 60
-        found = False
-        while time.monotonic() < deadline:
-            try:
-                scroll_resp = requests.post(
-                    f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-                    json={
-                        "filter": {
-                            "must": [{"key": "source_path", "match": {"value": note_path}}]
-                        },
-                        "limit": 1,
-                    },
-                    timeout=10,
-                )
-                if scroll_resp.status_code == 200:
-                    pts = scroll_resp.json().get("result", {}).get("points", [])
-                    if pts:
-                        found = True
-                        break
-            except (requests.ConnectionError, requests.HTTPError):
-                pass
-            time.sleep(3)
-
-        assert found, f"Seeded note '{note_path}' not indexed within 60s"
+        # Wait for the note to be indexed. #590: match by path_hmac, not the
+        # removed plaintext source_path.
+        wait_for_qdrant_indexed(
+            seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60
+        )
 
         # Hit the Engram search API (not Qdrant directly)
         resp = api.session.post(
@@ -215,9 +180,9 @@ class TestSearchAPI:
         )
 
         results = resp.json().get("results", [])
-        # /api/search now returns one row per note (not per chunk) with `path`
-        # carrying the source path. The Qdrant scroll above still uses
-        # `source_path` because that's the raw payload field name.
+        # /api/search returns one row per note with `path` carrying the source
+        # path (rehydrated from the encrypted notes row — #590 dropped it from
+        # the Qdrant payload). The indexing wait above matches by path_hmac.
         paths = [r.get("path", "?") for r in results]
         assert any(note_path in p for p in paths), (
             f"Expected '{note_path}' in /api/search results. "
