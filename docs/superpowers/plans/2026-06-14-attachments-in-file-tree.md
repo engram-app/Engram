@@ -29,7 +29,7 @@
 
 **Frontend**
 - Modify `frontend/src/viewer/tree/types.ts` — `attachment` TreeItem variant + id encode/decode.
-- Modify `frontend/src/api/queries.ts` — `AttachmentSummary` type + `useAttachments` + `fetchAttachments`.
+- Modify `frontend/src/api/queries.ts` — `AttachmentSummary` type + `useAttachments`. (No `fetchAttachments`: the full attachment list loads eagerly via the hook — there's no per-folder lazy fetch like notes have.)
 - Create `frontend/src/viewer/tree/synthesize-folders.ts` — pure helper.
 - Modify `frontend/src/viewer/tree/loader.ts` — bucket attachments into folder/root children.
 - Modify `frontend/src/viewer/tree/use-engram-tree.ts` — thread `attachments` into the loader + structure key.
