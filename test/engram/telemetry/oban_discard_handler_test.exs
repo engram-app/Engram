@@ -49,16 +49,43 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
       assert logs =~ "Oban job discarded"
       assert logs =~ "Engram.Workers.EmbedNote"
 
-      # Reason MUST NOT leak into the warning message body — RedactFilter
-      # only scrubs metadata, not strings. The reason struct here is benign
-      # (a RuntimeError), but the contract guards against tokens / params
-      # carried by other exception types (Req.TransportError, Postgrex.Error).
-      refute logs =~ "RuntimeError"
+      # The bounded error class (exception module) IS surfaced so an operator
+      # can see the root cause — "job discarded" with no cause is useless in an
+      # incident. error_kind/1 yields only the struct module, never the
+      # secret-bearing fields: "boom" (the :message) must stay out.
+      assert logs =~ "error_kind="
+      assert logs =~ "RuntimeError"
       refute logs =~ "boom"
 
       assert_received {:discarded_emitted, %{count: 1}, m}
       assert m.worker == "Engram.Workers.EmbedNote"
       assert m.queue == :embed
+      assert m.error_kind == RuntimeError
+    end
+
+    test "surfaces a bounded error_kind without leaking a secret in the reason" do
+      secret = "REDIS-URL-PASSWORD-do-not-leak"
+      measurements = %{duration: 1_000, queue_time: 0}
+
+      metadata = %{
+        state: :discarded,
+        worker: "Engram.Workers.EmbedNote",
+        queue: :embed,
+        job: %{id: 99, args: %{}, attempt: 3, max_attempts: 3},
+        kind: :error,
+        # A connection error term that carries a secret in its payload, as a
+        # Redix/Req error would. error_kind/1 keeps only the leading atom.
+        reason: {:connection_error, secret}
+      }
+
+      logs =
+        capture_log(fn ->
+          :telemetry.execute([:oban, :job, :exception], measurements, metadata)
+          Process.sleep(10)
+        end)
+
+      assert logs =~ "error_kind=connection_error"
+      refute logs =~ secret
     end
 
     test "does NOT log or re-emit for non-discard exceptions (state :failure)" do
