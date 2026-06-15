@@ -346,7 +346,10 @@ defmodule Engram.Crypto.QdrantPayloadTest do
                    Crypto.decrypt_qdrant_candidates([candidate], user, %{"5" => vault})
         end)
 
-      assert log =~ "failed to load DEK"
+      # Structured, leak-safe shape (Engram.Logger.DecryptFailure): a bounded
+      # error_kind + user_id in metadata, no raw inspect(reason) in the message.
+      assert log =~ "qdrant_decrypt_dek_load_failed"
+      assert log =~ "error_kind=no_dek"
       assert log =~ "user_id=#{user.id}"
     end
   end
