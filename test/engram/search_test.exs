@@ -575,6 +575,94 @@ defmodule Engram.SearchTest do
     end
   end
 
+  describe "search/4 keyword + hybrid modes (#595)" do
+    # The keyword leg reads notes_fts directly — no embedder, no Qdrant. Index
+    # the note straight through the adapter (the EmbedNote path is covered
+    # elsewhere) so this test isolates the read path.
+    defp index_keyword(user, vault, content, title) do
+      note = Engram.Fixtures.insert_note!(user, vault, %{content: content, title: title})
+      decrypted = %{note | content: content, title: title}
+      :ok = Engram.KeywordIndex.Postgres.upsert(decrypted)
+      decrypted
+    end
+
+    test "mode: :keyword recalls an exact identifier the vector leg would miss",
+         %{user: user, vault: vault} do
+      note = index_keyword(user, vault, "deploy uses PADDLE_API_KEY=sk_live here", "Ops")
+
+      assert {:ok, results} = Search.search(user, vault, "PADDLE_API_KEY", mode: :keyword)
+
+      assert Enum.any?(results, &(&1.source_path == note.path))
+      # ts_headline returns a highlighted excerpt. The `english` config
+      # tokenizes the identifier on underscores, so each component is bolded
+      # (**PADDLE**_**API**_**KEY**) — assert the highlight, not a raw substring.
+      hit = Enum.find(results, &(&1.source_path == note.path))
+      assert hit.text =~ "PADDLE"
+      assert hit.text =~ "**"
+    end
+
+    test "mode: :keyword returns [] when nothing matches", %{user: user, vault: vault} do
+      _ = index_keyword(user, vault, "notes about gardening", "Garden")
+      assert {:ok, []} = Search.search(user, vault, "PADDLE_API_KEY", mode: :keyword)
+    end
+
+    test "mode: :hybrid fuses the keyword hit with vector results", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # A note only the keyword leg can find (exact identifier).
+      kw_note = index_keyword(user, vault, "the value is XYZZY_TOKEN=42", "Secrets")
+
+      # A different note the vector leg returns.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "semantic body", title: "Vector Note", heading_path: "root"},
+          user,
+          "engram_notes",
+          "qid-v"
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => "qid-v",
+            "score" => 0.9,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "source_path" => "vector/note.md",
+              "tags" => [],
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      assert {:ok, results} = Search.search(user, vault, "XYZZY_TOKEN", mode: :hybrid)
+
+      paths = Enum.map(results, & &1.source_path)
+      # Both legs contribute: the keyword-only note AND the vector note.
+      assert kw_note.path in paths
+      assert "vector/note.md" in paths
+    end
+  end
+
   describe "search/4 with encrypted vaults" do
     setup do
       Engram.Crypto.DekCache.invalidate_all()

@@ -71,7 +71,9 @@ defmodule EngramWeb.SearchControllerTest do
       assert %{"results" => results} = json_response(conn, 200)
       assert length(results) == 1
       [hit] = results
-      assert hit["score"] == 0.95
+      # #595: the endpoint now defaults to hybrid, so `score` is the RRF fused
+      # score (rank-based, ordering-meaningful), not the raw cosine value.
+      assert hit["score"] > 0
       assert hit["path"] == "Health/Iron Panel.md"
       assert hit["title"] == "Iron Panel"
       assert hit["folder"] == "Health"
@@ -269,7 +271,8 @@ defmodule EngramWeb.SearchControllerTest do
       assert iron["path"] == "Health/Iron Panel.md"
       assert iron["match_count"] == 3
       assert iron["snippet"] == "Ferritin section."
-      assert iron["score"] == 0.95
+      # Hybrid (RRF) re-scores by rank; assert the ordering, not the raw cosine.
+      assert iron["score"] > vitd["score"]
 
       assert vitd["path"] == "Health/Vitamin D.md"
       assert vitd["match_count"] == 1

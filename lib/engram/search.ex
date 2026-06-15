@@ -8,9 +8,14 @@ defmodule Engram.Search do
   - `:reranker`  — Engram.Rerankers.Jina | .None | any Engram.Reranker impl
   """
 
+  alias Engram.KeywordIndex
+  alias Engram.Notes
+  alias Engram.Repo
+  alias Engram.Search.Rrf
   alias Engram.Vector.Qdrant
 
   @min_candidates 20
+  @leg_timeout 5_000
 
   defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
 
@@ -131,38 +136,13 @@ defmodule Engram.Search do
   defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok
 
   defp do_search(user, vault, query, opts) do
-    limit = Keyword.get(opts, :limit, 5)
-    tags = Keyword.get(opts, :tags)
+    mode = Keyword.get(opts, :mode, :vector)
     folder = Keyword.get(opts, :folder)
-
-    # Fetch more candidates when reranking is active for THIS user (per-plan).
-    rerank_for_user? = reranker_active_for?(user)
-    fetch_limit = if rerank_for_user?, do: max(limit * 4, @min_candidates), else: limit
+    tags = Keyword.get(opts, :tags)
 
     case translate_phase_b_filters(user, folder, tags) do
       {:ok, phase_b_kw} ->
-        with {:ok, [vector]} <- embed_for_search(query) do
-          search_opts =
-            [user_id: to_string(user.id), limit: fetch_limit]
-            |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
-            |> Keyword.merge(phase_b_kw)
-
-          with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
-               vaults_by_id = load_candidate_vaults(user, vault, candidates),
-               {:ok, decrypted} <-
-                 Engram.Crypto.decrypt_qdrant_candidates(
-                   candidates,
-                   user,
-                   vaults_by_id,
-                   collection()
-                 ) do
-            rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
-
-            with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
-              {:ok, rehydrate_display_fields(ranked, user)}
-            end
-          end
-        end
+        run_mode(mode, user, vault, query, opts, phase_b_kw)
 
       :no_dek_with_filter ->
         # Caller asked to filter by folder/tags but has no DEK provisioned —
@@ -170,6 +150,180 @@ defmodule Engram.Search do
         # match anyway. Mirrors list_folders (B.2.2) defensive empty.
         {:ok, []}
     end
+  end
+
+  # --- mode dispatch (#595) -------------------------------------------------
+  #
+  # Internal default is `:vector` (backward-compatible for the MCP path and the
+  # existing test suite, which assert raw cosine scores). The web controller
+  # opts into `:hybrid` as the user-facing default; `?mode=` overrides.
+
+  defp run_mode(:vector, user, vault, query, opts, phase_b_kw),
+    do: vector_leg(user, vault, query, opts, phase_b_kw)
+
+  defp run_mode(:keyword, user, vault, query, opts, _phase_b_kw),
+    do: keyword_leg(user, vault, query, opts)
+
+  # Both legs run concurrently; the slower (usually Qdrant) bounds latency, not
+  # the sum. Either leg failing degrades to the other rather than failing the
+  # whole search — hybrid is the resilient default at the API.
+  defp run_mode(:hybrid, user, vault, query, opts, phase_b_kw) do
+    limit = Keyword.get(opts, :limit, 5)
+
+    vtask = Task.async(fn -> vector_leg(user, vault, query, opts, phase_b_kw) end)
+    ktask = Task.async(fn -> keyword_leg(user, vault, query, opts) end)
+
+    with {:ok, vres} <- Task.await(vtask, @leg_timeout) do
+      # Keyword is the additive leg: a keyword-leg failure degrades to
+      # vector-only rather than failing the search. A vector-leg failure
+      # propagates (preserves the error→500 contract; no error swallowing).
+      kres = leg_results(Task.await(ktask, @leg_timeout))
+      {:ok, fuse_legs(vres, kres, limit)}
+    end
+  end
+
+  defp leg_results({:ok, results}) when is_list(results), do: results
+  defp leg_results(_), do: []
+
+  # --- vector leg (Qdrant KNN → decrypt → rerank → rehydrate) ---------------
+
+  defp vector_leg(user, vault, query, opts, phase_b_kw) do
+    limit = Keyword.get(opts, :limit, 5)
+
+    # Fetch more candidates when reranking is active for THIS user (per-plan).
+    rerank_for_user? = reranker_active_for?(user)
+    fetch_limit = if rerank_for_user?, do: max(limit * 4, @min_candidates), else: limit
+
+    with {:ok, [vector]} <- embed_for_search(query) do
+      search_opts =
+        [user_id: to_string(user.id), limit: fetch_limit]
+        |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
+        |> Keyword.merge(phase_b_kw)
+
+      with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
+           vaults_by_id = load_candidate_vaults(user, vault, candidates),
+           {:ok, decrypted} <-
+             Engram.Crypto.decrypt_qdrant_candidates(
+               candidates,
+               user,
+               vaults_by_id,
+               collection()
+             ) do
+        rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
+
+        with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
+          {:ok, rehydrate_display_fields(ranked, user)}
+        end
+      end
+    end
+  end
+
+  # --- keyword leg (tsvector → ts_rank_cd → ts_headline snippet) ------------
+
+  # Cross-vault keyword search is deferred for v1 (the leg scopes by a single
+  # vault). Cross-vault hybrid therefore runs vector-only.
+  defp keyword_leg(_user, nil, _query, _opts), do: {:ok, []}
+
+  defp keyword_leg(user, vault, query, opts) do
+    limit = Keyword.get(opts, :limit, 5)
+    scope = %{user_id: to_string(user.id), vault_id: to_string(vault.id)}
+
+    with {:ok, hits} <- KeywordIndex.module().search(query, scope, limit: limit) do
+      results =
+        hits
+        |> Enum.map(fn {note_id, rank} ->
+          build_keyword_result(user, vault, note_id, rank, query)
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, results}
+    end
+  end
+
+  defp build_keyword_result(user, vault, note_id, rank, query) do
+    case Notes.get_note_by_id(user, vault, note_id) do
+      {:ok, note} ->
+        %{
+          source_path: note.path,
+          title: note.title,
+          heading_path: nil,
+          text: keyword_snippet(query, note.content),
+          score: rank,
+          tags: note.tags || [],
+          qdrant_id: nil
+        }
+
+      {:error, :not_found} ->
+        # Race: indexed in notes_fts but the note row is gone/soft-deleted.
+        nil
+    end
+  end
+
+  # Postgres ts_headline highlights the matched terms (markdown bold, fitting
+  # an MD app). Falls back to a leading excerpt if highlighting errors.
+  defp keyword_snippet(query, content) do
+    text = content || ""
+
+    case Repo.query(
+           "SELECT ts_headline('english', $1, websearch_to_tsquery('english', $2), " <>
+             "'StartSel=**, StopSel=**, MaxFragments=1, MaxWords=30, MinWords=10')",
+           [text, query]
+         ) do
+      {:ok, %{rows: [[snippet]]}} when is_binary(snippet) -> snippet
+      _ -> String.slice(text, 0, 200)
+    end
+  end
+
+  # --- RRF fusion of the two legs (#595) ------------------------------------
+
+  # Fuse on `source_path` (the common key — the vector leg is chunk-level, the
+  # keyword leg is note-level). RRF ranks the *notes*; we then return the
+  # original vector chunks for the surviving notes (re-scored to the note's
+  # fused score) so the controller's chunk grouping + match_count still work,
+  # plus one synthetic result per keyword-only note (no vector chunk to reuse).
+  defp fuse_legs(vres, kres, limit) do
+    v_by_path = best_by_path(vres)
+
+    v_ranked =
+      v_by_path
+      |> Map.values()
+      |> Enum.sort_by(& &1.score, :desc)
+      |> Enum.map(& &1.source_path)
+
+    k_ranked = kres |> Enum.map(& &1.source_path) |> Enum.uniq()
+
+    scored = [v_ranked, k_ranked] |> Rrf.fuse() |> Map.new()
+
+    top_paths =
+      scored
+      |> Enum.sort_by(fn {_path, score} -> score end, :desc)
+      |> Enum.take(limit)
+      |> Enum.map(&elem(&1, 0))
+      |> MapSet.new()
+
+    vector_paths = MapSet.new(Map.keys(v_by_path))
+
+    v_kept =
+      vres
+      |> Enum.filter(&MapSet.member?(top_paths, &1.source_path))
+      |> Enum.map(&%{&1 | score: Map.fetch!(scored, &1.source_path)})
+
+    k_only =
+      kres
+      |> Enum.filter(fn r ->
+        MapSet.member?(top_paths, r.source_path) and
+          not MapSet.member?(vector_paths, r.source_path)
+      end)
+      |> Enum.map(&%{&1 | score: Map.fetch!(scored, &1.source_path)})
+
+    v_kept ++ k_only
+  end
+
+  defp best_by_path(results) do
+    results
+    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
+    |> Enum.group_by(& &1.source_path)
+    |> Map.new(fn {path, group} -> {path, Enum.max_by(group, & &1.score)} end)
   end
 
   # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...]

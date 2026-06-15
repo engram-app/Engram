@@ -20,11 +20,14 @@ defmodule EngramWeb.SearchController do
     tags = params["tags"]
     folder = params["folder"]
     cross_vault = Map.get(params, "cross_vault", false)
+    # #595 — the web endpoint defaults to hybrid (keyword + vector). `?mode=`
+    # lets a client isolate a single leg (keyword|vector) for debugging/tests.
+    mode = parse_mode(params["mode"])
 
     chunk_limit = max(note_limit * @overfetch_factor, @min_overfetch)
 
     opts =
-      [limit: chunk_limit, cross_vault: cross_vault]
+      [limit: chunk_limit, cross_vault: cross_vault, mode: mode]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
 
@@ -63,6 +66,12 @@ defmodule EngramWeb.SearchController do
     |> put_status(422)
     |> json(%{error: "query is required"})
   end
+
+  # Unknown/missing mode falls back to the hybrid default rather than erroring —
+  # a stray ?mode=foo degrades to the best behavior, not a 4xx.
+  defp parse_mode("keyword"), do: :keyword
+  defp parse_mode("vector"), do: :vector
+  defp parse_mode(_), do: :hybrid
 
   defp clamp_limit(nil), do: 5
   defp clamp_limit(n) when is_integer(n), do: n |> max(1) |> min(@max_search_limit)
