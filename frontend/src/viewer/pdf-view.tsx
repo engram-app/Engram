@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import LoadingPane from './loading-pane'
+import PreviewColumn from './preview-column'
 
 // Self-host the pdf.js worker from the bundled pdfjs-dist (Vite resolves the
 // `new URL(..., import.meta.url)` asset reference at build time). Keeps PDF
@@ -36,28 +37,26 @@ export default function PdfView({ url, filename }: { url: string; filename: stri
   const pageWidth = width ? Math.min(width - 32, MAX_PAGE_WIDTH) : undefined
 
   return (
-    <section className="mx-auto -my-6 flex h-[calc(100%+3rem)] min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden">
-      <ScrollArea className="min-h-0 flex-1">
-        <div ref={containerRef} className="w-full p-4">
-          <Document
-            file={url}
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            className="flex flex-col items-center gap-4"
-            loading={<p className="p-2 text-sm text-muted-foreground">Loading {filename}…</p>}
-            error={<p className="p-2 text-sm text-destructive">Couldn&apos;t render {filename}.</p>}
-          >
-            {Array.from({ length: numPages }, (_, i) => (
-              <Page
-                key={i + 1}
-                pageNumber={i + 1}
-                width={pageWidth}
-                className="shadow-md"
-                renderAnnotationLayer={false}
-              />
-            ))}
-          </Document>
-        </div>
-      </ScrollArea>
-    </section>
+    <PreviewColumn>
+      <div ref={containerRef} className="w-full p-4">
+        <Document
+          file={url}
+          onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+          className="flex flex-col items-center gap-4"
+          loading={<LoadingPane />}
+          error={<p className="p-2 text-sm text-destructive">Couldn&apos;t render {filename}.</p>}
+        >
+          {Array.from({ length: numPages }, (_, i) => (
+            <Page
+              key={i + 1}
+              pageNumber={i + 1}
+              width={pageWidth}
+              className="shadow-md"
+              renderAnnotationLayer={false}
+            />
+          ))}
+        </Document>
+      </div>
+    </PreviewColumn>
   )
 }

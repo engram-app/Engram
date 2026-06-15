@@ -79,11 +79,11 @@ it('shows an error state when the byte fetch fails', async () => {
   await waitFor(() => expect(screen.getByText(/couldn.t load/i)).toBeInTheDocument())
 })
 
-it('shows a loading state before the bytes resolve', () => {
+it('shows a centered loading spinner before the bytes resolve', () => {
   mockAttachments = [att({ id: 'img-1', path: 'slow.png', mime_type: 'image/png' })]
   vi.spyOn(api, 'getBlob').mockReturnValueOnce(new Promise<Blob>(() => {}))
   renderAt('img-1')
-  expect(screen.getByText(/loading slow\.png/i)).toBeInTheDocument()
+  expect(screen.getByRole('status')).toBeInTheDocument()
 })
 
 it('shows "not found" when no attachment matches the id', () => {

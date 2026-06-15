@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { useParams } from 'react-router'
 import { useAttachments } from '../api/queries'
+import LoadingPane from './loading-pane'
 
 // Both viewers are heavy (NotePage pulls remark/CodeMirror; AttachmentPage pulls
 // pdf.js on demand) — load whichever the route resolves to.
@@ -19,7 +20,7 @@ export default function VaultItemPage() {
   const isAttachment = attachments?.some((a) => a.id === id) ?? false
 
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading…</p>}>
+    <Suspense fallback={<LoadingPane />}>
       {isAttachment ? <AttachmentPage /> : <NotePage />}
     </Suspense>
   )

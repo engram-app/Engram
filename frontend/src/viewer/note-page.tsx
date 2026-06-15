@@ -8,6 +8,7 @@ import { ApiError } from '../api/client'
 import { useRightSidebar } from '../layout/right-sidebar-context'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import LoadingPane from './loading-pane'
 import NoteToc from './note-toc'
 import NoteView from './note-view'
 import { merge3 } from './merge'
@@ -207,7 +208,7 @@ export default function NotePage() {
   )
 
   if (validId === null) return <p className="p-6 text-destructive">Invalid note id.</p>
-  if (isLoading) return <p className="p-6 text-muted-foreground">Loading note…</p>
+  if (isLoading) return <LoadingPane />
   if (error) return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>
   if (!note) return <p className="p-6 text-muted-foreground">Note not found</p>
 

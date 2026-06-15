@@ -7,6 +7,7 @@ import WaitlistPage from './auth/waitlist'
 import { UpgradeDialogProvider } from './billing/upgrade-dialog-provider'
 import type { EngramConfig } from './config'
 import AppLayout from './layout/app-layout'
+import LoadingPane from './viewer/loading-pane'
 import NotFoundPage from './not-found'
 import SettingsLayout from './settings/settings-layout'
 import { ROUTES } from './routes'
@@ -37,7 +38,7 @@ const OnboardBillingPage = lazy(() => import('./onboarding/onboard-billing-page'
 const OnboardToolsPage = lazy(() => import('./onboarding/onboard-tools-page'))
 const OnboardVaultPage = lazy(() => import('./onboarding/onboard-vault-page'))
 
-const routeFallback = <p className="p-6 text-muted-foreground">Loading…</p>
+const routeFallback = <LoadingPane />
 
 function suspended(el: ReactNode) {
   return <Suspense fallback={routeFallback}>{el}</Suspense>

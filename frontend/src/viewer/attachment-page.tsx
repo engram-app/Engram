@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { api } from '../api/client'
 import { useAttachments } from '../api/queries'
+import LoadingPane from './loading-pane'
+import PreviewColumn from './preview-column'
 
 // pdf.js is heavy — only pull its chunk when a PDF is actually opened, never
 // for image/other previews.
@@ -47,11 +49,7 @@ export default function AttachmentPage() {
 
   // Attachment list still loading and the id isn't resolved yet.
   if (!att && isLoading) {
-    return (
-      <section className="p-6">
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      </section>
-    )
+    return <LoadingPane />
   }
   // List loaded but no attachment with this id (deleted, or a stale link).
   if (!att) {
@@ -69,28 +67,25 @@ export default function AttachmentPage() {
     )
   }
   if (!url) {
-    return (
-      <section className="p-6">
-        <p className="text-sm text-muted-foreground">Loading {filename}…</p>
-      </section>
-    )
+    return <LoadingPane />
   }
   if (mime.startsWith('image/')) {
     return (
-      <section className="flex h-full items-center justify-center overflow-auto p-6">
-        <img src={url} alt={filename} className="max-h-full max-w-full rounded" />
-      </section>
+      <PreviewColumn>
+        <div className="flex w-full justify-center p-4">
+          <img
+            src={url}
+            alt={filename}
+            className="max-w-full rounded shadow-md"
+            style={{ maxWidth: 800 }}
+          />
+        </div>
+      </PreviewColumn>
     )
   }
   if (mime === 'application/pdf') {
     return (
-      <Suspense
-        fallback={
-          <section className="p-6">
-            <p className="text-sm text-muted-foreground">Loading viewer…</p>
-          </section>
-        }
-      >
+      <Suspense fallback={<LoadingPane />}>
         <PdfView url={url} filename={filename} />
       </Suspense>
     )
