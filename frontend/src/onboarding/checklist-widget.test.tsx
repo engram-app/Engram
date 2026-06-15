@@ -229,7 +229,7 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
           kind: 'obsidian', client_id: 'obs_1', key_id: null,
           name: 'Engram Vault Sync',
           software_id: null, software_version: null,
-          verified: true, logo: null,
+          verified: true, logo: null, slug: null,
           vault_id: null, vault_name: null,
           scope: null, last_used_at: null, connected_at: null,
           first_user_agent: null, first_ip: null,
