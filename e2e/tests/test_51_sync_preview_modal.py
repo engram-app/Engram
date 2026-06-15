@@ -88,7 +88,7 @@ async def test_modal_appears_on_first_sync(vault_a, cdp_a):
 @pytest.mark.parametrize(
     "label, expected_choice, destructive",
     [
-        ("Merge", "smart-merge", False),
+        ("Sync", "smart-merge", False),
         ("Push all + keep remote", "push-all-keep-remote", False),
         ("Pull all + keep local", "pull-all-keep-local", False),
         ("Push all + delete remote", "push-all-delete-remote", True),
