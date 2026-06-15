@@ -18,3 +18,23 @@ describe('item id helpers', () => {
     expect(parseItemId(ROOT_ID)).toEqual({ kind: 'root' })
   })
 })
+
+describe('attachment item ids', () => {
+  it('round-trips a simple attachment path', () => {
+    const id = formatItemId({ kind: 'attachment', path: 'img/a.png' })
+    expect(id).toBe('a:img/a.png')
+    expect(parseItemId(id)).toEqual({ kind: 'attachment', path: 'img/a.png' })
+  })
+
+  it('round-trips a path with spaces and unicode', () => {
+    const path = 'My Files/diagram (final).pdf'
+    const id = formatItemId({ kind: 'attachment', path })
+    expect(parseItemId(id)).toEqual({ kind: 'attachment', path })
+  })
+
+  it('keeps slashes as path separators, not encoded', () => {
+    const id = formatItemId({ kind: 'attachment', path: 'a/b/c.png' })
+    expect(id.startsWith('a:')).toBe(true)
+    expect(parseItemId(id)).toEqual({ kind: 'attachment', path: 'a/b/c.png' })
+  })
+})
