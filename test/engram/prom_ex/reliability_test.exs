@@ -63,7 +63,8 @@ defmodule Engram.PromEx.ReliabilityTest do
       banned = [:user_id, :vault_id, :note_id, :tenant_id, :job_id]
 
       for m <- metrics(), tag <- m.tags do
-        refute tag in banned, "Reliability metric #{inspect(m.name)} has banned tag #{inspect(tag)}"
+        refute tag in banned,
+               "Reliability metric #{inspect(m.name)} has banned tag #{inspect(tag)}"
       end
     end
   end

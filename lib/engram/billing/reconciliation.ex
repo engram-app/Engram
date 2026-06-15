@@ -179,7 +179,15 @@ defmodule Engram.Billing.Reconciliation do
 
     cond do
       is_nil(local) ->
-        [%{subscription_id: id, kind: :missing_local, user_id: nil, paddle: paddle_sub, local: nil}]
+        [
+          %{
+            subscription_id: id,
+            kind: :missing_local,
+            user_id: nil,
+            paddle: paddle_sub,
+            local: nil
+          }
+        ]
 
       paddle_sub["status"] != local.status ->
         [

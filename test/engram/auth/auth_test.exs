@@ -47,7 +47,8 @@ defmodule Engram.AuthTest do
       assert "claim_invalid:exp" =
                Engram.Auth.emit_rejected([message: "x", claim: "exp"], :socket)
 
-      assert_received {:auth_rejected, %{count: 1}, %{reason: "claim_invalid:exp", source: :socket}}
+      assert_received {:auth_rejected, %{count: 1},
+                       %{reason: "claim_invalid:exp", source: :socket}}
     end
   end
 

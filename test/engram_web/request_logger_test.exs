@@ -269,7 +269,12 @@ defmodule EngramWeb.RequestLoggerTest do
         :telemetry.execute(
           [:phoenix, :router_dispatch, :exception],
           %{duration: 1_000_000},
-          %{conn: conn, kind: :error, reason: %RuntimeError{message: "XYZZYZ-secret"}, stacktrace: []}
+          %{
+            conn: conn,
+            kind: :error,
+            reason: %RuntimeError{message: "XYZZYZ-secret"},
+            stacktrace: []
+          }
         )
       end)
 
