@@ -1,6 +1,6 @@
 import Config
 
-# TLS is terminated at the edge (Fly.io proxy / nginx) — no force_ssl in app.
+# TLS is terminated at the edge (AWS ALB / nginx) — no force_ssl in app.
 # Do not print debug messages in production
 config :logger, level: :info
 

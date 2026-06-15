@@ -18,7 +18,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 
 | Mode | Real-time | Embedding | Vector DB | PostgreSQL | Attachments |
 |------|-----------|-----------|-----------|------------|-------------|
-| **SaaS** (primary) | Phoenix Channels (WS) | Voyage AI (`voyage-4-large`, 1024d) | Qdrant Cloud | Fly Postgres | Fly Tigris (S3) |
+| **SaaS** (primary) | Phoenix Channels (WS) | Voyage AI (`voyage-4-large`, 1024d) | Qdrant Cloud | AWS RDS | AWS S3 |
 | **Local dev / CI** | Phoenix Channels (WS) | Ollama (e.g., nomic-embed-text 768d) | Qdrant (Docker) | PostgreSQL (Docker) | Local filesystem |
 
 ### Target Components
@@ -36,7 +36,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Embedders | `lib/engram/embedders/` | Voyage AI (SaaS) + Ollama (self-hosted) |
 | Search | `lib/engram/search.ex` | Vector search, optional reranking |
 | MCP Server | `lib/engram/mcp/` | MCP tool definitions via Hermes MCP |
-| Attachments | `lib/engram/attachments.ex` | Fly Tigris S3 (ExAws) or local |
+| Attachments | `lib/engram/attachments.ex` | AWS S3 (ExAws) or local |
 | Auth | `lib/engram/auth.ex` | API keys, internal JWT (Joken), RLS context |
 | Clerk Auth | `lib/engram/auth/clerk*.ex` | Clerk JWT verification (SPA + WebSocket primary path) |
 | Onboarding | `lib/engram_web/plugs/require_onboarding.ex` | TOS + active-sub gate on vault pipeline (`router.ex:189`) |
@@ -131,10 +131,10 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | 3: Indexing | Earmark parser, Voyage embedder, Qdrant client, pipeline | shipped |
 | 4: Search | Vector search, folder/tag filter | shipped |
 | 5: Real-time | Phoenix Channel sync, Presence | shipped |
-| 6: Attachments | Tigris S3 via ExAws | shipped |
+| 6: Attachments | AWS S3 via ExAws | shipped |
 | 7: MCP | Hermes MCP server + OAuth 2.1 + DCR | shipped |
 | 8: Web UI | React SPA (Vite + shadcn/ui), Obsidian-style viewer + CodeMirror 6 editor | shipped |
-| 9: Deploy | Fly.io for SaaS, OIDC pull-based deploy to self-host, isolated runner VM pool | shipped |
+| 9: Deploy | AWS ECS Fargate for SaaS, OIDC pull-based deploy to self-host, isolated runner VM pool | shipped |
 | 10: Billing | Paddle (Merchant-of-Record), subscriptions, RequireOnboarding gate | shipped |
 | 11: Encryption | Per-user DEKs + AAD bind + boot canary + per-user DEK rotation | shipped (T3.0-T3.7) |
 | Future | AWS KMS provider routing (Tier-4 / Phase F), T3.8-T3.11 hardening, frontend Paddle.js overlay smoke, Rewardful affiliate hookup, annual price IDs | pending |
@@ -160,7 +160,7 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/chunking-retrieval-strategy.md` | Chunking priorities, rejected strategies |
 | `docs/context/environment-variables.md` | All env vars by category |
 | `docs/context/testing-strategy.md` | Test layers, ExUnit tooling, CI pipeline |
-| `docs/context/production-deployment.md` | Fly.io deploy, backups, observability, security checklist |
+| `docs/context/deploy-prod.md` | AWS ECS deploy, backups, observability, security checklist |
 | `docs/context/docker-build-cache-pitfalls.md` | Why `_build` cache mount across RUN steps ships stale beams |
 | `docs/context/dev-iteration-loop.md` | Local dev loop, hot reload, IEx tricks |
 | `docs/context/quality-tooling-baseline.md` | Phase 1-6 lint ratchet history + threshold rationale |
