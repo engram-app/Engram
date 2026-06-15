@@ -41,6 +41,9 @@ defmodule EngramWeb.Plugs.Auth do
           request_path: conn.request_path
         )
 
+        # Alertable counter (the log is grep-only). Coarse bounded reason tag.
+        _ = Engram.Auth.emit_rejected(reason, :http)
+
         conn
         |> put_resp_content_type("application/json")
         |> send_resp(401, Jason.encode!(%{error: "unauthorized"}))
