@@ -21,6 +21,17 @@ defmodule EngramWeb.UserChannelTest do
   end
 
   describe "join/3" do
+    test "replies with the user's plan state" do
+      free_user = insert(:user)
+      {:ok, free_user} = Engram.Crypto.ensure_user_dek(free_user)
+      {:ok, socket} = connect_as(free_user)
+
+      {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{free_user.id}", %{})
+
+      assert reply.plan.tier == :free
+      assert reply.plan.attachments_text_only == true
+    end
+
     test "rejects joining another user's topic", %{other_user: other_user} do
       {:ok, socket} = connect_as(other_user)
 

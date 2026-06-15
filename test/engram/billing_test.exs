@@ -137,6 +137,24 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "plan_state/1" do
+    test "free user: text-only true, numeric caps present" do
+      user = build(:user, free_tier_accepted_at: nil)
+      state = Billing.plan_state(user)
+      assert state.tier == :free
+      assert state.attachments_text_only == true
+      assert is_integer(state.max_file_bytes)
+      assert is_integer(state.attachment_bytes_cap) or is_nil(state.attachment_bytes_cap)
+    end
+
+    test "pro user: text-only false" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "active")
+      state = Billing.plan_state(user)
+      assert state.tier == :pro
+      assert state.attachments_text_only == false
+    end
+  end
+
   describe "active?/1 (re-purposed: suspension-only)" do
     test "true for Free user (no subscription, not suspended)" do
       user = build(:user, free_tier_accepted_at: nil, suspended_at: nil)
@@ -669,6 +687,16 @@ defmodule Engram.BillingTest do
       assert payload.status == "trialing"
       assert payload.tier == "starter"
       assert payload.subscription_id == "sub_broadcast_1"
+
+      # Plan snapshot is merged in so the plugin can re-gate attachments the
+      # instant the subscription flips, without a follow-up fetch. The fields
+      # mirror Billing.plan_state/1 (sans tier, which stays the string form).
+      reloaded = Engram.Accounts.get_user(user.id)
+      plan = Engram.Billing.plan_state(reloaded)
+      assert payload.attachments_text_only == plan.attachments_text_only
+      assert payload.max_file_bytes == plan.max_file_bytes
+      assert payload.attachment_bytes_cap == plan.attachment_bytes_cap
+      assert is_boolean(payload.attachments_text_only)
     end
 
     test "subscription.updated broadcasts subscription_activated on user:{id} topic" do
