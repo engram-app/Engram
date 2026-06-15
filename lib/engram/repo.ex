@@ -3,6 +3,8 @@ defmodule Engram.Repo do
     otp_app: :engram,
     adapter: Ecto.Adapters.Postgres
 
+  require Logger
+
   @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)a
 
   @doc """
@@ -98,10 +100,33 @@ defmodule Engram.Repo do
   """
   @impl true
   def prepare_query(_operation, query, opts) do
-    if tenant_required?(query) and is_nil(Process.get(:engram_tenant)) and
-         not Keyword.get(opts, :skip_tenant_check, false) do
-      raise Engram.TenantError,
-        message: "Tenant context not set! Use Repo.with_tenant/2 for tenant-scoped queries."
+    if tenant_required?(query) do
+      cond do
+        # Properly scoped — the hot path. No telemetry, no overhead.
+        not is_nil(Process.get(:engram_tenant)) ->
+          :ok
+
+        # Deliberate bypass (admin/cron/auth). Count it: a regression that adds
+        # skip_tenant_check to a user-facing read shows up as a rate change on a
+        # tenant table that should never be skipped on the request path.
+        Keyword.get(opts, :skip_tenant_check, false) ->
+          emit_tenant_event(:tenant_check_skipped, query)
+
+        # A tenant table queried with no scope and no bypass — the highest
+        # severity failure mode in a multi-tenant system. Make it speak (a
+        # tripwire metric + log) before the structural guard raises, instead of
+        # relying on the unhandled-exception path alone.
+        true ->
+          emit_tenant_event(:tenant_guard_violation, query)
+
+          Logger.error("tenant_guard_violation",
+            category: :repo,
+            table: table_of(query)
+          )
+
+          raise Engram.TenantError,
+            message: "Tenant context not set! Use Repo.with_tenant/2 for tenant-scoped queries."
+      end
     end
 
     {query, opts}
@@ -114,4 +139,11 @@ defmodule Engram.Repo do
   end
 
   defp tenant_required?(_), do: false
+
+  defp table_of(%Ecto.Query{from: %{source: {table, _}}}), do: table
+  defp table_of(_), do: nil
+
+  defp emit_tenant_event(event, query) do
+    :telemetry.execute([:engram, :repo, event], %{count: 1}, %{table: table_of(query)})
+  end
 end
