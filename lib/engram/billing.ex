@@ -155,6 +155,29 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  Plan/limit snapshot the Obsidian plugin needs to pre-gate attachments and
+  recover after an upgrade. Sent on `user:{id}` channel join and on the
+  `subscription_activated` broadcast. Numeric `:unlimited` limits serialize to
+  `nil` (JSON null) so the wire shape stays `number | null`.
+  """
+  def plan_state(%Engram.Accounts.User{} = user) do
+    %{
+      tier: tier(user),
+      attachments_text_only: effective_limit(user, :attachments_text_only) == true,
+      max_file_bytes: numeric_limit(user, :max_file_bytes),
+      attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap)
+    }
+  end
+
+  defp numeric_limit(user, key) do
+    case effective_limit(user, key) do
+      :unlimited -> nil
+      n when is_integer(n) -> n
+      _ -> nil
+    end
+  end
+
+  @doc """
   Returns true when the user is not suspended. Tier defaults to `:free`
   for un-onboarded users — see `tier/1`. Account access is gated by
   suspension only; tier-based feature gating happens via
@@ -604,15 +627,32 @@ defmodule Engram.Billing do
     # so the cached pass verdict must re-derive.
     :ok = Engram.Onboarding.GateCache.evict(user_id)
 
+    # Carry the full plan snapshot so the plugin can re-gate attachments the
+    # instant the subscription flips, without a follow-up fetch. `tier` stays
+    # the string form (`sub.tier`, e.g. "pro") that the web frontend type and
+    # existing consumers expect, so we take only the attachment limit fields
+    # from plan_state (allowlist) — a future field added to plan_state/1 can't
+    # silently leak into the broadcast, and this branch stays symmetric with
+    # the fallback below. The attachment limit fields are the new payload.
+    plan_fields =
+      case Engram.Accounts.get_user(user_id) do
+        %Engram.Accounts.User{} = u ->
+          plan_state(u)
+          |> Map.take([:attachments_text_only, :max_file_bytes, :attachment_bytes_cap])
+
+        _ ->
+          %{attachments_text_only: nil, max_file_bytes: nil, attachment_bytes_cap: nil}
+      end
+
     _ =
       EngramWeb.Endpoint.broadcast(
         "user:#{user_id}",
         "subscription_activated",
-        %{
+        Map.merge(plan_fields, %{
           tier: sub.tier,
           status: sub.status,
           subscription_id: sub.paddle_subscription_id
-        }
+        })
       )
 
     :ok

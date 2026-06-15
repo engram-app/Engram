@@ -17,7 +17,7 @@ defmodule EngramWeb.UserChannel do
     user = socket.assigns.current_user
 
     if to_string(user.id) == user_id_str do
-      {:ok, socket}
+      {:ok, %{plan: Engram.Billing.plan_state(user)}, socket}
     else
       {:error, %{reason: "unauthorized"}}
     end
