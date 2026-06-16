@@ -544,6 +544,25 @@ defmodule EngramWeb.AttachmentsControllerTest do
              ]
     end
 
+    test "forces download for text/* markup types (allowlist, not just svg/html)", %{conn: conn} do
+      # text/xml is admitted by the MIME whitelist's `text/` prefix and can run
+      # script via XSLT — it must NOT render inline.
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "data.xml",
+          content_base64: Base.encode64("<?xml version=\"1.0\"?><root/>"),
+          mime_type: "text/xml",
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/data.xml?raw=1")
+
+      assert resp.status == 200
+      assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="data.xml")]
+    end
+
     test "without raw still returns JSON with content_base64", %{conn: conn} do
       _ =
         conn

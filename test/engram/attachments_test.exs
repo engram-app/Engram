@@ -331,6 +331,41 @@ defmodule Engram.AttachmentsTest do
       {:ok, list} = Attachments.list_attachments(user, vault)
       refute Enum.any?(list, &(&1.path == "secret.png"))
     end
+
+    test "skips an undecryptable row instead of crashing the whole list",
+         %{user: user, vault: vault} do
+      {:ok, _good} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "good.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, bad} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "bad.png",
+          "content_base64" => Base.encode64("Y"),
+          "mime_type" => "image/png"
+        })
+
+      # Corrupt the bad row's path ciphertext → decrypt_metadata returns
+      # {:error, :decrypt_failed} for it (AEAD verification fails).
+      Engram.Repo.with_tenant(user.id, fn ->
+        from(a in Attachment, where: a.id == ^bad.id)
+        |> Engram.Repo.update_all(set: [path_ciphertext: :crypto.strong_rand_bytes(48)])
+      end)
+
+      log =
+        capture_log(fn ->
+          {:ok, list} = Attachments.list_attachments(user, vault)
+          paths = Enum.map(list, & &1.path)
+          assert "good.png" in paths
+          refute "bad.png" in paths
+          assert length(list) == 1
+        end)
+
+      assert log =~ "Skipping undecryptable attachment"
+    end
   end
 
   describe "encrypted S3 storage path" do
