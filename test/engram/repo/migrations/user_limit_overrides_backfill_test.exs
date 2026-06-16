@@ -6,7 +6,7 @@ defmodule Engram.Repo.Migrations.UserLimitOverridesBackfillTest do
   legacy table inside a test transaction (rolled back by DataCase) to exercise
   the same SQL against synthetic legacy rows.
   """
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   alias Engram.Billing.UserLimitOverride
   alias Engram.Repo

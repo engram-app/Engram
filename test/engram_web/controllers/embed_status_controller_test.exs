@@ -1,5 +1,5 @@
 defmodule EngramWeb.EmbedStatusControllerTest do
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   describe "GET /api/embed-status" do
     test "returns embedding stats for authenticated user", %{conn: conn} do

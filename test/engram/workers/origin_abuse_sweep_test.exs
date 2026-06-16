@@ -1,5 +1,5 @@
 defmodule Engram.Workers.OriginAbuseSweepTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Abuse.OriginStats

@@ -17,6 +17,14 @@ config :engram, :pre_auth_rate_limit_override, 10_000
 # cover BootCanary directly via Engram.Crypto.BootCanaryTest.
 config :engram, :boot_canary_enabled, false
 
+# #619 — bootstrap admin advisory lock disabled in tests. It's a global
+# pg_advisory_xact_lock; under the SQL sandbox (one transaction per test) it's
+# held for the whole test and deadlocks once enough user-creating tests run
+# async. Role assignment stays correct via the row-based bootstrap_pending?
+# check; the lock only guards true-concurrent first-signups, which can't happen
+# across isolated sandbox transactions. Prod keeps it (defaults true).
+config :engram, :admin_bootstrap_lock_enabled, false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

@@ -1,5 +1,5 @@
 defmodule Engram.Onboarding.MigrationTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   alias Engram.Repo
 

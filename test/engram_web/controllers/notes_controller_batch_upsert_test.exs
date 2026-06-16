@@ -1,5 +1,5 @@
 defmodule EngramWeb.NotesControllerBatchUpsertTest do
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   setup %{conn: conn} do
     user = insert(:user)

@@ -1,5 +1,5 @@
 defmodule EngramWeb.Plugs.DeviceFingerprintTest do
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   alias EngramWeb.Plugs.DeviceFingerprint
 
