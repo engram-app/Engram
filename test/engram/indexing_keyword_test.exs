@@ -53,7 +53,7 @@ defmodule Engram.IndexingKeywordTest do
     assert %{"dense" => dense, "keyword" => %{indices: indices, values: values}} = point.vector
     assert is_list(dense)
     assert length(indices) == length(values)
-    assert length(indices) > 0
+    assert indices != []
 
     {:ok, key} = Crypto.dek_filter_key(user)
     assert QdrantSparse.dim(key, "alpha") in indices

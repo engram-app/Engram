@@ -374,7 +374,10 @@ defmodule Engram.Vector.Qdrant do
     must = [%{key: "user_id", match: %{value: user_id}}]
     must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
     must = if tags_hmac, do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must], else: must
-    must = if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
+
+    must =
+      if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
+
     %{must: must}
   end
 

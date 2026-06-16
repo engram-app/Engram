@@ -28,7 +28,9 @@ defmodule Engram.Vector.QdrantHybridTest do
     end)
 
     sparse = %{indices: [7], values: [1.0]}
-    assert {:ok, []} = Qdrant.hybrid_search("c1", [0.1], sparse, user_id: "u1", vault_id: "v1", limit: 5)
+
+    assert {:ok, []} =
+             Qdrant.hybrid_search("c1", [0.1], sparse, user_id: "u1", vault_id: "v1", limit: 5)
   end
 
   test "keyword-only search targets the sparse vector", %{bypass: bypass} do
@@ -43,6 +45,7 @@ defmodule Engram.Vector.QdrantHybridTest do
       |> Plug.Conn.send_resp(200, ~s({"result":[]}))
     end)
 
-    assert {:ok, []} = Qdrant.sparse_search("c1", %{indices: [7], values: [1.0]}, user_id: "u1", limit: 5)
+    assert {:ok, []} =
+             Qdrant.sparse_search("c1", %{indices: [7], values: [1.0]}, user_id: "u1", limit: 5)
   end
 end

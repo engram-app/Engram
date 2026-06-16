@@ -8,8 +8,8 @@ defmodule Engram.Search do
   - `:reranker`  — Engram.Rerankers.Jina | .None | any Engram.Reranker impl
   """
 
-  alias Engram.Vector.Qdrant
   alias Engram.KeywordIndex
+  alias Engram.Vector.Qdrant
 
   @min_candidates 20
 

@@ -248,7 +248,12 @@ defmodule Engram.Indexing do
               created_at: now
             }
 
-            point = %{id: point_id, vector: %{"dense" => vector, "keyword" => sparse}, payload: payload}
+            point = %{
+              id: point_id,
+              vector: %{"dense" => vector, "keyword" => sparse},
+              payload: payload
+            }
+
             {:cont, {:ok, [{row, point} | acc]}}
 
           {:error, reason} = err ->

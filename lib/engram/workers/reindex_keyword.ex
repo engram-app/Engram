@@ -31,7 +31,7 @@ defmodule Engram.Workers.ReindexKeyword do
   def perform(%Oban.Job{args: %{"vault_id" => vault_id}}) do
     note_ids =
       from(n in Note,
-        where: n.vault_id == ^vault_id and is_nil(n.deleted_at),
+        where: n.vault_id == ^vault_id and is_nil(n.deleted_at) and n.kind == "note",
         select: n.id
       )
       |> Repo.all(skip_tenant_check: true)
