@@ -463,6 +463,122 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # GET /attachments — List (index)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /attachments (index)" do
+    test "lists non-deleted attachments", %{conn: conn} do
+      conn
+      |> post("/api/attachments", %{
+        path: "diagrams/arch.png",
+        content_base64: Base.encode64("PNG"),
+        mtime: 1_000.0
+      })
+      |> json_response(200)
+
+      resp = conn |> get("/api/attachments") |> json_response(200)
+
+      assert [%{"path" => "diagrams/arch.png", "mime_type" => "image/png"} = a] =
+               resp["attachments"]
+
+      assert a["size_bytes"] == 3
+      assert Map.has_key?(a, "updated_at")
+      assert is_binary(a["id"])
+    end
+
+    test "returns empty list for a vault with no attachments", %{conn: conn} do
+      resp = conn |> get("/api/attachments") |> json_response(200)
+      assert resp["attachments"] == []
+    end
+
+    test "returns 401 without auth", %{conn: conn} do
+      conn =
+        conn
+        |> delete_req_header("authorization")
+        |> get("/api/attachments")
+
+      assert conn.status in [401, 403]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GET /attachments/*path?raw=1 — Raw byte streaming
+  # ---------------------------------------------------------------------------
+
+  describe "GET /attachments/*path?raw=1" do
+    test "streams raw bytes with the attachment Content-Type", %{conn: conn} do
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "p.png",
+          content_base64: Base.encode64("RAWBYTES"),
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/p.png?raw=1")
+
+      assert resp.status == 200
+      assert response_content_type(resp, :png) =~ "image/png"
+      assert resp.resp_body == "RAWBYTES"
+      assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="p.png")]
+    end
+
+    test "forces download for inline-script types (svg)", %{conn: conn} do
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "diagram.svg",
+          content_base64: Base.encode64("<svg/>"),
+          mime_type: "image/svg+xml",
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/diagram.svg?raw=1")
+
+      assert resp.status == 200
+
+      assert get_resp_header(resp, "content-disposition") == [
+               ~s(attachment; filename="diagram.svg")
+             ]
+    end
+
+    test "forces download for text/* markup types (allowlist, not just svg/html)", %{conn: conn} do
+      # text/xml is admitted by the MIME whitelist's `text/` prefix and can run
+      # script via XSLT — it must NOT render inline.
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "data.xml",
+          content_base64: Base.encode64("<?xml version=\"1.0\"?><root/>"),
+          mime_type: "text/xml",
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = get(conn, "/api/attachments/data.xml?raw=1")
+
+      assert resp.status == 200
+      assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="data.xml")]
+    end
+
+    test "without raw still returns JSON with content_base64", %{conn: conn} do
+      _ =
+        conn
+        |> post("/api/attachments", %{
+          path: "q.png",
+          content_base64: Base.encode64("BYTES"),
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      resp = conn |> get("/api/attachments/q.png") |> json_response(200)
+      assert resp["content_base64"] == Base.encode64("BYTES")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Multi-tenant isolation
   # ---------------------------------------------------------------------------
 

@@ -282,6 +282,32 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Lists non-deleted attachment metadata for a vault (no content).
+  """
+  def list_attachments(user, vault) do
+    user = fresh_user(user)
+
+    Repo.with_tenant(user.id, fn ->
+      from(a in Attachment,
+        where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
+        order_by: [asc: a.updated_at]
+      )
+      |> Repo.all()
+    end)
+    |> unwrap_tenant()
+    |> case do
+      {:ok, atts} ->
+        {:ok,
+         decrypt_each(atts, user, fn att, meta ->
+           meta |> Map.delete(:deleted_at) |> Map.put(:id, att.id)
+         end)}
+
+      err ->
+        err
+    end
+  end
+
+  @doc """
   Lists attachment changes since a given timestamp. Returns metadata only (no content).
   """
   def list_changes(user, vault, since) do
@@ -299,21 +325,7 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
     |> case do
       {:ok, atts} ->
-        changes =
-          Enum.map(atts, fn att ->
-            {:ok, decrypted} = Crypto.maybe_decrypt_attachment_fields(att, user)
-
-            %{
-              path: decrypted.path,
-              mime_type: decrypted.mime_type,
-              size_bytes: decrypted.size_bytes,
-              mtime: decrypted.mtime,
-              updated_at: decrypted.updated_at,
-              deleted_at: decrypted.deleted_at
-            }
-          end)
-
-        {:ok, changes}
+        {:ok, decrypt_each(atts, user, fn _att, meta -> meta end)}
 
       err ->
         err
@@ -468,6 +480,49 @@ defmodule Engram.Attachments do
       {:ok, binary} -> {:ok, binary}
       :error -> {:error, :invalid_base64}
     end
+  end
+
+  # Returns {:ok, metadata} or {:error, reason}. Callers SKIP + log on error so a
+  # single undecryptable ("poison") row — e.g. AAD mismatch after a botched DEK
+  # rotation — doesn't crash the whole list and blank every attachment in the
+  # vault.
+  defp decrypt_metadata(att, user) do
+    case Crypto.maybe_decrypt_attachment_fields(att, user) do
+      {:ok, decrypted} ->
+        {:ok,
+         %{
+           path: decrypted.path,
+           mime_type: decrypted.mime_type,
+           size_bytes: decrypted.size_bytes,
+           mtime: decrypted.mtime,
+           updated_at: decrypted.updated_at,
+           deleted_at: decrypted.deleted_at
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Decrypts each row, skipping (and logging) any that fail. `extra.(att, meta)`
+  # post-processes a successful metadata map (e.g. drop :deleted_at, add :id).
+  defp decrypt_each(atts, user, extra) do
+    Enum.flat_map(atts, fn att ->
+      case decrypt_metadata(att, user) do
+        {:ok, meta} ->
+          [extra.(att, meta)]
+
+        {:error, reason} ->
+          require Logger
+
+          Logger.error("Skipping undecryptable attachment",
+            attachment_id: att.id,
+            reason: inspect(reason)
+          )
+
+          []
+      end
+    end)
   end
 
   defp unwrap_tenant({:ok, {:ok, result}}), do: {:ok, result}

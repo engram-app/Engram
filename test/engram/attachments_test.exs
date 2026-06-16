@@ -280,6 +280,94 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "list_attachments/2" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "returns non-deleted attachment metadata for the vault", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => Base.encode64("PNGDATA"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, _b} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "b.pdf",
+          "content_base64" => Base.encode64("PDFDATA"),
+          "mime_type" => "application/pdf"
+        })
+
+      :ok = Attachments.delete_attachment(user, vault, "b.pdf")
+
+      {:ok, list} = Attachments.list_attachments(user, vault)
+
+      paths = Enum.map(list, & &1.path)
+      assert "img/a.png" in paths
+      refute "b.pdf" in paths
+
+      a = Enum.find(list, &(&1.path == "img/a.png"))
+      assert a.mime_type == "image/png"
+      assert a.size_bytes == byte_size("PNGDATA")
+      assert Map.has_key?(a, :updated_at)
+      assert a.id != nil
+      refute Map.has_key?(a, :deleted_at)
+    end
+
+    test "scopes to the given user+vault", %{user: user, vault: vault} do
+      other = insert(:user)
+      other_vault = insert(:vault, user: other)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(other, other_vault, %{
+          "path" => "secret.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, list} = Attachments.list_attachments(user, vault)
+      refute Enum.any?(list, &(&1.path == "secret.png"))
+    end
+
+    test "skips an undecryptable row instead of crashing the whole list",
+         %{user: user, vault: vault} do
+      {:ok, _good} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "good.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png"
+        })
+
+      {:ok, bad} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "bad.png",
+          "content_base64" => Base.encode64("Y"),
+          "mime_type" => "image/png"
+        })
+
+      # Corrupt the bad row's path ciphertext → decrypt_metadata returns
+      # {:error, :decrypt_failed} for it (AEAD verification fails).
+      Engram.Repo.with_tenant(user.id, fn ->
+        from(a in Attachment, where: a.id == ^bad.id)
+        |> Engram.Repo.update_all(set: [path_ciphertext: :crypto.strong_rand_bytes(48)])
+      end)
+
+      log =
+        capture_log(fn ->
+          {:ok, list} = Attachments.list_attachments(user, vault)
+          paths = Enum.map(list, & &1.path)
+          assert "good.png" in paths
+          refute "bad.png" in paths
+          assert length(list) == 1
+        end)
+
+      assert log =~ "Skipping undecryptable attachment"
+    end
+  end
+
   describe "encrypted S3 storage path" do
     setup do
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)

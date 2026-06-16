@@ -1,11 +1,12 @@
 import type React from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, File, FileText, Image } from 'lucide-react'
 import { Link } from 'react-router'
 import type { ItemInstance } from '@headless-tree/core'
 import type { LoaderItem } from './loader'
 import type { TreeItem } from './types'
 import { RenameInput } from '../tree-actions/rename-input'
 import { useLongPress } from '../tree-actions/use-long-press'
+import { isSyntheticFolderId } from './synthesize-folders'
 
 interface Props {
   instance: ItemInstance<LoaderItem>
@@ -62,15 +63,19 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
   }
 
   if (item.kind === 'folder') {
-    const hoverPrefetch = onFolderHover
-      ? () => onFolderHover(item.id)
-      : undefined
+    // Synthetic folders are UI-only scaffolding for attachment-only dirs — they
+    // have no backend record, so rename/delete/move and note-prefetch don't
+    // apply. Drop their action affordances; expansion (to reveal the
+    // attachments inside) still works.
+    const isSynthetic = isSyntheticFolderId(item.id)
+    const hoverPrefetch =
+      onFolderHover && !isSynthetic ? () => onFolderHover(item.id) : undefined
     return (
       <button
         type="button"
         {...instance.getProps()}
-        {...longPressProps}
-        onContextMenu={contextMenuHandler}
+        {...(isSynthetic ? {} : longPressProps)}
+        onContextMenu={isSynthetic ? undefined : contextMenuHandler}
         onPointerEnter={hoverPrefetch}
         onFocus={hoverPrefetch}
         aria-expanded={instance.isExpanded()}
@@ -82,6 +87,39 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
         <Chevron open={instance.isExpanded()} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
       </button>
+    )
+  }
+
+  if (item.kind === 'attachment') {
+    const filename = item.path.split('/').pop() ?? item.path
+    const dot = filename.lastIndexOf('.')
+    const ext = dot > 0 ? filename.slice(dot + 1).toLowerCase() : null
+    const Icon = item.mime.startsWith('image/')
+      ? Image
+      : item.mime === 'application/pdf'
+        ? FileText
+        : File
+    // Phase 1 is display + preview only: attachments wire no context menu /
+    // long-press, so the file action menu (rename/move/delete) — all no-ops for
+    // an attachment — never surfaces. Pure navigation.
+    // Routed by uuid under the unified /note/:id (VaultItemPage resolves
+    // note-vs-file) so the URL survives a rename/move. The HT itemId stays
+    // path-keyed (internal tree machinery).
+    return (
+      <Link
+        to={`/note/${item.id}`}
+        {...instance.getProps()}
+        aria-selected={instance.isSelected()}
+        className={rowClass(instance)}
+        style={{ paddingLeft: `${notePad}px` }}
+      >
+        <IndentGuides depth={depth} />
+        <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
+        <span className="min-w-0 flex-1 truncate">{filename}</span>
+        {ext && (
+          <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">{ext.toUpperCase()}</span>
+        )}
+      </Link>
     )
   }
 

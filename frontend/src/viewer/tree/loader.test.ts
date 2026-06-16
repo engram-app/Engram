@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { buildLoader, type SortKey } from './loader'
-import type { Folder, NoteSummary } from '../../api/queries'
+import type { AttachmentSummary, Folder, NoteSummary } from '../../api/queries'
 
 const folders: Folder[] = [
   { id: '1', parent_id: null, name: 'Projects', count: 2 },
@@ -55,6 +55,101 @@ function makeQc(): QueryClient {
   qc.setQueryData(['folder-notes-by-id', 'v', '2'], notesByFolder['2'])
   return qc
 }
+
+// Standalone qc for attachment tests (no pre-seeded folder notes)
+const qc = new QueryClient()
+
+const att = (path: string): AttachmentSummary => ({
+  id: `att:${path}`, path, mime_type: path.endsWith('.pdf') ? 'application/pdf' : 'image/png',
+  size_bytes: 1, mtime: 0, updated_at: '',
+})
+
+it('lists root attachments under ROOT', () => {
+  const loader = buildLoader({
+    folders: [], qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('cover.png')],
+  })
+  const kids = loader.getChildren('root')
+  const a = kids.find((k) => k.item.kind === 'attachment')
+  expect(a?.item).toMatchObject({ kind: 'attachment', path: 'cover.png', mime: 'image/png' })
+  expect(a?.itemId).toBe('a:cover.png')
+})
+
+it('orders root attachments by mtime under modified-desc', () => {
+  const older: AttachmentSummary = { ...att('old.png'), mtime: 100 }
+  const newer: AttachmentSummary = { ...att('new.png'), mtime: 200 }
+  const loader = buildLoader({
+    folders: [], qc, vaultId: 'v1', sort: 'modified-desc',
+    attachments: [older, newer],
+  })
+  const paths = loader
+    .getChildren('root')
+    .filter((k) => k.item.kind === 'attachment')
+    .map((k) => (k.item as { path: string }).path)
+  expect(paths).toEqual(['new.png', 'old.png'])
+})
+
+it('buckets an attachment under its folder', () => {
+  const folders = [{ id: 'f1', parent_id: null, name: 'img', count: 0 }]
+  const loader = buildLoader({
+    folders, qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('img/a.png')],
+  })
+  qc.setQueryData(['folder-notes-by-id', 'v1', 'f1'], [])
+  const kids = loader.getChildren('f:f1')
+  expect(kids.map((k) => k.item.kind)).toContain('attachment')
+  const a = kids.find((k) => k.item.kind === 'attachment')
+  expect(a?.item).toMatchObject({ path: 'img/a.png' })
+})
+
+it('does not leak a subfolder attachment into its parent', () => {
+  const folders = [
+    { id: 'f1', parent_id: null, name: 'img', count: 0 },
+    { id: 'f2', parent_id: 'f1', name: 'img/sub', count: 0 },
+  ]
+  const loader = buildLoader({
+    folders, qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('img/sub/deep.png')],
+  })
+  qc.setQueryData(['folder-notes-by-id', 'v1', 'f1'], [])
+  const kids = loader.getChildren('f:f1')
+  expect(kids.find((k) => k.item.kind === 'attachment')).toBeUndefined()
+})
+
+it('shows attachments even while folder notes are still loading (cache miss)', () => {
+  const folders = [{ id: 'f1', parent_id: null, name: 'img', count: 0 }]
+  // A fresh client with no seeded notes cache -> noteChildItems returns null.
+  const freshQc = new QueryClient()
+  const loaderFresh = buildLoader({
+    folders, qc: freshQc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('img/a.png')],
+  })
+  const kids = loaderFresh.getChildren('f:f1')
+  expect(kids.find((k) => k.item.kind === 'attachment')).toBeDefined()
+})
+
+it('buckets an attachment under a synthetic (syn:) folder', () => {
+  // The whole point of synthesizeFolders: an attachment-only dir gets a synthetic
+  // folder row, and its attachment must appear as that folder's child.
+  const folders = [{ id: 'syn:pics', parent_id: null, name: 'pics', count: 0 }]
+  const loader = buildLoader({
+    folders, qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('pics/a.png')],
+  })
+  qc.setQueryData(['folder-notes-by-id', 'v1', 'syn:pics'], [])
+  const kids = loader.getChildren('f:syn:pics')
+  const a = kids.find((k) => k.item.kind === 'attachment')
+  expect(a?.item).toMatchObject({ path: 'pics/a.png' })
+})
+
+it('getItem resolves an attachment id to its row, and undefined when absent', () => {
+  const loader = buildLoader({
+    folders: [], qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('cover.png')],
+  })
+  expect(loader.getItem('a:cover.png')?.item).toMatchObject({ kind: 'attachment', path: 'cover.png' })
+  expect(loader.getItem('a:nope.png')).toBeUndefined()
+})
 
 describe('buildLoader', () => {
   it('root returns top-level folders + root notes from the by-id root cache, sorted', () => {

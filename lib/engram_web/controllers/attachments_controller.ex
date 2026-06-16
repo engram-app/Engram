@@ -109,7 +109,36 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
-  def show(conn, %{"path" => path_parts}) do
+  def index(conn, _params) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    # The whole tree sidebar depends on this; handle a list failure explicitly
+    # (logged 500 body) instead of a bare-match MatchError stacktrace.
+    case Attachments.list_attachments(user, vault) do
+      {:ok, atts} ->
+        json(conn, %{
+          attachments:
+            Enum.map(atts, fn a ->
+              %{
+                id: a.id,
+                path: a.path,
+                mime_type: a.mime_type,
+                size_bytes: a.size_bytes,
+                mtime: a.mtime,
+                updated_at: a.updated_at
+              }
+            end)
+        })
+
+      {:error, reason} ->
+        require Logger
+        Logger.error("Failed to list attachments", vault_id: vault.id, reason: inspect(reason))
+        conn |> put_status(500) |> json(%{error: "failed to list attachments"})
+    end
+  end
+
+  def show(conn, %{"path" => path_parts} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     path = Path.join(path_parts)
@@ -119,16 +148,34 @@ defmodule EngramWeb.AttachmentsController do
         conn |> put_status(404) |> json(%{error: "attachment not found"})
 
       {:ok, att} ->
-        json(conn, %{
-          id: att.id,
-          path: att.path,
-          mime_type: att.mime_type,
-          size_bytes: att.size_bytes,
-          mtime: att.mtime,
-          content_base64: Base.encode64(att.content),
-          created_at: att.created_at,
-          updated_at: att.updated_at
-        })
+        if params["raw"] == "1" do
+          # Raw bytes are served from the API origin. nosniff (set on the :api
+          # pipeline) stops content-type confusion, but a declared inline type
+          # still renders in the browser — and HTML/SVG/XML can execute script
+          # (SVG <script>, XML via xml-stylesheet/XSLT). The MIME whitelist admits
+          # the whole `text/` prefix, so an allowlist of types known-safe to
+          # render inline is the correct gate; everything else force-downloads.
+          disposition = if inline_safe?(att.mime_type), do: "inline", else: "attachment"
+          # Strip control chars/quotes so a crafted filename can't break the
+          # header (Plug rejects control chars → 500 otherwise).
+          filename = String.replace(Path.basename(att.path), ~r/[[:cntrl:]"]/u, "")
+
+          conn
+          |> put_resp_content_type(att.mime_type || "application/octet-stream")
+          |> put_resp_header("content-disposition", ~s(#{disposition}; filename="#{filename}"))
+          |> send_resp(200, att.content)
+        else
+          json(conn, %{
+            id: att.id,
+            path: att.path,
+            mime_type: att.mime_type,
+            size_bytes: att.size_bytes,
+            mtime: att.mtime,
+            content_base64: Base.encode64(att.content),
+            created_at: att.created_at,
+            updated_at: att.updated_at
+          })
+        end
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
@@ -180,6 +227,17 @@ defmodule EngramWeb.AttachmentsController do
   end
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
+
+  # Types safe to render inline in the browser on the API origin. Raster images
+  # and PDFs are inert; SVG (script via <script>) and HTML/XML (script via
+  # markup or XSLT) are NOT — they force-download. Everything not on this list
+  # downloads by default.
+  defp inline_safe?(nil), do: false
+  defp inline_safe?("image/svg+xml"), do: false
+
+  defp inline_safe?(mime) when is_binary(mime) do
+    String.starts_with?(mime, "image/") or mime == "application/pdf" or mime == "text/plain"
+  end
 
   defp serialize_metadata(att) do
     %{

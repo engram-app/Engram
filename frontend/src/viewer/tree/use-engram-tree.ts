@@ -16,10 +16,11 @@ import type { QueryClient } from '@tanstack/react-query'
 import { buildLoader, type SortKey, type LoaderItem } from './loader'
 import { ROOT_ID } from './types'
 import { resolveDropMove } from './drop-redirect'
-import { ROOT_FOLDER_ID, type Folder, type NoteSummary } from '../../api/queries'
+import { ROOT_FOLDER_ID, type Folder, type NoteSummary, type AttachmentSummary } from '../../api/queries'
 
 interface Deps {
   folders: Folder[]
+  attachments?: AttachmentSummary[]
   qc: QueryClient
   vaultId: string
   sort: SortKey
@@ -53,6 +54,15 @@ export function treeStructureKey(
   return `${folderKey}::${sort}`
 }
 
+function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
+  if (!attachments || attachments.length === 0) return '0'
+  // length + max(updated_at) is enough: the list is static per fetch, and any
+  // add/remove changes one of the two.
+  let max = ''
+  for (const a of attachments) if (a.updated_at > max) max = a.updated_at
+  return `${attachments.length}:${max}`
+}
+
 export function useEngramTree(deps: Deps) {
   const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null)
   const inner = useMemo(
@@ -61,6 +71,7 @@ export function useEngramTree(deps: Deps) {
       qc: deps.qc,
       vaultId: deps.vaultId,
       sort: deps.sort,
+      attachments: deps.attachments,
       fetchFolderNotes: deps.fetchFolderNotes,
       onChildrenLoaded: (folderId) => {
         const t = treeRef.current
@@ -72,7 +83,7 @@ export function useEngramTree(deps: Deps) {
         inst?.invalidateChildrenIds()
       },
     }),
-    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.fetchFolderNotes],
+    [deps.folders, deps.qc, deps.vaultId, deps.sort, deps.attachments, deps.fetchFolderNotes],
   )
 
   // Bridge our LoaderItem-returning loader to HT's TreeDataLoader<T> shape
@@ -123,7 +134,9 @@ export function useEngramTree(deps: Deps) {
       const d = item.getItemData()
       if (!d) return ''
       const t = d.item
-      return t.kind === 'folder' ? t.name : t.title
+      if (t.kind === 'folder') return t.name
+      if (t.kind === 'attachment') return t.path.split('/').pop() ?? t.path
+      return t.title
     },
     isItemFolder: (item: ItemInstance<Data>) => {
       const d = item.getItemData()
@@ -168,7 +181,8 @@ export function useEngramTree(deps: Deps) {
   // data shape changes — keyed on stable structural fingerprints so we never
   // re-trigger from spurious identity churn (rebuildTree → setState → render
   // would otherwise spin into a max-update-depth loop).
-  const structureKey = treeStructureKey(deps.folders, deps.sort)
+  const structureKey =
+    treeStructureKey(deps.folders, deps.sort) + '#' + attachmentsFingerprint(deps.attachments)
   const lastKey = useRef('')
   useEffect(() => {
     if (lastKey.current === structureKey) return

@@ -166,6 +166,34 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 // event (or any single-note mutation) still invalidates the key and refetches.
 export const FOLDER_NOTES_STALE_MS = 60_000
 
+export interface AttachmentSummary {
+  id: string
+  path: string
+  mime_type: string
+  size_bytes: number
+  mtime: number
+  updated_at: string
+}
+
+const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.attachments
+
+export function useAttachments() {
+  const vaultId = useActiveVaultId()
+  const demo = useDemoVaultOptional()
+  const query = useQuery({
+    queryKey: ['attachments', vaultId],
+    queryFn: () => api.get<{ attachments: AttachmentSummary[] }>('/attachments'),
+    select: selectAttachments,
+    enabled: !demo?.active,
+    staleTime: FOLDER_NOTES_STALE_MS,
+  })
+  // Demo vaults carry no binary attachments.
+  if (demo?.active) {
+    return { ...query, data: [] as AttachmentSummary[], isLoading: false, isFetching: false, error: null }
+  }
+  return query
+}
+
 // The vault root has no folder-marker row (the by-id endpoint requires a
 // non-null id), so it keys its note list under this sentinel — the same value
 // the backend already uses as the batch-move root target. One id-space, one

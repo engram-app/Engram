@@ -9,6 +9,7 @@ import type { LoaderItem } from './loader'
 const folderItem: TreeItem = { kind: 'folder', id: '1', path: 'Projects', name: 'Projects', count: 3 }
 const noteItem: TreeItem = { kind: 'note', id: '100', path: 'Projects/a.md', title: 'a', ext: 'md' }
 const orgNote: TreeItem = { kind: 'note', id: '101', path: 'Projects/b.org', title: 'b', ext: 'org' }
+const attachmentItem: TreeItem = { kind: 'attachment', id: 'att-1', path: 'img/a.png', mime: 'image/png', size: 10 }
 
 interface InstanceOverrides {
   data?: TreeItem
@@ -25,8 +26,14 @@ interface InstanceOverrides {
 
 function mockInstance(overrides: InstanceOverrides = {}) {
   const data = overrides.data ?? folderItem
+  const itemIdStr =
+    data.kind === 'folder'
+      ? `f:${data.id}`
+      : data.kind === 'note'
+        ? `n:${data.id}`
+        : `a:${data.path.split('/').map(encodeURIComponent).join('/')}`
   const loaderItem: LoaderItem = {
-    itemId: `${data.kind === 'folder' ? 'f' : 'n'}:${data.id}`,
+    itemId: itemIdStr,
     item: data,
     isFolder: data.kind === 'folder',
   }
@@ -158,6 +165,31 @@ describe('TreeRow', () => {
     expect(onContextMenu).toHaveBeenCalledWith('f:1', 42, 99)
   })
 
+  it('does not invoke onContextMenu on a synthetic (syn:) folder row', () => {
+    const onContextMenu = vi.fn()
+    const synthetic: TreeItem = { kind: 'folder', id: 'syn:pics', path: 'pics', name: 'pics', count: 0 }
+    const instance = mockInstance({ data: synthetic })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('button'), { clientX: 42, clientY: 99 })
+    expect(onContextMenu).not.toHaveBeenCalled()
+  })
+
+  it('does not invoke onContextMenu on an attachment row (display-only in Phase 1)', () => {
+    const onContextMenu = vi.fn()
+    const instance = mockInstance({ data: attachmentItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} onContextMenu={onContextMenu} />
+      </MemoryRouter>,
+    )
+    fireEvent.contextMenu(screen.getByRole('link'), { clientX: 42, clientY: 99 })
+    expect(onContextMenu).not.toHaveBeenCalled()
+  })
+
   it('invokes onContextMenu with item id + clientX/Y on right-click of a note row', () => {
     const onContextMenu = vi.fn()
     const instance = mockInstance({ data: noteItem })
@@ -243,5 +275,28 @@ describe('TreeRow', () => {
     // The <a href> link payload Chrome uses for split-view must be cleared.
     expect(clearData).toHaveBeenCalledWith('text/uri-list')
     expect(clearData).toHaveBeenCalledWith('text/plain')
+  })
+
+  it('renders attachment as a link to /note/:id (uuid, not path)', () => {
+    const instance = mockInstance({ data: attachmentItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} />
+      </MemoryRouter>,
+    )
+    const link = screen.getByRole('link') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('/note/att-1')
+    expect(screen.getByText('a.png')).toBeInTheDocument()
+  })
+
+  it('shows uppercase ext badge for attachment', () => {
+    const instance = mockInstance({ data: attachmentItem })
+    render(
+      <MemoryRouter>
+        <TreeRow instance={instance} />
+      </MemoryRouter>,
+    )
+    const badge = screen.getByText('PNG')
+    expect(badge).toBeInTheDocument()
   })
 })

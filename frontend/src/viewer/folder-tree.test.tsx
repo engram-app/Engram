@@ -41,8 +41,8 @@ const {
   batchMoveNotesMutate: vi.fn(),
   batchDeleteFoldersMutate: vi.fn(),
   batchMoveFoldersMutate: vi.fn(),
-  // Mutable per-test fixtures (folders + root notes + loading flag), set in beforeEach.
-  mock: { folders: [] as unknown[], rootNotes: [] as unknown[], loading: false },
+  // Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
+  mock: { folders: [] as unknown[], rootNotes: [] as unknown[], loading: false, attachments: [] as unknown[] },
 }))
 
 vi.mock('../api/queries', async () => {
@@ -54,6 +54,7 @@ vi.mock('../api/queries', async () => {
       isLoading: mock.loading,
       isError: false,
     }),
+    useAttachments: () => ({ data: mock.attachments, isLoading: false }),
     useFolderNotesById: (folderId: string | null) => {
       // Root notes share the one id-keyed cache under the 'root' sentinel.
       if (folderId === 'root') {
@@ -114,6 +115,7 @@ beforeEach(() => {
   mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }))
   mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }]
   mock.loading = false
+  mock.attachments = []
 })
 
 describe('FolderTree (HT)', () => {
@@ -211,5 +213,22 @@ describe('FolderTree (HT)', () => {
       expect(screen.getByTestId('folder-tree-root')).toBeInTheDocument()
     })
     expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
+  })
+
+  it('renders an attachment row from useAttachments', async () => {
+    mock.folders = []
+    mock.rootNotes = []
+    mock.attachments = [
+      {
+        id: 'cover-1',
+        path: 'cover.png',
+        mime_type: 'image/png',
+        size_bytes: 1,
+        mtime: 0,
+        updated_at: '2026-06-10T00:00:00Z',
+      },
+    ]
+    renderTree()
+    expect(await screen.findByText('cover.png')).toBeInTheDocument()
   })
 })

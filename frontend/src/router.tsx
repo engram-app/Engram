@@ -7,6 +7,7 @@ import WaitlistPage from './auth/waitlist'
 import { UpgradeDialogProvider } from './billing/upgrade-dialog-provider'
 import type { EngramConfig } from './config'
 import AppLayout from './layout/app-layout'
+import LoadingPane from './viewer/loading-pane'
 import NotFoundPage from './not-found'
 import SettingsLayout from './settings/settings-layout'
 import { ROUTES } from './routes'
@@ -22,7 +23,9 @@ import { Outlet } from 'react-router'
 // (sign-in/up, layouts, guards) stay eager; everything behind navigation
 // loads on demand.
 const Dashboard = lazy(() => import('./viewer/dashboard'))
-const NotePage = lazy(() => import('./viewer/note-page'))
+// /note/:id resolves to the note OR attachment viewer (VaultItemPage owns the
+// lazy NotePage/AttachmentPage chunks).
+const VaultItemPage = lazy(() => import('./viewer/vault-item-page'))
 const BillingPage = lazy(() => import('./billing/billing-page'))
 const AdminPanel = lazy(() => import('./features/admin/AdminPanel'))
 const ResetPasswordPage = lazy(() => import('./features/auth/ResetPasswordPage'))
@@ -35,7 +38,7 @@ const OnboardBillingPage = lazy(() => import('./onboarding/onboard-billing-page'
 const OnboardToolsPage = lazy(() => import('./onboarding/onboard-tools-page'))
 const OnboardVaultPage = lazy(() => import('./onboarding/onboard-vault-page'))
 
-const routeFallback = <p className="p-6 text-muted-foreground">Loading…</p>
+const routeFallback = <LoadingPane />
 
 function suspended(el: ReactNode) {
   return <Suspense fallback={routeFallback}>{el}</Suspense>
@@ -140,7 +143,7 @@ export function createAppRouter(config: EngramConfig): AppRouter {
                   element: <AppLayout />,
                   children: [
                     { path: ROUTES.HOME, element: suspended(<Dashboard />) },
-                    { path: '/note/:id', element: suspended(<NotePage />) },
+                    { path: '/note/:id', element: suspended(<VaultItemPage />) },
                     {
                       path: 'settings',
                       element: <SettingsLayout />,
