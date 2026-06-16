@@ -8,6 +8,7 @@ defmodule Engram.Notes.Chunk do
     field :heading_path, :string
     field :char_start, :integer
     field :char_end, :integer
+    field :token_count, :integer
     field :qdrant_point_id, Ecto.UUID
 
     belongs_to :note, Engram.Notes.Note
@@ -24,6 +25,7 @@ defmodule Engram.Notes.Chunk do
       :heading_path,
       :char_start,
       :char_end,
+      :token_count,
       :qdrant_point_id,
       :note_id,
       :user_id,
