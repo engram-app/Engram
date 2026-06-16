@@ -1157,8 +1157,12 @@ defmodule Engram.Notes do
           {entries, 0}
 
         rows ->
+          # One op = one seq: every brand-new row in this batch shares it.
+          seq = Engram.Vaults.next_seq!(vault.id)
+          rows = Enum.map(Enum.reverse(rows), &Map.put(&1, :seq, seq))
+
           {_count, returned} =
-            Repo.insert_all(Note, Enum.reverse(rows), on_conflict: :nothing, returning: [:id])
+            Repo.insert_all(Note, rows, on_conflict: :nothing, returning: [:id])
 
           inserted_ids = MapSet.new(returned, & &1.id)
 
