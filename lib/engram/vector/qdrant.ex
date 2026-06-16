@@ -340,29 +340,12 @@ defmodule Engram.Vector.Qdrant do
   """
   def search(col \\ nil, vector, search_opts) do
     col = col || collection()
-    user_id = Keyword.fetch!(search_opts, :user_id)
-    vault_id = Keyword.get(search_opts, :vault_id)
     limit = Keyword.get(search_opts, :limit, 5)
-    tags_hmac = Keyword.get(search_opts, :tags_hmac)
-    folder_hmac = Keyword.get(search_opts, :folder_hmac)
-
-    must = [%{key: "user_id", match: %{value: user_id}}]
-    must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
-
-    must =
-      if tags_hmac,
-        do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must],
-        else: must
-
-    must =
-      if folder_hmac,
-        do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must],
-        else: must
 
     base = %{
       query: vector,
       using: "dense",
-      filter: %{must: must},
+      filter: tenant_filter(search_opts),
       limit: limit,
       with_payload: true
     }
@@ -379,6 +362,67 @@ defmodule Engram.Vector.Qdrant do
     instrument(:search, fn ->
       do_search(col, opts)
     end)
+  end
+
+  # Extracted from search/3 so all three query shapes share tenant filtering.
+  defp tenant_filter(search_opts) do
+    user_id = Keyword.fetch!(search_opts, :user_id)
+    vault_id = Keyword.get(search_opts, :vault_id)
+    tags_hmac = Keyword.get(search_opts, :tags_hmac)
+    folder_hmac = Keyword.get(search_opts, :folder_hmac)
+
+    must = [%{key: "user_id", match: %{value: user_id}}]
+    must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
+    must = if tags_hmac, do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must], else: must
+    must = if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
+    %{must: must}
+  end
+
+  @doc """
+  Keyword-only search against the sparse `keyword` vector. `sparse` is
+  `%{indices: [u32], values: [float]}`. Same options as `search/3`.
+  """
+  def sparse_search(col \\ nil, sparse, search_opts) do
+    col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
+
+    body = %{
+      query: %{indices: sparse.indices, values: sparse.values},
+      using: "keyword",
+      filter: tenant_filter(search_opts),
+      limit: limit,
+      with_payload: true
+    }
+
+    instrument(:sparse_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
+  end
+
+  @doc """
+  Hybrid search: dense + keyword prefetches fused server-side by RRF in one
+  request. `sparse` is `%{indices, values}`. Tenant filter is applied to BOTH
+  legs (load-bearing — the sparse inverted index is global).
+  """
+  def hybrid_search(col \\ nil, dense, sparse, search_opts) do
+    col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
+    filter = tenant_filter(search_opts)
+
+    body = %{
+      prefetch: [
+        %{query: dense, using: "dense", filter: filter, limit: limit},
+        %{
+          query: %{indices: sparse.indices, values: sparse.values},
+          using: "keyword",
+          filter: filter,
+          limit: limit
+        }
+      ],
+      query: %{fusion: "rrf"},
+      limit: limit,
+      with_payload: true
+    }
+
+    instrument(:hybrid_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
   end
 
   defp do_search(col, opts) do
