@@ -361,6 +361,7 @@ defmodule Engram.Vector.Qdrant do
 
     base = %{
       query: vector,
+      using: "dense",
       filter: %{must: must},
       limit: limit,
       with_payload: true
