@@ -110,11 +110,12 @@ defmodule Engram.Accounts do
   # one-time, near-impossible window) rely on it, and those don't occur across
   # isolated sandbox transactions. Defaults true → prod path is unchanged.
   defp acquire_admin_bootstrap_lock do
-    if Application.get_env(:engram, :admin_bootstrap_lock_enabled, true) do
-      Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
-        @admin_bootstrap_lock
-      ])
-    end
+    _ =
+      if Application.get_env(:engram, :admin_bootstrap_lock_enabled, true) do
+        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+          @admin_bootstrap_lock
+        ])
+      end
 
     :ok
   end
