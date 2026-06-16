@@ -68,6 +68,23 @@ defmodule Engram.Indexing do
            {:ok, vectors} <- embed_for_indexing(context_texts) do
         avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
         build_prepared(note, user, chunks, vectors, filter_key, avgdl)
+      else
+        {:error, :no_dek} = err ->
+          :telemetry.execute(
+            [:engram, :indexing, :encrypt_failed],
+            %{count: 1},
+            %{
+              user_id: note.user_id,
+              vault_id: note.vault_id,
+              note_id: note.id,
+              reason: :no_dek
+            }
+          )
+
+          err
+
+        other ->
+          other
       end
     end
   end

@@ -345,10 +345,13 @@ defmodule Engram.IndexingTest do
     end
 
     @tag capture_log: true
-    test "returns {:error, :no_dek} when DEK missing on encrypted vault", %{bypass: bypass} do
+    test "emits encrypt_failed telemetry and returns {:error, :no_dek} when DEK missing on encrypted vault",
+         %{bypass: bypass} do
       # User has NO DEK provisioned → dek_filter_key/1 in prepare_index returns
       # {:error, :no_dek} and short-circuits the with-chain before embedding.
       # No embed call, no Qdrant upsert — fail fast without spending API quota.
+      # The [:engram, :indexing, :encrypt_failed] metric must still fire so the
+      # "DEK-missing-at-index-time" counter doesn't silently read zero.
       user = insert(:user)
       vault = insert(:vault, user: user)
 
@@ -382,7 +385,29 @@ defmodule Engram.IndexingTest do
         Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
       end)
 
-      assert {:error, :no_dek} = Indexing.index_note(plaintext_note, vault)
+      handler_id = {__MODULE__, :encrypt_failed_no_dek_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :indexing, :encrypt_failed],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:encrypt_failed_fired, measurements, meta})
+        end,
+        nil
+      )
+
+      try do
+        assert {:error, :no_dek} = Indexing.index_note(plaintext_note, vault)
+
+        assert_received {:encrypt_failed_fired, %{count: 1}, meta}
+        assert meta.user_id == user.id
+        assert meta.vault_id == vault.id
+        assert meta.note_id == plaintext_note.id
+        assert meta.reason == :no_dek
+      after
+        :telemetry.detach(handler_id)
+      end
     end
 
     test "encryption failure preserves prior chunks (no partial-failure drift)", %{bypass: bypass} do
