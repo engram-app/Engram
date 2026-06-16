@@ -4,7 +4,7 @@ defmodule Engram.Repo.Migrations.AddTokenCountToChunks do
   # phase/expand — additive nullable column; no backfill (pre-launch, wipeable).
   def change do
     alter table(:chunks) do
-      add :token_count, :integer
+      add :token_count, :bigint
     end
   end
 end
