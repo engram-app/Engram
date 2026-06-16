@@ -102,12 +102,16 @@ defmodule Engram.NotesSeqTest do
   end
 
   # #614: the renamed live rows AND the old-path tombstones must become
-  # atomically visible at ONE seq. A single cursor read (`WHERE seq > cursor`)
-  # taken after the rename must see BOTH the renamed row and its tombstone —
-  # never the renamed row alone (which would let a pull advance its cursor past
-  # the shared seq and miss the delete signal → resurrection). The structural
-  # guarantee is the single transaction in `do_rename_folder/5`; this asserts
-  # the observable outcome: one read, both row classes, exactly one new seq.
+  # visible together at ONE seq, so a cursor pull (`WHERE seq > cursor`) can
+  # never see a renamed row without its tombstone (which would let the pull
+  # advance past the shared seq and miss the delete signal → resurrection).
+  #
+  # NOTE on scope: the real guarantee is *atomicity* — the single transaction
+  # in `do_rename_folder/5`. This test reads post-completion steady state, so
+  # it asserts the shared-seq invariant but would also pass against the old
+  # two-transaction structure (both committed by return). It is NOT a guard
+  # against re-splitting the transaction; that would need a fault-injection /
+  # interleaving test. The structural guarantee lives in the code + its comment.
   test "rename_folder makes renamed rows + tombstones visible together at one seq",
        %{user: user, vault: vault} do
     {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})
