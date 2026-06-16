@@ -1,7 +1,7 @@
 defmodule Engram.AttachmentsSeqTest do
   use Engram.DataCase, async: true
 
-  alias Engram.{Attachments, Vaults, Repo}
+  alias Engram.{Attachments, Repo, Vaults}
 
   setup do
     user = insert_user()

@@ -1,7 +1,7 @@
 defmodule Engram.BackfillSeqTest do
   use Engram.DataCase, async: false
 
-  alias Engram.{Notes, Vaults, Repo}
+  alias Engram.{Notes, Repo, Vaults}
 
   # The 20260616120100_backfill_seq migration runs on its own DB connection,
   # which cannot see the Ecto Sandbox's uncommitted test data. So per the
