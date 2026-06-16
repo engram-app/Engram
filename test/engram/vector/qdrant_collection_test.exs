@@ -1,12 +1,12 @@
 defmodule Engram.Vector.QdrantCollectionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
+  alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     %{bypass: bypass}
   end
 
