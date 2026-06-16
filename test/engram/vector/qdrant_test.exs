@@ -13,12 +13,14 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "ensure_collection/2" do
-    test "creates collection with binary quantization config", %{bypass: bypass} do
+    test "creates collection with named dense vector + keyword sparse(idf) + binary quantization config",
+         %{bypass: bypass} do
       Bypass.expect_once(bypass, "PUT", "/collections/test_col", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        assert decoded["vectors"]["size"] == 1024
-        assert decoded["vectors"]["distance"] == "Cosine"
+        assert decoded["vectors"]["dense"]["size"] == 1024
+        assert decoded["vectors"]["dense"]["distance"] == "Cosine"
+        assert decoded["sparse_vectors"]["keyword"]["modifier"] == "idf"
 
         quant = decoded["quantization_config"]["binary"]
         assert quant["always_ram"] == true
@@ -38,8 +40,9 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "PUT", "/collections/test_col", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        assert decoded["vectors"]["size"] == 1024
-        assert decoded["vectors"]["distance"] == "Cosine"
+        assert decoded["vectors"]["dense"]["size"] == 1024
+        assert decoded["vectors"]["dense"]["distance"] == "Cosine"
+        assert decoded["sparse_vectors"]["keyword"]["modifier"] == "idf"
         refute Map.has_key?(decoded, "quantization_config")
 
         conn

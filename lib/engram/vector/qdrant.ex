@@ -68,14 +68,20 @@ defmodule Engram.Vector.Qdrant do
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
 
-    vectors = %{size: dims, distance: "Cosine"}
+    dense = %{size: dims, distance: "Cosine"}
 
     body =
-      if binary_quantization_enabled?() do
-        %{vectors: vectors, quantization_config: %{binary: %{always_ram: true}}}
-      else
-        %{vectors: vectors}
-      end
+      %{
+        vectors: %{"dense" => dense},
+        sparse_vectors: %{"keyword" => %{modifier: "idf"}}
+      }
+      |> then(fn b ->
+        if binary_quantization_enabled?() do
+          Map.put(b, :quantization_config, %{binary: %{always_ram: true}})
+        else
+          b
+        end
+      end)
 
     opts = [json: body] ++ req_opts()
 
