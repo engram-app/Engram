@@ -8,62 +8,32 @@ defmodule Engram.Notes.PathSanitizerTest do
   # ---------------------------------------------------------------------------
 
   describe "illegal char stripping" do
-    test "strips question mark" do
-      assert PathSanitizer.sanitize("Notes/Why?.md") == "Notes/Why.md"
-    end
+    # Uniform input -> output cases. Table-driven to keep each case visible
+    # with a descriptive failure message, without 14 near-identical test bodies.
+    @illegal_char_cases [
+      {"strips question mark", "Notes/Why?.md", "Notes/Why.md"},
+      {"strips asterisk", "Notes/Important*.md", "Notes/Important.md"},
+      {"strips colon", "Notes/HH:MM.md", "Notes/HHMM.md"},
+      {"strips angle brackets", "Notes/<tag>.md", "Notes/tag.md"},
+      {"strips double quotes", ~s(Notes/"quoted".md), "Notes/quoted.md"},
+      {"strips pipe", "Notes/A|B.md", "Notes/AB.md"},
+      {"strips backslash", "Notes/A\\B.md", "Notes/AB.md"},
+      {"strips multiple illegal chars", ~s(Notes/What: A "Great" Day*.md),
+       "Notes/What A Great Day.md"},
+      {"preserves forward slash", "A/B/C.md", "A/B/C.md"},
+      {"collapses multiple spaces", "Notes/Too   Many  Spaces.md", "Notes/Too Many Spaces.md"},
+      {"strips leading space per segment", "Notes/ Padded.md", "Notes/Padded.md"},
+      {"strips trailing slash", "Notes/Subfolder/", "Notes/Subfolder"},
+      {"no change for clean path", "Notes/Clean File.md", "Notes/Clean File.md"},
+      {"single segment no folder", "Inbox.md", "Inbox.md"}
+    ]
 
-    test "strips asterisk" do
-      assert PathSanitizer.sanitize("Notes/Important*.md") == "Notes/Important.md"
-    end
-
-    test "strips colon" do
-      assert PathSanitizer.sanitize("Notes/HH:MM.md") == "Notes/HHMM.md"
-    end
-
-    test "strips angle brackets" do
-      assert PathSanitizer.sanitize("Notes/<tag>.md") == "Notes/tag.md"
-    end
-
-    test "strips double quotes" do
-      assert PathSanitizer.sanitize(~s(Notes/"quoted".md)) == "Notes/quoted.md"
-    end
-
-    test "strips pipe" do
-      assert PathSanitizer.sanitize("Notes/A|B.md") == "Notes/AB.md"
-    end
-
-    test "strips backslash" do
-      assert PathSanitizer.sanitize("Notes/A\\B.md") == "Notes/AB.md"
-    end
-
-    test "strips multiple illegal chars" do
-      assert PathSanitizer.sanitize(~s(Notes/What: A "Great" Day*.md)) ==
-               "Notes/What A Great Day.md"
-    end
-
-    test "preserves forward slash" do
-      assert PathSanitizer.sanitize("A/B/C.md") == "A/B/C.md"
-    end
-
-    test "collapses multiple spaces" do
-      assert PathSanitizer.sanitize("Notes/Too   Many  Spaces.md") ==
-               "Notes/Too Many Spaces.md"
-    end
-
-    test "strips leading space per segment" do
-      assert PathSanitizer.sanitize("Notes/ Padded.md") == "Notes/Padded.md"
-    end
-
-    test "strips trailing slash" do
-      assert PathSanitizer.sanitize("Notes/Subfolder/") == "Notes/Subfolder"
-    end
-
-    test "no change for clean path" do
-      assert PathSanitizer.sanitize("Notes/Clean File.md") == "Notes/Clean File.md"
-    end
-
-    test "single segment no folder" do
-      assert PathSanitizer.sanitize("Inbox.md") == "Inbox.md"
+    test "sanitizes each illegal-char case to its expected output" do
+      for {desc, input, expected} <- @illegal_char_cases do
+        assert PathSanitizer.sanitize(input) == expected,
+               "#{desc}: sanitize(#{inspect(input)}) expected #{inspect(expected)}, " <>
+                 "got #{inspect(PathSanitizer.sanitize(input))}"
+      end
     end
   end
 

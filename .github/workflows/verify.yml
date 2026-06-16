@@ -1114,7 +1114,9 @@ jobs:
           # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
           # already gated by `mix compile --warnings-as-errors` in the lint
           # job; this extends the same bar to test/**.
-          mix test --warnings-as-errors
+          # --slowest 20 surfaces the slowest tests each run so async/serial
+          # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
+          mix test --warnings-as-errors --slowest 20
 
       - name: Lint DB schema (splinter)
         run: |
