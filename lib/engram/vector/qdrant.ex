@@ -87,11 +87,35 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:ensure_collection, fn ->
       case Req.put("#{base_url()}/collections/#{col}", opts) do
-        {:ok, %{status: status}} when status in [200, 201, 409] -> :ok
+        {:ok, %{status: status}} when status in [200, 201] -> :ok
+        {:ok, %{status: 409}} -> verify_collection_shape(col)
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  # On an existing collection, confirm it has the named `dense` vector + the
+  # `keyword` sparse vector this build requires. A legacy single-unnamed-vector
+  # collection would otherwise 400 every upsert/search silently. Pre-launch the
+  # collection is recreated (wipeable); this guard catches a stale deploy.
+  defp verify_collection_shape(col) do
+    case collection_info(col) do
+      {:ok, %{"config" => %{"params" => params}}} ->
+        vectors = params["vectors"] || %{}
+        sparse = params["sparse_vectors"] || %{}
+
+        if is_map(vectors) and Map.has_key?(vectors, "dense") and Map.has_key?(sparse, "keyword") do
+          :ok
+        else
+          {:error, {:incompatible_collection_schema, col}}
+        end
+
+      _ ->
+        # Couldn't read collection info — don't block indexing on a transient
+        # read error; the upsert will surface a real failure if shape is wrong.
+        :ok
+    end
   end
 
   @doc """
