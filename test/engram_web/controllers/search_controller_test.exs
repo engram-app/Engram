@@ -178,6 +178,45 @@ defmodule EngramWeb.SearchControllerTest do
       assert json_response(conn, 200)["results"] == []
     end
 
+    test "?mode=vector issues a single-leg dense query without prefetch", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        json = Jason.decode!(body)
+        assert json["using"] == "dense"
+        refute Map.has_key?(json, "prefetch")
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "ferritin", "mode" => "vector"})
+      assert json_response(conn, 200)["results"] == []
+    end
+
+    test "?mode=garbage falls back to hybrid (rrf fusion)", %{conn: conn, bypass: bypass} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        assert Jason.decode!(body)["query"]["fusion"] == "rrf"
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "ferritin", "mode" => "garbage"})
+      assert json_response(conn, 200)["results"] == []
+    end
+
     test "returns 422 when query is missing", %{conn: conn} do
       conn = post(conn, "/api/search", %{})
       assert json_response(conn, 422)
