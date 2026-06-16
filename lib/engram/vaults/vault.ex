@@ -19,6 +19,8 @@ defmodule Engram.Vaults.Vault do
     field :name_hmac, :binary
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     field :dek_version, :integer, default: 1
+    # Sync change-log backbone — per-vault monotonic seq allocator counter.
+    field :change_seq, :integer, default: 0
 
     belongs_to :user, Engram.Accounts.User
 
@@ -37,7 +39,8 @@ defmodule Engram.Vaults.Vault do
       :name_ciphertext,
       :name_nonce,
       :name_hmac,
-      :dek_version
+      :dek_version,
+      :change_seq
     ])
     |> validate_required([
       :slug,
