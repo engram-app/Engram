@@ -2218,7 +2218,10 @@ defmodule Engram.Notes do
               Map.merge(base, Map.new(full_kw))
             end)
 
-          Repo.insert_all(Note, tombstones, on_conflict: :nothing)
+          # Bind the insert_all return; it's no longer the block's tail
+          # expression (the block returns `seq`), so discard explicitly to
+          # satisfy Dialyzer's unmatched_return.
+          _ = Repo.insert_all(Note, tombstones, on_conflict: :nothing)
 
           seq
         end)
