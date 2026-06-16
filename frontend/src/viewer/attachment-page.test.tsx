@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import AttachmentPage from './attachment-page'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import type { AttachmentSummary } from '../api/queries'
 
 // Stub the heavy pdf.js viewer — this suite only verifies routing-by-mime, not
@@ -72,11 +72,19 @@ it('renders a download fallback for unsupported types', async () => {
   await waitFor(() => expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument())
 })
 
-it('shows an error state when the byte fetch fails', async () => {
-  mockAttachments = [att({ id: 'img-1', path: 'missing.png', mime_type: 'image/png' })]
-  vi.spyOn(api, 'getBlob').mockRejectedValueOnce(new Error('boom'))
+it('shows a transient error (not "missing") when the byte fetch fails with a 5xx', async () => {
+  mockAttachments = [att({ id: 'img-1', path: 'x.png', mime_type: 'image/png' })]
+  vi.spyOn(api, 'getBlob').mockRejectedValueOnce(new ApiError(502, 'storage down'))
   renderAt('img-1')
-  await waitFor(() => expect(screen.getByText(/couldn.t load/i)).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText(/temporarily unavailable/i)).toBeInTheDocument())
+  expect(screen.queryByText(/no longer exists/i)).not.toBeInTheDocument()
+})
+
+it('shows "no longer exists" when the byte fetch 404s', async () => {
+  mockAttachments = [att({ id: 'img-1', path: 'gone.png', mime_type: 'image/png' })]
+  vi.spyOn(api, 'getBlob').mockRejectedValueOnce(new ApiError(404, 'not found'))
+  renderAt('img-1')
+  await waitFor(() => expect(screen.getByText(/no longer exists/i)).toBeInTheDocument())
 })
 
 it('shows a centered loading spinner before the bytes resolve', () => {

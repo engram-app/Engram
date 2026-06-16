@@ -6,6 +6,7 @@ import type { LoaderItem } from './loader'
 import type { TreeItem } from './types'
 import { RenameInput } from '../tree-actions/rename-input'
 import { useLongPress } from '../tree-actions/use-long-press'
+import { isSyntheticFolderId } from './synthesize-folders'
 
 interface Props {
   instance: ItemInstance<LoaderItem>
@@ -62,11 +63,11 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
   }
 
   if (item.kind === 'folder') {
-    // Synthetic folders (id prefix 'syn:') are UI-only scaffolding for
-    // attachment-only dirs — they have no backend record, so rename/delete/move
-    // and note-prefetch don't apply. Drop their action affordances; expansion
-    // (to reveal the attachments inside) still works.
-    const isSynthetic = item.id.startsWith('syn:')
+    // Synthetic folders are UI-only scaffolding for attachment-only dirs — they
+    // have no backend record, so rename/delete/move and note-prefetch don't
+    // apply. Drop their action affordances; expansion (to reveal the
+    // attachments inside) still works.
+    const isSynthetic = isSyntheticFolderId(item.id)
     const hoverPrefetch =
       onFolderHover && !isSynthetic ? () => onFolderHover(item.id) : undefined
     return (

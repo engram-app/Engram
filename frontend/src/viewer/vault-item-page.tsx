@@ -16,7 +16,19 @@ const AttachmentPage = lazy(() => import('./attachment-page'))
 // then re-resolves (the common case — a note — is never delayed).
 export default function VaultItemPage() {
   const { id } = useParams()
-  const { data: attachments } = useAttachments()
+  const { data: attachments, isLoading } = useAttachments()
+
+  // Until the attachments list has loaded we can't tell a note id from an
+  // attachment id, so wait — don't guess "note" and mount NotePage, which would
+  // fire a doomed GET /notes/:id for an attachment id and flash a 404 error on a
+  // valid attachment deep-link. The list is warm from the sidebar on in-app nav,
+  // so this only briefly gates a cold deep-link / hard refresh. (If the list
+  // outright failed, `attachments` is undefined → we fall through to NotePage,
+  // the common case — an accepted degradation since a failed list already breaks
+  // the sidebar.)
+  if (isLoading && !attachments) {
+    return <LoadingPane />
+  }
   const isAttachment = attachments?.some((a) => a.id === id) ?? false
 
   return (

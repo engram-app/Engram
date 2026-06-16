@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import { useAttachments } from '../api/queries'
 import LoadingPane from './loading-pane'
 import PreviewColumn from './preview-column'
@@ -23,14 +23,15 @@ export default function AttachmentPage() {
   const mime = att?.mime_type ?? ''
 
   const [url, setUrl] = useState<string | null>(null)
-  const [error, setError] = useState(false)
+  // 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
+  const [error, setError] = useState<'missing' | 'failed' | null>(null)
 
   useEffect(() => {
     if (!path) return
     let revoke: string | null = null
     let cancelled = false
     setUrl(null)
-    setError(false)
+    setError(null)
     const encoded = path.split('/').map(encodeURIComponent).join('/')
     api
       .getBlob(`/attachments/${encoded}?raw=1`)
@@ -40,7 +41,11 @@ export default function AttachmentPage() {
         revoke = objectUrl
         setUrl(objectUrl)
       })
-      .catch(() => !cancelled && setError(true))
+      .catch((err) => {
+        if (cancelled) return
+        if (!(err instanceof ApiError)) console.error('attachment load failed', path, err)
+        setError(err instanceof ApiError && err.status === 404 ? 'missing' : 'failed')
+      })
     return () => {
       cancelled = true
       if (revoke) URL.revokeObjectURL(revoke)
@@ -62,7 +67,11 @@ export default function AttachmentPage() {
   if (error) {
     return (
       <section className="p-6">
-        <p className="text-sm text-destructive">Couldn&apos;t load {filename}.</p>
+        <p className="text-sm text-destructive">
+          {error === 'missing'
+            ? `${filename} no longer exists.`
+            : `Couldn't load ${filename} — it may be temporarily unavailable.`}
+        </p>
       </section>
     )
   }

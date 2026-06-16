@@ -128,6 +128,29 @@ it('shows attachments even while folder notes are still loading (cache miss)', (
   expect(kids.find((k) => k.item.kind === 'attachment')).toBeDefined()
 })
 
+it('buckets an attachment under a synthetic (syn:) folder', () => {
+  // The whole point of synthesizeFolders: an attachment-only dir gets a synthetic
+  // folder row, and its attachment must appear as that folder's child.
+  const folders = [{ id: 'syn:pics', parent_id: null, name: 'pics', count: 0 }]
+  const loader = buildLoader({
+    folders, qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('pics/a.png')],
+  })
+  qc.setQueryData(['folder-notes-by-id', 'v1', 'syn:pics'], [])
+  const kids = loader.getChildren('f:syn:pics')
+  const a = kids.find((k) => k.item.kind === 'attachment')
+  expect(a?.item).toMatchObject({ path: 'pics/a.png' })
+})
+
+it('getItem resolves an attachment id to its row, and undefined when absent', () => {
+  const loader = buildLoader({
+    folders: [], qc, vaultId: 'v1', sort: 'name-asc',
+    attachments: [att('cover.png')],
+  })
+  expect(loader.getItem('a:cover.png')?.item).toMatchObject({ kind: 'attachment', path: 'cover.png' })
+  expect(loader.getItem('a:nope.png')).toBeUndefined()
+})
+
 describe('buildLoader', () => {
   it('root returns top-level folders + root notes from the by-id root cache, sorted', () => {
     const qc = makeQc()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { synthesizeFolders } from './synthesize-folders'
+import { isSyntheticFolderId, synthesizeFolders } from './synthesize-folders'
 import type { AttachmentSummary, Folder } from '../../api/queries'
 
 const att = (path: string): AttachmentSummary => ({
@@ -43,5 +43,11 @@ describe('synthesizeFolders', () => {
   it('does not duplicate a synthetic dir shared by two attachments', () => {
     const out = synthesizeFolders([], [att('p/a.png'), att('p/b.png')])
     expect(out.filter((f) => f.name === 'p')).toHaveLength(1)
+  })
+
+  it('isSyntheticFolderId distinguishes synthesized rows from real uuids', () => {
+    const syn = synthesizeFolders([], [att('pics/a.png')]).find((f) => f.name === 'pics')
+    expect(isSyntheticFolderId(syn!.id)).toBe(true)
+    expect(isSyntheticFolderId('a1b2c3d4-0000-0000-0000-000000000000')).toBe(false)
   })
 })

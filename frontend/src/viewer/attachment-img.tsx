@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
+
+// 'missing' only for a real 404; a transient 5xx/network failure must NOT claim
+// the file is missing (the file exists, storage is just unreachable).
+type LoadError = 'missing' | 'failed'
 
 export default function AttachmentImg({ path, alt }: { path: string; alt?: string }) {
   const [src, setSrc] = useState<string | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<LoadError | null>(null)
 
   useEffect(() => {
     let revoke: string | null = null
@@ -17,7 +21,12 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
         revoke = url
         setSrc(url)
       })
-      .catch(() => !cancelled && setError(true))
+      .catch((err) => {
+        if (cancelled) return
+        // A non-ApiError is a bug (e.g. createObjectURL), not a load failure.
+        if (!(err instanceof ApiError)) console.error('attachment image load failed', path, err)
+        setError(err instanceof ApiError && err.status === 404 ? 'missing' : 'failed')
+      })
     return () => {
       cancelled = true
       if (revoke) URL.revokeObjectURL(revoke)
@@ -27,7 +36,9 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
   if (error) {
     return (
       <span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
-        Missing attachment: {path}
+        {error === 'missing'
+          ? `Missing attachment: ${path}`
+          : `Couldn't load ${path} (temporarily unavailable)`}
       </span>
     )
   }

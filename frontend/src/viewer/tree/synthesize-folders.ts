@@ -1,5 +1,15 @@
 import type { AttachmentSummary, Folder } from '../../api/queries'
 
+// Synthetic folders (attachment-only dirs not in /api/folders) carry this id
+// prefix. They have no backend record, so id-keyed backend calls (rename, move,
+// delete, note-prefetch) must skip them — `isSyntheticFolderId` is the single
+// home for that check.
+const SYNTHETIC_ID_PREFIX = 'syn:'
+
+export function isSyntheticFolderId(id: string): boolean {
+  return id.startsWith(SYNTHETIC_ID_PREFIX)
+}
+
 // Folder dirs that exist only because they hold attachments aren't returned by
 // /api/folders (folders are derived from notes + markers, not attachments).
 // Synthesize them so every attachment is reachable in the tree. Real folders
@@ -30,7 +40,7 @@ export function synthesizeFolders(
     const parentName = slash < 0 ? null : name.slice(0, slash)
     const parent = parentName == null ? null : (byName.get(parentName) ?? null)
     byName.set(name, {
-      id: `syn:${name}`,
+      id: `${SYNTHETIC_ID_PREFIX}${name}`,
       parent_id: parent ? parent.id : null,
       name,
       count: 0,
