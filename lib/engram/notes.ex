@@ -425,6 +425,9 @@ defmodule Engram.Notes do
           phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
           changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
+          seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+          changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
+
           case Repo.insert(changeset) do
             {:ok, note} ->
               :ok = UsageMeters.inc_notes_count(user.id, 1)
@@ -489,8 +492,11 @@ defmodule Engram.Notes do
     with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
       phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
 
+      seq = Engram.Vaults.next_seq!(existing.vault_id)
+
       existing
       |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+      |> Ecto.Changeset.put_change(:seq, seq)
       |> Repo.update()
       |> case do
         {:ok, updated} -> {:ok, {existing.content_hash, updated}}
