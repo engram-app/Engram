@@ -24,7 +24,7 @@ defmodule EngramWeb.SearchController do
     chunk_limit = max(note_limit * @overfetch_factor, @min_overfetch)
 
     opts =
-      [limit: chunk_limit, cross_vault: cross_vault]
+      [limit: chunk_limit, cross_vault: cross_vault, mode: parse_mode(params["mode"])]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
 
@@ -75,6 +75,10 @@ defmodule EngramWeb.SearchController do
   end
 
   defp clamp_limit(_), do: 5
+
+  defp parse_mode("keyword"), do: :keyword
+  defp parse_mode("vector"), do: :vector
+  defp parse_mode(_), do: :hybrid
 
   # Collapse per-chunk Qdrant hits into one row per note. The web UI shows
   # a card per note; the MCP path bypasses this and gets raw chunks.

@@ -79,7 +79,9 @@ class TestQdrantConfig:
     def test_vector_dimensions_1024(self, seeded_note):
         """Vectors should be 1024d to match Voyage prod config."""
         info = _collection_info()
-        vectors = info["config"]["params"]["vectors"]
+        # Named vectors (#595 hybrid search): the dense vector lives under the
+        # "dense" key, alongside the "keyword" sparse vector.
+        vectors = info["config"]["params"]["vectors"]["dense"]
         assert vectors["size"] == 1024, (
             f"Expected 1024d vectors (prod parity), got {vectors['size']}d"
         )
@@ -128,6 +130,7 @@ class TestSearchRoundTrip:
             f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/query",
             json={
                 "query": vector,
+                "using": "dense",
                 "limit": 50,
                 "with_payload": True,
             },

@@ -8,6 +8,8 @@ defmodule Engram.Indexing do
 
   import Ecto.Query
 
+  alias Engram.KeywordIndex
+  alias Engram.KeywordIndex.Tokenizer
   alias Engram.Notes.Chunk
   alias Engram.Parsers.Markdown
   alias Engram.Repo
@@ -51,7 +53,7 @@ defmodule Engram.Indexing do
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = vault) do
+  def prepare_index(note, %Engram.Vaults.Vault{} = _vault) do
     chunks = Markdown.parse(note.content || "", note.path)
 
     if chunks == [] do
@@ -59,10 +61,30 @@ defmodule Engram.Indexing do
     else
       context_texts = Enum.map(chunks, & &1.context_text)
       dims = Application.get_env(:engram, :embed_dims, @default_dims)
+      user = Engram.Accounts.get_user!(note.user_id)
 
       with :ok <- Qdrant.ensure_collection(collection(), dims),
+           {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
            {:ok, vectors} <- embed_for_indexing(context_texts) do
-        build_prepared(note, vault, chunks, vectors)
+        avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
+        build_prepared(note, user, chunks, vectors, filter_key, avgdl)
+      else
+        {:error, :no_dek} = err ->
+          :telemetry.execute(
+            [:engram, :indexing, :encrypt_failed],
+            %{count: 1},
+            %{
+              user_id: note.user_id,
+              vault_id: note.vault_id,
+              note_id: note.id,
+              reason: :no_dek
+            }
+          )
+
+          err
+
+        other ->
+          other
       end
     end
   end
@@ -182,14 +204,16 @@ defmodule Engram.Indexing do
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, _vault, chunks, vectors) do
-    user = Engram.Accounts.get_user!(note.user_id)
+  defp build_prepared(note, user, chunks, vectors, filter_key, avgdl) do
     now = DateTime.utc_now(:second)
 
     prepared =
       Enum.zip(chunks, vectors)
       |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
         point_id = Ecto.UUID.generate()
+
+        doc_len = chunk.text |> Tokenizer.tokens() |> length()
+        sparse = KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl)
 
         base_payload = %{
           user_id: to_string(note.user_id),
@@ -219,11 +243,17 @@ defmodule Engram.Indexing do
               heading_path: chunk.heading_path,
               char_start: chunk.char_start,
               char_end: chunk.char_end,
+              token_count: doc_len,
               qdrant_point_id: point_id,
               created_at: now
             }
 
-            point = %{id: point_id, vector: vector, payload: payload}
+            point = %{
+              id: point_id,
+              vector: %{"dense" => vector, "keyword" => sparse},
+              payload: payload
+            }
+
             {:cont, {:ok, [{row, point} | acc]}}
 
           {:error, reason} = err ->

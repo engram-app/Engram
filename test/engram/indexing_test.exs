@@ -345,9 +345,13 @@ defmodule Engram.IndexingTest do
     end
 
     @tag capture_log: true
-    test "emits encrypt_failed telemetry when DEK missing on encrypted vault", %{bypass: bypass} do
-      # User has NO DEK provisioned — encrypted vault → maybe_encrypt_qdrant_payload
-      # returns {:error, :no_dek} → reduce_while halts → telemetry fires.
+    test "emits encrypt_failed telemetry and returns {:error, :no_dek} when DEK missing on encrypted vault",
+         %{bypass: bypass} do
+      # User has NO DEK provisioned → dek_filter_key/1 in prepare_index returns
+      # {:error, :no_dek} and short-circuits the with-chain before embedding.
+      # No embed call, no Qdrant upsert — fail fast without spending API quota.
+      # The [:engram, :indexing, :encrypt_failed] metric must still fire so the
+      # "DEK-missing-at-index-time" counter doesn't silently read zero.
       user = insert(:user)
       vault = insert(:vault, user: user)
 
@@ -365,9 +369,7 @@ defmodule Engram.IndexingTest do
       # Decrypt note while DEK still exists (simulates worker's decrypt step).
       {:ok, plaintext_note} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
 
-      # Now clear the DEK so that Indexing's re-encrypt attempt fails.
-      # upsert_note auto-provisioned via maybe_encrypt_note_fields; simulate the
-      # "DEK missing at index time" scenario that emits telemetry.
+      # Now clear the DEK so that Indexing's dek_filter_key call fails.
       import Ecto.Query
 
       Engram.Repo.update_all(
@@ -377,19 +379,13 @@ defmodule Engram.IndexingTest do
       )
 
       DekCache.invalidate(user.id)
-      user_cleared = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
-      _ = user_cleared
 
-      Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts ->
-        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
-      end)
-
+      # No embed expectation: dek_filter_key fails before embed_for_indexing runs.
       Bypass.expect(bypass, fn conn ->
         Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
       end)
 
-      handler_id = {__MODULE__, :encrypt_failed_handler, System.unique_integer()}
+      handler_id = {__MODULE__, :encrypt_failed_no_dek_handler, System.unique_integer()}
       test_pid = self()
 
       :telemetry.attach(
@@ -408,6 +404,7 @@ defmodule Engram.IndexingTest do
         assert meta.user_id == user.id
         assert meta.vault_id == vault.id
         assert meta.note_id == plaintext_note.id
+        assert meta.reason == :no_dek
       after
         :telemetry.detach(handler_id)
       end
@@ -430,8 +427,10 @@ defmodule Engram.IndexingTest do
 
       {:ok, plaintext_note} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
 
+      # First index succeeds (embed called once). Second index fails at
+      # dek_filter_key before embed_for_indexing runs, so embed is called once.
       Engram.MockEmbedder
-      |> expect(:embed_texts, 2, fn texts ->
+      |> expect(:embed_texts, fn texts ->
         {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
       end)
 

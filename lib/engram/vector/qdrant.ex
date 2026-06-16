@@ -68,24 +68,54 @@ defmodule Engram.Vector.Qdrant do
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
 
-    vectors = %{size: dims, distance: "Cosine"}
+    dense = %{size: dims, distance: "Cosine"}
 
     body =
-      if binary_quantization_enabled?() do
-        %{vectors: vectors, quantization_config: %{binary: %{always_ram: true}}}
-      else
-        %{vectors: vectors}
-      end
+      %{
+        vectors: %{"dense" => dense},
+        sparse_vectors: %{"keyword" => %{modifier: "idf"}}
+      }
+      |> then(fn b ->
+        if binary_quantization_enabled?() do
+          Map.put(b, :quantization_config, %{binary: %{always_ram: true}})
+        else
+          b
+        end
+      end)
 
     opts = [json: body] ++ req_opts()
 
     instrument(:ensure_collection, fn ->
       case Req.put("#{base_url()}/collections/#{col}", opts) do
-        {:ok, %{status: status}} when status in [200, 201, 409] -> :ok
+        {:ok, %{status: status}} when status in [200, 201] -> :ok
+        {:ok, %{status: 409}} -> verify_collection_shape(col)
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  # On an existing collection, confirm it has the named `dense` vector + the
+  # `keyword` sparse vector this build requires. A legacy single-unnamed-vector
+  # collection would otherwise 400 every upsert/search silently. Pre-launch the
+  # collection is recreated (wipeable); this guard catches a stale deploy.
+  defp verify_collection_shape(col) do
+    case collection_info(col) do
+      {:ok, %{"config" => %{"params" => params}}} ->
+        vectors = params["vectors"] || %{}
+        sparse = params["sparse_vectors"] || %{}
+
+        if is_map(vectors) and Map.has_key?(vectors, "dense") and Map.has_key?(sparse, "keyword") do
+          :ok
+        else
+          {:error, {:incompatible_collection_schema, col}}
+        end
+
+      _ ->
+        # Couldn't read collection info — don't block indexing on a transient
+        # read error; the upsert will surface a real failure if shape is wrong.
+        :ok
+    end
   end
 
   @doc """
@@ -334,28 +364,12 @@ defmodule Engram.Vector.Qdrant do
   """
   def search(col \\ nil, vector, search_opts) do
     col = col || collection()
-    user_id = Keyword.fetch!(search_opts, :user_id)
-    vault_id = Keyword.get(search_opts, :vault_id)
     limit = Keyword.get(search_opts, :limit, 5)
-    tags_hmac = Keyword.get(search_opts, :tags_hmac)
-    folder_hmac = Keyword.get(search_opts, :folder_hmac)
-
-    must = [%{key: "user_id", match: %{value: user_id}}]
-    must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
-
-    must =
-      if tags_hmac,
-        do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must],
-        else: must
-
-    must =
-      if folder_hmac,
-        do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must],
-        else: must
 
     base = %{
       query: vector,
-      filter: %{must: must},
+      using: "dense",
+      filter: tenant_filter(search_opts),
       limit: limit,
       with_payload: true
     }
@@ -372,6 +386,70 @@ defmodule Engram.Vector.Qdrant do
     instrument(:search, fn ->
       do_search(col, opts)
     end)
+  end
+
+  # Extracted from search/3 so all three query shapes share tenant filtering.
+  defp tenant_filter(search_opts) do
+    user_id = Keyword.fetch!(search_opts, :user_id)
+    vault_id = Keyword.get(search_opts, :vault_id)
+    tags_hmac = Keyword.get(search_opts, :tags_hmac)
+    folder_hmac = Keyword.get(search_opts, :folder_hmac)
+
+    must = [%{key: "user_id", match: %{value: user_id}}]
+    must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
+    must = if tags_hmac, do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must], else: must
+
+    must =
+      if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
+
+    %{must: must}
+  end
+
+  @doc """
+  Keyword-only search against the sparse `keyword` vector. `sparse` is
+  `%{indices: [u32], values: [float]}`. Same options as `search/3`.
+  """
+  def sparse_search(col \\ nil, sparse, search_opts) do
+    col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
+
+    body = %{
+      query: %{indices: sparse.indices, values: sparse.values},
+      using: "keyword",
+      filter: tenant_filter(search_opts),
+      limit: limit,
+      with_payload: true
+    }
+
+    instrument(:sparse_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
+  end
+
+  @doc """
+  Hybrid search: dense + keyword prefetches fused server-side by RRF in one
+  request. `sparse` is `%{indices, values}`. Tenant filter is applied to BOTH
+  legs (load-bearing — the sparse inverted index is global).
+  """
+  def hybrid_search(col \\ nil, dense, sparse, search_opts) do
+    col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
+    filter = tenant_filter(search_opts)
+
+    body = %{
+      prefetch: [
+        %{query: dense, using: "dense", filter: filter, limit: limit},
+        %{
+          query: %{indices: sparse.indices, values: sparse.values},
+          using: "keyword",
+          filter: filter,
+          limit: limit
+        }
+      ],
+      query: %{fusion: "rrf"},
+      limit: limit,
+      with_payload: true
+    }
+
+    instrument(:hybrid_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
   end
 
   defp do_search(col, opts) do

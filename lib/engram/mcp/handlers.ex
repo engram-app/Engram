@@ -44,7 +44,7 @@ defmodule Engram.MCP.Handlers do
     limit = min(args["limit"] || 5, 20)
     tags = args["tags"]
 
-    opts = [limit: limit]
+    opts = [limit: limit, mode: search_mode(args)]
     opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
 
     case Search.search(user, vault, query, opts) do
@@ -427,6 +427,17 @@ defmodule Engram.MCP.Handlers do
 
   def handle(name, _user, _vault, _args) do
     {:error, "Unknown tool: #{name}"}
+  end
+
+  # -- Public helpers --
+
+  @doc "Map the MCP `mode` arg to a Search mode (unknown → :hybrid)."
+  def search_mode(args) do
+    case args["mode"] do
+      "keyword" -> :keyword
+      "vector" -> :vector
+      _ -> :hybrid
+    end
   end
 
   # -- Private helpers --

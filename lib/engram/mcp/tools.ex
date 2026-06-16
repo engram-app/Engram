@@ -91,6 +91,15 @@ defmodule Engram.MCP.Tools do
             "type" => "array",
             "items" => %{"type" => "string"},
             "description" => "Optional list of tags to filter by"
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["hybrid", "keyword", "vector"],
+            "description" =>
+              "Retrieval mode (default hybrid). Use 'keyword' for exact terms, " <>
+                "identifiers, code, or error strings; 'vector' for purely " <>
+                "conceptual/semantic queries; 'hybrid' (default) blends both.",
+            "default" => "hybrid"
           }
         },
         "required" => ["query"]
