@@ -162,6 +162,22 @@ defmodule EngramWeb.SearchControllerTest do
       assert %{"results" => []} = json_response(conn, 200)
     end
 
+    test "web search requests hybrid mode", %{conn: conn, bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        assert Jason.decode!(body)["query"]["fusion"] == "rrf"
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
+      end)
+
+      Engram.MockEmbedder |> expect(:embed_texts, fn ["hi"], _ -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hi"})
+      assert json_response(conn, 200)["results"] == []
+    end
+
     test "returns 422 when query is missing", %{conn: conn} do
       conn = post(conn, "/api/search", %{})
       assert json_response(conn, 422)

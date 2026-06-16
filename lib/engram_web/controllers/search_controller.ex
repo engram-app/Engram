@@ -24,7 +24,7 @@ defmodule EngramWeb.SearchController do
     chunk_limit = max(note_limit * @overfetch_factor, @min_overfetch)
 
     opts =
-      [limit: chunk_limit, cross_vault: cross_vault]
+      [limit: chunk_limit, cross_vault: cross_vault, mode: :hybrid]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
 
