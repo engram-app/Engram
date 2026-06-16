@@ -9,6 +9,7 @@ defmodule Engram.Search do
   """
 
   alias Engram.Vector.Qdrant
+  alias Engram.KeywordIndex
 
   @min_candidates 20
 
@@ -131,6 +132,7 @@ defmodule Engram.Search do
   defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok
 
   defp do_search(user, vault, query, opts) do
+    mode = Keyword.get(opts, :mode, :vector)
     limit = Keyword.get(opts, :limit, 5)
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
@@ -141,26 +143,24 @@ defmodule Engram.Search do
 
     case translate_phase_b_filters(user, folder, tags) do
       {:ok, phase_b_kw} ->
-        with {:ok, [vector]} <- embed_for_search(query) do
-          search_opts =
-            [user_id: to_string(user.id), limit: fetch_limit]
-            |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
-            |> Keyword.merge(phase_b_kw)
+        search_opts =
+          [user_id: to_string(user.id), limit: fetch_limit]
+          |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
+          |> Keyword.merge(phase_b_kw)
 
-          with {:ok, candidates} <- Qdrant.search(collection(), vector, search_opts),
-               vaults_by_id = load_candidate_vaults(user, vault, candidates),
-               {:ok, decrypted} <-
-                 Engram.Crypto.decrypt_qdrant_candidates(
-                   candidates,
-                   user,
-                   vaults_by_id,
-                   collection()
-                 ) do
-            rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
+        with {:ok, candidates} <- run_legs(mode, user, query, search_opts),
+             vaults_by_id = load_candidate_vaults(user, vault, candidates),
+             {:ok, decrypted} <-
+               Engram.Crypto.decrypt_qdrant_candidates(
+                 candidates,
+                 user,
+                 vaults_by_id,
+                 collection()
+               ) do
+          rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
-            with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
-              {:ok, rehydrate_display_fields(ranked, user)}
-            end
+          with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
+            {:ok, rehydrate_display_fields(ranked, user)}
           end
         end
 
@@ -169,6 +169,38 @@ defmodule Engram.Search do
         # impossible to derive HMAC, and the user has no encrypted points to
         # match anyway. Mirrors list_folders (B.2.2) defensive empty.
         {:ok, []}
+    end
+  end
+
+  # Vector leg: embed query → dense Qdrant search (existing behavior preserved).
+  defp run_legs(:vector, _user, query, search_opts) do
+    with {:ok, [vector]} <- embed_for_search(query) do
+      Qdrant.search(collection(), vector, search_opts)
+    end
+  end
+
+  # Keyword leg: HMAC the query tokens → sparse Qdrant search. No DEK → empty.
+  defp run_legs(:keyword, user, query, search_opts) do
+    case sparse_query(user, query) do
+      {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
+      :no_vault -> {:ok, []}
+    end
+  end
+
+  # Hybrid: dense + sparse fused server-side. No-DEK degrades to vector-only.
+  defp run_legs(:hybrid, user, query, search_opts) do
+    with {:ok, [vector]} <- embed_for_search(query) do
+      case sparse_query(user, query) do
+        {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
+        :no_vault -> Qdrant.search(collection(), vector, search_opts)
+      end
+    end
+  end
+
+  defp sparse_query(user, query) do
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, filter_key} -> {:ok, KeywordIndex.module().encode_query(query, filter_key)}
+      {:error, :no_dek} -> :no_vault
     end
   end
 
