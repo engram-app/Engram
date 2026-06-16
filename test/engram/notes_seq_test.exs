@@ -101,6 +101,48 @@ defmodule Engram.NotesSeqTest do
     assert length(touched_seqs) == 1
   end
 
+  # #614: the renamed live rows AND the old-path tombstones must become
+  # atomically visible at ONE seq. A single cursor read (`WHERE seq > cursor`)
+  # taken after the rename must see BOTH the renamed row and its tombstone —
+  # never the renamed row alone (which would let a pull advance its cursor past
+  # the shared seq and miss the delete signal → resurrection). The structural
+  # guarantee is the single transaction in `do_rename_folder/5`; this asserts
+  # the observable outcome: one read, both row classes, exactly one new seq.
+  test "rename_folder makes renamed rows + tombstones visible together at one seq",
+       %{user: user, vault: vault} do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "f/sub/b.md", "content" => "B"})
+    s_before = max_seq(user, vault)
+
+    {:ok, count} = Notes.rename_folder(user, vault, "f", "g")
+    assert count >= 2
+
+    # ONE read of everything strictly above the pre-rename watermark — this is
+    # exactly what a cursor pull at `s_before` would observe.
+    {:ok, changed} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        Engram.Repo.all(
+          from(r in Engram.Notes.Note,
+            where: r.vault_id == ^vault.id and r.seq > ^s_before
+          )
+        )
+      end)
+
+    live = Enum.filter(changed, &is_nil(&1.deleted_at))
+    tombstones = Enum.filter(changed, &(&1.deleted_at != nil))
+
+    # Both renamed live rows survive (same ids) and both old-path tombstones
+    # are present in the very same read — no partial visibility.
+    live_ids = Enum.map(live, & &1.id)
+    assert n1.id in live_ids
+    assert n2.id in live_ids
+    assert length(tombstones) == 2
+
+    # Exactly one seq value across everything the cursor read surfaced: the
+    # renamed rows and the tombstones are inseparable at the cursor level.
+    assert changed |> Enum.map(& &1.seq) |> Enum.uniq() |> length() == 1
+  end
+
   test "delete_folder stamps a new seq on the cascade-deleted rows",
        %{user: user, vault: vault} do
     {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})

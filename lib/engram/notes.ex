@@ -2124,11 +2124,21 @@ defmodule Engram.Notes do
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
-      # One seq for the whole folder-rename op — shared across every
-      # touched row (updates + tombstones). Allocated inside the txn that
-      # holds the vault row lock; the bare integer is reused below for the
-      # tombstone insert (a separate txn, but the value is already minted).
-      {:ok, seq} =
+      mtime_float = DateTime.to_unix(now) + 0.0
+
+      real_note_updates =
+        Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
+
+      # One seq for the whole folder-rename op — shared across every touched
+      # row (renamed updates + old-path tombstones). The cascade row-updates
+      # AND the tombstone insert commit in a SINGLE transaction so a
+      # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
+      # rows at seq S, advance past S, and then miss the tombstones (also S,
+      # excluded by `seq > cursor`) → lost delete / resurrection (#614).
+      # seq is allocated inside the txn that holds the vault row lock; the
+      # tombstone rows are built from in-memory data (no re-query of committed
+      # state) so they fold cleanly into the same transaction.
+      {:ok, _seq} =
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
 
@@ -2173,50 +2183,45 @@ defmodule Engram.Notes do
             end
           end)
 
+          # Insert soft-deleted tombstones for old paths so the HTTP changes
+          # feed includes delete signals. Without these, polling clients
+          # retain stale files at old paths after a folder rename. Tombstones
+          # are full-row inserts so each must carry the encrypted
+          # path/folder/tags fields too. Marker rows have no path to
+          # tombstone — skip them. Built in-memory from `real_note_updates`,
+          # stamped with the same `seq` as the renamed rows.
+          tombstones =
+            Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+              # T3.6 — pre-allocate the tombstone id so the AAD bind string can
+              # be constructed before insert. Tombstones are full-row inserts
+              # written with empty content/title/tags but the row-id-bound AAD
+              # still applies — keeps tombstones decryptable and indistinguishable
+              # from any other AAD-bound row at read time.
+              tomb_id = mint_id()
+              old_path_folder = Helpers.extract_folder(old_path)
+
+              full_kw =
+                full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
+
+              base = %{
+                id: tomb_id,
+                content_hash: "",
+                mtime: mtime_float,
+                user_id: user.id,
+                vault_id: vault.id,
+                created_at: now,
+                updated_at: now,
+                deleted_at: now,
+                seq: seq
+              }
+
+              Map.merge(base, Map.new(full_kw))
+            end)
+
+          Repo.insert_all(Note, tombstones, on_conflict: :nothing)
+
           seq
         end)
-
-      # Insert soft-deleted tombstones for old paths so the HTTP changes feed
-      # includes delete signals. Without these, polling clients retain stale
-      # files at old paths after a folder rename. Tombstones are full-row
-      # inserts so each must carry the encrypted path/folder/tags fields too.
-      # Marker rows have no path to tombstone — skip them.
-      mtime_float = DateTime.to_unix(now) + 0.0
-
-      real_note_updates =
-        Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
-
-      tombstones =
-        Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
-          # T3.6 — pre-allocate the tombstone id so the AAD bind string can
-          # be constructed before insert. Tombstones are full-row inserts
-          # written with empty content/title/tags but the row-id-bound AAD
-          # still applies — keeps tombstones decryptable and indistinguishable
-          # from any other AAD-bound row at read time.
-          tomb_id = mint_id()
-          old_path_folder = Helpers.extract_folder(old_path)
-
-          full_kw =
-            full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
-
-          base = %{
-            id: tomb_id,
-            content_hash: "",
-            mtime: mtime_float,
-            user_id: user.id,
-            vault_id: vault.id,
-            created_at: now,
-            updated_at: now,
-            deleted_at: now,
-            seq: seq
-          }
-
-          Map.merge(base, Map.new(full_kw))
-        end)
-
-      Repo.with_tenant(user.id, fn ->
-        Repo.insert_all(Note, tombstones, on_conflict: :nothing)
-      end)
 
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
