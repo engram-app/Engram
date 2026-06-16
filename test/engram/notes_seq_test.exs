@@ -126,5 +126,7 @@ defmodule Engram.NotesSeqTest do
     rows = all_rows(user, vault)
 
     assert Enum.all?(rows, fn r -> is_integer(r.seq) end)
+    # One op = one seq: every row inserted by a single batch shares it.
+    assert length(Enum.uniq(Enum.map(rows, & &1.seq))) == 1
   end
 end
