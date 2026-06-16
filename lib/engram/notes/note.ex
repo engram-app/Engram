@@ -17,6 +17,10 @@ defmodule Engram.Notes.Note do
     field :content, :string, virtual: true
 
     field :version, :integer, default: 1
+    # Sync change-log backbone (PR A): per-row latest change sequence, allocated
+    # from `vaults.change_seq` via `Engram.Vaults.next_seq!/1` on every write.
+    # Nullable until the backfill migration populates pre-existing rows.
+    field :seq, :integer
     field :kind, :string, default: "note"
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     # Default 1 today; future rotation campaigns stamp the new version on
@@ -75,6 +79,7 @@ defmodule Engram.Notes.Note do
         # under `Engram.Schema`; without this `:id` is silently dropped and
         # Postgres rejects the INSERT for a missing PK.
         :id,
+        :seq,
         :version,
         :dek_version,
         :content_hash,

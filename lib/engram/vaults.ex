@@ -100,6 +100,26 @@ defmodule Engram.Vaults do
     :ok
   end
 
+  # ── Seq allocator ────────────────────────────────────────────────────────────
+
+  @doc """
+  Allocates the next monotonic change sequence for a vault.
+
+  MUST be called inside the caller's existing `Repo.with_tenant/2`
+  transaction so the bump participates in the same atomic unit as the row
+  write it stamps (and inherits RLS tenant context). The row-level lock on
+  the vault row serializes seq assignment per vault.
+  """
+  def next_seq!(vault_id) do
+    %{rows: [[seq]]} =
+      Repo.query!(
+        "UPDATE vaults SET change_seq = change_seq + 1 WHERE id = $1 RETURNING change_seq",
+        [Ecto.UUID.dump!(vault_id)]
+      )
+
+    seq
+  end
+
   # ── Register (idempotent) ───────────────────────────────────────────────────
 
   @doc """
