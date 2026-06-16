@@ -15,7 +15,10 @@ defmodule Engram.VaultsSeqTest do
   # so the bare integer from next_seq!/1 is unwrapped here. Later write-path
   # callers invoke next_seq!/1 directly inside their own transaction and use the
   # raw integer return.
-  test "next_seq! increments the vault counter and returns the new value", %{user: user, vault: vault} do
+  test "next_seq! increments the vault counter and returns the new value", %{
+    user: user,
+    vault: vault
+  } do
     {:ok, s1} = Repo.with_tenant(user.id, fn -> Vaults.next_seq!(vault.id) end)
     {:ok, s2} = Repo.with_tenant(user.id, fn -> Vaults.next_seq!(vault.id) end)
     assert is_integer(s1)
