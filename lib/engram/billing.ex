@@ -135,21 +135,34 @@ defmodule Engram.Billing do
 
   # ── Tier & Status Queries ──────────────────────────────────────
 
+  # Subscription statuses that entitle a user to their paid tier:
+  #   * `active`   — paying, current.
+  #   * `trialing` — paid plan with a deferred first charge (card-on-file);
+  #     the whole point is full paid access during the window.
+  #   * `past_due` — payment failed but Paddle is retrying within the
+  #     dunning grace window; a transient card decline shouldn't strip
+  #     features mid-cycle. (Data retention already treats past_due as
+  #     paid — see `Engram.Workers.InactivityCleanup`.)
+  # `paused`/`canceled` do NOT entitle: the subscription has lapsed, so the
+  # user drops to Free until it recovers.
+  @entitled_statuses ~w(active trialing past_due)
+
   @doc """
   Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
-  Only an `active` paid subscription resolves to `:starter` or `:pro`.
-  Everyone else — un-onboarded users, self-host, canceled / past_due /
-  trialing subscriptions — resolves to `:free`. Always returns an atom
-  (never `nil`); the un-onboarded path is gated upstream by
+  An `active`, `trialing`, or `past_due` paid subscription resolves to
+  `:starter` or `:pro` (see `@entitled_statuses` for the rationale — trials
+  and dunning grace both keep access). Everyone else — un-onboarded users,
+  self-host, paused / canceled subscriptions — resolves to `:free`. Always
+  returns an atom (never `nil`); the un-onboarded path is gated upstream by
   `RequireOnboarding` but a Free default keeps `effective_limit/2` and
   `default_for/2` total.
   """
   @spec tier(Engram.Accounts.User.t()) :: :free | :starter | :pro
   def tier(%Engram.Accounts.User{} = user) do
     case get_subscription(user) do
-      %Subscription{status: "active", tier: "starter"} -> :starter
-      %Subscription{status: "active", tier: "pro"} -> :pro
+      %Subscription{status: s, tier: "starter"} when s in @entitled_statuses -> :starter
+      %Subscription{status: s, tier: "pro"} when s in @entitled_statuses -> :pro
       _ -> :free
     end
   end

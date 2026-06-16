@@ -235,19 +235,20 @@ defmodule Engram.OnboardingTest do
                Onboarding.status(user)
     end
 
-    test "next_step=billing when terms accepted but subscription is past_due (no explicit Free)" do
-      # Under the Free-tier model + tightened predicate, only `status:"active"`
-      # paid subs resolve to `:starter`/`:pro`; past_due → `tier=:free`. Without
-      # explicit Free acceptance (`free_tier_accepted_at`), `subscription_ok`
-      # fails and the wizard bounces back to `:billing` so the user can either
-      # repair payment or click "Continue with Free".
+    test "subscription_ok when terms accepted and subscription is past_due (grace window)" do
+      # A `past_due` subscription is within Paddle's dunning grace window, so
+      # `Billing.tier/1` keeps it at its paid tier (`:starter`/`:pro`) — see
+      # `@entitled_statuses`. The onboarding billing gate passes on tier alone,
+      # so a past_due user is NOT bounced back to `:billing`; with the rest of
+      # the wizard complete they reach `:done`. (Payment repair happens later
+      # via the billing settings page, not the onboarding wizard.)
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "past_due")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
       insert(:vault, user: user)
 
-      assert %{terms_ok: true, subscription_ok: false, next_step: :billing} =
+      assert %{terms_ok: true, subscription_ok: true, next_step: :done} =
                Onboarding.status(user)
     end
 
