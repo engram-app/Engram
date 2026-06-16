@@ -125,6 +125,7 @@ defmodule Engram.Notes do
                {:ok, %Note{} = soft_deleted} ->
                  soft_deleted
                  |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
                    {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
@@ -188,6 +189,7 @@ defmodule Engram.Notes do
 
     %Note{id: marker_id}
     |> Note.changeset(attrs)
+    |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
     |> Repo.insert()
     |> case do
       {:ok, marker} ->
@@ -237,6 +239,7 @@ defmodule Engram.Notes do
                {:ok, %Note{deleted_at: nil} = marker} ->
                  marker
                  |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
                    {:ok, _} -> {:ok, :deleted}
@@ -732,13 +735,16 @@ defmodule Engram.Notes do
         decrypted_note.tags || []
       )
 
+    seq = Engram.Vaults.next_seq!(note.vault_id)
+
     {count, _} =
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
         set:
           [
             embed_hash: nil,
-            updated_at: now
+            updated_at: now,
+            seq: seq
           ] ++ full_kw
       )
 
@@ -782,9 +788,11 @@ defmodule Engram.Notes do
       if note do
         _ =
           Repo.with_tenant(user.id, fn ->
+            seq = Engram.Vaults.next_seq!(vault.id)
+
             {updated, _} =
               from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
-              |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+              |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
             # Decrement by rows actually transitioned live → deleted, so a
             # concurrent delete (already-nil deleted_at) can't double-count.
@@ -2112,46 +2120,57 @@ defmodule Engram.Notes do
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
-      Repo.with_tenant(user.id, fn ->
-        Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-          case note.kind do
-            "folder" ->
-              {ct, nonce, hmac} =
-                folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
+      # One seq for the whole folder-rename op — shared across every
+      # touched row (updates + tombstones). Allocated inside the txn that
+      # holds the vault row lock; the bare integer is reused below for the
+      # tombstone insert (a separate txn, but the value is already minted).
+      {:ok, seq} =
+        Repo.with_tenant(user.id, fn ->
+          seq = Engram.Vaults.next_seq!(vault.id)
 
-              from(n in Note, where: n.id == ^note.id)
-              |> Repo.update_all(
-                set: [
-                  folder_ciphertext: ct,
-                  folder_nonce: nonce,
-                  folder_hmac: hmac,
-                  updated_at: now
-                ]
-              )
+          Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
+            case note.kind do
+              "folder" ->
+                {ct, nonce, hmac} =
+                  folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-            _ ->
-              full_kw =
-                full_aad_bound_kw(
-                  user,
-                  note.id,
-                  note.content || "",
-                  new_title,
-                  new_path,
-                  new_note_folder,
-                  note.tags || []
+                from(n in Note, where: n.id == ^note.id)
+                |> Repo.update_all(
+                  set: [
+                    folder_ciphertext: ct,
+                    folder_nonce: nonce,
+                    folder_hmac: hmac,
+                    updated_at: now,
+                    seq: seq
+                  ]
                 )
 
-              from(n in Note, where: n.id == ^note.id)
-              |> Repo.update_all(
-                set:
-                  [
-                    embed_hash: nil,
-                    updated_at: now
-                  ] ++ full_kw
-              )
-          end
+              _ ->
+                full_kw =
+                  full_aad_bound_kw(
+                    user,
+                    note.id,
+                    note.content || "",
+                    new_title,
+                    new_path,
+                    new_note_folder,
+                    note.tags || []
+                  )
+
+                from(n in Note, where: n.id == ^note.id)
+                |> Repo.update_all(
+                  set:
+                    [
+                      embed_hash: nil,
+                      updated_at: now,
+                      seq: seq
+                    ] ++ full_kw
+                )
+            end
+          end)
+
+          seq
         end)
-      end)
 
       # Insert soft-deleted tombstones for old paths so the HTTP changes feed
       # includes delete signals. Without these, polling clients retain stale
@@ -2184,7 +2203,8 @@ defmodule Engram.Notes do
             vault_id: vault.id,
             created_at: now,
             updated_at: now,
-            deleted_at: now
+            deleted_at: now,
+            seq: seq
           }
 
           Map.merge(base, Map.new(full_kw))
@@ -2271,11 +2291,13 @@ defmodule Engram.Notes do
       {real_notes, _markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
 
       Repo.with_tenant(user.id, fn ->
+        seq = Engram.Vaults.next_seq!(vault.id)
+
         {updated, _} =
           from(n in Note,
             where: n.id in ^ids and is_nil(n.deleted_at)
           )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
         # Decrement only real notes — markers don't count against the meter.
         # `updated` may include both kinds; recompute live-real-note count from

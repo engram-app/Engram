@@ -32,4 +32,28 @@ defmodule Engram.NotesSeqTest do
     s_update = note_seq(user, vault, n1.id)
     assert s_update > s_insert
   end
+
+  test "delete_note stamps a new seq on the soft-deleted row", %{user: user, vault: vault} do
+    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    s_before = note_seq(user, vault, n.id)
+
+    :ok = Notes.delete_note(user, vault, "a.md")
+
+    {:ok, row} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        Engram.Repo.get(Engram.Notes.Note, n.id)
+      end)
+
+    assert row.deleted_at != nil
+    assert row.seq > s_before
+  end
+
+  test "rename_note stamps a new seq on the renamed row", %{user: user, vault: vault} do
+    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    s_before = note_seq(user, vault, n.id)
+
+    {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
+
+    assert note_seq(user, vault, n.id) > s_before
+  end
 end
