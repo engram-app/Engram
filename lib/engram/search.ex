@@ -187,20 +187,37 @@ defmodule Engram.Search do
     end
   end
 
-  # Hybrid: dense + sparse fused server-side. No-DEK degrades to vector-only.
+  # Hybrid: dense + sparse fused server-side. No-DEK or empty-query degrades to
+  # vector-only. Embedding failure (backend down/rate-limited) degrades to
+  # keyword-only rather than failing a search the keyword leg could still serve.
   defp run_legs(:hybrid, user, query, search_opts) do
-    with {:ok, [vector]} <- embed_for_search(query) do
-      case sparse_query(user, query) do
-        {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
-        :no_vault -> Qdrant.search(collection(), vector, search_opts)
-      end
+    case embed_for_search(query) do
+      {:ok, [vector]} ->
+        case sparse_query(user, query) do
+          {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
+          :no_vault -> Qdrant.search(collection(), vector, search_opts)
+        end
+
+      {:error, _reason} = err ->
+        # Embedding backend down/rate-limited: degrade to keyword-only rather
+        # than failing a search the keyword leg could still serve.
+        case sparse_query(user, query) do
+          {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
+          :no_vault -> err
+        end
     end
   end
 
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do
-      {:ok, filter_key} -> {:ok, KeywordIndex.module().encode_query(query, filter_key)}
-      {:error, :no_dek} -> :no_vault
+      {:ok, filter_key} ->
+        case KeywordIndex.module().encode_query(query, filter_key) do
+          %{indices: []} -> :no_vault
+          sparse -> {:ok, sparse}
+        end
+
+      {:error, :no_dek} ->
+        :no_vault
     end
   end
 

@@ -21,7 +21,7 @@ defmodule Engram.KeywordIndex.Tokenizer do
   def tokens(text) when is_binary(text) do
     text
     |> String.normalize(:nfkc)
-    |> String.downcase()
+    |> String.downcase(:default)
     |> then(&Regex.scan(@word_re, &1))
     |> Enum.map(&hd/1)
     |> Enum.flat_map(&expand/1)

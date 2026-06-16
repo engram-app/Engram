@@ -5,9 +5,11 @@ defmodule Engram.KeywordIndex.Stats do
   state, no counter bookkeeping. Used at index time; the #605 re-normalize
   worker recomputes weights when a vault's avgdl drifts.
 
-  Falls back to `@default_avgdl` for an empty/new vault (matches the FastEmbed
-  BM25 default). BM25 is a soft normalizer, so this bootstrap value barely
-  moves rankings on small vaults.
+  Falls back to `@default_avgdl` for an empty/new vault. 100.0 is a
+  markdown-realistic bootstrap (typical chunk is 50-150 tokens); the original
+  256.0 over-penalized short chunks via BM25 length-norm on a fresh vault.
+  BM25 is a soft normalizer, so this value barely moves rankings once real
+  chunks exist.
   """
 
   import Ecto.Query
@@ -15,7 +17,7 @@ defmodule Engram.KeywordIndex.Stats do
   alias Engram.Notes.Chunk
   alias Engram.Repo
 
-  @default_avgdl 256.0
+  @default_avgdl 100.0
 
   @spec avgdl(Ecto.UUID.t()) :: float()
   def avgdl(vault_id) do
