@@ -105,7 +105,11 @@ the same ciphertext as today.
 ### Seq assignment (the one correctness rule)
 
 The seq stamp and the row write happen in **one transaction**, so seq order ==
-commit order, gap-free, race-free:
+commit order, per-vault **monotonic**, and race-free. (Monotonic, not
+gap-free: a rolled-back op un-bumps the counter, but a no-op re-push still
+consumes a seq. Cursors/compaction only need monotonicity — `seq > cursor`
+and `seq <= low_water` are correct over a gappy sequence — so gaps are
+harmless. Don't build a contiguity assumption into compaction.)
 
 ```sql
 BEGIN;
@@ -242,7 +246,7 @@ Each step is independently shippable and reversible.
 ## Testing strategy (TDD)
 
 **Backend (`mix test`):**
-- In-transaction seq stamp: monotonic, gap-free, per-vault; concurrent writes
+- In-transaction seq stamp: per-vault monotonic (gaps from no-ops harmless); concurrent writes
   serialize correctly.
 - `?cursor=` pull returns rows + tombstones with `seq > cursor` in order;
   pagination by seq.
