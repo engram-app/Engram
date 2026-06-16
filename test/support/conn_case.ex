@@ -53,6 +53,25 @@ defmodule EngramWeb.ConnCase do
     user
   end
 
+  @doc """
+  Test `setup` callback that builds an API-key-authenticated connection:
+  inserts a paid (api_write_enabled) user with a default vault, mints an API
+  key, and sets the `Bearer` header. Returns `%{conn, user, vault, api_key}`
+  to merge into the test context.
+
+  Use as `setup :authed_api_conn`. This collapses the API-key auth boilerplate
+  that was copy-pasted across controller tests; files needing extra fixtures
+  can call it and augment the returned context.
+  """
+  def authed_api_conn(%{conn: conn}) do
+    user = Engram.Factory.insert(:user)
+    vault = Engram.Factory.insert(:vault, user: user, is_default: true)
+    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
+    authed = Plug.Conn.put_req_header(conn, "authorization", "Bearer #{api_key}")
+    %{conn: authed, user: user, vault: vault, api_key: api_key}
+  end
+
   @doc "Signs `user` in by minting a local access token and setting the Bearer header."
   def authenticate(conn, user) do
     # `user_factory` defaults `external_id: nil`; the access token's `sub` claim

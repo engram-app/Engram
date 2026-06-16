@@ -1,14 +1,7 @@
 defmodule EngramWeb.FoldersControllerBatchTest do
   use EngramWeb.ConnCase, async: false
 
-  setup %{conn: conn} do
-    user = insert(:user)
-    vault = insert(:vault, user: user, is_default: true)
-    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
-    authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user, vault: vault}
-  end
+  setup :authed_api_conn
 
   describe "POST /api/folders/batch-delete" do
     test "atomic cascading delete + idempotency replay", %{conn: conn, user: user, vault: vault} do
