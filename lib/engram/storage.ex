@@ -84,4 +84,15 @@ defmodule Engram.Storage do
       when is_binary(user_id) and is_binary(vault_id) and is_binary(path) and path != "" do
     "#{user_id}/#{vault_id}/#{path}"
   end
+
+  @doc """
+  Build a storage key from the immutable attachment row UUID. Decoupled from
+  the mutable vault path so move/rename never relocates the blob and a new
+  upload to a vacated path computes a fresh key (no clobber). New uploads use
+  this; legacy rows keep their path-derived `storage_key` column value.
+  """
+  def object_key(user_id, vault_id, att_id)
+      when is_binary(user_id) and is_binary(vault_id) and is_binary(att_id) and att_id != "" do
+    "#{user_id}/#{vault_id}/objects/#{att_id}"
+  end
 end
