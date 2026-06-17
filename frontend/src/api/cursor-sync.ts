@@ -88,6 +88,14 @@ async function pullLoop(
       setCursor(vaultId, cursor)
     }
     if (!page.has_more) break
+    if (i === MAX_PAGES - 1) {
+      // Don't silently truncate: a feed still reporting has_more at the cap is
+      // a server bug (or an absurdly large gap). The cursor is persisted, so
+      // the next trigger resumes — but surface it rather than hide the stall.
+      console.warn(
+        `[cursor-sync] vault ${vaultId}: hit MAX_PAGES (${MAX_PAGES}) with has_more still true; pull will resume on the next trigger`,
+      )
+    }
   }
 }
 
