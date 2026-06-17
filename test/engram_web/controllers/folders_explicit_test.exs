@@ -1,14 +1,7 @@
 defmodule EngramWeb.FoldersExplicitTest do
   use EngramWeb.ConnCase, async: true
 
-  setup %{conn: conn} do
-    user = insert(:user)
-    vault = insert(:vault, user: user, is_default: true)
-    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
-    authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user, vault: vault}
-  end
+  setup :authed_api_conn
 
   describe "GET /folders/explicit" do
     test "returns only marker rows, not derived folders", %{
