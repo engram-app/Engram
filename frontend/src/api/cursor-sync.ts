@@ -75,6 +75,8 @@ async function pullLoop(
 ): Promise<void> {
   let cursor = startCursor
   for (let i = 0; i < MAX_PAGES; i++) {
+    // cursor is already url-safe base64 (encodeCursor), so encodeURIComponent
+    // is a no-op here — kept defensively in case the token shape ever changes.
     const page = await api.get<ChangesPage>(
       `/sync/changes?cursor=${encodeURIComponent(cursor)}&fields=meta`,
     )
@@ -89,9 +91,10 @@ async function pullLoop(
   }
 }
 
-// The server only sends next_cursor while has_more is true. On the final page
-// we encode the head ourselves from the last applied row; an empty page keeps
-// the prior cursor.
+// The backend guarantees next_cursor is non-null ONLY when has_more is true
+// (sync_controller renders next_cursor inside `if has_more`), so the first
+// branch never fires on a final page. On the final page we encode the head
+// ourselves from the last applied row; an empty page keeps the prior cursor.
 function nextCursor(page: ChangesPage, prev: string): string {
   if (page.next_cursor) return page.next_cursor
   const last = page.changes[page.changes.length - 1]
