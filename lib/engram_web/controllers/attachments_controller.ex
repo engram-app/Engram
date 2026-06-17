@@ -109,6 +109,63 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  def rename(conn, %{"old_path" => old_path, "new_path" => new_path}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with :ok <- Billing.check_feature(user, :attachments_enabled),
+         {:ok, _att} <- Attachments.move_attachment(user, vault, old_path, new_path) do
+      json(conn, %{renamed: true, old_path: old_path, new_path: new_path})
+    else
+      {:error, :feature_not_available} ->
+        EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+
+      {:error, :conflict} ->
+        conn |> put_status(409) |> json(%{error: "conflict"})
+
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: "not_found"})
+    end
+  end
+
+  def batch_move(conn, %{"paths" => paths, "target_folder" => target}) when is_list(paths) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case Attachments.batch_move(user, vault, paths, target) do
+      {:ok, %{moved: n}} ->
+        body = %{moved: n}
+        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+        json(conn, body)
+
+      {:error, {:conflict, p}} ->
+        conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
+
+      {:error, {:not_found, p}} ->
+        conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
+
+      {:error, _} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
+    end
+  end
+
+  def batch_move(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required params: paths, target_folder"})
+  end
+
+  def batch_delete(conn, %{"paths" => paths}) when is_list(paths) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+    {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
+    body = %{deleted: n}
+    Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+    json(conn, body)
+  end
+
+  def batch_delete(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "missing required param: paths"})
+  end
+
   def index(conn, _params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
