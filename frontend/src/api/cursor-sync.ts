@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { api, ApiError } from './client'
+import { getActiveVaultId } from './active-vault'
 import { handleNoteChanged, type NoteChangedPayload } from './channel'
 import { encodeCursor, getCursor, setCursor, MAX_UUID } from './cursor'
 
@@ -43,10 +44,20 @@ export function runCursorSync(vaultId: string, queryClient: QueryClient): Promis
   return run
 }
 
+// The cursor-sync requests carry the AMBIENT X-Vault-ID (client.authFetch reads
+// the active vault, not vaultId). An in-flight run isn't cancelled on a vault
+// switch, so a response can arrive belonging to a different vault. Guard every
+// write: only apply/persist while this run's vault is still the active one,
+// otherwise discard (the now-active vault has its own run).
+function stillActive(vaultId: string): boolean {
+  return getActiveVaultId() === vaultId
+}
+
 async function doCursorSync(vaultId: string, queryClient: QueryClient): Promise<void> {
   const cursor = getCursor(vaultId)
   if (cursor == null) {
-    setCursor(vaultId, await bootstrap())
+    const seeded = await bootstrap()
+    if (stillActive(vaultId)) setCursor(vaultId, seeded)
     return
   }
   try {
@@ -56,7 +67,8 @@ async function doCursorSync(vaultId: string, queryClient: QueryClient): Promise<
     // PR D) → re-establish a head cursor. Bootstrap re-renders nothing; the
     // normal queries already hold current state.
     if (e instanceof ApiError && (e.status === 400 || e.status === 410)) {
-      setCursor(vaultId, await bootstrap())
+      const seeded = await bootstrap()
+      if (stillActive(vaultId)) setCursor(vaultId, seeded)
       return
     }
     throw e
@@ -80,6 +92,10 @@ async function pullLoop(
     const page = await api.get<ChangesPage>(
       `/sync/changes?cursor=${encodeURIComponent(cursor)}&fields=meta`,
     )
+    // Vault switched while this page was in flight → it was fetched under the
+    // new vault's X-Vault-ID, so it isn't this vault's data. Stop before
+    // applying or advancing the cursor.
+    if (!stillActive(vaultId)) return
     for (const row of page.changes) applyRow(row, queryClient, vaultId)
 
     const next = nextCursor(page, cursor)

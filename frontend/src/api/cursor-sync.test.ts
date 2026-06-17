@@ -13,6 +13,14 @@ vi.mock('./client', () => ({
   },
 }))
 
+// The cursor-sync requests carry the AMBIENT X-Vault-ID (client.authFetch reads
+// the active vault). Mock the active vault so tests can simulate a mid-pull
+// vault switch. Defaults to 'v1' (the vault used throughout the suite).
+const activeVaultRef = vi.hoisted(() => ({ current: 'v1' }))
+vi.mock('./active-vault', () => ({
+  getActiveVaultId: () => activeVaultRef.current,
+}))
+
 import { api, ApiError } from './client'
 import { __resetNoteChangeBatch } from './channel'
 import { getCursor, setCursor, encodeCursor, MAX_UUID } from './cursor'
@@ -35,6 +43,7 @@ beforeEach(() => {
   localStorage.clear()
   get.mockReset()
   __resetCursorSyncInflight()
+  activeVaultRef.current = 'v1'
   vi.useFakeTimers()
 })
 afterEach(() => {
@@ -151,6 +160,37 @@ describe('runCursorSync — single-flight per vault', () => {
     await Promise.all([a, b])
 
     expect(get).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('runCursorSync — vault switched mid-pull (ambient X-Vault-ID race)', () => {
+  it('discards the page and does not advance the cursor when the active vault changed', async () => {
+    setCursor('v1', 'tok-0')
+    get.mockResolvedValueOnce({
+      changes: [{ type: 'note', id: 'id-1', path: 'a.md', seq: 5 }],
+      next_cursor: null,
+      has_more: false,
+    })
+    const qc = mockQueryClient()
+    // The page resolves under a now-different active vault: client.authFetch
+    // sent X-Vault-ID for v2, so this page is v2's data — must not be applied
+    // to or persisted against v1.
+    activeVaultRef.current = 'v2'
+
+    await runCursorSync('v1', qc)
+
+    expect(qc.invalidateQueries).not.toHaveBeenCalled()
+    expect(getCursor('v1')).toBe('tok-0')
+  })
+
+  it('does not seed a cursor from a bootstrap fetched under a different vault', async () => {
+    get.mockResolvedValueOnce({ change_seq: 99 })
+    const qc = mockQueryClient()
+    activeVaultRef.current = 'v2'
+
+    await runCursorSync('v1', qc)
+
+    expect(getCursor('v1')).toBeNull()
   })
 })
 
