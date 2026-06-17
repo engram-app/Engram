@@ -256,11 +256,11 @@ defmodule Engram.Attachments do
       {:ok, filter_key} ->
         path_hmac = Crypto.hmac_field(filter_key, path)
 
-        storage_key =
+        result =
           Repo.with_tenant(user.id, fn ->
             seq = Engram.Vaults.next_seq!(vault.id)
 
-            {_count, keys} =
+            {count, keys} =
               from(a in Attachment,
                 where:
                   a.path_hmac == ^path_hmac and a.user_id == ^user.id and
@@ -269,35 +269,40 @@ defmodule Engram.Attachments do
               )
               |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-            List.first(keys)
+            {count, List.first(keys)}
           end)
           |> unwrap_tenant()
 
         # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
-        case storage_key do
-          {:ok, key} when is_binary(key) ->
-            delete_external(key)
+        deleted? =
+          case result do
+            {:ok, {count, key}} when is_binary(key) ->
+              delete_external(key)
+              count > 0
 
-          # {:ok, nil}: live row with no storage_key (legacy pre-column) — nothing to delete.
-          {:ok, _} ->
-            :ok
+            # {count, nil}: legacy row with no storage_key, or no row matched.
+            {:ok, {count, _}} ->
+              count > 0
 
-          {:error, reason} ->
-            require Logger
-            Logger.warning("delete_attachment: tenant lookup failed", reason: inspect(reason))
-            :ok
-        end
+            {:error, reason} ->
+              require Logger
+              Logger.warning("delete_attachment: tenant lookup failed", reason: inspect(reason))
+              false
+          end
 
-        # Real-time notification: path/vault are known; mime/size/mtime are
-        # unavailable post-delete (row is soft-deleted), so only the core delete
-        # discriminators are sent. Plugin only needs event_type+kind+path to trash.
-        _ =
+        # Real-time notification — only when a live row actually transitioned to
+        # deleted (idempotent no-op deletes of an absent/already-deleted path
+        # don't emit a spurious delete). path/vault are known; mime/size/mtime
+        # are gone post-delete, so only the discriminators the plugin needs to
+        # trash are sent.
+        if deleted? do
           EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
             "event_type" => "delete",
             "kind" => "attachment",
             "path" => path,
             "vault_id" => vault.id
           })
+        end
 
         :ok
 

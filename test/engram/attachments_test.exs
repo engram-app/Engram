@@ -623,6 +623,23 @@ defmodule Engram.AttachmentsTest do
       {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
     end
 
+    test "batch_move reverts an already-moved item when a later item conflicts",
+         %{user: user, vault: vault} do
+      # Pre-occupy the target of the SECOND item so a.png moves first, then
+      # b.png conflicts — proving the whole batch (incl. a.png) rolls back.
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "img/b.png", "content_base64" => Base.encode64("X"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+
+      assert {:error, {:conflict, "b.png"}} =
+               Attachments.batch_move(user, vault, ["a.png", "b.png"], "img")
+
+      # a.png's earlier move was rolled back: still at root, NOT at img/a.png.
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+      {:ok, nil} = Attachments.get_attachment(user, vault, "img/a.png")
+    end
+
     test "batch_delete soft-deletes each", %{user: user, vault: vault} do
       {:ok, %{deleted: 2}} = Attachments.batch_delete(user, vault, ["a.png", "b.png"])
       {:ok, nil} = Attachments.get_attachment(user, vault, "a.png")
@@ -671,6 +688,15 @@ defmodule Engram.AttachmentsTest do
         event: "note_changed",
         payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "gone.png"}
       }
+    end
+
+    test "deleting an absent path broadcasts nothing", %{user: user, vault: vault} do
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      :ok = Attachments.delete_attachment(user, vault, "never-existed.png")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
     end
   end
 end
