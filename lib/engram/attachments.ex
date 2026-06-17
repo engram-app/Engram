@@ -260,7 +260,7 @@ defmodule Engram.Attachments do
           Repo.with_tenant(user.id, fn ->
             seq = Engram.Vaults.next_seq!(vault.id)
 
-            {_, returned} =
+            {_count, keys} =
               from(a in Attachment,
                 where:
                   a.path_hmac == ^path_hmac and a.user_id == ^user.id and
@@ -269,14 +269,23 @@ defmodule Engram.Attachments do
               )
               |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-            List.first(returned || [])
+            List.first(keys)
           end)
           |> unwrap_tenant()
 
         # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
         case storage_key do
-          {:ok, key} when is_binary(key) -> delete_external(key)
-          _ -> :ok
+          {:ok, key} when is_binary(key) ->
+            delete_external(key)
+
+          # {:ok, nil}: live row with no storage_key (legacy pre-column) — nothing to delete.
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            require Logger
+            Logger.warning("delete_attachment: tenant lookup failed", reason: inspect(reason))
+            :ok
         end
 
         :ok
