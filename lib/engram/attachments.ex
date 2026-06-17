@@ -248,8 +248,16 @@ defmodule Engram.Attachments do
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
   def delete_attachment(user, vault, path) do
+    _ = do_delete_attachment(fresh_user(user), vault, path)
+    :ok
+  end
+
+  # Soft-deletes one attachment and returns whether a live row actually
+  # transitioned to deleted (`false` for an absent/already-deleted path).
+  # Broadcasts + best-effort blob cleanup happen here so both the single-delete
+  # API and `batch_delete/3` share one implementation and count truthfully.
+  defp do_delete_attachment(user, vault, path) do
     path = PathSanitizer.sanitize(path)
-    user = fresh_user(user)
     now = DateTime.utc_now(:second)
 
     case Crypto.dek_filter_key(user) do
@@ -304,11 +312,11 @@ defmodule Engram.Attachments do
           })
         end
 
-        :ok
+        deleted?
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror get_attachment's defensive empty.
-        :ok
+        false
     end
   end
 
@@ -468,7 +476,15 @@ defmodule Engram.Attachments do
     })
   end
 
-  @doc "Moves each attachment into `target_folder` (\"\" = root). All-or-nothing."
+  @doc """
+  Moves each attachment into `target_folder` (\"\" = root). All-or-nothing: any
+  conflict/not_found rolls back every prior move's DB write.
+
+  Caveat: each `move_attachment` broadcasts its `note_changed` events as its own
+  inner transaction commits, BEFORE the outer rollback can fire — so a later
+  failure can't retract earlier items' broadcasts. Clients self-heal on the next
+  pull. Same trade-off as `Notes.rename_folder`; not worth deferring broadcasts.
+  """
   @spec batch_move(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}} | {:error, {atom(), String.t()} | term()}
   def batch_move(_user, _vault, [], _target_folder), do: {:ok, %{moved: 0}}
@@ -494,13 +510,17 @@ defmodule Engram.Attachments do
     end)
   end
 
-  @doc "Soft-deletes each attachment by path. Best-effort (delete is idempotent)."
+  @doc """
+  Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
+  actually held a live row (absent/already-deleted paths don't count).
+  """
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, %{deleted: non_neg_integer()}}
   def batch_delete(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete(user, vault, paths) when is_list(paths) do
-    Enum.each(paths, fn p -> :ok = delete_attachment(user, vault, p) end)
-    {:ok, %{deleted: length(paths)}}
+    user = fresh_user(user)
+    deleted = Enum.count(paths, fn p -> do_delete_attachment(user, vault, p) end)
+    {:ok, %{deleted: deleted}}
   end
 
   # Real-time parity: reuse the existing `note_changed` socket event the plugin

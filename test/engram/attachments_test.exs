@@ -643,6 +643,11 @@ defmodule Engram.AttachmentsTest do
     test "batch_delete soft-deletes each", %{user: user, vault: vault} do
       {:ok, %{deleted: 2}} = Attachments.batch_delete(user, vault, ["a.png", "b.png"])
       {:ok, nil} = Attachments.get_attachment(user, vault, "a.png")
+      {:ok, nil} = Attachments.get_attachment(user, vault, "b.png")
+    end
+
+    test "batch_delete counts only paths that held a live row", %{user: user, vault: vault} do
+      {:ok, %{deleted: 1}} = Attachments.batch_delete(user, vault, ["a.png", "absent.png"])
     end
   end
 
