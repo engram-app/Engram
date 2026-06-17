@@ -26,6 +26,8 @@ defmodule Engram.Embedders.Voyage do
 
   @behaviour Engram.Embedder
 
+  alias Engram.ServiceConfig
+
   # Compile-time gate: the test-only `:voyage_throttle_key` config override
   # (used to give async test cases unique bucket keys) must be structurally
   # absent in non-test builds. Mirrors `EngramWeb.Plugs.RateLimit`'s
@@ -39,8 +41,8 @@ defmodule Engram.Embedders.Voyage do
   @impl true
   def model_info do
     %{
-      model: Application.get_env(:engram, :embed_model, @default_model),
-      dimensions: Application.get_env(:engram, :embed_dims, 1024)
+      model: ServiceConfig.get(:embed_model, @default_model),
+      dimensions: ServiceConfig.get(:embed_dims, 1024)
     }
   end
 
@@ -93,11 +95,11 @@ defmodule Engram.Embedders.Voyage do
   def request_defaults(_purpose), do: [receive_timeout: 30_000, retry: :transient, max_retries: 3]
 
   defp do_embed_texts(texts, opts) do
-    url = Application.get_env(:engram, :voyage_url, @default_url)
-    model = Keyword.get(opts, :model, Application.get_env(:engram, :embed_model, @default_model))
+    url = ServiceConfig.get(:voyage_url, @default_url)
+    model = Keyword.get(opts, :model, ServiceConfig.get(:embed_model, @default_model))
 
     api_key =
-      Application.get_env(:engram, :voyage_api_key) ||
+      ServiceConfig.get(:voyage_api_key) ||
         raise "VOYAGE_API_KEY not configured (set VOYAGE_API_KEY env var)"
 
     {req_opts, _} = Keyword.split(opts, [:retry, :max_retries, :receive_timeout])
@@ -187,19 +189,19 @@ defmodule Engram.Embedders.Voyage do
   end
 
   defp rpm_for(:query) do
-    Application.get_env(:engram, :voyage_query_rpm) ||
-      Application.get_env(:engram, :voyage_rpm)
+    ServiceConfig.get(:voyage_query_rpm) || ServiceConfig.get(:voyage_rpm)
   end
 
-  defp rpm_for(_), do: Application.get_env(:engram, :voyage_rpm)
+  defp rpm_for(_), do: ServiceConfig.get(:voyage_rpm)
 
-  # In test builds the bucket key honors `:voyage_throttle_key` so async test
-  # cases can use per-test keys and avoid collisions on the shared ETS limiter
-  # table. In non-test builds the override is structurally absent — operators
-  # cannot point a prod node at an arbitrary bucket key.
+  # In test builds the bucket key honors `:voyage_throttle_key` (resolved
+  # per-process via ServiceConfig) so async test cases can use per-test keys and
+  # avoid collisions on the shared ETS limiter table. In non-test builds the
+  # override is structurally absent — operators cannot point a prod node at an
+  # arbitrary bucket key.
   if @is_test_build do
     defp bucket_key(purpose) do
-      base = Application.get_env(:engram, :voyage_throttle_key, "voyage_embed")
+      base = ServiceConfig.get(:voyage_throttle_key, "voyage_embed")
       "#{base}:#{purpose}"
     end
   else

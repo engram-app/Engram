@@ -1,6 +1,11 @@
 ExUnit.start(assert_receive_timeout: 2_000)
 Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 
+# Own the per-process service-config override table on the long-lived suite
+# runner so a finishing async test can't destroy a concurrent test's overrides.
+# See Engram.ServiceConfig.
+Engram.ServiceConfig.ensure_table()
+
 # Capture log output during tests. Logger messages are buffered per-test and
 # only re-emitted to stdout when that test FAILS — green tests stay silent.
 # This hides intentional-error-path noise (e.g. `vault decrypt_failed`

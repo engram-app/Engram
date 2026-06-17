@@ -8,17 +8,19 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
+  alias Engram.ServiceConfig
+
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
 
-  defp base_url, do: Application.get_env(:engram, :qdrant_url, @default_url)
-  defp collection, do: Application.get_env(:engram, :qdrant_collection, @default_collection)
+  defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
+  defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
   @doc "Returns the configured Qdrant collection name (env-var-driven)."
   def collection_name, do: collection()
 
   defp binary_quantization_enabled?,
-    do: Application.get_env(:engram, :qdrant_binary_quantization, true)
+    do: ServiceConfig.get(:qdrant_binary_quantization, true)
 
   # Wrap an HTTP call in a `:telemetry.span` so the PromEx Qdrant plugin
   # (engram-app/engram-infra#340) sees per-op latency + status. `op` is
@@ -38,7 +40,7 @@ defmodule Engram.Vector.Qdrant do
 
   defp req_opts do
     {retry, max_retries} =
-      case Application.get_env(:engram, :qdrant_retry, :transient) do
+      case ServiceConfig.get(:qdrant_retry, :transient) do
         false -> {false, 0}
         mode -> {mode, 3}
       end
@@ -51,7 +53,7 @@ defmodule Engram.Vector.Qdrant do
       connect_options: [protocols: [:http1]]
     ]
 
-    case Application.get_env(:engram, :qdrant_api_key) do
+    case ServiceConfig.get(:qdrant_api_key) do
       nil -> base
       key -> Keyword.put(base, :headers, [{"api-key", key}])
     end

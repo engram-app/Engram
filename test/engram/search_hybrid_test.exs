@@ -1,18 +1,18 @@
 defmodule Engram.SearchHybridTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   import Mox
   import Ecto.Query
 
   alias Engram.Crypto.DekCache
   alias Engram.Search
+  alias Engram.ServiceConfig
 
   setup :verify_on_exit!
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}

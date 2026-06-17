@@ -1,5 +1,10 @@
 defmodule EngramWeb.Plugs.DeviceFingerprintTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false — this module attaches a GLOBAL telemetry handler for
+  # [:engram, :abuse, :device_fingerprint] and makes whole-event assertions
+  # (notably the `refute_received` no-op case below). Any concurrent test that
+  # emits that event would leak a foreign message into this process's mailbox,
+  # so the assertions are only sound when this module runs in isolation.
+  use EngramWeb.ConnCase, async: false
 
   alias EngramWeb.Plugs.DeviceFingerprint
 

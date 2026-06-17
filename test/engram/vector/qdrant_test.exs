@@ -1,15 +1,34 @@
 defmodule Engram.Vector.QdrantTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
+  alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    # Per-process override (not global put_env) so this suite runs async.
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     %{bypass: bypass}
+  end
+
+  describe "ServiceConfig override" do
+    test "prefers a per-process :qdrant_url override over global app env" do
+      # `setup` points the global :qdrant_url at `bypass`. Install a per-process
+      # override at a *different* Bypass and assert the request follows it —
+      # proving the read goes through ServiceConfig (the async-safety seam).
+      override_bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{override_bypass.port}")
+
+      Bypass.expect_once(override_bypass, "PUT", "/collections/ovr_col", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert :ok = Qdrant.ensure_collection("ovr_col", 1024)
+    end
   end
 
   describe "ensure_collection/2" do
@@ -34,8 +53,7 @@ defmodule Engram.Vector.QdrantTest do
     end
 
     test "omits quantization config when binary quantization is disabled", %{bypass: bypass} do
-      Application.put_env(:engram, :qdrant_binary_quantization, false)
-      on_exit(fn -> Application.delete_env(:engram, :qdrant_binary_quantization) end)
+      ServiceConfig.put_override(:qdrant_binary_quantization, false)
 
       Bypass.expect_once(bypass, "PUT", "/collections/test_col", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -352,8 +370,7 @@ defmodule Engram.Vector.QdrantTest do
     end
 
     test "omits rescore params when binary quantization is disabled", %{bypass: bypass} do
-      Application.put_env(:engram, :qdrant_binary_quantization, false)
-      on_exit(fn -> Application.delete_env(:engram, :qdrant_binary_quantization) end)
+      ServiceConfig.put_override(:qdrant_binary_quantization, false)
 
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -595,8 +612,7 @@ defmodule Engram.Vector.QdrantTest do
 
   describe "authentication" do
     test "sends api-key header when qdrant_api_key is configured", %{bypass: bypass} do
-      Application.put_env(:engram, :qdrant_api_key, "test-qdrant-key")
-      on_exit(fn -> Application.delete_env(:engram, :qdrant_api_key) end)
+      ServiceConfig.put_override(:qdrant_api_key, "test-qdrant-key")
 
       Bypass.expect_once(bypass, "PUT", "/collections/test_col", fn conn ->
         api_key = Plug.Conn.get_req_header(conn, "api-key")
@@ -611,8 +627,7 @@ defmodule Engram.Vector.QdrantTest do
     end
 
     test "does not send api-key header when config is not set", %{bypass: bypass} do
-      Application.delete_env(:engram, :qdrant_api_key)
-
+      # No override + app env unset (runtime-only key) ⇒ no api-key header.
       Bypass.expect_once(bypass, "PUT", "/collections/test_col", fn conn ->
         api_key = Plug.Conn.get_req_header(conn, "api-key")
         assert api_key == []

@@ -5,9 +5,10 @@ defmodule Engram.PromEx.QdrantTest do
 
   Cardinality contract: tags only `:op` (bounded enum) + `:status`.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Engram.PromEx.Qdrant, as: QdrantPlugin
+  alias Engram.ServiceConfig
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
@@ -61,25 +62,10 @@ defmodule Engram.PromEx.QdrantTest do
 
       on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
 
-      prev_url = Application.get_env(:engram, :qdrant_url)
-      Application.put_env(:engram, :qdrant_url, "http://127.0.0.1:1")
+      # Per-process overrides (not global put_env) so this suite runs async.
+      ServiceConfig.put_override(:qdrant_url, "http://127.0.0.1:1")
       # Avoid Req's transient retry loop blowing the test runtime
-      prev_retry = Application.get_env(:engram, :qdrant_retry)
-      Application.put_env(:engram, :qdrant_retry, false)
-
-      on_exit(fn ->
-        if prev_url do
-          Application.put_env(:engram, :qdrant_url, prev_url)
-        else
-          Application.delete_env(:engram, :qdrant_url)
-        end
-
-        if is_nil(prev_retry) do
-          Application.delete_env(:engram, :qdrant_retry)
-        else
-          Application.put_env(:engram, :qdrant_retry, prev_retry)
-        end
-      end)
+      ServiceConfig.put_override(:qdrant_retry, false)
 
       {:ok, ref: ref}
     end

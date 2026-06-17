@@ -1,5 +1,5 @@
 defmodule Engram.IndexingKeywordTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   import Mox
 
@@ -7,13 +7,13 @@ defmodule Engram.IndexingKeywordTest do
   alias Engram.Indexing
   alias Engram.KeywordIndex.QdrantSparse
   alias Engram.Notes
+  alias Engram.ServiceConfig
 
   setup :verify_on_exit!
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)

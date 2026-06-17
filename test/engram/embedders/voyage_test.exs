@@ -1,19 +1,16 @@
 defmodule Engram.Embedders.VoyageTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
   alias Engram.Embedders.Voyage
+  alias Engram.ServiceConfig
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :voyage_url, "http://localhost:#{bypass.port}")
-    Application.put_env(:engram, :voyage_api_key, "test-key")
-
-    on_exit(fn ->
-      Application.delete_env(:engram, :voyage_url)
-      Application.delete_env(:engram, :voyage_api_key)
-    end)
+    # Per-process overrides (not global put_env) so this suite runs async.
+    ServiceConfig.put_override(:voyage_url, "http://localhost:#{bypass.port}")
+    ServiceConfig.put_override(:voyage_api_key, "test-key")
 
     %{bypass: bypass}
   end
@@ -36,6 +33,25 @@ defmodule Engram.Embedders.VoyageTest do
       assert {:ok, vectors} = Voyage.embed_texts(["hello", "world"])
       assert length(vectors) == 2
       assert hd(vectors) == [0.1, 0.2, 0.3]
+    end
+
+    test "prefers a ServiceConfig per-process override over global app env" do
+      # `setup` points the global :voyage_url at `bypass`. Install a per-process
+      # override at a *different* Bypass and assert the request follows the
+      # override — proving the read goes through ServiceConfig, the seam that
+      # lets this suite run async without racing the global key.
+      override_bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:voyage_url, "http://localhost:#{override_bypass.port}")
+
+      Bypass.expect_once(override_bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{"data" => [%{"embedding" => [0.7]}]}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      assert {:ok, [[0.7]]} = Voyage.embed_texts(["only-via-override"])
     end
 
     test "returns error on non-200 response", %{bypass: bypass} do
@@ -112,8 +128,7 @@ defmodule Engram.Embedders.VoyageTest do
       # Per-test bucket key prevents cross-pollination between async tests
       # sharing the EngramWeb.RateLimiter ETS table.
       key = "voyage_embed_test_#{:erlang.unique_integer([:positive])}"
-      Application.put_env(:engram, :voyage_throttle_key, key)
-      on_exit(fn -> Application.delete_env(:engram, :voyage_throttle_key) end)
+      ServiceConfig.put_override(:voyage_throttle_key, key)
       :ok
     end
 
@@ -132,8 +147,7 @@ defmodule Engram.Embedders.VoyageTest do
     end
 
     test "returns synthetic 429 once bucket is exhausted, without hitting HTTP", %{bypass: bypass} do
-      Application.put_env(:engram, :voyage_rpm, 1)
-      on_exit(fn -> Application.delete_env(:engram, :voyage_rpm) end)
+      ServiceConfig.put_override(:voyage_rpm, 1)
 
       Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
         resp = %{"data" => [%{"embedding" => [0.1]}]}
@@ -153,8 +167,7 @@ defmodule Engram.Embedders.VoyageTest do
     end
 
     test "allows calls when bucket has tokens", %{bypass: bypass} do
-      Application.put_env(:engram, :voyage_rpm, 10)
-      on_exit(fn -> Application.delete_env(:engram, :voyage_rpm) end)
+      ServiceConfig.put_override(:voyage_rpm, 10)
 
       Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
         resp = %{"data" => [%{"embedding" => [0.1]}]}
