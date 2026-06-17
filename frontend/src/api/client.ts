@@ -1,5 +1,6 @@
 import { getActiveVaultId } from './active-vault'
 import { getApiBase, joinApiUrl } from './base'
+import { getDeviceId } from './device-id'
 
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null
@@ -50,6 +51,7 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
   if (vaultId != null) {
     headers.set('X-Vault-ID', String(vaultId))
   }
+  headers.set('X-Device-Id', getDeviceId())
 
   // joinApiUrl handles both same-origin (selfhost) and cross-origin
   // (saas, `https://api.engram.page`). For selfhost apiBase is "" so

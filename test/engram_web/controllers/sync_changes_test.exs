@@ -73,4 +73,45 @@ defmodule EngramWeb.SyncChangesTest do
     # exactly one write bumped the per-vault counter from 0 → 1
     assert body["change_seq"] == 1
   end
+
+  test "fields=meta omits note content but keeps content_hash + path", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "secret body"})
+
+    body = conn |> get(~p"/api/sync/changes?fields=meta") |> json_response(200)
+    note = Enum.find(body["changes"], &(&1["type"] == "note"))
+
+    assert note["content"] == nil
+    assert is_binary(note["content_hash"])
+    assert note["path"] == "n.md"
+  end
+
+  test "default (no fields param) returns full note content", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "secret body"})
+
+    body = conn |> get(~p"/api/sync/changes") |> json_response(200)
+    note = Enum.find(body["changes"], &(&1["type"] == "note"))
+
+    assert note["content"] == "secret body"
+  end
+
+  test "an unknown fields value falls back to full content (lenient, forward-compatible)", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "secret body"})
+
+    body = conn |> get(~p"/api/sync/changes?fields=bogus") |> json_response(200)
+    note = Enum.find(body["changes"], &(&1["type"] == "note"))
+
+    assert note["content"] == "secret body"
+  end
 end

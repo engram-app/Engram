@@ -45,17 +45,18 @@ defmodule EngramWeb.SyncController do
     vault = conn.assigns.current_vault
     device_id = conn |> get_req_header("x-device-id") |> List.first()
     limit = parse_limit(params["limit"])
+    fields = parse_fields(params["fields"])
 
     case Engram.Sync.decode_cursor(params["cursor"]) do
       {:ok, cursor} ->
-        render_changes(conn, user, vault, device_id, cursor || {0, nil}, limit)
+        render_changes(conn, user, vault, device_id, cursor || {0, nil}, limit, fields)
 
       {:error, :invalid_cursor} ->
         conn |> put_status(400) |> json(%{error: "invalid_cursor"})
     end
   end
 
-  defp render_changes(conn, user, vault, device_id, {after_seq, after_id}, limit) do
+  defp render_changes(conn, user, vault, device_id, {after_seq, after_id}, limit, fields) do
     if after_seq < Engram.Sync.retention_floor(vault) do
       conn |> put_status(410) |> json(%{error: "history_expired"})
     else
@@ -64,9 +65,11 @@ defmodule EngramWeb.SyncController do
       {:ok, %{changes: notes, has_more: notes_more}} =
         Engram.Notes.list_changes_by_seq(user, vault, after_seq,
           after_id: after_id,
-          limit: limit + 1
+          limit: limit + 1,
+          fields: fields
         )
 
+      # Attachments carry no note content, so the `fields` projection is n/a here.
       {:ok, %{changes: atts, has_more: atts_more}} =
         Engram.Attachments.list_changes_by_seq(user, vault, after_seq,
           after_id: after_id,
@@ -116,6 +119,13 @@ defmodule EngramWeb.SyncController do
       _ -> @max_page_limit
     end
   end
+
+  # Lenient by design: only "meta" opts into the content-stripped feed; any
+  # other/unknown value (incl. a future client's value) falls back to the full
+  # feed rather than 400ing. Unlike notes_controller's parse_changes_fields/1,
+  # this endpoint favors forward-compat degrade over strict rejection.
+  defp parse_fields("meta"), do: :meta
+  defp parse_fields(_), do: :all
 
   defp render_empty_manifest(conn, user, vault) do
     json(conn, %{

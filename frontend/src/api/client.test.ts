@@ -80,4 +80,17 @@ describe("api client 402 handling", () => {
 
     await expect(api.get("/x")).rejects.toBeInstanceOf(ApiError)
   })
+
+  it("sends an X-Device-Id header on every request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 200 }))
+    globalThis.fetch = fetchMock
+
+    await api.get("/anything")
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    const headers = init.headers as Headers
+    expect(headers.get("X-Device-Id")).toMatch(/^[0-9a-f-]{36}$/)
+  })
 })

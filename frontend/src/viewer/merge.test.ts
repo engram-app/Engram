@@ -28,6 +28,17 @@ describe('merge3', () => {
     expect(r.text).toBe('a\nB\n')
   })
 
+  it('treats identical local and remote edits as agreement, not a conflict', () => {
+    // Both sides made the SAME change vs base — e.g. a REST save's own
+    // note_changed echo arriving while baseRef is momentarily stale. Identical
+    // edits agree; an overlapping-but-equal change must never raise a conflict.
+    const base = 'a\nb\nc\n'
+    const edited = 'a\nb EDITED\nc\n'
+    const r = merge3(base, edited, edited)
+    expect(r.conflict).toBe(false)
+    expect(r.text).toBe(edited)
+  })
+
   // The behavior the true-conflict gate fixes: node-diff3's own `conflict` flag
   // groups an edited line + an adjacent remote insertion into one "conflict"
   // even though they touch disjoint base lines.
