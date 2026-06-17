@@ -1,5 +1,5 @@
 defmodule Engram.RepoUserAgreementsTenantTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   test "querying user_agreements without with_tenant raises TenantError" do
     assert_raise Engram.TenantError, fn ->

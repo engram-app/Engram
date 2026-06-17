@@ -1,5 +1,5 @@
 defmodule Engram.Legal.SeederTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
   alias Engram.Legal
   alias Engram.Legal.Seeder
 

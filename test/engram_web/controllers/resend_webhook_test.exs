@@ -1,5 +1,5 @@
 defmodule EngramWeb.ResendWebhookTest do
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   alias Engram.Email.Suppression
 
