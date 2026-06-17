@@ -28,6 +28,95 @@ defmodule EngramWeb.SyncController do
     end
   end
 
+  @doc """
+  Unified ordered change-log pull. Merges the per-table seq feeds (notes +
+  attachments) into one `(seq, id)`-ordered page, tags each entry with its
+  `type`, and returns an opaque `next_cursor` + `has_more`.
+
+  Per-vault `seq` is globally unique across notes AND attachments (both draw
+  from `Vaults.next_seq!/1`), so sorting the union by `{seq, id}` is a total
+  order — no note/attachment seq collisions.
+
+  Pull-carries-ack: records the device watermark from the *incoming* cursor
+  (what the client has durably applied), NOT the new page's max seq.
+  """
+  def changes(conn, params) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+    device_id = conn |> get_req_header("x-device-id") |> List.first()
+    limit = parse_limit(params["limit"])
+
+    case Engram.Sync.decode_cursor(params["cursor"]) do
+      {:ok, cursor} ->
+        render_changes(conn, user, vault, device_id, cursor || {0, nil}, limit)
+
+      {:error, :invalid_cursor} ->
+        conn |> put_status(400) |> json(%{error: "invalid_cursor"})
+    end
+  end
+
+  defp render_changes(conn, user, vault, device_id, {after_seq, after_id}, limit) do
+    if after_seq < Engram.Sync.retention_floor(vault) do
+      conn |> put_status(410) |> json(%{error: "history_expired"})
+    else
+      # Fetch limit+1 from EACH table so the merged page can still fill
+      # `limit` even if one feed is entirely consumed within the window.
+      {:ok, %{changes: notes, has_more: notes_more}} =
+        Engram.Notes.list_changes_by_seq(user, vault, after_seq,
+          after_id: after_id,
+          limit: limit + 1
+        )
+
+      {:ok, %{changes: atts, has_more: atts_more}} =
+        Engram.Attachments.list_changes_by_seq(user, vault, after_seq,
+          after_id: after_id,
+          limit: limit + 1
+        )
+
+      merged =
+        (Enum.map(notes, &Map.put(&1, :type, "note")) ++
+           Enum.map(atts, &Map.put(&1, :type, "attachment")))
+        |> Enum.sort_by(&{&1.seq, &1.id})
+
+      {page, has_more} =
+        if length(merged) > limit do
+          {Enum.take(merged, limit), true}
+        else
+          {merged, notes_more or atts_more}
+        end
+
+      next_cursor =
+        if has_more do
+          last = List.last(page)
+          Engram.Sync.encode_cursor(last.seq, last.id)
+        end
+
+      # The cursor the client *sent* is what it has durably applied; record
+      # that as the watermark (no-op when device_id is nil/blank).
+      :ok = Engram.Sync.record_cursor(user, vault, device_id, after_seq)
+
+      json(conn, %{changes: page, next_cursor: next_cursor, has_more: has_more})
+    end
+  end
+
+  # Both seq feeds hard-cap their own page at 500 rows. The controller MUST
+  # clamp to the same ceiling: each feed is fetched with `limit + 1`, and that
+  # +1 probe is what lets the merge detect "more rows exist" and trim safely.
+  # If the controller allowed a larger limit, a feed could return its capped
+  # 500 (< limit) while more in-range rows remain, the merge would skip the
+  # trim branch, and `next_cursor` would jump past those rows — silently
+  # dropping them from the pull. Keep this in lockstep with the feed caps.
+  @max_page_limit 500
+
+  defp parse_limit(nil), do: @max_page_limit
+
+  defp parse_limit(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} when n > 0 -> min(n, @max_page_limit)
+      _ -> @max_page_limit
+    end
+  end
+
   defp render_empty_manifest(conn) do
     json(conn, %{notes: [], attachments: [], total_notes: 0, total_attachments: 0})
   end
