@@ -101,4 +101,17 @@ defmodule EngramWeb.SyncChangesTest do
 
     assert note["content"] == "secret body"
   end
+
+  test "an unknown fields value falls back to full content (lenient, forward-compatible)", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "secret body"})
+
+    body = conn |> get(~p"/api/sync/changes?fields=bogus") |> json_response(200)
+    note = Enum.find(body["changes"], &(&1["type"] == "note"))
+
+    assert note["content"] == "secret body"
+  end
 end

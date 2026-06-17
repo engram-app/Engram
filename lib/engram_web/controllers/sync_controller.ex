@@ -69,6 +69,7 @@ defmodule EngramWeb.SyncController do
           fields: fields
         )
 
+      # Attachments carry no note content, so the `fields` projection is n/a here.
       {:ok, %{changes: atts, has_more: atts_more}} =
         Engram.Attachments.list_changes_by_seq(user, vault, after_seq,
           after_id: after_id,
@@ -119,6 +120,10 @@ defmodule EngramWeb.SyncController do
     end
   end
 
+  # Lenient by design: only "meta" opts into the content-stripped feed; any
+  # other/unknown value (incl. a future client's value) falls back to the full
+  # feed rather than 400ing. Unlike notes_controller's parse_changes_fields/1,
+  # this endpoint favors forward-compat degrade over strict rejection.
   defp parse_fields("meta"), do: :meta
   defp parse_fields(_), do: :all
 
