@@ -343,8 +343,10 @@ defmodule Engram.Attachments do
               Repo.rollback(:not_found)
 
             old_path == new_path ->
-              {:ok, att} = Crypto.maybe_decrypt_attachment_fields(live, user)
-              att
+              case Crypto.maybe_decrypt_attachment_fields(live, user) do
+                {:ok, att} -> att
+                {:error, reason} -> Repo.rollback(reason)
+              end
 
             Repo.one(live_by_hmac_query(user, vault, new_hmac)) ->
               Repo.rollback(:conflict)
@@ -392,6 +394,8 @@ defmodule Engram.Attachments do
         |> unwrap_tenant()
         |> case do
           {:ok, att} -> att
+          # No current cond branch returns {:error,_} without rolling back itself;
+          # this guards a future branch that returns an error tuple directly.
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
