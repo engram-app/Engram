@@ -22,6 +22,8 @@ defmodule Engram.Attachments.Attachment do
     field :mtime, :float
     field :storage_key, :string
     field :deleted_at, :utc_datetime
+    # Sync change-log seq (monotonic per vault). Stamped on every write.
+    field :seq, :integer
     field :encryption_version, :integer, default: 1
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     field :dek_version, :integer, default: 1
@@ -49,6 +51,7 @@ defmodule Engram.Attachments.Attachment do
       :vault_id,
       :storage_key,
       :deleted_at,
+      :seq,
       :encryption_version,
       :dek_version,
       :dek_version_pending,

@@ -125,6 +125,7 @@ defmodule Engram.Notes do
                {:ok, %Note{} = soft_deleted} ->
                  soft_deleted
                  |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
                    {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
@@ -188,6 +189,7 @@ defmodule Engram.Notes do
 
     %Note{id: marker_id}
     |> Note.changeset(attrs)
+    |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
     |> Repo.insert()
     |> case do
       {:ok, marker} ->
@@ -237,6 +239,7 @@ defmodule Engram.Notes do
                {:ok, %Note{deleted_at: nil} = marker} ->
                  marker
                  |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
                    {:ok, _} -> {:ok, :deleted}
@@ -425,6 +428,9 @@ defmodule Engram.Notes do
           phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
           changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
+          seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+          changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
+
           case Repo.insert(changeset) do
             {:ok, note} ->
               :ok = UsageMeters.inc_notes_count(user.id, 1)
@@ -489,8 +495,11 @@ defmodule Engram.Notes do
     with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
       phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
 
+      seq = Engram.Vaults.next_seq!(existing.vault_id)
+
       existing
       |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+      |> Ecto.Changeset.put_change(:seq, seq)
       |> Repo.update()
       |> case do
         {:ok, updated} -> {:ok, {existing.content_hash, updated}}
@@ -726,13 +735,16 @@ defmodule Engram.Notes do
         decrypted_note.tags || []
       )
 
+    seq = Engram.Vaults.next_seq!(note.vault_id)
+
     {count, _} =
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
         set:
           [
             embed_hash: nil,
-            updated_at: now
+            updated_at: now,
+            seq: seq
           ] ++ full_kw
       )
 
@@ -776,9 +788,11 @@ defmodule Engram.Notes do
       if note do
         _ =
           Repo.with_tenant(user.id, fn ->
+            seq = Engram.Vaults.next_seq!(vault.id)
+
             {updated, _} =
               from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
-              |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+              |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
             # Decrement by rows actually transitioned live → deleted, so a
             # concurrent delete (already-nil deleted_at) can't double-count.
@@ -1143,8 +1157,12 @@ defmodule Engram.Notes do
           {entries, 0}
 
         rows ->
+          # One op = one seq: every brand-new row in this batch shares it.
+          seq = Engram.Vaults.next_seq!(vault.id)
+          rows = Enum.map(Enum.reverse(rows), &Map.put(&1, :seq, seq))
+
           {_count, returned} =
-            Repo.insert_all(Note, Enum.reverse(rows), on_conflict: :nothing, returning: [:id])
+            Repo.insert_all(Note, rows, on_conflict: :nothing, returning: [:id])
 
           inserted_ids = MapSet.new(returned, & &1.id)
 
@@ -2106,87 +2124,107 @@ defmodule Engram.Notes do
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
-      Repo.with_tenant(user.id, fn ->
-        Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
-          case note.kind do
-            "folder" ->
-              {ct, nonce, hmac} =
-                folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
-
-              from(n in Note, where: n.id == ^note.id)
-              |> Repo.update_all(
-                set: [
-                  folder_ciphertext: ct,
-                  folder_nonce: nonce,
-                  folder_hmac: hmac,
-                  updated_at: now
-                ]
-              )
-
-            _ ->
-              full_kw =
-                full_aad_bound_kw(
-                  user,
-                  note.id,
-                  note.content || "",
-                  new_title,
-                  new_path,
-                  new_note_folder,
-                  note.tags || []
-                )
-
-              from(n in Note, where: n.id == ^note.id)
-              |> Repo.update_all(
-                set:
-                  [
-                    embed_hash: nil,
-                    updated_at: now
-                  ] ++ full_kw
-              )
-          end
-        end)
-      end)
-
-      # Insert soft-deleted tombstones for old paths so the HTTP changes feed
-      # includes delete signals. Without these, polling clients retain stale
-      # files at old paths after a folder rename. Tombstones are full-row
-      # inserts so each must carry the encrypted path/folder/tags fields too.
-      # Marker rows have no path to tombstone — skip them.
       mtime_float = DateTime.to_unix(now) + 0.0
 
       real_note_updates =
         Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
 
-      tombstones =
-        Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
-          # T3.6 — pre-allocate the tombstone id so the AAD bind string can
-          # be constructed before insert. Tombstones are full-row inserts
-          # written with empty content/title/tags but the row-id-bound AAD
-          # still applies — keeps tombstones decryptable and indistinguishable
-          # from any other AAD-bound row at read time.
-          tomb_id = mint_id()
-          old_path_folder = Helpers.extract_folder(old_path)
+      # One seq for the whole folder-rename op — shared across every touched
+      # row (renamed updates + old-path tombstones). The cascade row-updates
+      # AND the tombstone insert commit in a SINGLE transaction so a
+      # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
+      # rows at seq S, advance past S, and then miss the tombstones (also S,
+      # excluded by `seq > cursor`) → lost delete / resurrection (#614).
+      # seq is allocated inside the txn that holds the vault row lock; the
+      # tombstone rows are built from in-memory data (no re-query of committed
+      # state) so they fold cleanly into the same transaction.
+      {:ok, _seq} =
+        Repo.with_tenant(user.id, fn ->
+          seq = Engram.Vaults.next_seq!(vault.id)
 
-          full_kw =
-            full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
+          Enum.each(updates, fn {note, _old_path, new_path, new_note_folder, new_title} ->
+            case note.kind do
+              "folder" ->
+                {ct, nonce, hmac} =
+                  folder_only_aad_bound(user, note.id, new_note_folder, note.dek_version)
 
-          base = %{
-            id: tomb_id,
-            content_hash: "",
-            mtime: mtime_float,
-            user_id: user.id,
-            vault_id: vault.id,
-            created_at: now,
-            updated_at: now,
-            deleted_at: now
-          }
+                from(n in Note, where: n.id == ^note.id)
+                |> Repo.update_all(
+                  set: [
+                    folder_ciphertext: ct,
+                    folder_nonce: nonce,
+                    folder_hmac: hmac,
+                    updated_at: now,
+                    seq: seq
+                  ]
+                )
 
-          Map.merge(base, Map.new(full_kw))
+              _ ->
+                full_kw =
+                  full_aad_bound_kw(
+                    user,
+                    note.id,
+                    note.content || "",
+                    new_title,
+                    new_path,
+                    new_note_folder,
+                    note.tags || []
+                  )
+
+                from(n in Note, where: n.id == ^note.id)
+                |> Repo.update_all(
+                  set:
+                    [
+                      embed_hash: nil,
+                      updated_at: now,
+                      seq: seq
+                    ] ++ full_kw
+                )
+            end
+          end)
+
+          # Insert soft-deleted tombstones for old paths so the HTTP changes
+          # feed includes delete signals. Without these, polling clients
+          # retain stale files at old paths after a folder rename. Tombstones
+          # are full-row inserts so each must carry the encrypted
+          # path/folder/tags fields too. Marker rows have no path to
+          # tombstone — skip them. Built in-memory from `real_note_updates`,
+          # stamped with the same `seq` as the renamed rows.
+          tombstones =
+            Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+              # T3.6 — pre-allocate the tombstone id so the AAD bind string can
+              # be constructed before insert. Tombstones are full-row inserts
+              # written with empty content/title/tags but the row-id-bound AAD
+              # still applies — keeps tombstones decryptable and indistinguishable
+              # from any other AAD-bound row at read time.
+              tomb_id = mint_id()
+              old_path_folder = Helpers.extract_folder(old_path)
+
+              full_kw =
+                full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
+
+              base = %{
+                id: tomb_id,
+                content_hash: "",
+                mtime: mtime_float,
+                user_id: user.id,
+                vault_id: vault.id,
+                created_at: now,
+                updated_at: now,
+                deleted_at: now,
+                seq: seq
+              }
+
+              Map.merge(base, Map.new(full_kw))
+            end)
+
+          # Bind the insert_all return; it's no longer the block's tail
+          # expression (the block returns `seq`), so discard explicitly to
+          # satisfy Dialyzer's unmatched_return.
+          _ = Repo.insert_all(Note, tombstones, on_conflict: :nothing)
+
+          seq
         end)
-
-      Repo.with_tenant(user.id, fn ->
-        Repo.insert_all(Note, tombstones, on_conflict: :nothing)
-      end)
 
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
@@ -2265,11 +2303,13 @@ defmodule Engram.Notes do
       {real_notes, _markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
 
       Repo.with_tenant(user.id, fn ->
+        seq = Engram.Vaults.next_seq!(vault.id)
+
         {updated, _} =
           from(n in Note,
             where: n.id in ^ids and is_nil(n.deleted_at)
           )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
         # Decrement only real notes — markers don't count against the meter.
         # `updated` may include both kinds; recompute live-real-note count from

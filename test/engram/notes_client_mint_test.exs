@@ -2,7 +2,7 @@ defmodule Engram.NotesClientMintTest do
   # Phase I — contract: when a caller (plugin, SDK, e2e) supplies an `id` in
   # the upsert_note attrs, the server persists it as the row's PK. Falls back
   # to server-side mint when the supplied id is missing or malformed.
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   import Engram.Factory
 

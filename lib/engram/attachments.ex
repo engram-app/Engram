@@ -132,6 +132,11 @@ defmodule Engram.Attachments do
 
   defp write_row(user, existing, fallback_id, changeset_attrs) do
     Repo.with_tenant(user.id, fn ->
+      # Sync backbone: stamp a monotonic seq inside the same tenant txn so the
+      # bump and the row write commit atomically. Applies to insert + update.
+      changeset_attrs =
+        Map.put(changeset_attrs, :seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+
       case existing do
         nil ->
           %Attachment{id: fallback_id}
@@ -243,12 +248,14 @@ defmodule Engram.Attachments do
         path_hmac = Crypto.hmac_field(filter_key, path)
 
         Repo.with_tenant(user.id, fn ->
+          seq = Engram.Vaults.next_seq!(vault.id)
+
           from(a in Attachment,
             where:
               a.path_hmac == ^path_hmac and a.user_id == ^user.id and
                 a.vault_id == ^vault.id and is_nil(a.deleted_at)
           )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
         end)
 
         # Best-effort blob cleanup — row is already soft-deleted so this is safe to retry later

@@ -1,5 +1,5 @@
 defmodule Engram.Crypto.RotationGateTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   import Ecto.Query, only: [from: 2]
 

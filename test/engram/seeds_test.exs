@@ -1,5 +1,5 @@
 defmodule Engram.SeedsTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   alias Engram.Billing.{LimitKeys, Plan}
   alias Engram.Repo

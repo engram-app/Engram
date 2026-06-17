@@ -97,6 +97,29 @@ defmodule Engram.Accounts do
   # Advisory lock key for bootstrap admin assignment — arbitrary fixed integer
   @admin_bootstrap_lock 739_201
 
+  # Serializes admin-count-sensitive ops (bootstrap admin claim,
+  # set_role/suspend/soft_delete) on one global advisory lock so concurrent
+  # callers can't race the active-admin count.
+  #
+  # Gated off in test (`config :engram, :admin_bootstrap_lock_enabled, false`):
+  # the Ecto SQL sandbox wraps each test in one long-lived transaction, so a
+  # `pg_advisory_xact_lock` is held for the *entire test* rather than just the
+  # claim — under async concurrency that global lock deadlocks (issue #619).
+  # Role assignment itself is row-based (`Instance.bootstrap_pending?/0`) and
+  # stays correct without the lock; only true-concurrent first-signups (a
+  # one-time, near-impossible window) rely on it, and those don't occur across
+  # isolated sandbox transactions. Defaults true → prod path is unchanged.
+  defp acquire_admin_bootstrap_lock do
+    _ =
+      if Application.get_env(:engram, :admin_bootstrap_lock_enabled, true) do
+        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
+          @admin_bootstrap_lock
+        ])
+      end
+
+    :ok
+  end
+
   @max_password_bytes 72
 
   def create_user_with_password(email, password)
@@ -111,10 +134,7 @@ defmodule Engram.Accounts do
         # Serialize bootstrap claim so two concurrent first-time signups can't
         # both become admin. The second one enters the tx after the first
         # commits, sees bootstrap_pending? == false, and is created as member.
-        _ =
-          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
-            @admin_bootstrap_lock
-          ])
+        acquire_admin_bootstrap_lock()
 
         bootstrap_pending = Engram.Instance.bootstrap_pending?()
         role = if bootstrap_pending, do: "admin", else: "member"
@@ -702,10 +722,7 @@ defmodule Engram.Accounts do
   defp with_admin_lock(fun) do
     Repo.transaction(
       fn ->
-        _ =
-          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [
-            @admin_bootstrap_lock
-          ])
+        acquire_admin_bootstrap_lock()
 
         fun.()
       end,

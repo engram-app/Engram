@@ -5,7 +5,7 @@ defmodule Engram.Repo.Migrations.UsageMetersNotesCountBackfillTest do
   already ran in test DB setup; here we re-exercise the same SQL against
   synthetic users/notes inside a DataCase transaction (rolled back).
   """
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   alias Engram.Repo
   alias Engram.UsageMeters

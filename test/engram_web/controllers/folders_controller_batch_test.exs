@@ -1,5 +1,5 @@
 defmodule EngramWeb.FoldersControllerBatchTest do
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   setup :authed_api_conn
 
