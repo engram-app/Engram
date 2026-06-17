@@ -78,7 +78,7 @@ defmodule Engram.Attachments do
           rebind =
             case existing do
               %Attachment{id: id} when id != att_id0 ->
-                with {:ok, _key, attrs1, ciphertext1} <-
+                with {:ok, rebind_key, attrs1, ciphertext1} <-
                        prepare_upload(
                          user,
                          vault,
@@ -89,7 +89,7 @@ defmodule Engram.Attachments do
                          mtime,
                          explicit_mime
                        ),
-                     :ok <- store_external(key, ciphertext1, attrs1.mime_type) do
+                     :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
                   {:ok, attrs1}
                 end
 
@@ -119,7 +119,7 @@ defmodule Engram.Attachments do
         from(a in Attachment,
           where:
             a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-              a.vault_id == ^vault_id
+              a.vault_id == ^vault_id and is_nil(a.deleted_at)
         )
       )
     end)
@@ -256,19 +256,28 @@ defmodule Engram.Attachments do
       {:ok, filter_key} ->
         path_hmac = Crypto.hmac_field(filter_key, path)
 
-        Repo.with_tenant(user.id, fn ->
-          seq = Engram.Vaults.next_seq!(vault.id)
+        storage_key =
+          Repo.with_tenant(user.id, fn ->
+            seq = Engram.Vaults.next_seq!(vault.id)
 
-          from(a in Attachment,
-            where:
-              a.path_hmac == ^path_hmac and a.user_id == ^user.id and
-                a.vault_id == ^vault.id and is_nil(a.deleted_at)
-          )
-          |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
-        end)
+            {_, returned} =
+              from(a in Attachment,
+                where:
+                  a.path_hmac == ^path_hmac and a.user_id == ^user.id and
+                    a.vault_id == ^vault.id and is_nil(a.deleted_at),
+                select: a.storage_key
+              )
+              |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
-        # Best-effort blob cleanup — row is already soft-deleted so this is safe to retry later
-        delete_external(user.id, vault.id, path)
+            List.first(returned || [])
+          end)
+          |> unwrap_tenant()
+
+        # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
+        case storage_key do
+          {:ok, key} when is_binary(key) -> delete_external(key)
+          _ -> :ok
+        end
 
         :ok
 
@@ -278,10 +287,8 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp delete_external(user_id, vault_id, path) do
-    key = Storage.key(user_id, vault_id, path)
-
-    case Storage.adapter().delete(key) do
+  defp delete_external(storage_key) when is_binary(storage_key) do
+    case Storage.adapter().delete(storage_key) do
       :ok ->
         :ok
 
@@ -289,7 +296,7 @@ defmodule Engram.Attachments do
         require Logger
 
         Logger.warning("Failed to delete blob (row already soft-deleted)",
-          storage_key: key,
+          storage_key: storage_key,
           reason: inspect(reason)
         )
 
@@ -490,7 +497,8 @@ defmodule Engram.Attachments do
 
   defp prepare_upload(user, vault, att_id, path, path_hmac, plaintext, mtime, explicit_mime) do
     mime = explicit_mime || MimeWhitelist.detect_mime(path)
-    key = Storage.key(user.id, vault.id, path)
+    # was: key = Storage.key(user.id, vault.id, path)
+    key = Storage.object_key(user.id, vault.id, att_id)
 
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user) do

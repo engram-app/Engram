@@ -479,7 +479,7 @@ defmodule Engram.AttachmentsTest do
       vault = insert(:vault, user: user)
       path = "missing.bin"
 
-      {:ok, _att} =
+      {:ok, att} =
         Attachments.upsert_attachment(user, vault, %{
           "path" => path,
           "content_base64" => Base.encode64("orphan me"),
@@ -487,8 +487,8 @@ defmodule Engram.AttachmentsTest do
         })
 
       # Delete the underlying object directly to simulate storage corruption
-      # while leaving the DB row live.
-      InMemory.delete("#{user.id}/#{vault.id}/#{path}")
+      # while leaving the DB row live. Blobs are UUID-keyed since Task 2.
+      InMemory.delete(att.storage_key)
 
       log =
         capture_log(fn ->
@@ -497,6 +497,35 @@ defmodule Engram.AttachmentsTest do
         end)
 
       assert log =~ "Attachment blob missing"
+    end
+  end
+
+  describe "uuid-keyed storage (Task 2)" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "new upload keys storage by uuid, not by path", %{user: user, vault: vault} do
+      {:ok, att} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "img/cat.png", "content_base64" => Base.encode64("PNGDATA"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+      assert att.storage_key =~ ~r{/objects/#{att.id}$}
+      refute att.storage_key =~ "img/cat.png"
+    end
+
+    test "a new upload to a vacated path does NOT clobber a different blob", %{user: user, vault: vault} do
+      {:ok, a} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "p/x.png", "content_base64" => Base.encode64("AAA"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+      :ok = Attachments.delete_attachment(user, vault, "p/x.png")
+      {:ok, b} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "p/x.png", "content_base64" => Base.encode64("BBB"),
+        "mime_type" => "image/png", "mtime" => 2.0
+      })
+      refute a.storage_key == b.storage_key
     end
   end
 end
