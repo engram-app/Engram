@@ -3,8 +3,8 @@ defmodule Engram.Vector.QdrantTest do
 
   import ExUnit.CaptureLog
 
-  alias Engram.Vector.Qdrant
   alias Engram.ServiceConfig
+  alias Engram.Vector.Qdrant
 
   setup do
     bypass = Bypass.open()

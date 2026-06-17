@@ -8,10 +8,10 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
+  alias Engram.ServiceConfig
+
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
-
-  alias Engram.ServiceConfig
 
   defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)

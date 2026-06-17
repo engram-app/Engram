@@ -35,9 +35,11 @@ defmodule Engram.ServiceConfig do
   @build_env Application.compile_env(:engram, :env, :prod)
   @is_test_build @build_env == :test
 
-  @table :engram_service_config_overrides
-
   if @is_test_build do
+    # Defined only in test builds — the prod path never touches the override
+    # table, so a module-level attribute would warn as unused there.
+    @table :engram_service_config_overrides
+
     @doc """
     Reads `key`, preferring a per-process override over global app env.
 
