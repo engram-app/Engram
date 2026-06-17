@@ -89,7 +89,7 @@ describe("api client 402 handling", () => {
 
     await api.get("/anything")
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
     const headers = init.headers as Headers
     expect(headers.get("X-Device-Id")).toMatch(/^[0-9a-f-]{36}$/)
   })

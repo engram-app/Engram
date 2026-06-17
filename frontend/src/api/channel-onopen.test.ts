@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Minimal phoenix mock: capture the onOpen callback and the channel handlers.
 // Uses vi.hoisted + a constructor function (not arrow) so `new Socket(...)` works.
-const { onOpen, channelOn, join, socketCtor } = vi.hoisted(() => {
+const { onOpen, channelOn: _channelOn, join: _join, socketCtor } = vi.hoisted(() => {
   const onOpen = vi.fn()
   const channelOn = vi.fn()
   const join = vi.fn(() => ({ receive: () => ({ receive: () => {} }) }))
@@ -43,7 +43,7 @@ describe('connectChannel onSocketOpen', () => {
     })
 
     expect(onOpen).toHaveBeenCalledTimes(1)
-    const registered = onOpen.mock.calls[0][0] as () => void
+    const registered = onOpen.mock.calls[0]![0] as () => void
     registered()
     expect(onSocketOpen).toHaveBeenCalledTimes(1)
   })

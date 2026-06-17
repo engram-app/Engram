@@ -127,7 +127,7 @@ describe('runCursorSync — incremental pull (cursor present)', () => {
   it('reseeds from the manifest when the stored cursor is stale (410)', async () => {
     setCursor('v1', 'stale-tok')
     get
-      .mockRejectedValueOnce(new (ApiError as never)(410, 'history_expired'))
+      .mockRejectedValueOnce(new ApiError(410, 'history_expired'))
       .mockResolvedValueOnce({ change_seq: 12 })
     const qc = mockQueryClient()
 
