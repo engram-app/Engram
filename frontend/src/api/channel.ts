@@ -11,6 +11,7 @@ interface ConnectOptions {
   vaultId: string
   getToken: () => Promise<string | null>
   queryClient: QueryClient
+  onSocketOpen?: () => void
 }
 
 export interface NoteChangedPayload {
@@ -176,7 +177,7 @@ export function handleNotesBatch(
   }
 }
 
-export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
+export async function connectChannel({ userId, vaultId, getToken, queryClient, onSocketOpen }: ConnectOptions) {
   disconnectChannel()
 
   const token = await getToken()
@@ -186,6 +187,11 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
   })
 
   socket.connect()
+
+  // Fires on initial connect AND every reconnect — the durable-feed catch-up
+  // trigger. The socket can drop events while disconnected (no replay), so a
+  // reconnect kicks a cursor pull to backfill the gap.
+  if (onSocketOpen) socket.onOpen(onSocketOpen)
 
   const topic = `sync:${userId}:${vaultId}`
   channel = socket.channel(topic)
