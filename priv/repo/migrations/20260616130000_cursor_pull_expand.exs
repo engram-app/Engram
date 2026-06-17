@@ -9,8 +9,10 @@ defmodule Engram.Repo.Migrations.CursorPullExpand do
     supplies the uniqueness + index the ON CONFLICT upsert targets, and its
     leading vault_id column covers the FK, so no separate index is needed.
   - attachments.version: optimistic-concurrency / resurrection-safety parity
-    with notes.version (nullable->default 1; bumped on write).
+    with notes.version (default 1; bumped on write). bigint to match the seq
+    counters + satisfy squawk's prefer-bigint rule.
 
+  `last_seen_at` is timestamptz (absolute instant; squawk prefer-timestamp-tz).
   Fully transactional: a new (empty) table + a metadata-only NOT NULL column
   add with a constant default (PG11+) need no CONCURRENTLY, so no
   @disable_ddl_transaction.
@@ -24,11 +26,11 @@ defmodule Engram.Repo.Migrations.CursorPullExpand do
 
       add :device_id, :text, null: false, primary_key: true
       add :last_seq, :bigint, null: false, default: 0
-      add :last_seen_at, :utc_datetime, null: false
+      add :last_seen_at, :timestamptz, null: false
     end
 
     alter table(:attachments) do
-      add :version, :integer, null: false, default: 1
+      add :version, :bigint, null: false, default: 1
     end
   end
 
