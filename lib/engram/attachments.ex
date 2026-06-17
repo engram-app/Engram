@@ -288,6 +288,17 @@ defmodule Engram.Attachments do
             :ok
         end
 
+        # Real-time notification: path/vault are known; mime/size/mtime are
+        # unavailable post-delete (row is soft-deleted), so only the core delete
+        # discriminators are sent. Plugin only needs event_type+kind+path to trash.
+        _ =
+          EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            "event_type" => "delete",
+            "kind" => "attachment",
+            "path" => path,
+            "vault_id" => vault.id
+          })
+
         :ok
 
       {:error, :no_dek} ->
@@ -452,9 +463,23 @@ defmodule Engram.Attachments do
     })
   end
 
-  # Replaced by the real socket fan-out in Task 5. This stub keeps the module
-  # compiling and move_attachment's control flow complete until then.
-  defp broadcast_attachment(_user_id, _vault_id, _event_type, _path, _att), do: :ok
+  # Real-time parity: reuse the existing `note_changed` socket event the plugin
+  # already dispatches by `kind`. A move fires delete(old) + upsert(new), like
+  # Notes.rename. Receive-only on the plugin — it still pushes over HTTP.
+  defp broadcast_attachment(user_id, vault_id, event_type, path, %Attachment{} = att) do
+    payload = %{
+      "event_type" => event_type,
+      "kind" => "attachment",
+      "path" => path,
+      "vault_id" => vault_id,
+      "mime_type" => att.mime_type,
+      "size_bytes" => att.size_bytes,
+      "mtime" => att.mtime
+    }
+
+    _ = EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", payload)
+    :ok
+  end
 
   @doc """
   Lists non-deleted attachment metadata for a vault (no content).

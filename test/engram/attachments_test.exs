@@ -586,4 +586,49 @@ defmodule Engram.AttachmentsTest do
       assert {:error, :not_found} = Attachments.move_attachment(user, vault, "nope.png", "x.png")
     end
   end
+
+  describe "note_changed broadcast (kind=attachment)" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "move broadcasts delete(old) + upsert(new) with kind=attachment", %{user: user, vault: vault} do
+      {:ok, att} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "old/a.png", "content_base64" => Base.encode64("D"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "old/a.png"}
+      }
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "kind" => "attachment", "path" => "new/b.png",
+                   "mime_type" => "image/png"}
+      }
+      _ = att
+    end
+
+    test "delete_attachment broadcasts delete with kind=attachment", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "gone.png", "content_base64" => Base.encode64("D"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      :ok = Attachments.delete_attachment(user, vault, "gone.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "gone.png"}
+      }
+    end
+  end
 end
