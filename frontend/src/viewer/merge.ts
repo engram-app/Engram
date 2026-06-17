@@ -78,6 +78,14 @@ function applyDisjointHunks(
 // we fall back to node-diff3's marker text so the caller can offer a manual
 // "view merge" resolution.
 export function merge3(base: string, local: string, remote: string): Merge3Result {
+  // Identical sides agree — a 3-way merge of two equal sides is never a
+  // conflict. Without this, two identical edits produce identical hunks over
+  // the same base lines, which the collision gate (a range overlaps itself)
+  // wrongly flags. Covers the self-echo case: a REST save's own note_changed
+  // broadcast returns byte-identical content while baseRef is momentarily
+  // stale, which otherwise raised a spurious conflict on every edit.
+  if (local === remote) return { text: local, conflict: false }
+
   const O = base.split('\n')
   const A = local.split('\n')
   const B = remote.split('\n')
