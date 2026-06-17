@@ -350,6 +350,7 @@ defmodule EngramWeb.Router do
 
     # Sync
     get "/sync/manifest", SyncController, :manifest
+    get "/sync/changes", SyncController, :changes
 
     # Attachments
     post "/attachments", AttachmentsController, :upload

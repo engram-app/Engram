@@ -134,8 +134,17 @@ defmodule Engram.Attachments do
     Repo.with_tenant(user.id, fn ->
       # Sync backbone: stamp a monotonic seq inside the same tenant txn so the
       # bump and the row write commit atomically. Applies to insert + update.
+      # version mirrors notes.version for resurrection parity: an update sets
+      # existing.version + 1; an insert leaves the schema default (1) untouched.
       changeset_attrs =
-        Map.put(changeset_attrs, :seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+        changeset_attrs
+        |> Map.put(:seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+        |> then(fn attrs ->
+          case existing do
+            %Attachment{version: v} -> Map.put(attrs, :version, v + 1)
+            _ -> attrs
+          end
+        end)
 
       case existing do
         nil ->
@@ -333,6 +342,79 @@ defmodule Engram.Attachments do
     |> case do
       {:ok, atts} ->
         {:ok, decrypt_each(atts, user, fn _att, meta -> meta end)}
+
+      err ->
+        err
+    end
+  end
+
+  @doc """
+  Seq-cursor change feed over attachments: rows with `(seq, id) > (after_seq,
+  after_id)`, ordered by `(seq, id)`, paginated. Mirrors
+  `Engram.Notes.list_changes_by_seq/4`.
+
+  Carries the FULL change set — tombstones included (no `deleted_at` filter) so
+  deletes flow through the unified `/sync/changes` pull. Per-vault `seq` is
+  monotonic and unique, so `(seq, id)` is a stable keyset that never loses or
+  duplicates rows across pages.
+
+  Options:
+
+    * `after_id:` — the keyset tiebreak id from the previous page's `next`
+      (the `id` component); required to resume mid-`seq`, harmless otherwise.
+    * `limit:` — page size, clamped to 1..500 (default 500).
+
+  Each change entry carries `:id`, `:seq`, `:version`, `:deleted`
+  (`deleted_at != nil`), plus `:path`, `:mime_type`, `:size_bytes`, `:mtime`,
+  `:updated_at`. Returns
+  `{:ok, %{changes: [...], has_more: bool, next: {seq, id} | nil}}`.
+  """
+  @spec list_changes_by_seq(map(), map(), integer(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next: {integer(), binary()} | nil}}
+          | {:error, term()}
+  def list_changes_by_seq(user, vault, after_seq, opts \\ []) when is_integer(after_seq) do
+    user = fresh_user(user)
+    limit = opts |> Keyword.get(:limit, 500) |> min(500) |> max(1)
+    after_id = Keyword.get(opts, :after_id)
+
+    base =
+      from(a in Attachment,
+        where: a.user_id == ^user.id and a.vault_id == ^vault.id and not is_nil(a.seq),
+        order_by: [asc: a.seq, asc: a.id],
+        limit: ^(limit + 1)
+      )
+
+    base =
+      if after_id do
+        from(a in base, where: a.seq > ^after_seq or (a.seq == ^after_seq and a.id > ^after_id))
+      else
+        from(a in base, where: a.seq > ^after_seq)
+      end
+
+    Repo.with_tenant(user.id, fn -> Repo.all(base) end)
+    |> unwrap_tenant()
+    |> case do
+      {:ok, atts} ->
+        {page, has_more} =
+          if length(atts) > limit, do: {Enum.take(atts, limit), true}, else: {atts, false}
+
+        changes =
+          decrypt_each(page, user, fn att, meta ->
+            meta
+            |> Map.put(:id, att.id)
+            |> Map.put(:seq, att.seq)
+            |> Map.put(:version, att.version)
+            |> Map.put(:deleted, not is_nil(att.deleted_at))
+            |> Map.delete(:deleted_at)
+          end)
+
+        next =
+          if has_more do
+            last = List.last(page)
+            {last.seq, last.id}
+          end
+
+        {:ok, %{changes: changes, has_more: has_more, next: next}}
 
       err ->
         err
