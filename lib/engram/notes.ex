@@ -1413,6 +1413,7 @@ defmodule Engram.Notes do
   # phase-4 helpers short-circuit per-field on nil ciphertext).
   @note_meta_fields [
     :id,
+    :seq,
     :version,
     :kind,
     :dek_version,
@@ -1554,6 +1555,84 @@ defmodule Engram.Notes do
 
       {:ok, %{changes: changes, has_more: has_more, next_cursor: next_cursor}}
     end
+  end
+
+  @doc """
+  Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
+  ordered by `(seq, id)`, paginated.
+
+  Unlike `list_changes_page/4` (the timestamp feed) this carries the FULL
+  change set: ALL kinds (notes + folder markers) and tombstones (no
+  `deleted_at` filter, no `kind == "note"` filter) so deletes / renames /
+  folder ops all flow through the unified `/sync/changes` pull. Per-vault
+  `seq` is monotonic and unique, so `(seq, id)` is a stable keyset that never
+  loses or duplicates rows across pages.
+
+  Options:
+
+    * `after_id:` — the keyset tiebreak id from the previous page's `next`
+      (the `id` component); required to resume mid-`seq`, harmless otherwise.
+    * `limit:` — page size, clamped to 1..#{@changes_page_max_limit}
+      (default #{@changes_page_max_limit}).
+    * `fields: :meta` — skip the content column + its decrypt; entries carry
+      `content_hash` and `content: nil`.
+
+  Each change_map carries an extra `:seq` key. Returns
+  `{:ok, %{changes: [...], has_more: bool, next: {seq, id} | nil}}`.
+  """
+  @spec list_changes_by_seq(map(), map(), integer(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next: {integer(), binary()} | nil}}
+  def list_changes_by_seq(user, vault, after_seq, opts \\ []) when is_integer(after_seq) do
+    limit =
+      opts
+      |> Keyword.get(:limit, @changes_page_max_limit)
+      |> min(@changes_page_max_limit)
+      |> max(1)
+
+    fields = Keyword.get(opts, :fields, :all)
+    after_id = Keyword.get(opts, :after_id)
+
+    base =
+      from(n in Note,
+        where: n.user_id == ^user.id and n.vault_id == ^vault.id and not is_nil(n.seq),
+        order_by: [asc: n.seq, asc: n.id],
+        limit: ^(limit + 1)
+      )
+
+    base =
+      if after_id do
+        from(n in base, where: n.seq > ^after_seq or (n.seq == ^after_seq and n.id > ^after_id))
+      else
+        from(n in base, where: n.seq > ^after_seq)
+      end
+
+    query =
+      case fields do
+        :meta -> from(n in base, select: struct(n, @note_meta_fields))
+        :all -> base
+      end
+
+    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+
+    {page, has_more} =
+      if length(notes) > limit do
+        {Enum.take(notes, limit), true}
+      else
+        {notes, false}
+      end
+
+    changes =
+      page
+      |> decrypt_or_raise!(user)
+      |> Enum.map(fn note -> note |> change_map() |> Map.put(:seq, note.seq) end)
+
+    next =
+      if has_more do
+        last = List.last(page)
+        {last.seq, last.id}
+      end
+
+    {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
   defp change_map(note) do
