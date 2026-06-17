@@ -134,8 +134,17 @@ defmodule Engram.Attachments do
     Repo.with_tenant(user.id, fn ->
       # Sync backbone: stamp a monotonic seq inside the same tenant txn so the
       # bump and the row write commit atomically. Applies to insert + update.
+      # version mirrors notes.version for resurrection parity: an update sets
+      # existing.version + 1; an insert leaves the schema default (1) untouched.
       changeset_attrs =
-        Map.put(changeset_attrs, :seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+        changeset_attrs
+        |> Map.put(:seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+        |> then(fn attrs ->
+          case existing do
+            %Attachment{version: v} -> Map.put(attrs, :version, v + 1)
+            _ -> attrs
+          end
+        end)
 
       case existing do
         nil ->

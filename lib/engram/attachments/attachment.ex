@@ -24,6 +24,10 @@ defmodule Engram.Attachments.Attachment do
     field :deleted_at, :utc_datetime
     # Sync change-log seq (monotonic per vault). Stamped on every write.
     field :seq, :integer
+    # Sync resurrection-parity counter (mirrors notes.version). Starts at 1 on
+    # insert, +1 on every content update. NOT bumped on soft-delete — deletes
+    # are conveyed by the `deleted_at` tombstone, not version.
+    field :version, :integer, default: 1
     field :encryption_version, :integer, default: 1
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     field :dek_version, :integer, default: 1
@@ -52,6 +56,7 @@ defmodule Engram.Attachments.Attachment do
       :storage_key,
       :deleted_at,
       :seq,
+      :version,
       :encryption_version,
       :dek_version,
       :dek_version_pending,
