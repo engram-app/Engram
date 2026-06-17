@@ -463,6 +463,41 @@ defmodule Engram.Attachments do
     })
   end
 
+  @doc "Moves each attachment into `target_folder` (\"\" = root). All-or-nothing."
+  @spec batch_move(map(), map(), [String.t()], String.t()) ::
+          {:ok, %{moved: non_neg_integer()}} | {:error, {atom(), String.t()} | term()}
+  def batch_move(_user, _vault, [], _target_folder), do: {:ok, %{moved: 0}}
+
+  def batch_move(user, vault, paths, target_folder)
+      when is_list(paths) and is_binary(target_folder) do
+    Repo.transaction(fn ->
+      Enum.reduce_while(paths, %{moved: 0}, fn old_path, acc ->
+        base = Path.basename(old_path)
+        new_path = if target_folder == "", do: base, else: Path.join(target_folder, base)
+
+        case move_attachment(user, vault, old_path, new_path) do
+          {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+          {:error, :conflict} -> {:halt, {:rollback, {:conflict, old_path}}}
+          {:error, :not_found} -> {:halt, {:rollback, {:not_found, old_path}}}
+          {:error, reason} -> {:halt, {:rollback, reason}}
+        end
+      end)
+      |> case do
+        {:rollback, reason} -> Repo.rollback(reason)
+        acc -> acc
+      end
+    end)
+  end
+
+  @doc "Soft-deletes each attachment by path. Best-effort (delete is idempotent)."
+  @spec batch_delete(map(), map(), [String.t()]) :: {:ok, %{deleted: non_neg_integer()}}
+  def batch_delete(_user, _vault, []), do: {:ok, %{deleted: 0}}
+
+  def batch_delete(user, vault, paths) when is_list(paths) do
+    Enum.each(paths, fn p -> :ok = delete_attachment(user, vault, p) end)
+    {:ok, %{deleted: length(paths)}}
+  end
+
   # Real-time parity: reuse the existing `note_changed` socket event the plugin
   # already dispatches by `kind`. A move fires delete(old) + upsert(new), like
   # Notes.rename. Receive-only on the plugin — it still pushes over HTTP.

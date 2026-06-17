@@ -587,6 +587,48 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "batch_move/4 + batch_delete/3" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+
+      for p <- ["a.png", "b.png"] do
+        {:ok, _} = Attachments.upsert_attachment(user, vault, %{
+          "path" => p, "content_base64" => Base.encode64(p),
+          "mime_type" => "image/png", "mtime" => 1.0
+        })
+      end
+
+      :ok
+    end
+
+    test "batch_move relocates each into the target folder", %{user: user, vault: vault} do
+      {:ok, %{moved: 2}} = Attachments.batch_move(user, vault, ["a.png", "b.png"], "img")
+      {:ok, _} = Attachments.get_attachment(user, vault, "img/a.png")
+      {:ok, _} = Attachments.get_attachment(user, vault, "img/b.png")
+    end
+
+    test "batch_move to root keeps basenames", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.batch_move(user, vault, ["a.png"], "img")
+      {:ok, %{moved: 1}} = Attachments.batch_move(user, vault, ["img/a.png"], "")
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+    end
+
+    test "batch_move rolls back on conflict", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
+        "path" => "img/a.png", "content_base64" => Base.encode64("X"),
+        "mime_type" => "image/png", "mtime" => 1.0
+      })
+      assert {:error, {:conflict, "a.png"}} = Attachments.batch_move(user, vault, ["a.png"], "img")
+      # a.png still at root (rolled back)
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+    end
+
+    test "batch_delete soft-deletes each", %{user: user, vault: vault} do
+      {:ok, %{deleted: 2}} = Attachments.batch_delete(user, vault, ["a.png", "b.png"])
+      {:ok, nil} = Attachments.get_attachment(user, vault, "a.png")
+    end
+  end
+
   describe "note_changed broadcast (kind=attachment)" do
     setup do
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
