@@ -120,6 +120,31 @@ defmodule Engram.Vaults do
     seq
   end
 
+  @doc """
+  Reads the vault's current `change_seq` watermark (read-only).
+
+  Unlike `next_seq!/1` — which the docstring requires callers run inside
+  their own `Repo.with_tenant/2` write transaction — this is a standalone
+  read, so it sets the tenant itself. The `vaults` table is under FORCE ROW
+  LEVEL SECURITY (policy `tenant_isolation_vaults`), so a raw query without
+  `app.current_tenant` set would match zero rows. Mirrors `next_seq!/1`'s
+  raw-SQL + `Ecto.UUID.dump!/1` access idiom otherwise.
+  """
+  def current_seq(user_id, vault_id) do
+    {:ok, seq} =
+      Repo.with_tenant(user_id, fn ->
+        %{rows: [[seq]]} =
+          Repo.query!(
+            "SELECT change_seq FROM vaults WHERE id = $1",
+            [Ecto.UUID.dump!(vault_id)]
+          )
+
+        seq
+      end)
+
+    seq
+  end
+
   # ── Register (idempotent) ───────────────────────────────────────────────────
 
   @doc """

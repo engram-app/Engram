@@ -24,7 +24,7 @@ defmodule EngramWeb.SyncController do
     # to an empty manifest instead of crashing on `{:ok, dek}` match.
     case Crypto.get_dek(user) do
       {:ok, dek} -> render_manifest(conn, user, vault, dek)
-      {:error, :no_dek} -> render_empty_manifest(conn)
+      {:error, :no_dek} -> render_empty_manifest(conn, user, vault)
     end
   end
 
@@ -117,8 +117,14 @@ defmodule EngramWeb.SyncController do
     end
   end
 
-  defp render_empty_manifest(conn) do
-    json(conn, %{notes: [], attachments: [], total_notes: 0, total_attachments: 0})
+  defp render_empty_manifest(conn, user, vault) do
+    json(conn, %{
+      notes: [],
+      attachments: [],
+      total_notes: 0,
+      total_attachments: 0,
+      change_seq: Engram.Vaults.current_seq(user.id, vault.id)
+    })
   end
 
   defp render_manifest(conn, user, vault, dek) do
@@ -175,7 +181,8 @@ defmodule EngramWeb.SyncController do
       notes: notes,
       attachments: attachments,
       total_notes: length(notes),
-      total_attachments: length(attachments)
+      total_attachments: length(attachments),
+      change_seq: Engram.Vaults.current_seq(user.id, vault.id)
     })
   end
 

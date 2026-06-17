@@ -23,6 +23,8 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["attachments"] == []
       assert body["total_notes"] == 0
       assert body["total_attachments"] == 0
+      # zero-write vault → change_seq bootstrap floor is 0
+      assert body["change_seq"] == 0
     end
 
     test "includes notes with path and content_hash", %{conn: conn} do

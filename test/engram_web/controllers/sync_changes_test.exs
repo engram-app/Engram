@@ -65,4 +65,12 @@ defmodule EngramWeb.SyncChangesTest do
     # has no "<seq>:<id>" shape) — exercises decode_cursor's {:error, :invalid_cursor}.
     assert conn |> get(~p"/api/sync/changes?cursor=not-a-real-cursor") |> json_response(400)
   end
+
+  test "manifest includes current change_seq", %{conn: conn, user: user, vault: vault} do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "x"})
+    body = conn |> get(~p"/api/sync/manifest") |> json_response(200)
+    assert is_integer(body["change_seq"])
+    # exactly one write bumped the per-vault counter from 0 → 1
+    assert body["change_seq"] == 1
+  end
 end
