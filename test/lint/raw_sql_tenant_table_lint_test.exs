@@ -30,7 +30,13 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # Operator-run, intentionally cross-tenant backfill: seeds
     # onboarding_actions for every legacy user by scanning `FROM vaults`.
     # Runs as a one-shot Mix task / release command, never on a request path.
-    "mix/tasks/engram.backfill_onboarding_actions.ex"
+    "mix/tasks/engram.backfill_onboarding_actions.ex",
+    # Vaults.next_seq!/1 — atomic `UPDATE vaults SET change_seq = change_seq + 1
+    # ... RETURNING change_seq` for the sync change-log seq allocator. MUST be
+    # called inside the caller's existing `Repo.with_tenant/2` transaction (see
+    # the @doc), so it DOES run under RLS tenant context — the raw SQL is needed
+    # for the single-round-trip read-modify-write + row lock, not to bypass RLS.
+    "engram/vaults.ex"
   ]
 
   # Matches a raw-SQL call and the text immediately following it (covers
