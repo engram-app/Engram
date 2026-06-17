@@ -683,6 +683,10 @@ class CdpClient:
         """Read the lastSync timestamp string."""
         return await self.evaluate(f"{ENGINE_PATH}.lastSync")
 
+    async def get_sync_cursor(self) -> str | None:
+        """Read the opaque sync cursor (B2 ordered-pull watermark)."""
+        return await self.evaluate(f"{ENGINE_PATH}.getSyncCursor()")
+
     async def accelerate_echo_expiry(self, path: str, ms: int = 200) -> None:
         """Replace the pending recentlyPushed timer for ``path`` with a short one.
 
