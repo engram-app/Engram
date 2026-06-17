@@ -1,7 +1,7 @@
 """Test 58: Plugin command palette entries each fire their handler.
 
 Covers the four commands not already tested elsewhere:
-  sync-now        — lastSync timestamp advances after fullSync completes
+  sync-now        — pulls a pending server change down into the vault
   push-all        — pushAll() is invoked on SyncEngine (spy counter)
   pull-all        — pullAll() is invoked on SyncEngine (spy counter)
   show-sync-log   — .engram-sync-log-modal mounts in the DOM
@@ -31,28 +31,41 @@ Notice observation rationale:
 
 from __future__ import annotations
 import asyncio
+import uuid
+
 import pytest
+from helpers.vault import wait_for_content
 
 
 # ---------------------------------------------------------------------------
-# test_sync_now_advances_last_sync
+# test_sync_now_pulls_pending_change
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_sync_now_advances_last_sync(cdp_a):
-    """sync-now: lastSync timestamp changes after the command completes."""
-    before = await cdp_a.get_last_sync()
+async def test_sync_now_pulls_pending_change(vault_a, cdp_a, api_sync):
+    """sync-now: the command runs a sync that pulls a pending server change.
+
+    Post-B2, lastSync is frozen (the opaque syncCursor is the watermark), so
+    "lastSync advances" is no longer a valid signal. Instead we create a note
+    on the server out-of-band, fire sync-now, and assert the pull lands the
+    note in the local vault — a behavior assertion that holds regardless of
+    cursor internals.
+    """
+    unique = uuid.uuid4().hex[:12]
+    path = f"E2E/SyncNowCmd-{unique}.md"
+    marker = f"sync-now pull marker {unique}"
+    content = f"# Sync Now Command\n{marker}"
+
+    # Create the note server-side (out-of-band — not via the local vault).
+    api_sync.create_note(path, content)
+
+    # Fire the command under test.
     await cdp_a.run_command("sync-now")
-    # fullSync is async — give it up to 10 s to finish
-    deadline = asyncio.get_event_loop().time() + 10
-    after = before
-    while asyncio.get_event_loop().time() < deadline:
-        after = await cdp_a.get_last_sync()
-        if after != before:
-            break
-        await asyncio.sleep(0.25)
-    assert after != before, (
-        f"lastSync did not advance after sync-now (before={before!r}, after={after!r})"
+
+    # The note must arrive locally as a result of the sync the command ran.
+    local = wait_for_content(vault_a, path, marker, timeout=15)
+    assert marker in local, (
+        f"sync-now did not pull pending server change into {path!r}"
     )
 
 

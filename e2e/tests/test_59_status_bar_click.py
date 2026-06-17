@@ -3,8 +3,8 @@
 User paths covered:
   1. Gate blocked  → clicking the status bar opens SyncPreviewModal so the
                      user can pick a sync direction.
-  2. Gate unblocked → clicking the status bar fires fullSync() and the
-                     lastSync timestamp advances.
+  2. Gate unblocked → clicking the status bar runs a sync that pulls a
+                     pending server change down into the vault.
 
 Seed/restore rationale:
   test_click_blocked_opens_modal:
@@ -16,18 +16,20 @@ Seed/restore rationale:
       seed file, restores the sync handlers, and re-accepts the gate so
       subsequent tests are not left in a blocked state.
 
-  test_click_unblocked_triggers_sync:
+  test_click_triggers_sync_pull:
     - Relies on the gate being open (normal post-conftest state).
-    - Does not mutate vault files — only measures lastSync advancement.
-    - Does not need a restore block because no persistent state is changed.
+    - Creates a note server-side, clicks the status bar, asserts the pull
+      lands it locally. lastSync is frozen post-B2 (opaque syncCursor is the
+      watermark), so behavior — not timestamp advancement — is asserted.
+    - Does not need a restore block because no local vault state is mutated.
 """
 
 from __future__ import annotations
 
-import asyncio
+import uuid
 
 import pytest
-from helpers.vault import write_note
+from helpers.vault import wait_for_content, write_note
 
 
 # ---------------------------------------------------------------------------
@@ -75,27 +77,32 @@ async def test_click_blocked_opens_modal(vault_a, cdp_a):
 
 
 # ---------------------------------------------------------------------------
-# test_click_unblocked_triggers_sync
+# test_click_triggers_sync_pull
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_click_unblocked_triggers_sync(cdp_a):
-    """Gate open: status bar click fires fullSync and lastSync advances."""
-    before = await cdp_a.get_last_sync()
+async def test_click_triggers_sync_pull(vault_a, cdp_a, api_sync):
+    """Gate open: status bar click runs a sync that pulls a pending change.
 
+    Post-B2, lastSync is frozen (the opaque syncCursor is the watermark), so
+    "lastSync advances" is no longer a valid signal. We create a note on the
+    server out-of-band, click the status bar, and assert the resulting sync
+    lands the note locally — a behavior assertion independent of cursor state.
+    """
+    unique = uuid.uuid4().hex[:12]
+    path = f"E2E/StatusBarClick-{unique}.md"
+    marker = f"status-bar pull marker {unique}"
+    content = f"# Status Bar Click\n{marker}"
+
+    # Create the note server-side (out-of-band — not via the local vault).
+    api_sync.create_note(path, content)
+
+    # The gate is open in normal post-conftest state; a click runs fullSync.
     await cdp_a.click_status_bar()
 
-    # fullSync is async; poll up to 10 s for lastSync to change.
-    deadline = asyncio.get_event_loop().time() + 10
-    after = before
-    while asyncio.get_event_loop().time() < deadline:
-        after = await cdp_a.get_last_sync()
-        if after != before:
-            break
-        await asyncio.sleep(0.25)
-
-    assert after != before, (
-        f"lastSync did not advance after status bar click "
-        f"(before={before!r}, after={after!r})"
+    # The note must arrive locally as a result of the sync the click ran.
+    local = wait_for_content(vault_a, path, marker, timeout=15)
+    assert marker in local, (
+        f"status bar click did not pull pending server change into {path!r}"
     )

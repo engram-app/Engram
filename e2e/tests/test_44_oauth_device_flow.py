@@ -130,7 +130,10 @@ async def test_full_device_flow(
             # Trigger sync
             result = await cdp_a.trigger_full_sync()
             logger.info("Sync result: %s", result)
-            assert result.get("pushed", 0) >= 1, f"Expected push, got: {result}"
+            # Post-B2, offline-created files are pushed inside bootstrap(), so
+            # fullSync()'s `pushed` counter can read 0 even though the file
+            # reached the server. Assert server-side arrival instead of the
+            # (now-unreliable) push counter.
 
             # Verify note reached server using OAuth access token
             resp = requests.get(
