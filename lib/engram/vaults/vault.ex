@@ -19,6 +19,11 @@ defmodule Engram.Vaults.Vault do
     field :name_hmac, :binary
     # T3.4 / H5 — DEK version this row's ciphertext was wrapped under.
     field :dek_version, :integer, default: 1
+    # Sync change-log backbone — per-vault monotonic seq allocator counter.
+    # Deliberately NOT in changeset cast: only the migration default (0) and
+    # Vaults.next_seq!/1's raw UPDATE may set it, so no client-supplied attr
+    # can clobber the counter and break monotonicity.
+    field :change_seq, :integer, default: 0
 
     belongs_to :user, Engram.Accounts.User
 
