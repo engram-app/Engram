@@ -528,4 +528,62 @@ defmodule Engram.AttachmentsTest do
       refute a.storage_key == b.storage_key
     end
   end
+
+  describe "move_attachment/4" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/a.png",
+          "content_base64" => Base.encode64("DATA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      %{att: att}
+    end
+
+    test "repoints the live row, blob/storage_key untouched", %{
+      user: user,
+      vault: vault,
+      att: att
+    } do
+      {:ok, moved} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+      assert moved.id == att.id
+      assert moved.path == "new/b.png"
+      assert moved.storage_key == att.storage_key
+      {:ok, fetched} = Attachments.get_attachment(user, vault, "new/b.png")
+      assert fetched.content == "DATA"
+    end
+
+    test "emits a soft-deleted tombstone at the old path", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+      {:ok, %{changes: changes}} = Attachments.list_changes_by_seq(user, vault, 0)
+      assert Enum.any?(changes, &(&1.path == "old/a.png" and &1.deleted))
+      assert Enum.any?(changes, &(&1.path == "new/b.png" and not &1.deleted))
+    end
+
+    test "conflict on occupied target → :conflict", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "new/b.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert {:error, :conflict} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+    end
+
+    test "no-op move (old == new) is idempotent, no tombstone", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "old/a.png")
+      {:ok, %{changes: changes}} = Attachments.list_changes_by_seq(user, vault, 0)
+      refute Enum.any?(changes, & &1.deleted)
+    end
+
+    test "missing source → :not_found", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Attachments.move_attachment(user, vault, "nope.png", "x.png")
+    end
+  end
 end

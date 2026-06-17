@@ -314,6 +314,145 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Moves/renames an attachment by path. One transaction under the per-vault seq:
+  repoint the live row (id stable, path re-encrypted under its unchanged
+  id-AAD, storage_key + blob untouched) and insert a soft-deleted tombstone at
+  the old path so poll/cursor clients converge (trash old, write new). Mirrors
+  `Engram.Notes.rename_folder/4`'s tombstone discipline (#614).
+  """
+  @spec move_attachment(map(), map(), String.t(), String.t()) ::
+          {:ok, Attachment.t()} | {:error, :conflict | :not_found | term()}
+  def move_attachment(user, vault, old_path, new_path) do
+    old_path = PathSanitizer.sanitize(old_path)
+    new_path = PathSanitizer.sanitize(new_path)
+    user = fresh_user(user)
+    now = DateTime.utc_now(:second)
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      old_hmac = Crypto.hmac_field(filter_key, old_path)
+      new_hmac = Crypto.hmac_field(filter_key, new_path)
+
+      Repo.transaction(fn ->
+        Repo.with_tenant(user.id, fn ->
+          live = Repo.one(live_by_hmac_query(user, vault, old_hmac))
+
+          cond do
+            is_nil(live) ->
+              Repo.rollback(:not_found)
+
+            old_path == new_path ->
+              {:ok, att} = Crypto.maybe_decrypt_attachment_fields(live, user)
+              att
+
+            Repo.one(live_by_hmac_query(user, vault, new_hmac)) ->
+              Repo.rollback(:conflict)
+
+            true ->
+              # Both writes share ONE seq inside ONE transaction (#614): a cursor
+              # pull must never see the repoint at seq S, advance past S, and miss
+              # the tombstone also at S.
+              seq = Engram.Vaults.next_seq!(vault.id)
+
+              # Repoint the live row: re-encrypt path under the SAME id-AAD (id is
+              # unchanged, so the AAD bind is unchanged), recompute path_hmac, bump
+              # updated_at + seq. storage_key + blob untouched.
+              path_aad = Crypto.aad_for_row(:attachments, :path, live.id)
+              {path_ct, path_n} = Envelope.encrypt(new_path, dek, path_aad)
+
+              {1, _} =
+                from(a in Attachment, where: a.id == ^live.id)
+                |> Repo.update_all(
+                  set: [
+                    path_ciphertext: path_ct,
+                    path_nonce: path_n,
+                    path_hmac: new_hmac,
+                    updated_at: now,
+                    seq: seq
+                  ]
+                )
+
+              # Insert the old-path tombstone (fresh uuid, path encrypted under
+              # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
+              # in the change feed so clients trash the old path.
+              Repo.insert!(tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now))
+
+              %{
+                live
+                | path: new_path,
+                  path_ciphertext: path_ct,
+                  path_nonce: path_n,
+                  path_hmac: new_hmac,
+                  updated_at: now,
+                  seq: seq
+              }
+          end
+        end)
+        |> unwrap_tenant()
+        |> case do
+          {:ok, att} -> att
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, %Attachment{} = att} ->
+          if old_path != new_path do
+            broadcast_attachment(user.id, vault.id, "delete", old_path, att)
+            broadcast_attachment(user.id, vault.id, "upsert", new_path, att)
+          end
+
+          {:ok, att}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp live_by_hmac_query(user, vault, hmac) do
+    from(a in Attachment,
+      where:
+        a.path_hmac == ^hmac and a.user_id == ^user.id and
+          a.vault_id == ^vault.id and is_nil(a.deleted_at)
+    )
+  end
+
+  # Soft-deleted full-row insert at the vacated path. storage_key=nil (no blob),
+  # content_hash + content_nonce carried from the live row (the changeset
+  # requires content_nonce; the value is irrelevant — the row is deleted and
+  # never decrypted). Path encrypted under the tombstone's OWN id-AAD so reads
+  # of the (never-served) row stay AAD-consistent.
+  defp tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now) do
+    tomb_id = Ecto.UUID.generate()
+    path_aad = Crypto.aad_for_row(:attachments, :path, tomb_id)
+    {path_ct, path_n} = Envelope.encrypt(old_path, dek, path_aad)
+
+    Attachment.changeset(%Attachment{id: tomb_id}, %{
+      path_ciphertext: path_ct,
+      path_nonce: path_n,
+      path_hmac: old_hmac,
+      content_hash: live.content_hash,
+      mime_type: live.mime_type,
+      size_bytes: live.size_bytes,
+      mtime: live.mtime,
+      user_id: user.id,
+      vault_id: vault.id,
+      storage_key: nil,
+      deleted_at: now,
+      seq: seq,
+      version: 1,
+      encryption_version: 1,
+      dek_version: Crypto.row_version_aad_bound(),
+      content_nonce: live.content_nonce
+    })
+  end
+
+  # Replaced by the real socket fan-out in Task 5. This stub keeps the module
+  # compiling and move_attachment's control flow complete until then.
+  defp broadcast_attachment(_user_id, _vault_id, _event_type, _path, _att), do: :ok
+
+  @doc """
   Lists non-deleted attachment metadata for a vault (no content).
   """
   def list_attachments(user, vault) do
