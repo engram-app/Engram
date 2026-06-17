@@ -2123,6 +2123,11 @@ export function useBatchMoveAttachments() {
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
       qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
     },
+    // Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
+    // failures here, matching the note/folder batch hooks.
+    onError: () => {
+      toast.error('Batch move failed.')
+    },
   })
 }
 
@@ -2140,6 +2145,9 @@ export function useBatchDeleteAttachments() {
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
       qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+    },
+    onError: () => {
+      toast.error('Batch delete failed.')
     },
   })
 }
