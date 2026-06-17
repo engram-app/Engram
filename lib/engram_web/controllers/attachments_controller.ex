@@ -114,8 +114,13 @@ defmodule EngramWeb.AttachmentsController do
     vault = conn.assigns.current_vault
 
     with :ok <- Billing.check_feature(user, :attachments_enabled),
-         {:ok, _att} <- Attachments.move_attachment(user, vault, old_path, new_path) do
-      json(conn, %{renamed: true, old_path: old_path, new_path: new_path})
+         {:ok, att} <- Attachments.move_attachment(user, vault, old_path, new_path) do
+      json(conn, %{
+        renamed: true,
+        old_path: old_path,
+        new_path: new_path,
+        attachment: serialize_metadata(att)
+      })
     else
       {:error, :feature_not_available} ->
         EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
@@ -132,20 +137,28 @@ defmodule EngramWeb.AttachmentsController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Attachments.batch_move(user, vault, paths, target) do
-      {:ok, %{moved: n}} ->
-        body = %{moved: n}
-        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
-        json(conn, body)
+    # Gated like rename/upload: moving attachments is "using" the feature, so a
+    # plan without :attachments_enabled gets a 402 (delete stays ungated below).
+    case Billing.check_feature(user, :attachments_enabled) do
+      {:error, :feature_not_available} ->
+        EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
 
-      {:error, {:conflict, p}} ->
-        conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
+      :ok ->
+        case Attachments.batch_move(user, vault, paths, target) do
+          {:ok, %{moved: n}} ->
+            body = %{moved: n}
+            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+            json(conn, body)
 
-      {:error, {:not_found, p}} ->
-        conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
+          {:error, {:conflict, p}} ->
+            conn |> put_status(409) |> json(%{error: "conflict", item_path: p})
 
-      {:error, _} ->
-        conn |> put_status(500) |> json(%{error: "internal"})
+          {:error, {:not_found, p}} ->
+            conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
+
+          {:error, _} ->
+            conn |> put_status(500) |> json(%{error: "internal"})
+        end
     end
   end
 
@@ -153,9 +166,12 @@ defmodule EngramWeb.AttachmentsController do
     conn |> put_status(400) |> json(%{error: "missing required params: paths, target_folder"})
   end
 
+  # Intentionally NOT billing-gated: deleting is cleanup, never trap a downgraded
+  # user with attachments they can't remove. Mirrors notes-delete staying open.
   def batch_delete(conn, %{"paths" => paths}) when is_list(paths) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
+    # batch_delete/3 is total — its @spec returns {:ok, %{deleted: _}} only.
     {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
     body = %{deleted: n}
     Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})

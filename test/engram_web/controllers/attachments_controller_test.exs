@@ -599,6 +599,9 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["renamed"] == true
       assert body["old_path"] == "old/a.png"
       assert body["new_path"] == "new/b.png"
+      # Response carries the renamed attachment's metadata (parity with notes).
+      assert body["attachment"]["path"] == "new/b.png"
+      assert body["attachment"]["mime_type"] == "image/png"
     end
 
     test "conflict → 409", %{conn: conn, user: user, vault: vault} do
@@ -678,6 +681,8 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       body = json_response(conn, 200)
       assert body["deleted"] == 1
+      # The attachment is actually gone, not just counted.
+      assert {:ok, nil} = Attachments.get_attachment(user, vault, "b.png")
     end
   end
 
