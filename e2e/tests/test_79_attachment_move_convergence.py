@@ -12,14 +12,21 @@ with one per-vault seq in one transaction. That tombstone is the durable
     in the same final state.
 
 Both paths must leave NO duplicate at the old path (no resurrection).
+
+The seed attachment is uploaded via the API (web-origin) rather than written to
+vault A and waited on — that keeps the setup off the plugin's binary-push timing
+(which is slow under parallel CI load) and matches the web-origin theme.
 """
 
 import asyncio
 
 import pytest
 
-from helpers.vault import wait_for_binary, wait_for_file_gone, write_binary
+from helpers.vault import wait_for_binary, wait_for_file_gone
 
+# B-side convergence (socket delivery / catch-up pull + blob fetch) can lag under
+# parallel CI load — give it more room than the suite's 15s default.
+CONVERGE_TIMEOUT = 25
 
 # Minimal valid PNG: 1x1 red pixel (same constant as test_33).
 TINY_PNG = (
@@ -38,11 +45,11 @@ async def test_attachment_move_converges_via_live_socket(
     old_path = "E2E/attachments/move79live-old.png"
     new_path = "E2E/attachments/move79live-new.png"
 
-    # Seed: A creates the attachment, server stores it, B pulls a copy.
-    write_binary(vault_a, old_path, TINY_PNG)
+    # Seed via the API (web-origin upload → immediately on the server), then B pulls.
+    assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
     await cdp_b.trigger_full_sync()
-    wait_for_binary(vault_b, old_path, timeout=15)
+    wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
     # B is connected to the live channel before the move.
     await cdp_b.wait_for_stream_connected(timeout=10)
@@ -56,9 +63,9 @@ async def test_attachment_move_converges_via_live_socket(
     api_sync.wait_for_attachment_gone(old_path)
 
     # B converges over the live socket: new written, old trashed — no duplicate.
-    b_data = wait_for_binary(vault_b, new_path, timeout=15)
+    b_data = wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT)
     assert b_data == TINY_PNG, "B's moved attachment bytes should be intact"
-    wait_for_file_gone(vault_b, old_path, timeout=15)
+    wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
 
 @pytest.mark.asyncio
@@ -74,11 +81,11 @@ async def test_attachment_move_converges_offline_catch_up(
     old_path = "E2E/attachments/move79offline-old.png"
     new_path = "E2E/attachments/move79offline-new.png"
 
-    # Seed: A creates the attachment, server stores it, B pulls a copy.
-    write_binary(vault_a, old_path, TINY_PNG)
+    # Seed via the API, then B pulls a copy.
+    assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
     await cdp_b.trigger_full_sync()
-    wait_for_binary(vault_b, old_path, timeout=15)
+    wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
     # Take B offline so it misses the ephemeral move broadcasts.
     await cdp_b.wait_for_stream_connected(timeout=10)
@@ -95,6 +102,6 @@ async def test_attachment_move_converges_offline_catch_up(
     # Reconnect → catch-up pull delivers BOTH the upsert(new) and the
     # tombstone(old). B converges with no duplicate.
     await cdp_b.reconnect_stream()
-    b_data = wait_for_binary(vault_b, new_path, timeout=15)
+    b_data = wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT)
     assert b_data == TINY_PNG, "B's moved attachment bytes should be intact"
-    wait_for_file_gone(vault_b, old_path, timeout=15)
+    wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
