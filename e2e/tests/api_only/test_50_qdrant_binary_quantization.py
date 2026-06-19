@@ -109,8 +109,12 @@ class TestSearchRoundTrip:
 
         # Step 1: Wait for THIS note to be indexed in Qdrant (not just any points).
         # #590: source_path is no longer in the payload — match by path_hmac.
+        # 120s (was 60s, #428): the worst-case async path is Voyage 429 backoff
+        # + Qdrant Cloud cold-start + Oban contention, which exceeded 60s under
+        # CI load. This doesn't mask perf regressions — the RDS/ECS health
+        # alarms (#259) still fire on real slowdowns.
         wait_for_qdrant_indexed(
-            seeded_note["vault_id"], path_hmac, note_path, timeout=60
+            seeded_note["vault_id"], path_hmac, note_path, timeout=120
         )
 
         # Step 2: Embed query directly via Ollama
