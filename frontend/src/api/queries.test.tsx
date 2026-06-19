@@ -44,8 +44,10 @@ import {
   type Note,
   useAcceptTerms,
   useAttachments,
+  useBatchDeleteAttachments,
   useBatchDeleteFolders,
   useBatchDeleteNotes,
+  useBatchMoveAttachments,
   useBatchMoveFolders,
   useBatchMoveNotes,
   useCancelSubscription,
@@ -58,6 +60,7 @@ import {
   useFolders,
   useNote,
   usePlanChangePreview,
+  useRenameAttachment,
   useRenameFolder,
   useRenameNote,
   useReverseCancel,
@@ -1367,5 +1370,102 @@ describe('useAttachments', () => {
 
     expect(get).toHaveBeenCalledWith('/attachments')
     expect(result.current.data?.[0]?.path).toBe('a.png')
+  })
+})
+
+describe('useRenameAttachment', () => {
+  it('POSTs /attachments/rename with {old_path, new_path} and invalidates folders + attachments', async () => {
+    post.mockResolvedValue({ renamed: true, old_path: 'img/a.png', new_path: 'img/b.png' })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useRenameAttachment(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ old_path: 'img/a.png', new_path: 'img/b.png' })
+    })
+
+    expect(post).toHaveBeenCalledWith('/attachments/rename', {
+      old_path: 'img/a.png',
+      new_path: 'img/b.png',
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderNotes', '42'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
+  })
+
+  it('surfaces 409 as ApiError', async () => {
+    post.mockRejectedValue(new ApiError(409, 'conflict'))
+
+    const { result } = renderHook(() => useRenameAttachment(), { wrapper })
+    await expect(
+      result.current.mutateAsync({ old_path: 'a.png', new_path: 'b.png' }),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+})
+
+describe('useBatchMoveAttachments', () => {
+  it('POSTs paths + target_folder with UUID X-Idempotency-Key header', async () => {
+    post.mockResolvedValue({ moved: 2 })
+
+    const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ paths: ['a.png', 'b.png'], target_folder: 'img' })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/attachments/batch-move',
+      { paths: ['a.png', 'b.png'], target_folder: 'img' },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('invalidates folders + attachments on success', async () => {
+    post.mockResolvedValue({ moved: 1 })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ paths: ['a.png'], target_folder: 'img' })
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
+  })
+})
+
+describe('useBatchDeleteAttachments', () => {
+  it('POSTs paths with UUID X-Idempotency-Key header', async () => {
+    post.mockResolvedValue({ deleted: 2 })
+
+    const { result } = renderHook(() => useBatchDeleteAttachments(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ paths: ['a.png', 'b.png'] })
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/attachments/batch-delete',
+      { paths: ['a.png', 'b.png'] },
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Idempotency-Key': expect.stringMatching(UUID_RE),
+        }),
+      }),
+    )
+  })
+
+  it('invalidates folders + attachments on success', async () => {
+    post.mockResolvedValue({ deleted: 2 })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+
+    const { result } = renderHook(() => useBatchDeleteAttachments(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ paths: ['a.png', 'b.png'] })
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
   })
 })

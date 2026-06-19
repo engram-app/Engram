@@ -2086,3 +2086,68 @@ export function useBatchMoveFolders() {
     },
   })
 }
+
+export function useRenameAttachment() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { renamed: boolean; old_path: string; new_path: string },
+    ApiError,
+    { old_path: string; new_path: string }
+  >({
+    mutationFn: (vars) =>
+      api.post<{ renamed: boolean; old_path: string; new_path: string }>(
+        '/attachments/rename',
+        vars,
+      ),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+    },
+  })
+}
+
+export function useBatchMoveAttachments() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<{ moved: number }, ApiError, { paths: string[]; target_folder: string }>({
+    mutationFn: ({ paths, target_folder }) =>
+      api.post<{ moved: number }>(
+        '/attachments/batch-move',
+        { paths, target_folder },
+        idempotencyHeaders(),
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+    },
+    // Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
+    // failures here, matching the note/folder batch hooks.
+    onError: () => {
+      toast.error('Batch move failed.')
+    },
+  })
+}
+
+export function useBatchDeleteAttachments() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
+    mutationFn: ({ paths }) =>
+      api.post<{ deleted: number }>(
+        '/attachments/batch-delete',
+        { paths },
+        idempotencyHeaders(),
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+    },
+    onError: () => {
+      toast.error('Batch delete failed.')
+    },
+  })
+}
