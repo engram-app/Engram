@@ -31,4 +31,14 @@ defmodule EngramWeb.ApiSpecTest do
                Map.take(schemes["apiKey"], [:type, :in])
     end
   end
+
+  describe "annotated paths" do
+    test "/api/health is present with a 200 HealthStatus response" do
+      spec = EngramWeb.ApiSpec.spec()
+
+      assert %{} = op = spec.paths["/api/health"].get
+      assert op.summary
+      assert Map.has_key?(op.responses, 200)
+    end
+  end
 end
