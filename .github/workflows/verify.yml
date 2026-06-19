@@ -518,6 +518,13 @@ jobs:
       E2E_VAULT_PREFIX: /tmp/e2e-vault-${{ github.run_id }}
       E2E_CONFIG_PREFIX: /tmp/e2e-obsidian-config-${{ github.run_id }}
       ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+      # Run e2e-clerk serially (1 xdist worker). The 2-worker default starves
+      # the headless-Obsidian renderer under CPU contention, which is the
+      # shared root cause of the timing-flake family — slow 1k-file indexing
+      # (test_77), late WS heartbeats → server idle-close (test_47/48/78),
+      # offline-transition lag (test_24). Serial is ~2× slower but removes the
+      # contention; a flaky gate that blocks every merge costs far more.
+      E2E_WORKERS: 1
 
     steps:
       - name: Generate App token
