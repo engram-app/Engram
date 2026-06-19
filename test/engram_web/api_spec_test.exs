@@ -121,4 +121,21 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 204)
     end
   end
+
+  describe "Search + Tags paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "POST /api/search documents request + 200/403/422", %{spec: spec} do
+      op = spec.paths["/api/search"].post
+      assert op.tags == ["Search"]
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 403, 422]
+    end
+
+    test "GET /api/tags returns tag names", %{spec: spec} do
+      op = spec.paths["/api/tags"].get
+      assert op.tags == ["Tags"]
+      assert Map.has_key?(op.responses, 200)
+    end
+  end
 end
