@@ -215,11 +215,18 @@ defmodule Engram.Notes do
       {:error, %Ecto.Changeset{errors: errors}} = err ->
         # Race: concurrent insert of the same marker collapses to the
         # winner. Re-fetch and return rather than surface a constraint
-        # error — keeps the API idempotent under load.
+        # error — keeps the API idempotent under load. The unique index is
+        # partial (WHERE deleted_at IS NULL), so the conflict winner is always
+        # a LIVE marker; match deleted_at: nil explicitly so this stays correct
+        # even if find_folder_marker (no deleted_at filter) ever returns a
+        # tombstone, rather than hydrating a soft-deleted row.
         if has_unique_conflict?(errors) do
           case find_folder_marker(user, vault, folder_hmac) do
-            {:ok, existing} -> {:ok, hydrate_folder_marker(existing, dek)}
-            :not_found -> err
+            {:ok, %Note{deleted_at: nil} = existing} ->
+              {:ok, hydrate_folder_marker(existing, dek)}
+
+            _ ->
+              err
           end
         else
           err
