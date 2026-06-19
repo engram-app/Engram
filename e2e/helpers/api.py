@@ -155,6 +155,15 @@ class ApiClient:
         )
         return resp.status_code
 
+    def rename_attachment(self, old_path: str, new_path: str) -> int:
+        """POST /attachments/rename (web-origin move). Returns HTTP status code."""
+        resp = self.session.post(
+            f"{self.base_url}/attachments/rename",
+            json={"old_path": old_path, "new_path": new_path},
+            timeout=10,
+        )
+        return resp.status_code
+
     def append_note(self, path: str, text: str) -> int:
         """POST /notes/append. Returns HTTP status code."""
         resp = self.session.post(
