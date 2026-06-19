@@ -29,16 +29,25 @@ async def test_offline_queue_replay(vault_a, cdp_a, api_sync):
         time.sleep(0.3)  # Space apart to ensure separate push attempts
         write_note(vault_a, path2, "# Offline Note 2\nAlso queued while offline")
 
-        # Wait for push attempts to fail and queue
-        deadline = time.monotonic() + 10
+        # Both the offline flag and the queue fill are REACTIONS to the
+        # simulated push failures — and the engine flips `offline` on its own
+        # health/error path, which can lag the queue fill under e2e-clerk load.
+        # The old code broke out as soon as queue >= 2, then snapshotted
+        # `offline` immediately — a point-in-time assert on eventually-
+        # consistent state that flaked (#635). Poll for BOTH conditions before
+        # asserting.
+        deadline = time.monotonic() + 15
+        offline = False
+        queue_size = 0
         while time.monotonic() < deadline:
-            if await cdp_a.get_queue_size() >= 2:
+            offline = await cdp_a.get_offline_status()
+            queue_size = await cdp_a.get_queue_size()
+            if offline and queue_size >= 2:
                 break
             await asyncio.sleep(0.5)
 
         # Verify offline state
-        assert await cdp_a.get_offline_status(), "Engine should be offline"
-        queue_size = await cdp_a.get_queue_size()
+        assert offline, "Engine should be offline"
         assert queue_size >= 2, f"Expected at least 2 queued entries, got {queue_size}"
     finally:
         # MUST restore even if assertions fail — prevents cascade

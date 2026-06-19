@@ -956,12 +956,18 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             se._origPushNote = se.api.pushNote.bind(se.api);
+            se._origPushNotesBatch = se.api.pushNotesBatch.bind(se.api);
             se._origDeleteNote = se.api.deleteNote.bind(se.api);
             se._origPushAttachment = se.api.pushAttachment.bind(se.api);
             se._origDeleteAttachment = se.api.deleteAttachment.bind(se.api);
             se._origHealth = se.api.health.bind(se.api);
             const fail = async () => {{ throw new Error('simulated offline'); }};
             se.api.pushNote = fail;
+            // pushNotesBatch (POST /notes/batch, protocol rev #557) is a SEPARATE
+            // method — without overriding it too, multi-file pushes that coalesce
+            // into a batch bypass the simulation, the real call succeeds, and the
+            // engine flips back online (goOnline) so it never goes offline (#635).
+            se.api.pushNotesBatch = fail;
             se.api.deleteNote = fail;
             se.api.pushAttachment = fail;
             se.api.deleteAttachment = fail;
@@ -982,11 +988,13 @@ class CdpClient:
         (function() {{
             const se = {ENGINE_PATH};
             if (se._origPushNote) se.api.pushNote = se._origPushNote;
+            if (se._origPushNotesBatch) se.api.pushNotesBatch = se._origPushNotesBatch;
             if (se._origDeleteNote) se.api.deleteNote = se._origDeleteNote;
             if (se._origPushAttachment) se.api.pushAttachment = se._origPushAttachment;
             if (se._origDeleteAttachment) se.api.deleteAttachment = se._origDeleteAttachment;
             if (se._origHealth) se.api.health = se._origHealth;
             delete se._origPushNote;
+            delete se._origPushNotesBatch;
             delete se._origDeleteNote;
             delete se._origPushAttachment;
             delete se._origDeleteAttachment;
