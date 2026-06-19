@@ -304,12 +304,13 @@ defmodule Engram.Attachments do
         # are gone post-delete, so only the discriminators the plugin needs to
         # trash are sent.
         if deleted? do
-          EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
-            "event_type" => "delete",
-            "kind" => "attachment",
-            "path" => path,
-            "vault_id" => vault.id
-          })
+          _ =
+            EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
+              "event_type" => "delete",
+              "kind" => "attachment",
+              "path" => path,
+              "vault_id" => vault.id
+            })
         end
 
         deleted?
