@@ -48,6 +48,18 @@ defmodule EngramWeb.Endpoint do
   # including 404/410 rejections from HostRewrite — for log correlation.
   plug Plug.RequestId
 
+  # Tidewave MCP (dev only) — runtime introspection of the running app
+  # for AI tooling (project_eval, DB queries, logs) at /tidewave/mcp.
+  # Mounted BEFORE HostRewrite so the dev endpoint is never subject to
+  # saas-only host rejection (e.g. when running `make saas-dev`).
+  # `code_reloading?` is true only in :dev and is evaluated at compile
+  # time, so the `Tidewave` module (an `only: :dev` dep, absent in
+  # prod/test) is never referenced outside dev — same pattern as the
+  # `Phoenix.CodeReloader` guard below.
+  if code_reloading? do
+    plug Tidewave
+  end
+
   # HostRewrite runs BEFORE Plug.Static so saas-only host rejection (410
   # Gone on app.engram.page after the saas-only cutover) covers static
   # assets too — otherwise `app.engram.page/favicon.ico` and
