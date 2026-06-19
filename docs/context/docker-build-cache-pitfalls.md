@@ -10,7 +10,7 @@ How the backend Dockerfile packages an Elixir release, and why the old split-ste
 
 ## Environment
 - `backend/Dockerfile` — multi-stage Elixir release build.
-- Triggered by `docker-compose.ci.yml` (self-hosted runner on FastRaid) and any local `docker compose -f docker-compose.ci.yml build`.
+- Triggered by `ci/compose.yml` (self-hosted runner on FastRaid) and any local `docker compose -f ci/compose.yml build`.
 - Cache mounts are BuildKit-scoped (`id=mix-deps`, `id=mix-build` historically) — persistent named volumes on the builder host, survive across runs.
 
 ## The Pitfall
@@ -49,7 +49,7 @@ The extra ~1 minute of compile time is worth the guarantee that the released ima
 
 - Verify a CI build is using fresh code: check the stack log for `Image cache miss (engram-ci:<sha>) — building` AND `Compiling N files (.ex)` AND look for expected file-level compilation output.
 - If a stacktrace line number disagrees with current source, **suspect build cache first, not code**. `git show HEAD -- <file>` to confirm the commit has the change; if yes, it is a deployment/cache issue, not a source issue.
-- Local test: `docker compose -f docker-compose.ci.yml build --no-cache engram` forces a full rebuild without BuildKit cache.
+- Local test: `docker compose -f ci/compose.yml build --no-cache engram` forces a full rebuild without BuildKit cache.
 
 ## Failed Approaches / Dead Ends
 

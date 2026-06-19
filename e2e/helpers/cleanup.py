@@ -27,7 +27,7 @@ CONFIG_PATHS = [
     Path("/tmp/e2e-obsidian-config-c"),
 ]
 
-# CI compose project name — matches the directory name where docker-compose.ci.yml lives
+# CI compose project name — matches the directory name where ci/compose.yml lives
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
 CI_MINIO_CONTAINER = os.environ.get("CI_MINIO_CONTAINER", "engram-ci-minio-1")
 CI_MINIO_BUCKET = os.environ.get("CI_MINIO_BUCKET", "engram-attachments")

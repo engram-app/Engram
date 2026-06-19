@@ -73,7 +73,6 @@ SEARCH:            MCP/REST → Voyage embed query → Qdrant similarity → top
 ```bash
 # Docker Compose (Elixir + PostgreSQL + Qdrant + Ollama + MinIO)
 docker compose up --build
-# docker-compose.elixir.yml is a lighter variant (Elixir + PostgreSQL + MinIO, no Qdrant/Ollama)
 
 # Outside Docker (requires Elixir 1.15+, PostgreSQL, Qdrant)
 mix deps.get

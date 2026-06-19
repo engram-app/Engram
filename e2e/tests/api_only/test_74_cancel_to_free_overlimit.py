@@ -18,7 +18,7 @@ Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
   8. POST /notes for a NEW path returns 200.
 
 Webhook secret note:
-  docker-compose.ci.yml sets PADDLE_NOTIFICATION_SECRET=pdl_ntfn_e2e_fake
+  ci/compose.yml sets PADDLE_NOTIFICATION_SECRET=pdl_ntfn_e2e_fake
   (added in this PR). The test signs its payload with the same secret.
   If you run e2e outside CI, export PADDLE_NOTIFICATION_SECRET to match.
 

@@ -28,7 +28,7 @@ Why API-only, not driving Obsidian:
   test_73 (attachment 402) and test_71 (vault-limit 402).
 
 CI billing_enabled note:
-  docker-compose.ci.yml leaves PADDLE_API_KEY unset → runtime.exs flips
+  ci/compose.yml leaves PADDLE_API_KEY unset → runtime.exs flips
   :billing_enabled to false → Onboarding.status/1 auto-passes
   :subscription_ok regardless of accept_free_tier. We still POST it to
   prove the endpoint accepts the request (idempotent {:ok, user}) and
