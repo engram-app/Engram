@@ -99,4 +99,26 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 404)
     end
   end
+
+  describe "Folders paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "GET /api/folders/list documents required folder query param", %{spec: spec} do
+      op = spec.paths["/api/folders/list"].get
+      assert op.tags == ["Folders"]
+      assert Enum.any?(op.parameters, &(&1.name == :folder and &1.in == :query and &1.required))
+      assert Map.has_key?(op.responses, 400)
+    end
+
+    test "POST /api/folders documents request + 201/422", %{spec: spec} do
+      op = spec.paths["/api/folders"].post
+      assert op.requestBody
+      assert Map.has_key?(op.responses, 201) and Map.has_key?(op.responses, 422)
+    end
+
+    test "DELETE /api/folders/*path is 204", %{spec: spec} do
+      op = spec.paths["/api/folders/*path"].delete
+      assert Map.has_key?(op.responses, 204)
+    end
+  end
 end
