@@ -177,6 +177,15 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/folder-tree-optimistic-rebuild.md` | How the SPA folder-tree (headless-tree) reads notes from `folder-notes-by-id` + `folderNotes` caches and what triggers `rebuildTree()` — `treeStructureKey` (id:count:parent_id) + a QueryCache subscription; the 2026-06-13 optimistic move/delete/duplicate fixes + remaining gaps |
 | `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md` | PG18/UUIDv7 prod crash-loop root cause: in-place RDS engine bump preserved data instead of the specced taint+recreate, so the wreck-and-recreate baseline never replayed → integer PKs vs `Ecto.UUID` schemas → boot ArgumentError. Includes the guarded `reset_baseline/0` fix |
 | `docs/context/read-path-decrypt-perf.md` | Read-path decrypt perf: parallel_map economics (3.6× on 50KB content, SLOWER on path-sized payloads — keep those sequential), local test DB needs PG18 on :5433 post-uuidv7 (symptom table), why manifest needs no `(user_id, vault_id, kind)` index, decrypt_batch/dek_cache telemetry to check first |
+| `docs/context/b2-cursor-pull-e2e-triage.md` | Root-cause triage of the B2 cursor-pull paired e2e failures (test_48 vault-swap reconnect bug, test_24 coalesce-pull regression, merge sequencing) |
+| `docs/context/refresh-token-reuse-detection.md` | Refresh-token rotation (as-built): leeway/overlap window + token-family reuse detection |
+| `docs/context/connections-client-identity.md` | How `/settings/connections` + onboarding checklist identify an OAuth/MCP client (redirect-host matching, why `software_id` failed, HTTPS trust model) |
+| `docs/context/attachment-mime-whitelist.md` | Two-phase MIME/extension whitelist abuse defense (Pricing v2 §H) — stops Free storage being used as a malware/file host |
+| `docs/context/pricing-v2-server-side-enforcement-audit.md` | Pricing v2 §G audit: every `LimitKeys` key has a server-side enforcement site; encoded by `mix engram.lint.no_client_only_rate_limits` (CI) |
+| `docs/context/perf-caching-invalidation.md` | Perf caches + invalidation contracts (2026-06-12 audit wave); note: local test DB is PG18 on :5433 |
+| `docs/context/exunit-application-env-races.md` | Why `Application.put_env` in `async: true` tests is a flake source (global ETS; the SQL sandbox doesn't isolate app env) |
+| `docs/context/e2e-vault-registration-diagnostics.md` | Diagnostic ladder for `Vault not registered after 15s` E2E failures — don't just bump the timeout |
+| `docs/context/local-dev-preview-stack.md` | Preview frontend changes against a locally-running real backend |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS
