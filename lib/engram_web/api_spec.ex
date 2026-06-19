@@ -11,7 +11,7 @@ defmodule EngramWeb.ApiSpec do
   @behaviour OpenApiSpex.OpenApi
 
   alias OpenApiSpex.{Components, Info, OpenApi, Paths, SecurityScheme, Server}
-  alias EngramWeb.{Endpoint, Router}
+  alias EngramWeb.Router
 
   @impl OpenApiSpex.OpenApi
   def spec do
@@ -22,8 +22,7 @@ defmodule EngramWeb.ApiSpec do
         version: to_string(Application.spec(:engram, :vsn) || "dev")
       },
       servers: [
-        %Server{url: "https://api.engram.page", description: "Production"},
-        %Server{url: Endpoint.url(), description: "This instance"}
+        %Server{url: "https://api.engram.page", description: "Production"}
       ],
       paths: Paths.from_router(Router),
       components: %Components{
