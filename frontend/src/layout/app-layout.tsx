@@ -16,6 +16,7 @@ import AppSidebarPanel, { Rail } from './app-sidebar'
 import MobileLayout from './mobile-layout'
 import { RailViewProvider } from './rail-view-context'
 import { RightSidebarProvider, useRightSidebar } from './right-sidebar-context'
+import { AttachmentUploadProvider } from '../viewer/attachment-upload/provider'
 
 const LAYOUT_PANEL_IDS = ['sidebar', 'main', 'right-sidebar']
 
@@ -150,7 +151,9 @@ export default function AppLayout() {
   return (
     <RightSidebarProvider>
       <RailViewProvider>
-        <AppLayoutInner />
+        <AttachmentUploadProvider>
+          <AppLayoutInner />
+        </AttachmentUploadProvider>
       </RailViewProvider>
     </RightSidebarProvider>
   )

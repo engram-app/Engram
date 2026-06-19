@@ -24,6 +24,9 @@ vi.mock('../api/queries', async () => {
     ...actual,
     useBillingStatus: () => ({ data: { subscription: { status: 'active' } } }),
     useSearch: () => ({ data: [], isLoading: false, error: null }),
+    // AttachmentUploadProvider reads useFolders for the upload dialog's folder
+    // list; stub it so this layout test makes no real /folders fetch.
+    useFolders: () => ({ data: [] }),
   }
 })
 vi.mock('../api/use-channel', () => ({ useChannel: () => {} }))
