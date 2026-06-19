@@ -1,4 +1,4 @@
-.PHONY: help deps dev dev-selfhost dev-stop dev-db-up dev-db-down dev-db-reset test backend-build backend-up backend-down frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list parity-mix parity-bash parity-ci-up parity-ci-down gen-master-key
+.PHONY: help deps dev dev-selfhost dev-stop dev-db-up dev-db-down dev-db-reset test frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list gen-master-key
 
 help:              ## List available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -50,15 +50,6 @@ dev-stop:          ## Stop local Phoenix dev server (and any orphan Vite process
 
 test:              ## Run mix test
 	mix test
-
-backend-build:     ## Build engram_elixir docker image
-	docker compose -f docker-compose.elixir.yml build engram_elixir
-
-backend-up:        ## Start full Elixir stack (Phoenix + Postgres + Qdrant)
-	docker compose -f docker-compose.elixir.yml up -d --wait
-
-backend-down:      ## Stop Elixir stack
-	docker compose -f docker-compose.elixir.yml down
 
 # --- Frontend ---
 
@@ -113,19 +104,6 @@ bench-report:      ## Generate consolidated benchmark report
 bench-list:        ## List configured embedding models
 	python3 -m benchmarks list models
 
-# --- Parity Validation ---
-
-parity-mix:        ## Run mix parity.validate (internal module validation)
-	env $$(grep -v '^\#' .env.elixir | grep -v '^$$' | xargs) mix parity.validate
-
-parity-bash:       ## Run validate_parity.sh (deployed system validation)
-	VOYAGE_API_KEY=$${VOYAGE_API_KEY} bash validate_parity.sh
-
-parity-ci-up:      ## Start CI stack in parity mode (requires VOYAGE_API_KEY)
-	VOYAGE_API_KEY=$${VOYAGE_API_KEY} docker compose -f docker-compose.ci.yml -f docker-compose.parity.yml -p engram-ci up -d --build --wait
-
-parity-ci-down:    ## Tear down parity CI stack
-	docker compose -f docker-compose.ci.yml -f docker-compose.parity.yml -p engram-ci down -v --remove-orphans
 
 # --- Dev UX ---
 
