@@ -66,7 +66,7 @@ takes effect on an EMPTY schema — on an existing DB the baseline row in
 `schema_migrations` makes it a silent no-op. So such a change MUST be paired
 with an actual DB wipe/recreate at every env, and the infra step must be a
 **taint + recreate**, never an in-place engine upgrade that preserves data. An
-in-place PG17→PG18 bump is exactly what stranded prod on legacy integer PKs on
+in-place PG16→PG18 bump is exactly what stranded prod on legacy integer PKs on
 2026-06-11 (see `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`).
 `Engram.Release.verify_schema_baseline/0` now fails the deploy loud if this is
 ever missed again.

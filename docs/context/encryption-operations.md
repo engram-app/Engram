@@ -1,17 +1,14 @@
 # Context Doc: Encryption-at-Rest Operations
 
-_Last verified: 2026-05-05 (post-B.3)_
+_Last verified: 2026-06-18 (post-B.4)_
 
-> **⚠ Most of this runbook is historical.** Phase B.3 (PR #71, 0.5.28) retired the vault decrypt path entirely — the `POST/DELETE /api/vaults/:id/decrypt` endpoints, `Engram.Workers.DecryptVault`, and the `Engram.Crypto.request_decrypt_vault/2` / `cancel_decrypt_vault/2` API are all deleted. Encryption is one-way; per-note read decryption happens transparently. The toggle/cooldown sections below describe the pre-B.3 world and are kept for historical context only.
+> **⚠ The toggle/cooldown half of this runbook is historical — the feature is GONE.** Phase B.3 (PR #71, 0.5.28) retired the vault decrypt path, and B.4 (PR #72, 0.5.29) retired the encrypt toggle entirely. **As of today (verified against `lib/`):** there are NO `/api/vaults/:id/encrypt`, `/decrypt`, or `/encryption_progress` routes; no `EncryptVault`/`DecryptVault` workers; no `users.encryption_toggle_cooldown_days` column; no `mix engram.set_cooldown` task; and no `encryption_status` / `last_toggle_at` vault fields. Encryption is unconditional and one-way; per-note read decryption happens transparently. The "Per-User Toggle Cooldown", "Toggle Flow & State Machine", and the related triage recipes below describe the **pre-B.4 world** and are kept only for archaeological context — do not act on them.
 >
-> **Current operator surface (post-B.3):**
-> - Every saas vault is encrypted at rest. Path/folder/tags/name plaintext columns dropped on saas in B.3.
-> - `POST /api/vaults/:id/encrypt` still exists — it converts a non-encrypted vault to encrypted (one-way). New vaults default to non-encrypted; this is closing in B.4.
-> - `GET /api/vaults/:id/encryption_progress` still works for monitoring an in-flight encrypt job.
-> - Decrypt routes return 404 (route removed in B.3, no replacement).
+> **Current operator surface (post-B.4):**
+> - Every vault is encrypted at rest by default at create time. There is no per-vault toggle, no cooldown, no in-flight encrypt job to monitor.
+> - Path/folder/tags/name + `notes.content`/`title` plaintext columns were dropped (B.3/B.4).
 > - To check vault state, query Postgres directly or use the engram MCP `list_vaults`.
->
-> **Forward plan shipped:** B.4 (PR #72, 2026-05-06) retired the `vault.encrypted` flag, dropped `notes.content`/`title` plaintext columns, and removed the encrypt toggle entirely. Every vault encrypted by default at create time.
+> - The live operator runbooks that still apply are the **Tier-3 sections** further down: master-key rotation (T3.5), master-key backup, and per-user DEK rotation (T3.7).
 
 ## Status (historical — pre-B.3)
 
@@ -53,9 +50,11 @@ The toggle described in this runbook governs **notes only**. Attachments encrypt
 ## What This Is
 Operator runbook for encryption toggling, per-user cooldown, and incident triage. Companion to the architecture spec at `docs/superpowers/specs/2026-04-07-encryption-at-rest-design.md`.
 
-## Per-User Toggle Cooldown
+## Per-User Toggle Cooldown (HISTORICAL — removed in B.4; does not exist today)
 
-Users can encrypt/decrypt their vaults via the plugin (`POST /api/vaults/:id/encrypt`, `POST /api/vaults/:id/decrypt`). To prevent abusive flapping, each user has an independent `users.encryption_toggle_cooldown_days INTEGER NULL` column.
+> This entire section describes a feature that no longer exists. The endpoints, the `users.encryption_toggle_cooldown_days` column, and the `mix engram.set_cooldown` task were all removed when the encrypt/decrypt toggle was retired (B.3/B.4). Retained for context only.
+
+Users could encrypt/decrypt their vaults via the plugin (`POST /api/vaults/:id/encrypt`, `POST /api/vaults/:id/decrypt`). To prevent abusive flapping, each user had an independent `users.encryption_toggle_cooldown_days INTEGER NULL` column.
 
 | Value | Behavior |
 |-------|----------|
@@ -68,12 +67,10 @@ The plugin reads the effective `cooldown_days` from the vault JSON (`/api/vaults
 ### Setting the cooldown
 
 ```bash
-# In a release shell on the FastRaid container
-docker exec -it engram bin/engram remote
-iex> Engram.Accounts.set_encryption_toggle_cooldown_days(Engram.Accounts.get_user!(<id>), 7)
-
-# OR from a dev shell with .env.elixir loaded
-mix engram.set_cooldown <user_id> <days|null>
+# HISTORICAL — neither of these works today. The function and the Mix
+# task were removed with the toggle feature (B.4).
+# iex> Engram.Accounts.set_encryption_toggle_cooldown_days(user, 7)
+# mix engram.set_cooldown <user_id> <days|null>
 ```
 
 The Mix task accepts `null`, `none`, or `NULL` to clear the column. Negative values are rejected at the function-clause level — there is no `0`-vs-`NULL` distinction at the Crypto layer (both bypass the cooldown predicate).
@@ -253,7 +250,7 @@ If you discover post-step-5 that the new key is wrong (lost, corrupted, mistyped
 
 _Added 2026-05-08 with PR #78 (T3.5)._
 
-> **Selfhost reality check:** today, we have one paying environment (selfhost on FastRaid) and zero managed-key-by-customer instances. The "named owners" convention below applies primarily to the saas instance; selfhost users carry their own backup obligation, which is captured in product-level UX (out of scope here).
+> **Environment reality check (updated 2026-06-18):** prod is **AWS ECS Fargate** (`app.engram.page`); FastRaid runs **staging** (`staging.engram.page`), NOT prod. The master key on prod lives in **AWS SSM Parameter Store (SecureString, SOPS-managed via engram-infra TF)** — not a FastRaid container env. The "named owners" convention below applies to the saas instance; selfhost users carry their own backup obligation, captured in product-level UX (out of scope here).
 
 ### What to back up
 
@@ -268,7 +265,7 @@ Sources of truth:
 
 **Tier-3 launch baseline (today):**
 
-1. **Primary:** the value lives in the FastRaid Unraid template's runtime ENV. SSH access required. Owner: open-claw.
+1. **Primary:** prod's authoritative copy lives in **AWS SSM Parameter Store** (SecureString), sourced from the SOPS-encrypted secrets file in engram-infra TF. (Staging on FastRaid keeps its own separate key in its Unraid template ENV.) Owner: open-claw.
 2. **Secondary:** sealed printout in a physical safe at owner's residence. Owner: open-claw.
 3. **Off-site copy:** encrypted, stored in 1Password personal vault. Owner: open-claw.
 
@@ -337,10 +334,13 @@ Local / staging (Mix task — operator gets exit code, blocks until done):
 
     mix engram.rotate_user_dek --user-id <ID>
 
-Production (release rpc — synchronous, fits short rotations < 1 min):
+Production (release rpc — synchronous, fits short rotations < 1 min). Prod is AWS ECS Fargate, so shell in via ECS Exec rather than `docker exec`:
 
-    docker exec engram-saas /app/bin/engram rpc \
-      "Engram.Crypto.UserDekRotation.rotate_user(<ID>)"
+    aws ecs execute-command --cluster <cluster> --task <task-id> \
+      --container engram --interactive \
+      --command "/app/bin/engram rpc 'Engram.Crypto.UserDekRotation.rotate_user(<ID>)'"
+
+    # (Staging on FastRaid: docker exec engram /app/bin/engram rpc "...")
 
 Production (Oban worker — preferred for long rotations that must survive node restarts):
 

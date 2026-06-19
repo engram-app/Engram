@@ -1,7 +1,9 @@
-# Refresh token rotation — reuse detection + leeway (build plan)
+# Refresh token rotation — reuse detection + leeway (as-built)
 
-_Status: built 2026-05-28 on `fix/refresh-token-grace-window` (Engram PR #341),
-v0.5.245. Backend repo (`engram`)._
+_Status: SHIPPED 2026-05-28 (Engram PR #341), v0.5.245. Backend repo (`engram`).
+Both halves landed: the leeway/overlap window AND token-family reuse-detection
+revocation. This doc describes the as-built behavior; the old "build plan"
+sections were folded into "As built" below._
 
 ## Why
 
@@ -28,55 +30,42 @@ token rotation + reuse detection with token-family revocation**, layered with a
   new one, skip breach detection. (Auth0 `leeway` / "Rotation Overlap Period";
   default 0, "shortest amount of time" recommended.)
 
-PR #341 added the leeway half (`@refresh_grace_seconds 60`) but **not** the
-family-revocation half — that is the gap to close. Keep the leeway; add families.
+PR #341 shipped **both** halves: the leeway/overlap window and family-wide
+reuse-detection revocation.
 
 Sources: RFC 9700 §4.14.2 (ietf.org/rfc/rfc9700.html); Auth0 "Refresh Token
 Rotation" + "Configure Refresh Token Rotation" (`leeway` attr); WorkOS "We read
 RFC 9700".
 
-## Current state
+## As built
 
-- `lib/engram/auth/device_flow.ex` — `refresh_access_token/1` accepts a token
-  revoked within `@refresh_grace_seconds` (60s); stamps `revoked_at` only on
-  first use. **No family tracking, no reuse-detection revocation.**
-- `Engram.Auth.DeviceRefreshToken` schema — no `family_id` column.
-- PR #341 (`fix/refresh-token-grace-window`) open with the leeway-only change +
-  tests; CI green. Decide: extend this PR with families, or supersede it.
-
-## Build plan (TDD, one step per commit)
-
-1. **Migration** — add `family_id :uuid` to `device_refresh_tokens` (+ index).
-   Backfill: give every existing row its own fresh `family_id` (each existing
-   token = its own family). Add to the schema + changeset.
-2. **`create_refresh_token/3`** — accept an optional `family_id`; generate a new
-   uuid when nil (new login), inherit it on rotation. Device authorize/exchange
-   path mints a new family; `refresh_access_token` passes the old token's family.
-3. **`refresh_access_token/1` reuse detection** — look up by hash where
-   `expires_at > now` (regardless of `revoked_at`). Then:
-   - not found → `{:error, :invalid_refresh_token}`
-   - active (`revoked_at` nil) → rotate: revoke it, issue child in same family.
-   - revoked **within** leeway → benign retry: issue child in same family, no
-     revocation (this is the existing grace path).
-   - revoked **outside** leeway (or an older token) → **reuse detected**:
-     **hard-`delete_all` the entire family** (`where family_id == ^fid`), return
-     `{:error, :invalid_refresh_token}`. **Delete, not `update_all` set
-     `revoked_at`** — a freshly-revoked current token would land *inside* the
-     leeway window and be misclassified as a benign retry on its next
-     presentation, defeating the revocation. Deleting removes that ambiguity;
-     `Logger.warning` the breach (family_id + user_id) so the audit trail
-     survives the row deletion.
-   - Renamed `@refresh_grace_seconds` → `@refresh_leeway_seconds`; trimmed 60s →
-     30s (Auth0 recommends shortest; plugin reload races resolve in <1s).
-4. **Tests** (`test/engram/auth/device_flow_test.exs` +
-   `test/engram_web/controllers/device_auth_controller_test.exs`):
-   - normal rotation chain still works;
-   - reuse within leeway → ok (exists);
-   - **reuse outside leeway → family revoked**: after reuse, the *valid current*
-     token in that family is also rejected (the security-defining test);
-   - boundary at exactly the leeway cutoff; expired-AND-revoked still rejected;
-   - unknown token → invalid (exists).
-5. Version bump `mix.exs` (pre-push hook enforces it). Format + credo. CI green.
+- **Schema** — `Engram.Auth.DeviceRefreshToken` has a `family_id :uuid` column
+  (`device_refresh_token.ex:8`), required in the changeset. Each existing row was
+  backfilled with its own fresh family.
+- **`create_refresh_token/3`** (`device_flow.ex:257`) takes an optional
+  `family_id`; `nil` mints a fresh uuid (new login), rotation inherits the old
+  token's `family_id` to keep the lineage together.
+- **`refresh_access_token/1`** (`device_flow.ex:144`) looks up by hash where
+  `expires_at > now` (regardless of `revoked_at`), then:
+  - not found → `{:error, :invalid_refresh_token}`
+  - active (`revoked_at` nil) → rotate: stamp `revoked_at`, issue child in same
+    family.
+  - revoked **within** leeway → benign retry: `issue_child` in same family, no
+    re-revocation.
+  - revoked **outside** leeway (or older token) → **reuse breach**:
+    `invalidate_family/1` runs `delete_all where family_id == ^fid`
+    (`device_flow.ex:251`) and returns `{:error, :invalid_refresh_token}`. It
+    **deletes** rather than `update_all` set `revoked_at` — a freshly-revoked
+    current token would otherwise land *inside* the leeway and be misclassified
+    as benign on next presentation. A `Logger.warning` records the breach
+    (`family_id` + `user_id`) so the audit trail survives row deletion.
+- **Leeway policy** — extracted into `Engram.Auth.RefreshLeeway` (`@seconds 30`,
+  boundary-inclusive `benign?/2`). The old `@refresh_grace_seconds 60` is gone.
+- **Tests** — `test/engram/auth/device_flow_test.exs` +
+  `test/engram_web/controllers/device_auth_controller_test.exs` cover: normal
+  rotation chain, reuse within leeway → ok, **reuse outside leeway → whole family
+  revoked (the current valid token also rejected)**, the leeway boundary,
+  expired-AND-revoked rejected, unknown token → invalid.
 
 ## Notes / gotchas
 

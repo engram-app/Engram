@@ -1,8 +1,10 @@
 # MCP OAuth 2.1 + DCR — How It Works
 
-End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so Claude Connectors / Cursor / ChatGPT custom GPTs / any other standards-compliant client can auto-auth against `app.engram.page/api/mcp` (saas) or `engram.ax/api/mcp` (selfhost) without per-client integration code.
+End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so Claude Connectors / Cursor / ChatGPT custom GPTs / any other standards-compliant client can auto-auth against `mcp.engram.page/api/mcp` (saas) or `engram.ax/api/mcp` (selfhost) without per-client integration code.
 
-Plan: `docs/superpowers/plans/2026-05-09-mcp-oauth-dcr.md`. Shipped in PRs #91-#97 across 6 backend phases (Phase 0-6) plus the docs PR.
+> **Host note:** the saas MCP endpoint is `mcp.engram.page`, NOT `app.engram.page`. The `host_rewrite.ex` plug rejects `/api/mcp` and `/oauth/*` on `app.engram.page` (old path now 405s). All curl examples below use `mcp.engram.page`.
+
+Plan: `docs/superpowers/plans/2026-05-09-mcp-oauth-dcr.md`. Shipped in PRs #91-#97 across 6 backend phases (Phase 0-6) plus the docs PR. Phases 7.A/7.B/7.C and the SPA consent page are also shipped.
 
 ## Wire flow (what Claude Connectors actually does)
 
@@ -50,7 +52,7 @@ Scope is propagated through code → refresh token → access JWT. Today the JWT
 
 ```bash
 # Register via DCR — no admin involvement
-curl -X POST https://app.engram.page/oauth/register \
+curl -X POST https://mcp.engram.page/oauth/register \
   -H "Content-Type: application/json" \
   -d '{"redirect_uris":["http://localhost:9999/cb"],"client_name":"my-cli"}'
 
@@ -62,7 +64,7 @@ Use the returned `client_id` in a normal authorize → token flow. PKCE is manda
 ## How to revoke a refresh token
 
 ```bash
-curl -X POST https://app.engram.page/oauth/revoke \
+curl -X POST https://mcp.engram.page/oauth/revoke \
   -H "Content-Type: application/json" \
   -d '{"token":"engram_oauth_rt_...","client_id":"<uuid>"}'
 ```
@@ -79,17 +81,13 @@ Always returns 200 per RFC 7009 §2.2. If `client_id` doesn't own the token, it'
 
 All three skip RLS — they're keyed by client_id or token-hash and looked up before user identity is established. Cleanup runs hourly via `Engram.Workers.CleanupDeviceAuthWorker`.
 
-## Phase 7+ — what's left
+## Phase 7 — SPA consent mediation (all shipped)
 
-Phases 7-9 of the plan are smoke/conformance tests against:
-- Real Claude desktop Connectors UI (`app.engram.page` + `engram.ax`)
-- Cursor / Continue / ChatGPT custom GPT (cross-client conformance)
+Phases 7.A/7.B/7.C are all shipped; the live Connectors flow has been verified against Claude Desktop Connectors.
 
-These need a live deployment after the PRs land.
+**Phase 7.A — SPA mediation:** `GET /oauth/authorize` is public. It validates client_id + redirect_uri + PKCE then 302s the browser to `/oauth/consent?<all-params-preserved>`. The React SPA reads the URL params, fetches `/api/oauth/clients/:client_id` to display the client name, renders a consent UI under the user's existing Clerk JWT session, and POSTs `/api/oauth/authorize/consent` with `vault_choice` + the full param set. The backend mints the code and returns JSON `{redirect_uri: "..."}` so the SPA does `window.location.assign(json.redirect_uri)`.
 
-**Phase 7.A (shipped) — SPA mediation:** `GET /oauth/authorize` is now public. It validates client_id + redirect_uri + PKCE then 302s the browser to `/oauth/consent?<all-params-preserved>`. The React SPA reads the URL params, fetches `/api/oauth/clients/:client_id` to display the client name, renders a consent UI under the user's existing Clerk JWT session, and POSTs `/api/oauth/authorize/consent` with `vault_choice` + the full param set. The backend mints the code and returns JSON `{redirect_uri: "..."}` so the SPA does `window.location.assign(json.redirect_uri)`.
-
-**Phase 7.B (in flight)** ships the actual React consent page. **7.C** is the live Connectors walk-through.
+**Phase 7.B** ships the actual React consent page. **Phase 7.C** is the live Connectors walk-through against `mcp.engram.page` + `engram.ax`, plus cross-client conformance (Cursor / Continue / ChatGPT custom GPT). All complete.
 
 ## Failed approaches (none yet)
 
