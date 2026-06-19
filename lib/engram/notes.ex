@@ -749,6 +749,52 @@ defmodule Engram.Notes do
       )
 
     if count == 1 do
+      # Insert a soft-deleted tombstone for the OLD path so the seq-cursor
+      # change feed carries a durable `{old_path, deleted: true}` delete
+      # signal. Without it, an offline client that reconnects and pulls by
+      # cursor sees only the repointed live row at `new_path` and keeps a
+      # duplicate at `old_path` (#614, single-note analogue). Mirrors the
+      # `do_rename_folder/5` cascade: a fresh row-id-bound full-row insert,
+      # stamped with the SAME `seq` as the repoint above so a cursor pull
+      # (`WHERE seq > cursor`) can't observe the repoint at seq S, advance
+      # past S, and miss the tombstone (also S). Built from in-memory data so
+      # it folds into this same `Repo.with_tenant` transaction. The tombstone
+      # never enqueues EmbedNote — only the renamed live note does.
+      old_path = decrypted_note.path
+      tomb_id = mint_id()
+      mtime_float = DateTime.to_unix(now) + 0.0
+
+      tomb_kw =
+        full_aad_bound_kw(user, tomb_id, "", "", old_path, Helpers.extract_folder(old_path), [])
+
+      tombstone =
+        Map.merge(
+          %{
+            id: tomb_id,
+            content_hash: "",
+            mtime: mtime_float,
+            user_id: user.id,
+            vault_id: note.vault_id,
+            created_at: now,
+            updated_at: now,
+            deleted_at: now,
+            seq: seq
+          },
+          Map.new(tomb_kw)
+        )
+
+      # `on_conflict: :nothing` is belt-and-suspenders — the tombstone has a
+      # fresh UUIDv7 PK and `deleted_at != nil` excludes it from the partial
+      # unique path index, so a conflict is structurally impossible today. Log
+      # if that ever stops holding (e.g. an index-semantics change), since a
+      # dropped tombstone silently reopens the offline-resurrection gap.
+      {inserted, _} = Repo.insert_all(Note, [tombstone], on_conflict: :nothing)
+
+      if inserted == 0 do
+        require Logger
+        Logger.warning("rename_note tombstone dropped on conflict", vault_id: note.vault_id)
+      end
+
       # Splice the freshly-encrypted ciphertext + dek_version=2
       # into the in-memory struct so callers (broadcast, MCP,
       # controllers) read the new plaintext without re-decrypting
