@@ -41,9 +41,10 @@ explicit **`rebuildTree()` / `invalidateChildrenIds()`**. It does NOT react to
 cache writes. So we trigger rebuilds ourselves via two mechanisms in
 `use-engram-tree.ts`:
 
-1. **`treeStructureKey(folders, rootNoteIds, sort)`** → a `useEffect` that calls
+1. **`treeStructureKey(folders, sort)`** → a `useEffect` that calls
    `rebuildTree()` when the key changes. Fingerprints each folder as
-   `id:count:parent_id`, plus root note ids, plus sort. Keyed (not identity) so
+   `id:count:parent_id`, plus sort (the call site also concatenates an
+   `attachmentsFingerprint(...)` onto the result). Keyed (not identity) so
    spurious churn doesn't spin a max-update-depth loop.
    **Blind spot**: it does NOT see `folder-notes-by-id` list *contents*. A note
    op that changes a by-id list without changing any folder count/parent_id will

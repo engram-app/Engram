@@ -70,7 +70,7 @@ catches it. Phase 2 PhotoDNA addresses the residual image-payload case.
 ## Operator launch checklist
 
 1. Decide policy for SaaS: gate ON by default. No env vars needed on
-   Fly — module defaults match the SaaS posture.
+   AWS — module defaults match the SaaS posture.
 2. For self-host docs, add a note to `engram.ax` quick-start docs that
    `ATTACHMENT_MIME_BYPASS=true` is available for operators who need to
    distribute executables from their personal vault.

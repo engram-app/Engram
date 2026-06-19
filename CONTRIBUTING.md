@@ -56,8 +56,8 @@ without Docker — i.e. you're hacking on the app itself.
 
 ### Prerequisites
 
-- Elixir 1.17+ and Erlang/OTP 27+
-- PostgreSQL 16+
+- Elixir 1.15+ and Erlang/OTP 27+
+- PostgreSQL 18+ (the schema baseline uses `uuidv7`; older majors won't boot)
 - [Qdrant](https://qdrant.tech) running locally or Qdrant Cloud
 - [Ollama](https://ollama.com) (optional — only if running embeddings locally;
   the alternative is `EMBED_BACKEND=voyage` with a Voyage API key)
@@ -114,7 +114,7 @@ curl -X POST http://localhost:4000/api/auth/register \
 TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "your-password"}' \
-  | jq -r '.token')
+  | jq -r '.access_token')
 
 # Create API key
 curl -X POST http://localhost:4000/api/api-keys \

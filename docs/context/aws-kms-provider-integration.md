@@ -2,7 +2,7 @@
 
 > Non-obvious discoveries from Phase 1 (PR #110). Prevents rediscovery in Phase 2 (BootCanary polymorphism) and Phase 3 (ProviderMigration).
 >
-> **Status update 2026-05-20:** Phase 2 quietly shipped — `Engram.Crypto.BootCanary.verify!/0` calls `Resolver.provider()` + `provider.boot_check/0` + `provider.unwrap_dek_no_fallback/2`. `MasterRotation` uses `Resolver.provider_for/1`. Only Phase 3 (cross-provider migration state machine) remains pending. Staging cutover docs in workspace plan `ok-i-think-we-shimmying-duckling.md`.
+> **Status update 2026-06-18:** All three phases shipped. Phase 2 — `Engram.Crypto.BootCanary.verify!/0` calls `Resolver.provider()` + `provider.boot_check/0` + `provider.unwrap_dek_no_fallback/2`; `MasterRotation` uses `Resolver.provider_for/1`. **Phase 3 — the cross-provider migration state machine is live:** `Engram.Crypto.ProviderMigration` (`lib/engram/crypto/provider_migration.ex`) + the `Engram.Workers.MigrateUserProvider` Oban worker + the `mix engram.migrate_provider` task (`lib/mix/tasks/engram.migrate_provider.ex`). Per-user Local→KMS migration no longer requires a DB wipe — see the corrected "Phase 3" note at the bottom.
 
 ## Architecture — Three Layers
 
@@ -93,7 +93,7 @@ config :ex_aws, :kms,
 
 ### The Trap
 
-The S3 storage backend (Fly Tigris) sets **global** `:ex_aws` creds:
+The S3 storage backend (AWS S3 in prod / MinIO in self-host) sets **global** `:ex_aws` creds:
 
 ```elixir
 # runtime.exs — storage config
@@ -106,7 +106,7 @@ config :ex_aws,
 If KMS wiring puts credentials at the same global level:
 
 ```elixir
-# WRONG: overwrites Tigris creds
+# WRONG: overwrites the storage backend's creds
 config :ex_aws,
   access_key_id: AWS_ACCESS_KEY_ID,  # Silently replaces STORAGE_ACCESS_KEY_ID
   secret_access_key: AWS_SECRET_ACCESS_KEY,
@@ -120,14 +120,21 @@ Result: S3 attachment storage breaks at runtime. No error — just silent auth f
 Always scope KMS credentials to the service-specific namespace:
 
 ```elixir
-# Scoped to :ex_aws, :kms — preserves Tigris creds
-config :ex_aws, :kms,
-  access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
-  secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
-  region: System.fetch_env!("AWS_REGION")
+# Scoped to :ex_aws, :kms — preserves the global storage creds.
+# On AWS ECS Fargate the static keys are left UNSET so ex_aws falls
+# back to the task role; only region is set. Static keys are an
+# opt-in (local dev / non-task-role) path:
+if System.get_env("AWS_ACCESS_KEY_ID") do
+  config :ex_aws, :kms,
+    access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
+    secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY"),
+    region: System.fetch_env!("AWS_REGION")
+else
+  config :ex_aws, :kms, region: System.fetch_env!("AWS_REGION")
+end
 ```
 
-ExAws merges service-scoped config into the global namespace at request time, so both credential sets coexist.
+ExAws merges service-scoped config into the global namespace at request time, so both credential sets coexist. (See `config/runtime.exs` ~L482-500.)
 
 ## Provider Tag Byte `0xAA` Rationale
 
@@ -142,7 +149,7 @@ def identify_from_blob(<<0x01, 0x01, _::binary-size(60)>>), do: :local  # v1 = k
 def identify_from_blob(<<0x02, 0x01, _::binary-size(60)>>), do: :local  # v2 = key rotation
 ```
 
-**Phase 1 ships this helper but does NOT wire it into read paths.** Phase 3 (ProviderMigration) will use it to route decryption during the Local→KMS migration window.
+Phase 1 shipped this helper unwired; **Phase 3 (ProviderMigration, now shipped) wires it into the read path** to route decryption during the Local→KMS migration window.
 
 ## EncryptionContext for AAD Binding
 
@@ -178,10 +185,9 @@ From `KeyProvider.AwsKms.unwrap_dek/2`:
 ### Ships
 - Provider + behaviour + Mox seam + conformance suite + `Config.validate!/0` extension + `runtime.exs` opt-in arm + `identify_from_blob/1` primitive.
 
-### Does NOT Ship (at PR #110 — see status update at top)
+### Did NOT ship at PR #110 — now resolved
 - ~~BootCanary polymorphism (Phase 2)~~ — shipped post PR #110; see status update.
-- ProviderMigration state machine (Phase 3).
-- Fly secrets / IAM policy creation (Phase 4 cutover for prod). Staging cutover lives in the workspace plan, not here.
-- Changes to `Engram.Crypto.get_dek/1` read paths — still read-only from configured provider; no cross-provider blob routing.
+- ~~ProviderMigration state machine (Phase 3)~~ — **SHIPPED**: `Engram.Crypto.ProviderMigration` + `Engram.Workers.MigrateUserProvider` + `mix engram.migrate_provider`. `identify_from_blob/1` is now wired into the read path so Local and KMS blobs are routed during the migration window.
+- IAM / CMK provisioning for prod — handled in **engram-infra Terraform**, not Fly. Prod runs on AWS ECS Fargate: KMS access is granted via the **task role** (no static keys in env), and the master/app secrets live in **AWS SSM Parameter Store** (SOPS-managed), NOT Fly secrets.
 
-Key impl detail: All DEK operations (get/wrap/unwrap) use the configured provider, but the migration machinery to change provider per-user doesn't exist yet — staging cutover therefore wipes the DB rather than migrating.
+Key impl detail (corrected): The per-user provider-migration machinery now exists, so cutover **migrates** users (re-wraps each DEK Local→KMS via `ProviderMigration`) rather than wiping the DB. The old "staging cutover wipes the DB" note applied only before Phase 3 landed.

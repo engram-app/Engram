@@ -55,7 +55,7 @@ When the frontend opens `Paddle.Checkout.open()`, it MUST include at least `user
 
 ```js
 Paddle.Checkout.open({
-  items: [{ priceId: cfg.price_ids.starter, quantity: 1 }],
+  items: [{ priceId: cfg.price_ids.starter.monthly, quantity: 1 }],
   customer: { email: cfg.customer_email },
   customData: {
     ...cfg.custom_data,          // { user_id: 42 }
@@ -78,11 +78,11 @@ Whatever the overlay sends becomes `data.custom_data` on every subscription webh
 | `subscription.created` | Insert row (or upsert on `user_id` conflict). Populates `paddle_customer_id`, `paddle_subscription_id`, `tier`, `status`, `current_period_end`, `custom_data`. | First touch — bind the Paddle entities to the user. |
 | `subscription.activated` | Update `status`, `tier`, `current_period_end` by `paddle_subscription_id`. | Fires when trial converts to paid. |
 | `subscription.updated` | Same as activated. | Plan change, billing cycle roll, dunning recovery. |
-| `subscription.past_due` | Same as activated; status becomes `"past_due"`. | Card declined, retry in progress. We still gate access in `active?/1` since past-due remains within the grace window. |
-| `subscription.canceled` | Status becomes `"canceled"`. | End of life. `active?/1` returns false. |
+| `subscription.past_due` | Same as activated; status becomes `"past_due"`. | Card declined, retry in progress. `past_due` is in `@entitled_statuses`, so `tier/1` still reports the paid tier during the grace window. |
+| `subscription.canceled` | Status becomes `"canceled"`. | End of life. `canceled` is NOT entitled, so `tier/1` drops back to `:free`. (`active?/1` is suspension-only — `is_nil(suspended_at)` — and is unaffected by subscription status.) |
 | anything else | `{:ok, :ignored}` | Transactions, invoices, payment methods, etc. — out of scope for the subscription row. |
 
-`tier` is derived from `data.items[0].price.id` matched against `:paddle_starter_price_id` / `:paddle_pro_price_id` config; anything unrecognized falls back to `"starter"`.
+`tier` is derived from `data.items[0].price.id` matched against the four price-ID config keys (`:paddle_starter_monthly_price_id`, `:paddle_starter_annual_price_id`, `:paddle_pro_monthly_price_id`, `:paddle_pro_annual_price_id`) via `Engram.Billing.tier_from_subscription/1`. Anything unrecognized returns `{:error, :unknown_price_id}` — the upserter then leaves the existing tier UNCHANGED and captures a Sentry message (`billing.ex:446/512/589`). It does NOT fall back to `"starter"`.
 
 ## Trial
 
@@ -95,8 +95,10 @@ export PADDLE_ENV=sandbox
 export PADDLE_API_KEY=pdl_sdbx_apns_...
 export PADDLE_NOTIFICATION_SECRET=pdl_ntfn_...
 export PADDLE_CLIENT_TOKEN=test_...
-export PADDLE_STARTER_PRICE_ID=pri_01...
-export PADDLE_PRO_PRICE_ID=pri_01...
+export PADDLE_STARTER_MONTHLY_PRICE_ID=pri_01...
+export PADDLE_STARTER_ANNUAL_PRICE_ID=pri_01...
+export PADDLE_PRO_MONTHLY_PRICE_ID=pri_01...
+export PADDLE_PRO_ANNUAL_PRICE_ID=pri_01...
 ```
 
 Use the **Paddle CLI** to forward sandbox webhooks at localhost:
@@ -172,4 +174,4 @@ PromEx + Prometheus + alert rules are tracked separately on the engram-infra rep
 
 - Frontend wiring of Paddle.js (marketing site + app). Owned by the frontend rewrite.
 - Affiliate-platform-specific integration (Rewardful etc.). Configured in their dashboards, not in our code.
-- Annual prices ($50/yr, $100/yr). Same wiring; just add the price IDs when they exist in Paddle.
+- Annual prices ($70/yr Starter, $140/yr Pro). Wired via the `*_annual_price_id` config keys; surfaced under `price_ids.{starter,pro}.annual` in `GET /api/billing/config`.
