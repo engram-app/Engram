@@ -1,20 +1,24 @@
 import { useCallback, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Navigate, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '../api/client'
-import type { OnboardingStatus } from '../api/queries'
+import { useOnboardingStatus, type OnboardingStatus } from '../api/queries'
 import BillingPage from '../billing/billing-page'
+
+function nextPath(status: OnboardingStatus): string {
+  return status.next_step === 'done' ? '/' : `/onboard/${status.next_step}`
+}
 
 export default function OnboardBillingPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const { data: onboarding } = useOnboardingStatus()
   const [freeLoading, setFreeLoading] = useState(false)
 
   const onActivated = useCallback(
     (status: OnboardingStatus) => {
-      const next = status.next_step === 'done' ? '/' : `/onboard/${status.next_step}`
-      navigate(next, { replace: true })
+      navigate(nextPath(status), { replace: true })
     },
     [navigate],
   )
@@ -32,6 +36,14 @@ export default function OnboardBillingPage() {
       setFreeLoading(false)
     }
   }, [navigate, qc])
+
+  // Cached/fetched status already past billing (e.g. user advanced in another
+  // tab, or returned to /onboard/billing after subscribing) — bounce forward
+  // to their actual next step instead of re-showing the plan picker. Keys off
+  // `next_step`, not `steps` (billing stays in `steps` even once satisfied).
+  if (onboarding && onboarding.next_step !== 'billing') {
+    return <Navigate to={nextPath(onboarding)} replace />
+  }
 
   return (
     <section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pb-[14vh] pt-8">

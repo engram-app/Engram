@@ -285,8 +285,7 @@ describe('OnboardBillingPage — push activation', () => {
     expect(toolsPageMounts).toBe(1)
   })
 
-  // Broken on origin/main since free-tier launch (#502). See engram-app/Engram#511.
-  it.skip('navigates immediately if cached onboarding status is already past billing', async () => {
+  it('navigates immediately if cached onboarding status is already past billing', async () => {
     get.mockImplementation(async (url: string) => {
       if (url === '/billing/status') return BILLING_ACTIVE
       if (url === '/billing/config') return BILLING_CONFIG
