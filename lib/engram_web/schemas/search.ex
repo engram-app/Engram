@@ -1,7 +1,7 @@
 defmodule EngramWeb.Schemas.SearchRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "SearchRequest",
     type: :object,
@@ -19,8 +19,8 @@ end
 
 defmodule EngramWeb.Schemas.SearchResult do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "SearchResult",
     type: :object,
@@ -39,8 +39,8 @@ end
 
 defmodule EngramWeb.Schemas.SearchResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "SearchResponse",
     type: :object,
@@ -51,8 +51,8 @@ end
 
 defmodule EngramWeb.Schemas.TagsResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "TagsResponse",
     type: :object,

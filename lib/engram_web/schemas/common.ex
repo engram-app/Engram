@@ -1,7 +1,7 @@
 defmodule EngramWeb.Schemas.Note do
   @moduledoc "A note with its full content."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "Note",
@@ -24,8 +24,8 @@ end
 
 defmodule EngramWeb.Schemas.NoteMeta do
   @moduledoc "A note without its content (list/changes responses)."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "NoteMeta",
@@ -47,8 +47,8 @@ end
 
 defmodule EngramWeb.Schemas.Error do
   @moduledoc "Generic error body."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "Error",
@@ -64,8 +64,8 @@ end
 
 defmodule EngramWeb.Schemas.Conflict do
   @moduledoc "409 version-conflict body; carries the server's authoritative note."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "Conflict",
@@ -79,8 +79,8 @@ end
 
 defmodule EngramWeb.Schemas.DeletedFlag do
   @moduledoc "Single-resource delete acknowledgement."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "DeletedFlag",
@@ -92,8 +92,8 @@ end
 
 defmodule EngramWeb.Schemas.DeletedCount do
   @moduledoc "Batch-delete count."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "DeletedCount",
@@ -105,8 +105,8 @@ end
 
 defmodule EngramWeb.Schemas.MovedCount do
   @moduledoc "Batch-move count."
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "MovedCount",

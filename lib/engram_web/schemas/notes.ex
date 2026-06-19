@@ -11,8 +11,8 @@ end
 
 defmodule EngramWeb.Schemas.UpsertNoteRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "UpsertNoteRequest",
     type: :object,
@@ -31,8 +31,8 @@ end
 
 defmodule EngramWeb.Schemas.RenameRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "RenameRequest",
     type: :object,
@@ -43,8 +43,8 @@ end
 
 defmodule EngramWeb.Schemas.RenameNoteResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "RenameNoteResponse",
     type: :object,
@@ -59,8 +59,8 @@ end
 
 defmodule EngramWeb.Schemas.AppendRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "AppendRequest",
     type: :object,
@@ -71,8 +71,8 @@ end
 
 defmodule EngramWeb.Schemas.AppendResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "AppendResponse",
     type: :object,
@@ -86,8 +86,8 @@ end
 
 defmodule EngramWeb.Schemas.ChangesResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "ChangesResponse",
     type: :object,
@@ -106,8 +106,8 @@ end
 
 defmodule EngramWeb.Schemas.BatchUpsertRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "BatchUpsertRequest",
     type: :object,
@@ -120,8 +120,8 @@ end
 
 defmodule EngramWeb.Schemas.BatchUpsertResult do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "BatchUpsertResult",
     type: :object,
@@ -140,8 +140,8 @@ end
 
 defmodule EngramWeb.Schemas.BatchUpsertResponse do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "BatchUpsertResponse",
     type: :object,
@@ -152,8 +152,8 @@ end
 
 defmodule EngramWeb.Schemas.BatchIdsRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "BatchIdsRequest",
     type: :object,
@@ -164,8 +164,8 @@ end
 
 defmodule EngramWeb.Schemas.BatchMoveNotesRequest do
   @moduledoc false
-  require OpenApiSpex
   alias OpenApiSpex.Schema
+  require OpenApiSpex
   OpenApiSpex.schema(%{
     title: "BatchMoveNotesRequest",
     type: :object,
