@@ -51,11 +51,11 @@ Any new top-level `/api/<segment>` route MUST be added to `@api_top_segments` in
 
 The `openapi` segment had to be added during initial wiring — this is a real gotcha.
 
-## GOTCHA — embedded version requires a clean recompile
+## info.version is the static API contract version
 
-`info.version` in the spec comes from `Application.spec(:engram, :vsn)` — the **compiled** app version. After a `mix.exs` version bump you must recompile before regenerating `openapi.json`, or the embedded version is stale.
+`info.version` is a hardcoded `@api_version` constant in `api_spec.ex` (currently `"1.0.0"`), **not** the app build version (`Application.spec(:engram, :vsn)`). This is deliberate: the repo's `version-check` CI job forces a `mix.exs` bump on *every* PR, so if the spec tracked the build version, `openapi.json` would change on every PR and the drift gate would false-fail on changes that touch no API surface. Bump `@api_version` only when the REST contract itself changes. (The running build version is still exposed at `GET /api/health`.)
 
-In worktrees the `_build` directory is hardlinked/shared across worktrees, so a concurrent session's compile can clobber the `.app` version mid-regen. If you see a version mismatch, regenerate in an isolated build environment.
+Because the spec is env- and build-independent, regeneration is deterministic — no recompile dance needed even in worktrees with a shared `_build`.
 
 ## GOTCHA — openapi.json key order is alphabetical
 

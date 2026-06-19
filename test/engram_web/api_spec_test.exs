@@ -20,15 +20,25 @@ defmodule EngramWeb.ApiSpecTest do
       assert is_binary(spec.info.version)
     end
 
-    test "declares the bearerAuth + apiKey security schemes" do
+    test "info.version is the static API contract version, not the app build" do
+      spec = EngramWeb.ApiSpec.spec()
+
+      # Decoupled from Application.spec(:engram, :vsn) so release bumps don't
+      # churn openapi.json / trip the CI drift gate. See ApiSpec @api_version.
+      assert spec.info.version == "1.0.0"
+      refute spec.info.version == to_string(Application.spec(:engram, :vsn))
+    end
+
+    test "declares a single bearerAuth security scheme covering all credentials" do
       spec = EngramWeb.ApiSpec.spec()
       schemes = spec.components.securitySchemes
 
       assert %{type: "http", scheme: "bearer"} =
                Map.take(schemes["bearerAuth"], [:type, :scheme])
 
-      assert %{type: "apiKey", in: "header"} =
-               Map.take(schemes["apiKey"], [:type, :in])
+      # API keys ride the same Authorization: Bearer header, so there is no
+      # separate apiKey scheme to duplicate it.
+      refute Map.has_key?(schemes, "apiKey")
     end
   end
 

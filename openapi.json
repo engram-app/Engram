@@ -45,15 +45,9 @@
       }
     },
     "securitySchemes": {
-      "apiKey": {
-        "description": "Personal API key (Bearer <key>).",
-        "in": "header",
-        "name": "authorization",
-        "type": "apiKey"
-      },
       "bearerAuth": {
         "bearerFormat": "JWT",
-        "description": "Clerk/local JWT or OAuth access token.",
+        "description": "Sent as `Authorization: Bearer <token>` — a Clerk/local JWT, an OAuth access token, or a personal API key/PAT.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -62,7 +56,7 @@
   "info": {
     "description": "REST API for Engram — notes, search, sync, billing, and MCP.",
     "title": "Engram API",
-    "version": "0.5.466"
+    "version": "1.0.0"
   },
   "openapi": "3.0.0",
   "paths": {
