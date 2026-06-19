@@ -1,7 +1,7 @@
 # Environment (keep .env.example as canonical template)
 .env*
 
-# Python (benchmarks, e2e)
+# Python (e2e)
 __pycache__/
 .pytest_cache/
 pytest-e2e.log

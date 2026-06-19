@@ -1,4 +1,4 @@
-.PHONY: help deps dev dev-selfhost dev-stop dev-db-up dev-db-down dev-db-reset test frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e bench-dataset bench-quality bench-perf bench-reranking bench-cost bench-all bench-report bench-list gen-master-key
+.PHONY: help deps dev dev-selfhost dev-stop dev-db-up dev-db-down dev-db-reset test frontend-install frontend-build frontend-dev ci-up ci-down ci-e2e e2e gen-master-key
 
 help:              ## List available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -77,33 +77,6 @@ ci-e2e: ci-up      ## Bring up CI stack and run e2e tests
 
 e2e:               ## Run e2e tests against http://localhost:8100
 	cd e2e && ENGRAM_API_URL=http://localhost:8100 python3 -m pytest tests/ -v
-
-# --- Embedding Benchmarks ---
-
-bench-dataset:     ## Build benchmark dataset
-	python3 -m benchmarks build-dataset --save-raw
-
-bench-quality:     ## Run quality benchmarks
-	python3 -m benchmarks run quality
-
-bench-perf:        ## Run performance benchmarks
-	python3 -m benchmarks run performance
-
-bench-reranking:   ## Run reranker benchmarks
-	python3 -m benchmarks run reranking
-
-bench-cost:        ## Run cost benchmarks
-	python3 -m benchmarks run cost
-
-bench-all:         ## Run every benchmark
-	python3 -m benchmarks run all
-
-bench-report:      ## Generate consolidated benchmark report
-	python3 -m benchmarks report
-
-bench-list:        ## List configured embedding models
-	python3 -m benchmarks list models
-
 
 # --- Dev UX ---
 
