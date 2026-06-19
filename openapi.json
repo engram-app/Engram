@@ -2,6 +2,914 @@
   "components": {
     "responses": {},
     "schemas": {
+      "BatchMoveFoldersRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_parent_id": {
+            "description": "Parent folder UUID or \"root\".",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "ids",
+          "target_parent_id"
+        ],
+        "title": "BatchMoveFoldersRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchMoveFoldersRequest",
+        "x-validate": null
+      },
+      "Note": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "content_hash": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folder": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "description": "Client mtime (epoch seconds)",
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "example": "Projects/engram.md",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "version": {
+            "nullable": true,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "Note",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Note",
+        "x-validate": null
+      },
+      "Folder": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parent_id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "Folder",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Folder",
+        "x-validate": null
+      },
+      "TagsResponse": {
+        "properties": {
+          "tags": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "tags"
+        ],
+        "title": "TagsResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.TagsResponse",
+        "x-validate": null
+      },
+      "BatchUpsertResult": {
+        "properties": {
+          "content_hash": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "errors": {
+            "nullable": true,
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "server_note": {
+            "nullable": true,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Note"
+              }
+            ],
+            "x-struct": null,
+            "x-validate": null
+          },
+          "server_path": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "conflict",
+              "error"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "version": {
+            "nullable": true,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "BatchUpsertResult",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertResult",
+        "x-validate": null
+      },
+      "NoteResponse": {
+        "properties": {
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "title": "NoteResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.NoteResponse",
+        "x-validate": null
+      },
+      "SearchResult": {
+        "properties": {
+          "folder": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "heading_path": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "match_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "score": {
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "snippet": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "SearchResult",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SearchResult",
+        "x-validate": null
+      },
+      "MovedCount": {
+        "properties": {
+          "moved": {
+            "example": 3,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "moved"
+        ],
+        "title": "MovedCount",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.MovedCount",
+        "x-validate": null
+      },
+      "ChangesResponse": {
+        "properties": {
+          "changes": {
+            "description": "Note objects (content present only when fields=all).",
+            "items": {
+              "$ref": "#/components/schemas/Note"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "has_more": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "next_cursor": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "server_time": {
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "ChangesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ChangesResponse",
+        "x-validate": null
+      },
+      "SearchRequest": {
+        "properties": {
+          "cross_vault": {
+            "description": "Pro plan only.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folder": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "limit": {
+            "description": "1..50, default 5",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mode": {
+            "enum": [
+              "keyword",
+              "vector",
+              "hybrid"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "query": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
+        "x-validate": null
+      },
+      "AppendRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "text": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "title": "AppendRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AppendRequest",
+        "x-validate": null
+      },
+      "RenameRequest": {
+        "properties": {
+          "new_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "old_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "old_path",
+          "new_path"
+        ],
+        "title": "RenameRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.RenameRequest",
+        "x-validate": null
+      },
+      "FoldersResponse": {
+        "properties": {
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/Folder"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folders"
+        ],
+        "title": "FoldersResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FoldersResponse",
+        "x-validate": null
+      },
+      "FolderNamesResponse": {
+        "properties": {
+          "folders": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folders"
+        ],
+        "title": "FolderNamesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderNamesResponse",
+        "x-validate": null
+      },
+      "SearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "SearchResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SearchResponse",
+        "x-validate": null
+      },
+      "FolderResponse": {
+        "properties": {
+          "folder": {
+            "$ref": "#/components/schemas/Folder"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "title": "FolderResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderResponse",
+        "x-validate": null
+      },
+      "BatchIdsRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "BatchIdsRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchIdsRequest",
+        "x-validate": null
+      },
+      "CreateFolderRequest": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "title": "CreateFolderRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.CreateFolderRequest",
+        "x-validate": null
+      },
+      "DeletedCount": {
+        "properties": {
+          "deleted": {
+            "example": 3,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "DeletedCount",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.DeletedCount",
+        "x-validate": null
+      },
+      "FolderListResponse": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteMeta"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folder",
+          "notes"
+        ],
+        "title": "FolderListResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderListResponse",
+        "x-validate": null
+      },
+      "BatchUpsertRequest": {
+        "properties": {
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/UpsertNoteRequest"
+            },
+            "maxItems": 100,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "title": "BatchUpsertRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertRequest",
+        "x-validate": null
+      },
+      "NoteMeta": {
+        "properties": {
+          "content_hash": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folder": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "version": {
+            "nullable": true,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "NoteMeta",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.NoteMeta",
+        "x-validate": null
+      },
+      "Conflict": {
+        "properties": {
+          "error": {
+            "example": "version_conflict",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "server_note": {
+            "$ref": "#/components/schemas/Note"
+          }
+        },
+        "title": "Conflict",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Conflict",
+        "x-validate": null
+      },
+      "DeletedFlag": {
+        "properties": {
+          "deleted": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "DeletedFlag",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.DeletedFlag",
+        "x-validate": null
+      },
+      "UpsertNoteRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folder": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "version": {
+            "nullable": true,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path",
+          "mtime"
+        ],
+        "title": "UpsertNoteRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpsertNoteRequest",
+        "x-validate": null
+      },
+      "RenameNoteResponse": {
+        "properties": {
+          "new_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          },
+          "old_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "renamed": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "RenameNoteResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.RenameNoteResponse",
+        "x-validate": null
+      },
+      "FolderNotesResponse": {
+        "properties": {
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteMeta"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "title": "FolderNotesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderNotesResponse",
+        "x-validate": null
+      },
+      "AppendResponse": {
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "AppendResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AppendResponse",
+        "x-validate": null
+      },
+      "FolderRenameResponse": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "new_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "old_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "renamed": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "FolderRenameResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderRenameResponse",
+        "x-validate": null
+      },
+      "Error": {
+        "properties": {
+          "errors": {
+            "description": "Error detail — a message string or a field→messages map.",
+            "oneOf": [
+              {
+                "type": "string",
+                "x-struct": null,
+                "x-validate": null
+              },
+              {
+                "type": "object",
+                "x-struct": null,
+                "x-validate": null
+              }
+            ],
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "Error",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Error",
+        "x-validate": null
+      },
       "HealthStatus": {
         "description": "Service health status.",
         "example": {
@@ -42,6 +950,54 @@
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.HealthStatus",
         "x-validate": null
+      },
+      "BatchUpsertResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BatchUpsertResult"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "BatchUpsertResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertResponse",
+        "x-validate": null
+      },
+      "BatchMoveNotesRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_folder_id": {
+            "description": "Folder UUID or \"root\".",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "ids",
+          "target_folder_id"
+        ],
+        "title": "BatchMoveNotesRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchMoveNotesRequest",
+        "x-validate": null
       }
     },
     "securitySchemes": {
@@ -60,6 +1016,404 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/api/folders": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FoldersResponse"
+                }
+              }
+            },
+            "description": "Folders"
+          }
+        },
+        "summary": "List folders",
+        "tags": [
+          "Folders"
+        ]
+      },
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.create",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFolderRequest"
+              }
+            }
+          },
+          "description": "Folder path",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderResponse"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Empty/root folder rejected"
+          }
+        },
+        "summary": "Create a folder",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/*path": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.delete",
+        "parameters": [
+          {
+            "description": "Folder path",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (empty body)"
+          }
+        },
+        "summary": "Delete a folder by path",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/batch-delete": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.batch_delete",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIdsRequest"
+              }
+            }
+          },
+          "description": "Folder ids",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
+              }
+            },
+            "description": "Deleted count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid ids"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Delete folders by id (idempotent)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/batch-move": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.batch_move",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchMoveFoldersRequest"
+              }
+            }
+          },
+          "description": "Ids + target parent",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedCount"
+                }
+              }
+            },
+            "description": "Moved count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Move folders under a new parent (idempotent)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/by-id/{id}/notes": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.list_notes",
+        "parameters": [
+          {
+            "description": "Folder UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderNotesResponse"
+                }
+              }
+            },
+            "description": "Folder notes"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such folder"
+          }
+        },
+        "summary": "List notes in a folder by id (metadata only)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/explicit": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.explicit",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderNamesResponse"
+                }
+              }
+            },
+            "description": "Folder names"
+          }
+        },
+        "summary": "List explicitly-created (empty-capable) folders",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/list": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.list",
+        "parameters": [
+          {
+            "description": "Folder path",
+            "in": "query",
+            "name": "folder",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderListResponse"
+                }
+              }
+            },
+            "description": "Folder notes"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing folder param"
+          }
+        },
+        "summary": "List notes in a folder (metadata only)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/folders/rename": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.FoldersController.rename",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "description": "Old + new path",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderRenameResponse"
+                }
+              }
+            },
+            "description": "Renamed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such folder"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target exists"
+          }
+        },
+        "summary": "Rename / move a folder",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "callbacks": {},
@@ -78,6 +1432,7 @@
             "description": "Service is up"
           }
         },
+        "security": [],
         "summary": "Liveness probe",
         "tags": []
       }
@@ -110,12 +1465,692 @@
             "description": "Degraded"
           }
         },
+        "security": [],
         "summary": "Readiness probe",
         "tags": []
       }
+    },
+    "/api/notes": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.upsert",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertNoteRequest"
+              }
+            }
+          },
+          "description": "Note to upsert",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteResponse"
+                }
+              }
+            },
+            "description": "Created/updated"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            },
+            "description": "Version conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Note exceeds 10MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Create or update a note",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/*path": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.delete",
+        "parameters": [
+          {
+            "description": "Note path",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedFlag"
+                }
+              }
+            },
+            "description": "Deleted"
+          }
+        },
+        "summary": "Delete a note by path",
+        "tags": [
+          "Notes"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.show",
+        "parameters": [
+          {
+            "description": "Note path (slash-separated)",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            },
+            "description": "Note"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Get a note by path",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/append": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.append",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendRequest"
+              }
+            }
+          },
+          "description": "Path + text",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendResponse"
+                }
+              }
+            },
+            "description": "Appended"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Append text to a note (creating it if absent)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/batch": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.batch_upsert",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchUpsertRequest"
+              }
+            }
+          },
+          "description": "Notes array",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchUpsertResponse"
+                }
+              }
+            },
+            "description": "Per-note results"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid array / >100 items"
+          }
+        },
+        "summary": "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/batch-delete": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.batch_delete",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIdsRequest"
+              }
+            }
+          },
+          "description": "Note ids",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
+              }
+            },
+            "description": "Deleted count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid ids"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Delete notes by id (idempotent)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/batch-move": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.batch_move",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchMoveNotesRequest"
+              }
+            }
+          },
+          "description": "Ids + target folder",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedCount"
+                }
+              }
+            },
+            "description": "Moved count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Move notes to a folder (idempotent)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/by-id/{id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.delete_by_id",
+        "parameters": [
+          {
+            "description": "Note UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedFlag"
+                }
+              }
+            },
+            "description": "Deleted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Delete a note by id",
+        "tags": [
+          "Notes"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.show_by_id",
+        "parameters": [
+          {
+            "description": "Note UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            },
+            "description": "Note"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Get a note by id",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/changes": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.changes",
+        "parameters": [
+          {
+            "description": "ISO8601 timestamp cursor",
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Max rows (<=500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "\"meta\" or \"all\"",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Opaque pagination cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesResponse"
+                }
+              }
+            },
+            "description": "Changes page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid since/limit/fields/cursor"
+          }
+        },
+        "summary": "List note changes since a cursor (keyset pagination)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/rename": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.NotesController.rename",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "description": "Old + new path",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameNoteResponse"
+                }
+              }
+            },
+            "description": "Renamed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target exists / version conflict"
+          }
+        },
+        "summary": "Rename / move a note",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/search": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.SearchController.search",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "description": "Search query",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Results"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "cross_vault requires Pro"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing query"
+          }
+        },
+        "summary": "Search notes (vector / keyword / hybrid)",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.TagsController.index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagsResponse"
+                }
+              }
+            },
+            "description": "Tags"
+          }
+        },
+        "summary": "List all tags in the vault",
+        "tags": [
+          "Tags"
+        ]
+      }
     }
   },
-  "security": [],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
   "servers": [
     {
       "description": "Production",
@@ -123,5 +2158,22 @@
       "variables": {}
     }
   ],
-  "tags": []
+  "tags": [
+    {
+      "description": "Create, read, update, delete, and sync notes.",
+      "name": "Notes"
+    },
+    {
+      "description": "Browse and manage folders.",
+      "name": "Folders"
+    },
+    {
+      "description": "Vector, keyword, and hybrid search.",
+      "name": "Search"
+    },
+    {
+      "description": "List vault tags.",
+      "name": "Tags"
+    }
+  ]
 }
