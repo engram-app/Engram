@@ -204,13 +204,15 @@ export function useUploadAttachment() {
   >({
     mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>('/attachments', body),
     onSuccess: () => {
-      // New attachment row + its folder's count both change. The tree reads
-      // attachments from ['attachments', vaultId]; folder counts from
-      // ['folders', vaultId]. 402s (disabled / text-only / too-large / quota)
-      // throw LimitExceededError AND open the global UpgradeRequiredDialog via
-      // the client's upgradeHandler — nothing to handle here.
-      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+      // New attachment row changes the tree's attachment list, its folder's
+      // count, AND the dashboard folder-browse list (which renders attachments).
+      // Mirrors useBatchDeleteAttachments — keep all three keys in sync.
+      // 402s (disabled / text-only / too-large / quota) throw LimitExceededError
+      // AND open the global UpgradeRequiredDialog via the client's
+      // upgradeHandler — nothing to handle here.
       qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
+      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
     },
   })
 }

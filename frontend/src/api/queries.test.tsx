@@ -1480,11 +1480,7 @@ describe('useUploadAttachment', () => {
     return { qc, Wrapper }
   }
 
-  beforeEach(() => {
-    post.mockReset()
-  })
-
-  it('POSTs the upload payload and invalidates attachments + folders', async () => {
+  it('POSTs the upload payload and invalidates folders + folderNotes + attachments', async () => {
     post.mockResolvedValue({ attachment: { id: 'a1', path: 'pic.png' } })
     const { qc, Wrapper } = wrapper()
     const spy = vi.spyOn(qc, 'invalidateQueries')
@@ -1505,7 +1501,8 @@ describe('useUploadAttachment', () => {
       content_base64: 'AAAA',
       mtime: 1718000000,
     })
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
     expect(spy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['folderNotes', '42'] })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
   })
 })
