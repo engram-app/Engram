@@ -2,7 +2,7 @@ Title: Connections client identity — why `software_id` failed, redirect-host m
 
 _Last verified: 2026-06-15 (discovered fixing Claude identity on `/settings/connections` + onboarding checklist)_
 
-How `/settings/connections` cards and the onboarding checklist identify an OAuth/MCP client (logo, display_name, verified badge, checklist auto-check). Spec: `docs/superpowers/specs/2026-06-15-connection-redirect-host-identity-design.md`.
+How `/settings/connections` cards and the onboarding checklist identify an OAuth/MCP client (logo, display_name, verified badge, checklist auto-check).
 
 ## The gotcha: `software_id` is almost never sent
 
