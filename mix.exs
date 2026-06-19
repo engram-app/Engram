@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.469",
+      version: "0.5.470",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -127,7 +127,12 @@ defmodule Engram.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false}
+      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
+
+      # Tidewave MCP — runtime introspection of the running dev app
+      # (project_eval, DB queries, logs). Dev-only: it is RCE by design
+      # and is mounted in the endpoint behind a code_reloading? guard.
+      {:tidewave, "~> 0.5.0", only: :dev}
     ]
   end
 
