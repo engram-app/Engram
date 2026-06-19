@@ -1478,19 +1478,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Scan CLAUDE.md files for known-stale facts
+      - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
-          # CLAUDE.md should reflect CURRENT product state. Patterns below are
-          # known-dead facts per workspace memory entries:
+          # CLAUDE.md / AGENTS.md should reflect CURRENT product state. Patterns
+          # below are known-dead facts per workspace memory entries:
           #   - dead domains  → [[project_domain]]
           #   - dead pricing  → [[project_pricing_model]] (v2 reanchored $10/$20)
           #   - dead org refs → [[project_engram_app_org_complete]]
           # Stripe references are intentionally NOT linted — too noisy
           # against legitimate "Stripe removed" historical context.
-          mapfile -t files < <(find . -name 'CLAUDE.md' -type f -not -path './.git/*')
+          # AGENTS.md is the canonical AI doc; CLAUDE.md is a symlink to it
+          # (symlinks are not -type f, so AGENTS.md is what actually gets scanned).
+          mapfile -t files < <(find . \( -name 'CLAUDE.md' -o -name 'AGENTS.md' \) -type f -not -path './.git/*')
           if [ ${#files[@]} -eq 0 ]; then
-            echo "OK — no CLAUDE.md files in repo."
+            echo "OK — no CLAUDE.md / AGENTS.md files in repo."
             exit 0
           fi
           echo "Scanning: ${files[*]}"
