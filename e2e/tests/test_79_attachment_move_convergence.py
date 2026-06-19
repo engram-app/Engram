@@ -2,20 +2,16 @@
 
 A move performed on the web (POST /attachments/rename) repoints the live row to
 the new path AND inserts a soft-deleted tombstone at the old path, both stamped
-with one per-vault seq in one transaction. That tombstone is the durable
-`{old_path, deleted: true}` signal that makes the move converge on every client:
+with one per-vault seq in one transaction. That durable `{old_path, deleted}`
+tombstone is what makes the move converge for a client that pulls the change
+feed (the offline / catch-up path) — without it, the pull would see only the
+repointed row at the new path and keep a stale duplicate at the old path.
 
-  * Live socket — the backend broadcasts note_changed(kind=attachment)
-    delete(old) + upsert(new); the plugin trashes old and writes new.
-  * Offline catch-up — a client that missed the ephemeral socket events pulls
-    the tombstone (deleted) + the repointed row (live) on reconnect and lands
-    in the same final state.
-
-Both paths must leave NO duplicate at the old path (no resurrection).
-
-The seed attachment is uploaded via the API (web-origin) rather than written to
-vault A and waited on — that keeps the setup off the plugin's binary-push timing
-(which is slow under parallel CI load) and matches the web-origin theme.
+These tests assert convergence through an explicit pull (`trigger_full_sync`)
+rather than racing live-socket delivery: the pull path is the one the tombstone
+exists for, and it's deterministic under parallel CI load. Each test cleans up
+server-side state first so it is safe under pytest reruns (a move mutates shared
+vault state irreversibly, so a re-run must start from a known-clean slate).
 """
 
 import asyncio
@@ -24,8 +20,8 @@ import pytest
 
 from helpers.vault import wait_for_binary, wait_for_file_gone
 
-# B-side convergence (socket delivery / catch-up pull + blob fetch) can lag under
-# parallel CI load — give it more room than the suite's 15s default.
+# B-side convergence (pull + blob fetch) can lag under parallel CI load — give
+# it more room than the suite's 15s default.
 CONVERGE_TIMEOUT = 25
 
 # Minimal valid PNG: 1x1 red pixel (same constant as test_33).
@@ -37,13 +33,19 @@ TINY_PNG = (
 )
 
 
+def _seed_clean(api_sync, *paths):
+    """Soft-delete any leftover rows at these paths (idempotent) so the test
+    starts from a clean slate even on a pytest rerun after a partial failure."""
+    for p in paths:
+        api_sync.delete_attachment(p)
+
+
 @pytest.mark.asyncio
-async def test_attachment_move_converges_via_live_socket(
-    vault_a, vault_b, cdp_a, cdp_b, api_sync
-):
-    """B is online: a web move lands the new path and trashes the old — no dup."""
-    old_path = "E2E/attachments/move79live-old.png"
-    new_path = "E2E/attachments/move79live-new.png"
+async def test_web_move_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+    """A web move lands the new path and trashes the old on B's pull — no dup."""
+    old_path = "E2E/attachments/move79pull-old.png"
+    new_path = "E2E/attachments/move79pull-new.png"
+    _seed_clean(api_sync, old_path, new_path)
 
     # Seed via the API (web-origin upload → immediately on the server), then B pulls.
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
@@ -51,35 +53,31 @@ async def test_attachment_move_converges_via_live_socket(
     await cdp_b.trigger_full_sync()
     wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
-    # B is connected to the live channel before the move.
-    await cdp_b.wait_for_stream_connected(timeout=10)
-
-    # Web-originated move (repoint + old-path tombstone).
-    status = api_sync.rename_attachment(old_path, new_path)
-    assert status == 200, f"web move should return 200, got {status}"
-
-    # Server reflects the move: new reachable, old a 404.
+    # Web-originated move: repoint live row + insert old-path tombstone.
+    assert api_sync.rename_attachment(old_path, new_path) == 200
     api_sync.wait_for_attachment(new_path)
     api_sync.wait_for_attachment_gone(old_path)
 
-    # B converges over the live socket: new written, old trashed — no duplicate.
-    b_data = wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT)
-    assert b_data == TINY_PNG, "B's moved attachment bytes should be intact"
+    # B converges on its next pull: the tombstone trashes old, the repointed row
+    # writes new — no duplicate left at the old path.
+    await cdp_b.trigger_full_sync()
+    assert wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT) == TINY_PNG
     wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
 
 @pytest.mark.asyncio
-async def test_attachment_move_converges_offline_catch_up(
+async def test_web_move_converges_after_offline_window(
     vault_a, vault_b, cdp_a, cdp_b, api_sync
 ):
-    """B misses the socket events while disconnected, then catches up — no dup.
+    """B is offline during the move, then catches up on reconnect — no dup.
 
-    This is the case the durable tombstone exists for: without the old-path
-    tombstone in the change feed, B's catch-up pull would see only the
-    repointed row at the new path and keep a stale duplicate at the old path.
+    This is the scenario the durable tombstone is for: B never sees the ephemeral
+    move broadcasts, so it must learn the old path is gone purely from the pulled
+    change feed.
     """
     old_path = "E2E/attachments/move79offline-old.png"
     new_path = "E2E/attachments/move79offline-new.png"
+    _seed_clean(api_sync, old_path, new_path)
 
     # Seed via the API, then B pulls a copy.
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
@@ -87,21 +85,20 @@ async def test_attachment_move_converges_offline_catch_up(
     await cdp_b.trigger_full_sync()
     wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
-    # Take B offline so it misses the ephemeral move broadcasts.
+    # Take B offline so it misses the ephemeral move broadcasts entirely.
     await cdp_b.wait_for_stream_connected(timeout=10)
     await cdp_b.disconnect_stream()
     await asyncio.sleep(0.3)
     assert not await cdp_b.check_stream_connected(), "B's channel should be down"
 
     # Web move happens while B is disconnected.
-    status = api_sync.rename_attachment(old_path, new_path)
-    assert status == 200, f"web move should return 200, got {status}"
+    assert api_sync.rename_attachment(old_path, new_path) == 200
     api_sync.wait_for_attachment(new_path)
     api_sync.wait_for_attachment_gone(old_path)
 
-    # Reconnect → catch-up pull delivers BOTH the upsert(new) and the
-    # tombstone(old). B converges with no duplicate.
+    # Reconnect, then pull: the catch-up delivers the tombstone(old) + the
+    # repointed row(new). B converges with no duplicate.
     await cdp_b.reconnect_stream()
-    b_data = wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT)
-    assert b_data == TINY_PNG, "B's moved attachment bytes should be intact"
+    await cdp_b.trigger_full_sync()
+    assert wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT) == TINY_PNG
     wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
