@@ -117,10 +117,11 @@ describe('FolderActions', () => {
     })
   })
 
-  it('opens the upload flow when Upload attachment is clicked', () => {
+  it('opens the upload flow targeting the active folder when Upload is clicked', () => {
     renderWithProviders()
     fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }))
-    expect(openUpload).toHaveBeenCalledTimes(1)
+    // Seeded active note lives in folder "foo" (see renderWithProviders).
+    expect(openUpload).toHaveBeenCalledWith(undefined, 'foo')
   })
 
   it('hides the Upload button on demo vaults', () => {

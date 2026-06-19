@@ -14,6 +14,8 @@ interface Row {
 interface Props {
   initialFiles: File[]
   folders: { name: string }[]
+  // Pre-selected destination (e.g. the folder the user is browsing); '' = root.
+  defaultFolder?: string
   onClose: () => void
 }
 
@@ -58,17 +60,34 @@ function messageFor(err: unknown): string {
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
   rows.map((row, idx) => (idx === i ? { ...row, ...next } : row))
 
-export function AttachmentUploadDialog({ initialFiles, folders, onClose }: Props) {
+const optionId = (i: number): string => `upload-folder-opt-${i}`
+
+export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, onClose }: Props) {
   const [rows, setRows] = useState<Row[]>(() =>
     initialFiles.map((file) => ({ file, status: 'pending' as RowStatus })),
   )
-  const [folder, setFolder] = useState('') // '' = vault root
+  const [folder, setFolder] = useState(defaultFolder ?? '') // '' = vault root
   const [busy, setBusy] = useState(false)
   const addRef = useRef<HTMLInputElement>(null)
   const upload = useUploadAttachment()
 
   // Root first, then real folders.
   const candidates = ['', ...folders.map((f) => f.name)]
+  // Index of the selected option — drives aria-activedescendant + arrow-key nav.
+  const activeIndex = Math.max(0, candidates.indexOf(folder))
+
+  // Listbox keyboard support (selection follows focus): arrows + Home/End move
+  // the selection so the picker is operable without a mouse.
+  function onFolderKeyDown(e: React.KeyboardEvent) {
+    let next = activeIndex
+    if (e.key === 'ArrowDown') next = Math.min(activeIndex + 1, candidates.length - 1)
+    else if (e.key === 'ArrowUp') next = Math.max(activeIndex - 1, 0)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = candidates.length - 1
+    else return
+    e.preventDefault()
+    setFolder(candidates[next] ?? '')
+  }
 
   async function commit() {
     setBusy(true)
@@ -93,9 +112,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, onClose }: Props
         }
       }
     } finally {
-      // setBusy in finally so it always runs, even if the component unmounts
-      // between the last setRows call and this point. React 19 silently
-      // ignores setState on unmounted components, so this is safe.
+      // setBusy in finally so it always runs even if a mid-loop upload throws.
       setBusy(false)
     }
   }
@@ -130,11 +147,15 @@ export function AttachmentUploadDialog({ initialFiles, folders, onClose }: Props
           <ul
             role="listbox"
             aria-label="Destination folder"
-            className="max-h-24 overflow-y-auto rounded border border-border"
+            tabIndex={0}
+            aria-activedescendant={optionId(activeIndex)}
+            onKeyDown={onFolderKeyDown}
+            className="max-h-24 overflow-y-auto rounded border border-border focus:outline-none focus:ring-2 focus:ring-blue-400"
           >
-            {candidates.map((name) => (
+            {candidates.map((name, i) => (
               <li
                 key={name || '__root__'}
+                id={optionId(i)}
                 role="option"
                 aria-selected={name === folder}
                 onClick={() => setFolder(name)}

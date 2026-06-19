@@ -49,6 +49,36 @@ describe('AttachmentUploadDialog', () => {
     )
   })
 
+  it('seeds the destination from defaultFolder', async () => {
+    mutateAsync.mockResolvedValue({ attachment: { id: 'x', path: 'docs/a.txt' } })
+    render(
+      <AttachmentUploadDialog
+        initialFiles={[file('a.txt')]}
+        folders={[{ name: 'docs' }]}
+        defaultFolder="docs"
+        onClose={() => {}}
+      />,
+    )
+    // No folder interaction — defaultFolder drives the path.
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: 'docs/a.txt' })),
+    )
+  })
+
+  it('selects a folder via keyboard (ArrowDown) on the listbox', async () => {
+    mutateAsync.mockResolvedValue({ attachment: { id: 'x', path: 'docs/a.txt' } })
+    render(
+      <AttachmentUploadDialog initialFiles={[file('a.txt')]} folders={[{ name: 'docs' }]} onClose={() => {}} />,
+    )
+    // Starts at root (index 0); ArrowDown moves selection to 'docs' (index 1).
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: 'docs/a.txt' })),
+    )
+  })
+
   it('marks a row errored on 415 without blocking the others', async () => {
     mutateAsync
       .mockRejectedValueOnce(new ApiError(415, 'mime_not_allowed'))

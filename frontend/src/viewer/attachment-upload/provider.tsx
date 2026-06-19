@@ -4,7 +4,9 @@ import { useDemoVaultOptional } from '../../onboarding/tour/demo-vault-provider'
 import { AttachmentUploadDialog } from './upload-dialog'
 
 interface UploadApi {
-  openUpload: (files?: File[]) => void
+  // defaultFolder pre-selects the dialog's destination (e.g. the folder the user
+  // is browsing); omit for vault root.
+  openUpload: (files?: File[], defaultFolder?: string) => void
 }
 
 const Ctx = createContext<UploadApi | null>(null)
@@ -21,6 +23,7 @@ function hasFiles(e: DragEvent): boolean {
 
 export function AttachmentUploadProvider({ children }: { children: React.ReactNode }) {
   const [files, setFiles] = useState<File[] | null>(null) // null = dialog closed
+  const [pendingFolder, setPendingFolder] = useState('') // default dest for the next dialog
   const [dragging, setDragging] = useState(false)
   const depth = useRef(0)
   const pickerRef = useRef<HTMLInputElement>(null)
@@ -32,8 +35,9 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
   // No files → open the OS picker (the dialog opens once files are chosen, so
   // the button never flashes an empty dialog). Files present → open directly.
   const openUpload = useCallback(
-    (dropped?: File[]) => {
+    (dropped?: File[], defaultFolder = '') => {
       if (demoActive) return
+      setPendingFolder(defaultFolder)
       if (dropped && dropped.length > 0) setFiles(dropped)
       else pickerRef.current?.click()
     },
@@ -70,7 +74,11 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
       depth.current = 0
       setDragging(false)
       const dropped = Array.from(e.dataTransfer?.files ?? [])
-      if (dropped.length > 0) setFiles(dropped)
+      if (dropped.length > 0) {
+        // A whole-window drop has no folder context — default to vault root.
+        setPendingFolder('')
+        setFiles(dropped)
+      }
     }
     window.addEventListener('dragenter', onEnter)
     window.addEventListener('dragover', onOver)
@@ -110,6 +118,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
         <AttachmentUploadDialog
           initialFiles={files}
           folders={folders.map((f) => ({ name: f.name }))}
+          defaultFolder={pendingFolder}
           onClose={() => setFiles(null)}
         />
       )}

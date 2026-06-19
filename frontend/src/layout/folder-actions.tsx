@@ -111,7 +111,7 @@ export default function FolderActions() {
                 size="icon"
                 aria-label="Upload attachment"
                 className={BUTTON}
-                onClick={() => openUpload()}
+                onClick={() => openUpload(undefined, activeFolder)}
               >
                 <Upload className={ICON} />
               </Button>
