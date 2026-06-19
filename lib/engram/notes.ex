@@ -187,11 +187,28 @@ defmodule Engram.Notes do
       folder_hmac: folder_hmac
     }
 
-    %Note{id: marker_id}
-    |> Note.changeset(attrs)
-    |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
-    |> Repo.insert()
-    |> case do
+    changeset =
+      %Note{id: marker_id}
+      |> Note.changeset(attrs)
+      |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
+
+    # Insert inside a SAVEPOINT (nested transaction). A concurrent insert of the
+    # same folder races us: find_folder_marker saw :not_found, then this insert
+    # hits the `notes_user_vault_folder_marker` unique index. Without the
+    # savepoint that violation aborts the WHOLE enclosing Repo.with_tenant
+    # transaction — its trailing role-reset query then fails with
+    # 25P02 (in_failed_sql_transaction), so the re-fetch below can't run and the
+    # caller 500s. The savepoint scopes the rollback to just this insert, leaving
+    # the tenant transaction healthy so we can collapse to the winner's marker.
+    insert_result =
+      Repo.transaction(fn ->
+        case Repo.insert(changeset) do
+          {:ok, marker} -> marker
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case insert_result do
       {:ok, marker} ->
         {:ok, hydrate_folder_marker(marker, dek)}
 
