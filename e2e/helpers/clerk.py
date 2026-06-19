@@ -55,6 +55,13 @@ class ClerkClient:
         self.session.headers["Authorization"] = f"Bearer {secret_key}"
         self.session.headers["Content-Type"] = "application/json"
         self.base_url = "https://api.clerk.dev/v1"
+        # Every user this client creates, tracked so session teardown can delete
+        # the exact set it made — even ones whose id never reached the caller's
+        # try/finally (readiness-probe timeout) or whose test crashed before its
+        # own cleanup. Scoped to THIS client's creations, so it never races a
+        # sibling run's users. The hourly orphan reaper stays as the backstop
+        # for hard crashes that skip teardown entirely.
+        self.created_user_ids: set[str] = set()
         # Clerk rate-limits the Backend API (429). Without backoff, a burst of
         # e2e runs fails create/delete hard mid-suite — which then skips the
         # per-test cleanup and leaks users (compounding the quota problem).
@@ -117,6 +124,7 @@ class ClerkClient:
                 logger.warning(
                     "Clerk user %s already exists for %s — reusing", existing_id, email
                 )
+                self.created_user_ids.add(existing_id)
                 return existing_id
             logger.error(
                 "Clerk says %s is taken but lookup found nothing: %s",
@@ -126,6 +134,9 @@ class ClerkClient:
             logger.error("Clerk create_user failed for %s: %s %s", email, resp.status_code, resp.text)
         resp.raise_for_status()
         user_id = resp.json()["id"]
+        # Track BEFORE the readiness probe: if that raises, the id never reaches
+        # the caller, but teardown must still be able to delete it.
+        self.created_user_ids.add(user_id)
         logger.info("Created Clerk user %s (%s)", user_id, email)
         # Block until Clerk's session endpoint can see this user. Without
         # this, every downstream caller (create_session_token, JWT mint,
@@ -300,9 +311,26 @@ class ClerkClient:
         )
         if resp.status_code == 404:
             logger.warning("Clerk user %s already deleted", user_id)
+            self.created_user_ids.discard(user_id)
             return
         resp.raise_for_status()
+        self.created_user_ids.discard(user_id)
         logger.info("Deleted Clerk user %s", user_id)
+
+    def cleanup_tracked(self) -> int:
+        """Delete every user this client created that's still alive — the
+        per-run safety net. Catches users a test crashed before cleaning, or
+        whose id never reached the caller (readiness-probe timeout). Best-
+        effort: a failed delete is logged, not raised, so teardown never
+        crashes. Returns the count deleted."""
+        deleted = 0
+        for user_id in list(self.created_user_ids):
+            try:
+                self.delete_user(user_id)
+                deleted += 1
+            except Exception as e:
+                logger.warning("Tracked-user cleanup failed for %s: %s", user_id, e)
+        return deleted
 
     def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
         """List Clerk users with pagination."""

@@ -487,6 +487,21 @@ def session_cleanup(request, auth_provider):
     # Provider-specific cleanup (e.g., delete Clerk users)
     for uid in provider_user_ids:
         auth_provider.cleanup_user(uid)
+    # Per-run safety net: delete EVERY Clerk user this session created, not
+    # just the shared sync_user/isolation_user fixtures. Individual tests
+    # (billing, oauth, connections) provision their own users; without this
+    # they leaked every run and only the hourly orphan reaper caught them —
+    # which a heavy-CI burst outpaces, exhausting the 100-user quota and
+    # 403'ing all Clerk-auth e2e. Scoped to THIS client's creations, so it
+    # never races a sibling run. See helpers/clerk.py ClerkClient.cleanup_tracked.
+    clerk = getattr(auth_provider, "clerk_client", None)
+    if clerk is not None:
+        try:
+            n = clerk.cleanup_tracked()
+            if n:
+                logging.getLogger(__name__).info("Reaped %d tracked Clerk users", n)
+        except Exception as e:
+            logging.getLogger(__name__).error("Tracked Clerk cleanup failed: %s", e)
     # DB cleanup: scoped to THIS worker's users via the w{N} ts suffix
     # so a worker finishing early doesn't delete another worker's users
     # mid-run. Emails look like e2e-sync-20260416...w{N}+clerk_test@example.com
