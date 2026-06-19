@@ -11,6 +11,11 @@ vi.mock('./upload-dialog', () => ({
     <div data-testid="dialog">{initialFiles.map((f) => f.name).join(',')}</div>
   ),
 }))
+// Controllable demo flag — null (not demo) by default; flip per test.
+let demoActive = false
+vi.mock('../../onboarding/tour/demo-vault-provider', () => ({
+  useDemoVaultOptional: () => (demoActive ? { active: true } : null),
+}))
 
 function TriggerButton() {
   const { openUpload } = useAttachmentUpload()
@@ -30,6 +35,7 @@ function fileDragEvent(type: string, withFiles: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  demoActive = false
 })
 
 describe('AttachmentUploadProvider', () => {
@@ -71,5 +77,26 @@ describe('AttachmentUploadProvider', () => {
     )
     window.dispatchEvent(fileDragEvent('drop', true))
     await waitFor(() => expect(screen.getByTestId('dialog')).toHaveTextContent('dropped.txt'))
+  })
+
+  it('is inert for demo vaults: no overlay, no dialog on drop or openUpload', () => {
+    demoActive = true
+    render(
+      <AttachmentUploadProvider>
+        <TriggerButton />
+      </AttachmentUploadProvider>,
+    )
+    // Button is a no-op: clicking opens nothing.
+    fireEvent.click(screen.getByText('open'))
+    expect(screen.queryByTestId('dialog')).toBeNull()
+    // External file drop is ignored: no overlay, no dialog.
+    act(() => {
+      window.dispatchEvent(fileDragEvent('dragenter', true))
+    })
+    expect(screen.queryByText(/drop files to upload/i)).toBeNull()
+    act(() => {
+      window.dispatchEvent(fileDragEvent('drop', true))
+    })
+    expect(screen.queryByTestId('dialog')).toBeNull()
   })
 })

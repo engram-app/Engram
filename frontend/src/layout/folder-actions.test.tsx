@@ -14,6 +14,12 @@ vi.mock('../viewer/attachment-upload/provider', () => ({
   useAttachmentUpload: () => ({ openUpload }),
 }))
 
+// Controllable demo flag — null (not demo) by default; flip per test.
+let demoActive = false
+vi.mock('../onboarding/tour/demo-vault-provider', () => ({
+  useDemoVaultOptional: () => (demoActive ? { active: true } : null),
+}))
+
 vi.mock('react-router', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router')
   return {
@@ -72,6 +78,7 @@ describe('FolderActions', () => {
     post.mockReset()
     toastError.mockReset()
     openUpload.mockReset()
+    demoActive = false
   })
 
   it('creates a note in the active folder when New note is clicked', async () => {
@@ -114,6 +121,12 @@ describe('FolderActions', () => {
     renderWithProviders()
     fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }))
     expect(openUpload).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the Upload button on demo vaults', () => {
+    demoActive = true
+    renderWithProviders()
+    expect(screen.queryByRole('button', { name: 'Upload attachment' })).toBeNull()
   })
 
   it('uses the target folder label in the New note tooltip trigger', () => {

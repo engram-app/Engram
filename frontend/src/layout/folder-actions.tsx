@@ -19,6 +19,7 @@ import {
 import { useCreateFolder, useCreateNote } from '@/api/queries'
 import { useActiveFolder } from '@/lib/active-folder'
 import { useAttachmentUpload } from '../viewer/attachment-upload/provider'
+import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 import { type SortKey, useFolderTreeState } from './folder-tree-context'
 
 const ICON = 'size-5'
@@ -61,6 +62,8 @@ export default function FolderActions() {
   const createNote = useCreateNote()
   const createFolder = useCreateFolder()
   const { openUpload } = useAttachmentUpload()
+  // Demo vaults are read-only previews — no upload affordance during the tour.
+  const demoActive = useDemoVaultOptional()?.active === true
 
   return (
     <section
@@ -100,20 +103,22 @@ export default function FolderActions() {
           <TooltipContent>Creates in {targetLabel}</TooltipContent>
         </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Upload attachment"
-              className={BUTTON}
-              onClick={() => openUpload()}
-            >
-              <Upload className={ICON} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Upload an attachment</TooltipContent>
-        </Tooltip>
+        {!demoActive && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Upload attachment"
+                className={BUTTON}
+                onClick={() => openUpload()}
+              >
+                <Upload className={ICON} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Upload an attachment</TooltipContent>
+          </Tooltip>
+        )}
       </TooltipProvider>
 
       <DropdownMenu>
