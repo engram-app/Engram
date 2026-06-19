@@ -996,12 +996,14 @@ class CdpClient:
         """
         result = await self.evaluate(js)
         logger.info("Online restored on CDP port %d: %s", self.port, result)
-        # Trigger recovery if engine is offline
-        is_offline = await self.get_offline_status()
-        if is_offline:
-            await self.evaluate(
-                f"{ENGINE_PATH}.flushQueue()", await_promise=True
-            )
+        # Always drain the queue explicitly, awaited. Previously this was gated
+        # on `get_offline_status()` being true — but the engine's health check
+        # can auto-recover (flip online) before this check, which skipped the
+        # explicit flush and left the queue to drain via the slow auto-retry
+        # loop, intermittently blowing the drain timeout (#635). flushQueue is a
+        # no-op on an empty queue and idempotent on the server, so calling it
+        # unconditionally is safe and makes the drain deterministic.
+        await self.evaluate(f"{ENGINE_PATH}.flushQueue()", await_promise=True)
 
     async def get_queue_size(self) -> int:
         """Read the offline queue size."""
