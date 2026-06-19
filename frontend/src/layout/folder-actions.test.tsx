@@ -3,10 +3,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { navigate, post, toastError } = vi.hoisted(() => ({
+const { navigate, post, toastError, openUpload } = vi.hoisted(() => ({
   navigate: vi.fn(),
   post: vi.fn(),
   toastError: vi.fn(),
+  openUpload: vi.fn(),
+}))
+
+vi.mock('../viewer/attachment-upload/provider', () => ({
+  useAttachmentUpload: () => ({ openUpload }),
 }))
 
 vi.mock('react-router', async () => {
@@ -66,6 +71,7 @@ describe('FolderActions', () => {
     navigate.mockReset()
     post.mockReset()
     toastError.mockReset()
+    openUpload.mockReset()
   })
 
   it('creates a note in the active folder when New note is clicked', async () => {
@@ -102,6 +108,12 @@ describe('FolderActions', () => {
     await waitFor(() => {
       expect(navigate).toHaveBeenCalledWith('/note/7')
     })
+  })
+
+  it('opens the upload flow when Upload attachment is clicked', () => {
+    renderWithProviders()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }))
+    expect(openUpload).toHaveBeenCalledTimes(1)
   })
 
   it('uses the target folder label in the New note tooltip trigger', () => {

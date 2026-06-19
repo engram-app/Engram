@@ -1,4 +1,4 @@
-import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical } from 'lucide-react'
+import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical, Upload } from 'lucide-react'
 import { Fragment } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useCreateFolder, useCreateNote } from '@/api/queries'
 import { useActiveFolder } from '@/lib/active-folder'
+import { useAttachmentUpload } from '../viewer/attachment-upload/provider'
 import { type SortKey, useFolderTreeState } from './folder-tree-context'
 
 const ICON = 'size-5'
@@ -59,6 +60,7 @@ export default function FolderActions() {
 
   const createNote = useCreateNote()
   const createFolder = useCreateFolder()
+  const { openUpload } = useAttachmentUpload()
 
   return (
     <section
@@ -96,6 +98,21 @@ export default function FolderActions() {
             </Button>
           </TooltipTrigger>
           <TooltipContent>Creates in {targetLabel}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Upload attachment"
+              className={BUTTON}
+              onClick={() => openUpload()}
+            >
+              <Upload className={ICON} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Upload an attachment</TooltipContent>
         </Tooltip>
       </TooltipProvider>
 
