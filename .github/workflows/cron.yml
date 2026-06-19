@@ -70,7 +70,7 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The script imports `helpers.clerk_constants` (the shared e2e-email
           # predicate, added for #558), so the helpers package must be checked
@@ -174,7 +174,7 @@ jobs:
       # only update-obsidian.sh, but that left `core.sparseCheckout=true` and
       # skip-worktree bits on the shared self-hosted runner workspace, poisoning
       # subsequent CI jobs (mix.exs absent → "Could not find a Mix.Project").
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Update Obsidian to latest release
         run: |
@@ -207,7 +207,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for first/last commit lookups
 
@@ -243,7 +243,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -498,7 +498,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Fetch deps
         # Separate from the action's own `install-deps: true` so transient
