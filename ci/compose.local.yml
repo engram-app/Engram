@@ -1,5 +1,5 @@
 # CI overlay: local auth provider for API-only tests.
-# Usage: docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml -p engram-ci-local up -d --wait
+# Usage: docker compose -f ci/compose.yml -f ci/compose.local.yml -p engram-ci-local up -d --wait
 
 services:
   engram:
