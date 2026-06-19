@@ -10,8 +10,8 @@ defmodule EngramWeb.ApiSpec do
   """
   @behaviour OpenApiSpex.OpenApi
 
-  alias OpenApiSpex.{Components, Info, OpenApi, Paths, SecurityScheme, Server}
   alias EngramWeb.Router
+  alias OpenApiSpex.{Components, Info, OpenApi, Paths, SecurityScheme, Server}
 
   @impl OpenApiSpex.OpenApi
   def spec do

@@ -62,7 +62,7 @@
   "info": {
     "description": "REST API for Engram — notes, search, sync, billing, and MCP.",
     "title": "Engram API",
-    "version": "0.5.464"
+    "version": "0.5.465"
   },
   "openapi": "3.0.0",
   "paths": {

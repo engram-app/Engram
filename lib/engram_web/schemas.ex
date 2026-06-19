@@ -8,8 +8,8 @@ defmodule EngramWeb.Schemas do
 
   defmodule HealthStatus do
     @moduledoc "Liveness/readiness response from /api/health[/deep]."
-    require OpenApiSpex
     alias OpenApiSpex.Schema
+    require OpenApiSpex
 
     OpenApiSpex.schema(%{
       title: "HealthStatus",

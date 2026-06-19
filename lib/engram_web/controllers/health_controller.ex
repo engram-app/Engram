@@ -4,24 +4,27 @@ defmodule EngramWeb.HealthController do
 
   alias EngramWeb.Schemas.HealthStatus
 
-  operation :index,
+  operation(:index,
     summary: "Liveness probe",
     description: "Cheap liveness check. Always 200 if the app is up.",
     responses: [
       ok: {"Service is up", "application/json", HealthStatus}
     ]
+  )
 
   def index(conn, _params) do
     json(conn, %{status: "ok", version: Application.spec(:engram, :vsn) |> to_string()})
   end
 
-  operation :deep,
+  operation(:deep,
     summary: "Readiness probe",
-    description: "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
+    description:
+      "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
     responses: [
       ok: {"All critical deps ok", "application/json", HealthStatus},
       service_unavailable: {"Degraded", "application/json", HealthStatus}
     ]
+  )
 
   # ALB target group readiness probe. Only checks dependencies whose
   # absence makes EVERY request fail — Postgres is that one. Qdrant,
@@ -41,7 +44,7 @@ defmodule EngramWeb.HealthController do
 
   # diagnostics/2 is admin-gated in the router and intentionally excluded
   # from the public OpenAPI spec.
-  operation :diagnostics, false
+  operation(:diagnostics, false)
 
   # Full dependency matrix for humans + Grafana. Admin-gated in router.
   # BootCanary is reported by reading the :boot_canary_enabled config
