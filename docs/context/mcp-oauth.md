@@ -4,7 +4,7 @@ End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so 
 
 > **Host note:** the saas MCP endpoint is `mcp.engram.page`, NOT `app.engram.page`. The `host_rewrite.ex` plug rejects `/api/mcp` and `/oauth/*` on `app.engram.page` (old path now 405s). All curl examples below use `mcp.engram.page`.
 
-Plan: `docs/superpowers/plans/2026-05-09-mcp-oauth-dcr.md`. Shipped in PRs #91-#97 across 6 backend phases (Phase 0-6) plus the docs PR. Phases 7.A/7.B/7.C and the SPA consent page are also shipped.
+Shipped in PRs #91-#97 across 6 backend phases (Phase 0-6) plus the docs PR. Phases 7.A/7.B/7.C and the SPA consent page are also shipped.
 
 ## Wire flow (what Claude Connectors actually does)
 

@@ -2,7 +2,6 @@
 
 _Captured 2026-05-09 on `chore/quality-tooling-foundation` (PR #TBD). Each subsequent phase fixes findings + updates this doc with the new ratchet ceiling._
 
-Plan: `../../../engram-workspace/docs/superpowers/plans/2026-05-09-quality-tooling-rollout.md`
 
 ## Snapshot
 

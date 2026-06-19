@@ -27,7 +27,6 @@ The toggle described in this runbook governs **notes only**. Attachments encrypt
 - Worker is idempotent and cursor-driven; rerun is safe.
 - BYTEA column NOT yet dropped — happens in PR #62 after PR #61 cuts writes to S3-only.
 - Telemetry events for encrypt/decrypt are deferred to PR #59 (Phase A reland keeps surface area minimal).
-- See `docs/superpowers/plans/2026-05-02-encryption-attachments-reland.md` for the full reland plan + production runbook.
 
 ### A.4 — Cut writes to S3-only (PR #61, 0.5.18)
 
@@ -48,7 +47,7 @@ The toggle described in this runbook governs **notes only**. Attachments encrypt
 - Validations now require `encryption_version == 1` and `content_nonce` on every row. The dual-version branch in `decrypt_if_needed` is gone — version 0 is unrepresentable.
 
 ## What This Is
-Operator runbook for encryption toggling, per-user cooldown, and incident triage. Companion to the architecture spec at `docs/superpowers/specs/2026-04-07-encryption-at-rest-design.md`.
+Operator runbook for encryption toggling, per-user cooldown, and incident triage.
 
 ## Per-User Toggle Cooldown (HISTORICAL — removed in B.4; does not exist today)
 

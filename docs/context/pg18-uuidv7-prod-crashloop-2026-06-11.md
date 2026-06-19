@@ -11,7 +11,7 @@ Runtime terminating during boot (terminating)
 ECS deployment circuit breaker held the prior healthy rev 53 (`sha-950e3b0`), so no outage — but all backend deploys were blocked.
 
 ## Root cause (NOT a code bug in #524)
-The PG18/uuidv7 rework is a **wreck-and-recreate baseline**, not a data migration. The uuid schema only materializes by replaying `priv/repo/structure.sql` on an EMPTY schema (the 2026-06-02 baseline mechanic). There is intentionally NO `ALTER ... TYPE uuid` migration anywhere. The design spec (`engram-workspace/docs/superpowers/specs/2026-06-10-pg18-uuidv7-rework-design.md`) prescribed the prod cutover as: "TF taint + recreate the RDS instance → New cluster comes up empty → baseline replay rebuilds schema."
+The PG18/uuidv7 rework is a **wreck-and-recreate baseline**, not a data migration. The uuid schema only materializes by replaying `priv/repo/structure.sql` on an EMPTY schema (the 2026-06-02 baseline mechanic). There is intentionally NO `ALTER ... TYPE uuid` migration anywhere. The design spec prescribed the prod cutover as: "TF taint + recreate the RDS instance → New cluster comes up empty → baseline replay rebuilds schema."
 
 What actually happened: engram-infra #476 bumped prod RDS PG17→PG18 **in-place** (`apply_immediately = true`, comment "the PG17 → PG18 upgrade is safe") instead of taint+recreate. The in-place engine upgrade PRESERVED all data, so:
 1. `terms_versions.id` stayed an integer column (row `id = 1`).
