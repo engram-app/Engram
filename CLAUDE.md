@@ -156,6 +156,7 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 |-----|------|
 | `docs/context/elixir-architecture-decisions.md` | Decision audit, library deps, infra setup checklist |
 | `docs/context/async-indexing-pipeline.md` | Oban queues, dedup/debounce, retry, re-indexing |
+| `docs/context/sync-protocol.md` | **Server-side sync** — the per-vault seq-ordered change-log, opaque cursor-pull (`/sync/changes`), manifest bootstrap, device-cursor watermarks (pull-carries-ack), idempotent bulk ops, and the realtime channel. Start here for sync work |
 | `docs/context/channel-event-contract.md` | Phoenix Channel events, conflict flow, plugin integration |
 | `docs/context/database-schema-rls.md` | Full SQL schema, RLS policies, Ecto enforcement |
 | `docs/context/chunking-retrieval-strategy.md` | Chunking priorities, rejected strategies |
