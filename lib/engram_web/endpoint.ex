@@ -8,13 +8,7 @@ defmodule EngramWeb.Endpoint do
 
   socket "/socket", EngramWeb.UserSocket,
     websocket: [
-      check_origin: {__MODULE__, :check_origin, []},
-      # Idle close timeout. Default is 60s; if no frame arrives within it the
-      # server closes the socket (`:local_closed`) and any broadcast sent
-      # during the client's reconnect gap is lost. The plugin heartbeats every
-      # 15s, so 90s tolerates several missed/late heartbeats under load before
-      # the server gives up — headroom on top of the client-side margin.
-      timeout: 90_000
+      check_origin: {__MODULE__, :check_origin, []}
     ],
     longpoll: false
 
