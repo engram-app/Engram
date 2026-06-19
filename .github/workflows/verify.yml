@@ -146,11 +146,15 @@ jobs:
             AUTH=(-H "Accept: application/vnd.github+json")
           fi
 
+          # --retry-all-errors so a transient connection reset (curl 35/52/56)
+          # — not just HTTP 5xx — is retried. A single blip here is fatal:
+          # the whole pipeline gates on fingerprint's output, so one reset
+          # cascades to unit-tests/e2e-*/prebuild-* (#576).
           resolve_sha() {
-            curl -fsS "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
+            curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
           }
           branch_exists() {
-            curl -fsS -o /dev/null "${AUTH[@]}" "${API}/branches/$1"
+            curl -fsS -o /dev/null --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/branches/$1"
           }
 
           if [ -n "$DISPATCH_REF" ]; then
@@ -916,7 +920,7 @@ jobs:
           API="https://api.github.com/repos/engram-app/Engram-obsidian"
           AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
-          PLUGIN_SHA=$(curl -fsS "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
+          PLUGIN_SHA=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
           # Determine overall E2E result from prior steps
           if [ "${{ job.status }}" = "success" ]; then
             STATE="success"
@@ -925,7 +929,7 @@ jobs:
             STATE="failure"
             DESC="E2E tests failed"
           fi
-          curl -fsS -X POST "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
+          curl -fsS -X POST --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
             -d "$(jq -nc --arg state "$STATE" --arg context "backend/e2e" --arg description "$DESC" --arg target_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                   '{state:$state, context:$context, description:$description, target_url:$target_url}')"
 
