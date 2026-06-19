@@ -1118,6 +1118,21 @@ jobs:
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
           mix test --warnings-as-errors --slowest 20
 
+      - name: OpenAPI spec drift gate
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+        run: |
+          # Regenerate the spec and fail if it differs from the committed
+          # openapi.json. Keeps the docs source-of-truth honest: any
+          # controller annotation change must be accompanied by a regen
+          # (mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json).
+          MIX_ENV=test mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true /tmp/openapi.generated.json
+          if ! diff -u openapi.json /tmp/openapi.generated.json; then
+            echo "::error::openapi.json is stale. Run: mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json"
+            exit 1
+          fi
+          echo "OpenAPI spec is up to date."
+
       - name: Lint DB schema (splinter)
         run: |
           # splinter (priv/repo/splinter.sql) references Supabase's API roles,
