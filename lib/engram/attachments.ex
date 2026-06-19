@@ -402,7 +402,9 @@ defmodule Engram.Attachments do
               # Insert the old-path tombstone (fresh uuid, path encrypted under
               # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
               # in the change feed so clients trash the old path.
-              Repo.insert!(tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now))
+              Repo.insert!(
+                tombstone_changeset(user, vault, dek, old_path, old_hmac, live, seq, now)
+              )
 
               %{
                 live

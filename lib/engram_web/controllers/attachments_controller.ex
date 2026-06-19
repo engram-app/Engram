@@ -123,7 +123,13 @@ defmodule EngramWeb.AttachmentsController do
       })
     else
       {:error, :feature_not_available} ->
-        EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "attachments_disabled",
+          :attachments_enabled,
+          false,
+          nil
+        )
 
       {:error, :conflict} ->
         conn |> put_status(409) |> json(%{error: "conflict"})
@@ -141,7 +147,13 @@ defmodule EngramWeb.AttachmentsController do
     # plan without :attachments_enabled gets a 402 (delete stays ungated below).
     case Billing.check_feature(user, :attachments_enabled) do
       {:error, :feature_not_available} ->
-        EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+        EngramWeb.LimitResponse.halt(
+          conn,
+          "attachments_disabled",
+          :attachments_enabled,
+          false,
+          nil
+        )
 
       :ok ->
         case Attachments.batch_move(user, vault, paths, target) do

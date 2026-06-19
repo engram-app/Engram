@@ -507,24 +507,40 @@ defmodule Engram.AttachmentsTest do
     end
 
     test "new upload keys storage by uuid, not by path", %{user: user, vault: vault} do
-      {:ok, att} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "img/cat.png", "content_base64" => Base.encode64("PNGDATA"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/cat.png",
+          "content_base64" => Base.encode64("PNGDATA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
       assert att.storage_key =~ ~r{/objects/#{att.id}$}
       refute att.storage_key =~ "img/cat.png"
     end
 
-    test "a new upload to a vacated path does NOT clobber a different blob", %{user: user, vault: vault} do
-      {:ok, a} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "p/x.png", "content_base64" => Base.encode64("AAA"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
+    test "a new upload to a vacated path does NOT clobber a different blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "p/x.png",
+          "content_base64" => Base.encode64("AAA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
       :ok = Attachments.delete_attachment(user, vault, "p/x.png")
-      {:ok, b} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "p/x.png", "content_base64" => Base.encode64("BBB"),
-        "mime_type" => "image/png", "mtime" => 2.0
-      })
+
+      {:ok, b} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "p/x.png",
+          "content_base64" => Base.encode64("BBB"),
+          "mime_type" => "image/png",
+          "mtime" => 2.0
+        })
+
       refute a.storage_key == b.storage_key
     end
   end
@@ -573,7 +589,8 @@ defmodule Engram.AttachmentsTest do
           "mtime" => 1.0
         })
 
-      assert {:error, :conflict} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+      assert {:error, :conflict} =
+               Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
     end
 
     test "no-op move (old == new) is idempotent, no tombstone", %{user: user, vault: vault} do
@@ -592,10 +609,13 @@ defmodule Engram.AttachmentsTest do
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
 
       for p <- ["a.png", "b.png"] do
-        {:ok, _} = Attachments.upsert_attachment(user, vault, %{
-          "path" => p, "content_base64" => Base.encode64(p),
-          "mime_type" => "image/png", "mtime" => 1.0
-        })
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => p,
+            "content_base64" => Base.encode64(p),
+            "mime_type" => "image/png",
+            "mtime" => 1.0
+          })
       end
 
       :ok
@@ -614,11 +634,17 @@ defmodule Engram.AttachmentsTest do
     end
 
     test "batch_move rolls back on conflict", %{user: user, vault: vault} do
-      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "img/a.png", "content_base64" => Base.encode64("X"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
-      assert {:error, {:conflict, "a.png"}} = Attachments.batch_move(user, vault, ["a.png"], "img")
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert {:error, {:conflict, "a.png"}} =
+               Attachments.batch_move(user, vault, ["a.png"], "img")
+
       # a.png still at root (rolled back)
       {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
     end
@@ -627,10 +653,13 @@ defmodule Engram.AttachmentsTest do
          %{user: user, vault: vault} do
       # Pre-occupy the target of the SECOND item so a.png moves first, then
       # b.png conflicts — proving the whole batch (incl. a.png) rolls back.
-      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "img/b.png", "content_base64" => Base.encode64("X"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/b.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
 
       assert {:error, {:conflict, "b.png"}} =
                Attachments.batch_move(user, vault, ["a.png", "b.png"], "img")
@@ -657,11 +686,18 @@ defmodule Engram.AttachmentsTest do
       :ok
     end
 
-    test "move broadcasts delete(old) + upsert(new) with kind=attachment", %{user: user, vault: vault} do
-      {:ok, att} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "old/a.png", "content_base64" => Base.encode64("D"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
+    test "move broadcasts delete(old) + upsert(new) with kind=attachment", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/a.png",
+          "content_base64" => Base.encode64("D"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
       topic = "sync:#{user.id}:#{vault.id}"
       EngramWeb.Endpoint.subscribe(topic)
 
@@ -671,19 +707,29 @@ defmodule Engram.AttachmentsTest do
         event: "note_changed",
         payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "old/a.png"}
       }
+
       assert_receive %Phoenix.Socket.Broadcast{
         event: "note_changed",
-        payload: %{"event_type" => "upsert", "kind" => "attachment", "path" => "new/b.png",
-                   "mime_type" => "image/png"}
+        payload: %{
+          "event_type" => "upsert",
+          "kind" => "attachment",
+          "path" => "new/b.png",
+          "mime_type" => "image/png"
+        }
       }
+
       _ = att
     end
 
     test "delete_attachment broadcasts delete with kind=attachment", %{user: user, vault: vault} do
-      {:ok, _} = Attachments.upsert_attachment(user, vault, %{
-        "path" => "gone.png", "content_base64" => Base.encode64("D"),
-        "mime_type" => "image/png", "mtime" => 1.0
-      })
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "gone.png",
+          "content_base64" => Base.encode64("D"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
       topic = "sync:#{user.id}:#{vault.id}"
       EngramWeb.Endpoint.subscribe(topic)
 

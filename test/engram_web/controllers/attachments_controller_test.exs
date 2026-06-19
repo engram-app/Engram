@@ -594,7 +594,12 @@ defmodule EngramWeb.AttachmentsControllerTest do
           "mtime" => 1.0
         })
 
-      conn = post(conn, "/api/attachments/rename", %{"old_path" => "old/a.png", "new_path" => "new/b.png"})
+      conn =
+        post(conn, "/api/attachments/rename", %{
+          "old_path" => "old/a.png",
+          "new_path" => "new/b.png"
+        })
+
       body = json_response(conn, 200)
       assert body["renamed"] == true
       assert body["old_path"] == "old/a.png"
@@ -615,12 +620,16 @@ defmodule EngramWeb.AttachmentsControllerTest do
           })
       end
 
-      conn = post(conn, "/api/attachments/rename", %{"old_path" => "a.png", "new_path" => "b.png"})
+      conn =
+        post(conn, "/api/attachments/rename", %{"old_path" => "a.png", "new_path" => "b.png"})
+
       assert json_response(conn, 409)["error"] == "conflict"
     end
 
     test "not_found → 404", %{conn: conn} do
-      conn = post(conn, "/api/attachments/rename", %{"old_path" => "ghost.png", "new_path" => "x.png"})
+      conn =
+        post(conn, "/api/attachments/rename", %{"old_path" => "ghost.png", "new_path" => "x.png"})
+
       assert json_response(conn, 404)["error"] == "not_found"
     end
   end
