@@ -11,7 +11,8 @@ defmodule Engram.StorageTest do
     end
 
     test "two different uuids never collide even for the same future path" do
-      uid = "u"; vid = "v"
+      uid = "u"
+      vid = "v"
       refute Storage.object_key(uid, vid, "a") == Storage.object_key(uid, vid, "b")
     end
   end
