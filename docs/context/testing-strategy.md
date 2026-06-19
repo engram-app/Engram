@@ -36,7 +36,7 @@ Key advantage: `async: true` runs tests in parallel with per-test DB transaction
 
 If you spin up a fresh Postgres just to run `mix test` (e.g. an isolated audit/CI-repro container), two things bite in order:
 
-1. **Postgres must be 18+.** The baseline `structure.sql` uses `uuidv7()` (PK default) and `SET transaction_timeout` — both PG17-and-earlier fail (`function uuidv7() does not exist` / `unrecognized configuration parameter`). Use `postgres:18-alpine`. This is the test-side mirror of the prod cutover in [[pg18-uuidv7-prod-crashloop-2026-06-11]].
+1. **Postgres must be 18+.** The baseline `structure.sql` uses `uuidv7()` (PK default) and `SET transaction_timeout` — both PG17-and-earlier fail (`function uuidv7() does not exist` / `unrecognized configuration parameter`). Use `postgres:18.4` (the version CI and the compose files pin). This is the test-side mirror of the prod cutover in [[pg18-uuidv7-prod-crashloop-2026-06-11]].
 2. **The `engram_app` role must exist before migrate.** The baseline dump ends with `GRANT ... TO engram_app`; with no role you get `role "engram_app" does not exist`. `mix engram.prepare_database` creates it (+ default privileges).
 
 The `test` mix alias already chains this correctly:
@@ -53,14 +53,14 @@ See `docs/context/database-schema-rls.md` for the RLS spike test example.
 
 ## CI Pipeline
 
-All tests run in GitHub Actions (`.github/workflows/ci.yml`):
+All tests run in GitHub Actions (`.github/workflows/verify.yml`):
 
 1. **Unit tests** — `mix test` + `python3 -m pytest e2e/unit_tests/ -v` (E2E helpers)
 2. **E2E tests** — starts CI stack + headless Obsidian, runs full sync scenarios
 
-**Code quality checks:** `mix format --check-formatted` and `mix credo`. Dialyzer optional (slow, add later).
+**Code quality checks:** `mix format --check-formatted` and `mix credo --strict` (both fatal in the `lint` job). Dialyzer also runs in CI. See CLAUDE.md "Quality Tooling" for the full fatal-lint set.
 
 ## References
 - ExUnit tests: `test/`
 - E2E tests: `e2e/tests/`
-- CI config: `.github/workflows/ci.yml`
+- CI config: `.github/workflows/verify.yml`

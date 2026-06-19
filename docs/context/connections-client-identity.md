@@ -20,7 +20,7 @@ Identity now resolves via `LogoAllowlist.resolve(software_id, redirect_uris)` in
 1. Try the `software_id` allowlist first (preserves our own `engram-vault-sync` plugin).
 2. Fall back to matching the **redirect_uri host** against a vendor-host allowlist (`claude.ai` → Claude).
 
-A `slug` field now flows: `Connections.oauth_rows/1` → `ConnectionsController.serialize/1` → `/api/connections` JSON → React checklist (`connectedSlugs.has(slug)` auto-checks the row).
+A `slug` field now flows: `Connections.list_for_user/1` → `ConnectionsController.serialize/1` → `/api/connections` JSON → React checklist (`connectedSlugs.has(slug)` auto-checks the row).
 
 ## Trust model (security-relevant — do not weaken)
 

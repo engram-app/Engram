@@ -20,6 +20,15 @@ const FOLDER_ACTIONS: readonly Action[] = [
   { id: 'delete', label: 'Delete', destructive: true },
 ]
 
-export function actionsFor({ kind }: { kind: 'file' | 'folder' }): readonly Action[] {
-  return kind === 'file' ? FILE_ACTIONS : FOLDER_ACTIONS
+// Attachments are binary blobs — no duplicate/copy-wikilink.
+const ATTACHMENT_ACTIONS: readonly Action[] = [
+  { id: 'rename', label: 'Rename' },
+  { id: 'move', label: 'Move to…' },
+  { id: 'delete', label: 'Delete', destructive: true },
+]
+
+export function actionsFor({ kind }: { kind: 'file' | 'folder' | 'attachment' }): readonly Action[] {
+  if (kind === 'folder') return FOLDER_ACTIONS
+  if (kind === 'attachment') return ATTACHMENT_ACTIONS
+  return FILE_ACTIONS
 }

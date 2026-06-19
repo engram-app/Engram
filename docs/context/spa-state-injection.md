@@ -48,12 +48,13 @@ both modes:
 
 **Frontend (`frontend/src/config.ts`):**
 
-1. `loadConfig()` reads `window.__ENGRAM_CONFIG__` at module init time.
+1. `loadConfig()` (async) reads `window.__ENGRAM_CONFIG__` at module init time.
 2. Validates `authProvider`. Returns a typed `EngramConfig`.
-3. If the injected config is missing (Vite dev), falls back to
-   `import.meta.env.VITE_*` variables.
-4. Exports `export const config = loadConfig()` — a single eager value,
-   not a hook. Other modules import and use synchronously.
+3. If the injected config is missing (Vite dev), falls back to fetching
+   `/config.json`, then to defaults.
+4. Exports `export const configPromise = loadConfig()` — a single eager
+   `Promise<EngramConfig>` resolved once at module init. Consumers await it
+   (e.g. before bootstrapping the React root), not a hook.
 
 **Per-consumer pattern (e.g., `frontend/src/auth/use-bootstrap.ts`):**
 

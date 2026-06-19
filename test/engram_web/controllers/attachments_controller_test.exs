@@ -6,6 +6,8 @@ defmodule EngramWeb.AttachmentsControllerTest do
   # a POST/GET pair straddles a flip to MockStorage or Storage.Database.
   use EngramWeb.ConnCase, async: false
 
+  alias Engram.Attachments
+
   @sample_content "Hello, binary world!"
   @sample_base64 Base.encode64("Hello, binary world!")
   @updated_content "Updated content!"
@@ -18,11 +20,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
     # upload, so seed an active Pro subscription before any upload runs
     # through the controller gate.
     insert(:subscription, user: user, tier: "pro", status: "active")
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   # ---------------------------------------------------------------------------
@@ -575,6 +577,121 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       resp = conn |> get("/api/attachments/q.png") |> json_response(200)
       assert resp["content_base64"] == Base.encode64("BYTES")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # POST /attachments/rename — Rename / Move single attachment
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments/rename" do
+    test "moves and returns new path", %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/a.png",
+          "content_base64" => Base.encode64("D"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      conn =
+        post(conn, "/api/attachments/rename", %{
+          "old_path" => "old/a.png",
+          "new_path" => "new/b.png"
+        })
+
+      body = json_response(conn, 200)
+      assert body["renamed"] == true
+      assert body["old_path"] == "old/a.png"
+      assert body["new_path"] == "new/b.png"
+      # Response carries the renamed attachment's metadata (parity with notes).
+      assert body["attachment"]["path"] == "new/b.png"
+      assert body["attachment"]["mime_type"] == "image/png"
+    end
+
+    test "conflict → 409", %{conn: conn, user: user, vault: vault} do
+      for p <- ["a.png", "b.png"] do
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => p,
+            "content_base64" => Base.encode64(p),
+            "mime_type" => "image/png",
+            "mtime" => 1.0
+          })
+      end
+
+      conn =
+        post(conn, "/api/attachments/rename", %{"old_path" => "a.png", "new_path" => "b.png"})
+
+      assert json_response(conn, 409)["error"] == "conflict"
+    end
+
+    test "not_found → 404", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments/rename", %{"old_path" => "ghost.png", "new_path" => "x.png"})
+
+      assert json_response(conn, 404)["error"] == "not_found"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # POST /attachments/batch-move + batch-delete — Batch ops (IdempotencyKey)
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments/batch-move" do
+    test "requires idempotency key → 400", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments/batch-move", %{
+          "paths" => ["a.png"],
+          "target_folder" => "img"
+        })
+
+      assert json_response(conn, 400)["error"] == "missing_idempotency_key"
+    end
+
+    test "moves attachments into target folder", %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "a.png",
+          "content_base64" => Base.encode64("A"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      conn =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post("/api/attachments/batch-move", %{"paths" => ["a.png"], "target_folder" => "img"})
+
+      body = json_response(conn, 200)
+      assert body["moved"] == 1
+    end
+  end
+
+  describe "POST /attachments/batch-delete" do
+    test "requires idempotency key → 400", %{conn: conn} do
+      conn = post(conn, "/api/attachments/batch-delete", %{"paths" => ["a.png"]})
+      assert json_response(conn, 400)["error"] == "missing_idempotency_key"
+    end
+
+    test "deletes attachments", %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "b.png",
+          "content_base64" => Base.encode64("B"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      conn =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post("/api/attachments/batch-delete", %{"paths" => ["b.png"]})
+
+      body = json_response(conn, 200)
+      assert body["deleted"] == 1
+      # The attachment is actually gone, not just counted.
+      assert {:ok, nil} = Attachments.get_attachment(user, vault, "b.png")
     end
   end
 

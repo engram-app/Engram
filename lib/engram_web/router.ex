@@ -333,6 +333,8 @@ defmodule EngramWeb.Router do
       post "/notes/batch-move", NotesController, :batch_move
       post "/folders/batch-delete", FoldersController, :batch_delete
       post "/folders/batch-move", FoldersController, :batch_move
+      post "/attachments/batch-move", AttachmentsController, :batch_move
+      post "/attachments/batch-delete", AttachmentsController, :batch_delete
     end
 
     # Metadata
@@ -356,6 +358,8 @@ defmodule EngramWeb.Router do
     post "/attachments", AttachmentsController, :upload
     get "/attachments", AttachmentsController, :index
     get "/attachments/changes", AttachmentsController, :changes
+    # rename must come before *path wildcard so it is not swallowed
+    post "/attachments/rename", AttachmentsController, :rename
     get "/attachments/*path", AttachmentsController, :show
     delete "/attachments/*path", AttachmentsController, :delete
 

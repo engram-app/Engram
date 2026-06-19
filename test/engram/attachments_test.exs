@@ -479,7 +479,7 @@ defmodule Engram.AttachmentsTest do
       vault = insert(:vault, user: user)
       path = "missing.bin"
 
-      {:ok, _att} =
+      {:ok, att} =
         Attachments.upsert_attachment(user, vault, %{
           "path" => path,
           "content_base64" => Base.encode64("orphan me"),
@@ -487,8 +487,8 @@ defmodule Engram.AttachmentsTest do
         })
 
       # Delete the underlying object directly to simulate storage corruption
-      # while leaving the DB row live.
-      InMemory.delete("#{user.id}/#{vault.id}/#{path}")
+      # while leaving the DB row live. Blobs are UUID-keyed since Task 2.
+      InMemory.delete(att.storage_key)
 
       log =
         capture_log(fn ->
@@ -497,6 +497,257 @@ defmodule Engram.AttachmentsTest do
         end)
 
       assert log =~ "Attachment blob missing"
+    end
+  end
+
+  describe "uuid-keyed storage (Task 2)" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "new upload keys storage by uuid, not by path", %{user: user, vault: vault} do
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/cat.png",
+          "content_base64" => Base.encode64("PNGDATA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert att.storage_key =~ ~r{/objects/#{att.id}$}
+      refute att.storage_key =~ "img/cat.png"
+    end
+
+    test "a new upload to a vacated path does NOT clobber a different blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "p/x.png",
+          "content_base64" => Base.encode64("AAA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      :ok = Attachments.delete_attachment(user, vault, "p/x.png")
+
+      {:ok, b} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "p/x.png",
+          "content_base64" => Base.encode64("BBB"),
+          "mime_type" => "image/png",
+          "mtime" => 2.0
+        })
+
+      refute a.storage_key == b.storage_key
+    end
+  end
+
+  describe "move_attachment/4" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/a.png",
+          "content_base64" => Base.encode64("DATA"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      %{att: att}
+    end
+
+    test "repoints the live row, blob/storage_key untouched", %{
+      user: user,
+      vault: vault,
+      att: att
+    } do
+      {:ok, moved} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+      assert moved.id == att.id
+      assert moved.path == "new/b.png"
+      assert moved.storage_key == att.storage_key
+      {:ok, fetched} = Attachments.get_attachment(user, vault, "new/b.png")
+      assert fetched.content == "DATA"
+    end
+
+    test "emits a soft-deleted tombstone at the old path", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+      {:ok, %{changes: changes}} = Attachments.list_changes_by_seq(user, vault, 0)
+      assert Enum.any?(changes, &(&1.path == "old/a.png" and &1.deleted))
+      assert Enum.any?(changes, &(&1.path == "new/b.png" and not &1.deleted))
+    end
+
+    test "conflict on occupied target → :conflict", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "new/b.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert {:error, :conflict} =
+               Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+    end
+
+    test "no-op move (old == new) is idempotent, no tombstone", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "old/a.png")
+      {:ok, %{changes: changes}} = Attachments.list_changes_by_seq(user, vault, 0)
+      refute Enum.any?(changes, & &1.deleted)
+    end
+
+    test "missing source → :not_found", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Attachments.move_attachment(user, vault, "nope.png", "x.png")
+    end
+  end
+
+  describe "batch_move/4 + batch_delete/3" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+
+      for p <- ["a.png", "b.png"] do
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => p,
+            "content_base64" => Base.encode64(p),
+            "mime_type" => "image/png",
+            "mtime" => 1.0
+          })
+      end
+
+      :ok
+    end
+
+    test "batch_move relocates each into the target folder", %{user: user, vault: vault} do
+      {:ok, %{moved: 2}} = Attachments.batch_move(user, vault, ["a.png", "b.png"], "img")
+      {:ok, _} = Attachments.get_attachment(user, vault, "img/a.png")
+      {:ok, _} = Attachments.get_attachment(user, vault, "img/b.png")
+    end
+
+    test "batch_move to root keeps basenames", %{user: user, vault: vault} do
+      {:ok, _} = Attachments.batch_move(user, vault, ["a.png"], "img")
+      {:ok, %{moved: 1}} = Attachments.batch_move(user, vault, ["img/a.png"], "")
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+    end
+
+    test "batch_move rolls back on conflict", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert {:error, {:conflict, "a.png"}} =
+               Attachments.batch_move(user, vault, ["a.png"], "img")
+
+      # a.png still at root (rolled back)
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+    end
+
+    test "batch_move reverts an already-moved item when a later item conflicts",
+         %{user: user, vault: vault} do
+      # Pre-occupy the target of the SECOND item so a.png moves first, then
+      # b.png conflicts — proving the whole batch (incl. a.png) rolls back.
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/b.png",
+          "content_base64" => Base.encode64("X"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      assert {:error, {:conflict, "b.png"}} =
+               Attachments.batch_move(user, vault, ["a.png", "b.png"], "img")
+
+      # a.png's earlier move was rolled back: still at root, NOT at img/a.png.
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+      {:ok, nil} = Attachments.get_attachment(user, vault, "img/a.png")
+    end
+
+    test "batch_delete soft-deletes each", %{user: user, vault: vault} do
+      {:ok, %{deleted: 2}} = Attachments.batch_delete(user, vault, ["a.png", "b.png"])
+      {:ok, nil} = Attachments.get_attachment(user, vault, "a.png")
+      {:ok, nil} = Attachments.get_attachment(user, vault, "b.png")
+    end
+
+    test "batch_delete counts only paths that held a live row", %{user: user, vault: vault} do
+      {:ok, %{deleted: 1}} = Attachments.batch_delete(user, vault, ["a.png", "absent.png"])
+    end
+  end
+
+  describe "note_changed broadcast (kind=attachment)" do
+    setup do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      :ok
+    end
+
+    test "move broadcasts delete(old) + upsert(new) with kind=attachment", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/a.png",
+          "content_base64" => Base.encode64("D"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/a.png", "new/b.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "old/a.png"}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{
+          "event_type" => "upsert",
+          "kind" => "attachment",
+          "path" => "new/b.png",
+          "mime_type" => "image/png"
+        }
+      }
+
+      _ = att
+    end
+
+    test "delete_attachment broadcasts delete with kind=attachment", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "gone.png",
+          "content_base64" => Base.encode64("D"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      :ok = Attachments.delete_attachment(user, vault, "gone.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "gone.png"}
+      }
+    end
+
+    test "deleting an absent path broadcasts nothing", %{user: user, vault: vault} do
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      :ok = Attachments.delete_attachment(user, vault, "never-existed.png")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
     end
   end
 end

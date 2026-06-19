@@ -35,15 +35,15 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Qdrant Client | `lib/engram/vector/qdrant.ex` | Thin HTTP wrapper (~150 LOC, Req) |
 | Embedders | `lib/engram/embedders/` | Voyage AI (SaaS) + Ollama (self-hosted) |
 | Search | `lib/engram/search.ex` | Vector search, optional reranking |
-| MCP Server | `lib/engram/mcp/` | MCP tool definitions via Hermes MCP |
+| MCP Server | `lib/engram/mcp/` | Hand-rolled MCP server + tool definitions (no external MCP dep) |
 | Attachments | `lib/engram/attachments.ex` | AWS S3 (ExAws) or local |
 | Auth | `lib/engram/auth.ex` | API keys, internal JWT (Joken), RLS context |
 | Clerk Auth | `lib/engram/auth/clerk*.ex` | Clerk JWT verification (SPA + WebSocket primary path) |
-| Onboarding | `lib/engram_web/plugs/require_onboarding.ex` | TOS + active-sub gate on vault pipeline (`router.ex:189`) |
+| Onboarding | `lib/engram_web/plugs/require_onboarding.ex` | TOS + active-sub gate on vault pipeline (`router.ex:307`) |
 | Billing | `lib/engram/billing/`, `lib/engram/paddle/` | Paddle webhook receiver, billing config endpoint, subscriptions |
 | Crypto | `lib/engram/crypto/`, `lib/engram/encryption/` | Per-user DEKs, AAD bind, master-key rotation, boot canary |
 | MCP OAuth | `lib/engram_web/oauth/` | OAuth 2.1 + Dynamic Client Registration for Claude Desktop Connectors |
-| Oban Workers | `lib/engram/workers/` | EmbedNote, ReindexAll, PurgeSoftDeletes, RetryDiscarded, OrphanChunkScan, RotateUserDek, MasterRotation, AadRebind, BackfillContentHashHmac, ReconcileEmbeddings |
+| Oban Workers | `lib/engram/workers/`, `lib/engram/billing/workers/` | EmbedNote, ReconcileEmbeddings, ReindexKeyword, DeleteNoteIndex, RotateUserDek, RotateUserMasterKey, BackfillContentHashHmac, AccountExport, InactivityCleanup, MigrateUserProvider, OrphanSweep, CleanupVault, VaultDeletedEmail, CleanupDeviceAuthWorker, OriginAbuseSweep, PaddleReconcile, OverrideExpirySweep |
 
 ### Key Patterns
 
@@ -71,10 +71,11 @@ SEARCH:            MCP/REST → Voyage embed query → Qdrant similarity → top
 **Worktrees**: `git worktree add` fires `.githooks/post-checkout`, which hardlinks `deps/`, `_build/`, and `frontend/node_modules/` from the canonical checkout into the new tree. First-compile time drops from ~3min to ~10sec because mix's incremental compiler skips unchanged files. No setup needed — just `git worktree add <path> -b <branch> origin/main` and start working.
 
 ```bash
-# Docker Compose (Elixir + PostgreSQL + Qdrant)
-docker compose -f docker-compose.elixir.yml up --build
+# Docker Compose (Elixir + PostgreSQL + Qdrant + Ollama + MinIO)
+docker compose up --build
+# docker-compose.elixir.yml is a lighter variant (Elixir + PostgreSQL + MinIO, no Qdrant/Ollama)
 
-# Outside Docker (requires Elixir 1.17+, PostgreSQL, Qdrant)
+# Outside Docker (requires Elixir 1.15+, PostgreSQL, Qdrant)
 mix deps.get
 mix ecto.setup          # Create DB + run migrations + seeds
 mix phx.server          # http://localhost:4000
@@ -83,7 +84,7 @@ mix phx.server          # http://localhost:4000
 iex -S mix phx.server
 
 # Push a test note
-curl -X POST http://localhost:4000/notes \
+curl -X POST http://localhost:4000/api/notes \
   -H "Authorization: Bearer engram_..." \
   -H "Content-Type: application/json" \
   -d '{"path": "Test/Hello.md", "content": "# Hello\nTest note", "mtime": 1709234567.0}'
@@ -118,7 +119,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 
 **Pre-push hook** (`.githooks/pre-push`, activated via `git config core.hooksPath .githooks`): runs all four informationally in Phase 1. Promoted to fatal phase by phase. Bypass with `git push --no-verify` for WIP / emergency. Dialyzer skipped from pre-push (too slow); CI handles it.
 
-**CI:** `lint` job in `.github/workflows/ci.yml`. PLT cached via `actions/cache@v4` keyed on `mix.lock` hash. Required check on `main` once Phase 2 lands.
+**CI:** `lint` job in `.github/workflows/verify.yml`. PLT cached via `actions/cache@v4` keyed on `mix.lock` hash. Required check on `main` once Phase 2 lands.
 
 **Ratchet semantics** (Phase 3 onward): each phase fixes findings to zero, then promotes the CI step to fatal. Numbers strictly decrease — new PRs that introduce findings fail.
 
@@ -132,7 +133,7 @@ mix dialyzer                              # slow first run (~5-10 min PLT build)
 | 4: Search | Vector search, folder/tag filter | shipped |
 | 5: Real-time | Phoenix Channel sync, Presence | shipped |
 | 6: Attachments | AWS S3 via ExAws | shipped |
-| 7: MCP | Hermes MCP server + OAuth 2.1 + DCR | shipped |
+| 7: MCP | Hand-rolled MCP server + OAuth 2.1 + DCR | shipped |
 | 8: Web UI | React SPA (Vite + shadcn/ui), Obsidian-style viewer + CodeMirror 6 editor | shipped |
 | 9: Deploy | AWS ECS Fargate for SaaS, OIDC pull-based deploy to self-host, isolated runner VM pool | shipped |
 | 10: Billing | Paddle (Merchant-of-Record), subscriptions, RequireOnboarding gate | shipped |
@@ -171,7 +172,6 @@ Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/padd
 | `docs/context/billing-tier-frontend-contract.md` | `tier` values (default `free`, not `none`); consumers must handle every tier + gate on `!active` |
 | `docs/context/oidc-deploy-cutover.md` | OIDC pull-based deploy daemon, legacy SSH-as-root retirement |
 | `docs/context/aws-kms-provider-integration.md` | Tier-4 / Phase F roadmap for KMS provider routing |
-| `docs/context/followup-show-attachments-in-tree.md` | One-feature follow-up tracker |
 | `docs/context/local-supabase-audit.md` | Throwaway local Supabase stack to run Studio Security/Performance Advisors against the Engram schema (AVX2 CLI build, encrypted-seed, RLS role grant, boot-canary gotchas) |
 | `docs/context/spa-state-injection.md` | How Phoenix ships server-known state into `window.__ENGRAM_CONFIG__` so the React SPA can render first-paint-correct UI without a fetch round-trip — the recipe for adding new injected fields, dev vs prod behavior, gotchas (NOT real SSR; see #353) |
 | `docs/context/folder-tree-optimistic-rebuild.md` | How the SPA folder-tree (headless-tree) reads notes from `folder-notes-by-id` + `folderNotes` caches and what triggers `rebuildTree()` — `treeStructureKey` (id:count:parent_id) + a QueryCache subscription; the 2026-06-13 optimistic move/delete/duplicate fixes + remaining gaps |

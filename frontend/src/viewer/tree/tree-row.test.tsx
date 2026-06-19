@@ -178,7 +178,7 @@ describe('TreeRow', () => {
     expect(onContextMenu).not.toHaveBeenCalled()
   })
 
-  it('does not invoke onContextMenu on an attachment row (display-only in Phase 1)', () => {
+  it('invokes onContextMenu with item id + clientX/Y on right-click of an attachment row', () => {
     const onContextMenu = vi.fn()
     const instance = mockInstance({ data: attachmentItem })
     render(
@@ -187,7 +187,7 @@ describe('TreeRow', () => {
       </MemoryRouter>,
     )
     fireEvent.contextMenu(screen.getByRole('link'), { clientX: 42, clientY: 99 })
-    expect(onContextMenu).not.toHaveBeenCalled()
+    expect(onContextMenu).toHaveBeenCalledWith('a:img/a.png', 42, 99)
   })
 
   it('invokes onContextMenu with item id + clientX/Y on right-click of a note row', () => {

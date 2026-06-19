@@ -35,6 +35,7 @@ WebSocket connect: wss://api.engram.page/socket/websocket?token=<api_key|jwt>
 | `note_changed` (delete) | `{event_type: "delete", path, vault_id}` | After a delete/rename-away | Tombstone notification |
 | `notes.batch` (upsert digest) | `{op: "upsert", vault_id, notes: [{event_type, id, path, title, folder, tags, mtime, version, updated_at, content_hash}]}` | ONE per `POST /api/notes/batch` call (replaces N `note_changed` events) | Bulk-push digest — metadata-only, never carries content |
 | `notes.batch` (delete/move) | `{op: "delete"\|"move", ids, target_folder_id?}` | After batch delete / batch move | Batch-op notification |
+| `vault_created` | `{vault_id, ...}` (topic `user:{user_id}`) | A vault is created (`Engram.Vaults.broadcast_vault_created/2`) | FTUX listener — onboarding waits for this alongside `vault_populated` |
 | `vault_populated` | `{vault_id}` (topic `user:{user_id}`) | First note lands in an empty vault | FTUX listener |
 | `presence_state` / `presence_diff` | Phoenix Presence shapes | Join / device change | Connected-device tracking |
 

@@ -6,7 +6,7 @@ When to read this: shipping code to `app.engram.page`, rolling back a bad deploy
 
 Two-stage pipeline. Image build lives in this repo; image-tag selection lives in [engram-infra](https://github.com/engram-app/engram-infra). **The live image tag is reconcilable from git** — `var.engram_image_tag` in `engram-infra/main/envs/prod/variables.tf` is the source of truth.
 
-1. **`build-ecr.yml`** (this repo) — runs on every push to `main`. Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
+1. **`build-and-publish-image` job in `verify.yml`** (this repo) — runs on every push to `main` (the former standalone `build-ecr.yml`, since folded into `verify.yml`). Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
 
 2. **`deploy-prod.yml`** (this repo) — runs only when a `release-v*` git tag is pushed. Opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, enables auto-merge.
 
@@ -82,7 +82,7 @@ Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsh
 
 - **`deploy-prod.yml` step "Rewrite engram_image_tag default" fails** — regex regression. Check `main/envs/prod/variables.tf` shape in engram-infra; the workflow expects exactly one `variable "engram_image_tag"` block with a `default = "..."` line.
 - **Bot PR opens but doesn't auto-merge** — engram-infra CI failing (typically tflint or terraform plan). Open the PR, read the failing check, fix root cause in engram-infra. The bot will reuse the `bot/bump-engram-prod` branch on the next release tag.
-- **`terraform apply` on engram-infra fails on `ResourceNotFoundException`** — `sha-<7>` image isn't in ECR. `build-ecr.yml` for that commit hasn't finished (or never ran). Confirm with `aws ecr describe-images`; rerun build-ecr if needed.
+- **`terraform apply` on engram-infra fails on `ResourceNotFoundException`** — `sha-<7>` image isn't in ECR. The `build-and-publish-image` job in `verify.yml` for that commit hasn't finished (or never ran). Confirm with `aws ecr describe-images`; rerun the `verify.yml` run (or its `build-and-publish-image` job) if needed.
 - **Service crash-loops after deploy** — task running but health checks fail. Check CloudWatch Logs `/ecs/engram-saas-prod`, then forward-roll to the last-known-good `sha-<7>` via a new release tag.
 - **App token mint step 403s** — `engram-infra-tf` App permissions changed. Required: `contents: read & write` + `pull-requests: read & write` on engram-infra. Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf.
 

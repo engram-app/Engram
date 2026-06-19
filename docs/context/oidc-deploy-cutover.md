@@ -1,5 +1,18 @@
 # OIDC deploy cutover
 
+> **STAGING-ONLY / LARGELY SUPERSEDED — historical record.**
+> This cutover applied to the **FastRaid (now staging)** deploy path, and
+> only to the daemon's `/deploy` (image-roll) endpoint. That endpoint is now
+> a **legacy fallback**. The live staging deploy path is the daemon's
+> **`/tf-apply`** endpoint driven by a Terraform-tfvars var-bump PR
+> (`bump-infra-tfvars` in `verify.yml`) — the same GitOps "image tag in git →
+> engram-infra reconciles" model as prod. **PROD does not use this daemon at
+> all**: prod ships via a `release-v*` tag → engram-infra Terraform apply on
+> AWS ECS (see `docs/context/deploy-prod.md`). The OIDC token model, JWKS
+> validation, cert/firewall setup, and SSH-key decommission below are still
+> accurate for the staging daemon; treat the `/deploy`-rolls-the-image flow as
+> the fallback, not the primary path.
+
 Replaced the SSH-as-root deploy with a pull-based daemon
 (`engram-deployer`) running on FastRaid. Runner mints a per-job OIDC
 token, daemon validates against GitHub's JWKS and pins

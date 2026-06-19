@@ -18,7 +18,7 @@ TimeoutError: Vault not registered after 15s on CDP port <N>
 | `api.registerVault` status | Meaning | Where to look |
 |---|---|---|
 | **401 Unauthorized** | API key was invalidated mid-suite. Backend `api_keys` table cascades from `users`, so a deleted Clerk user kills its API key. | `e2e/conftest.py:auth_provider`. The nuclear `cleanup_all_e2e_clerk_users()` deletes *every* user with email prefix `e2e-*` without run-id namespacing → two races: worker-vs-worker within one run, AND run-vs-run across concurrent CI. Tracking: [issue #160]. **Do not "fix" this by moving the sweep into a CI pre-step** — that just trades one race for a wider one; see issue for real fix options (per-run namespace, scheduled orphan reaper). |
-| **402 Payment Required** | User hit `max_vaults` (default 1, see `lib/engram/billing.ex:16`). Something created a second vault for this user. | Check `api.listVaults` output — if `length > 1`, find the test that called `api.create_vault` or `api.register_vault` with a *different* `client_id`. Same `client_id` is idempotent and won't trip the limit. |
+| **402 Payment Required** | User hit `vaults_cap` (default 1, see `lib/engram/billing/limit_keys.ex:17`). Something created a second vault for this user. | Check `api.listVaults` output — if `length > 1`, find the test that called `api.create_vault` or `api.register_vault` with a *different* `client_id`. Same `client_id` is idempotent and won't trip the limit. |
 | **5xx Server Error** | Backend hiccup. Read the response body in pytest log; check `docker logs engram --tail 100` on the CI runner. | Usually transient; reruns mask it. If consistent, it's a real backend bug. |
 | Network error (no status) | Backend unreachable. | Compose stack didn't fully boot — see the `wait_for_engram_ready` step in `docker-compose.ci.yml`. |
 | `find_by_client_id` returns nil + `register_vault` returns OK | Plugin's `clientId` doesn't match what conftest's `api_sync.register_vault` used. | `e2e/helpers/obsidian.py:135-136` writes `clientId` into `data.json`; verify it matches `sync_client_id` from `conftest.py`. |
@@ -43,7 +43,7 @@ Only one production code path nulls it: `channel.onVaultDeleted` at `src/main.ts
 - `src/main.ts:677-685` — `onVaultDeleted` handler (only place that nulls `vaultId`).
 - `src/api.ts:132-138` — raw `EngramApi.registerVault` that throws with `.status`.
 - `lib/engram/vaults.ex:70-113` — backend `register_vault` (idempotent by `client_id`).
-- `lib/engram/billing.ex:16` — `max_vaults` default.
+- `lib/engram/billing/limit_keys.ex:17` — `vaults_cap` default.
 
 ## Test harness references
 

@@ -19,6 +19,9 @@ import {
   useRenameNote,
   useRenameFolder,
   useDuplicateNote,
+  useRenameAttachment,
+  useBatchMoveAttachments,
+  useBatchDeleteAttachments,
 } from '../api/queries'
 import { isSyntheticFolderId, synthesizeFolders } from './tree/synthesize-folders'
 import { useActiveVaultId } from '../api/active-vault'
@@ -82,6 +85,9 @@ export default function FolderTree() {
   const renameNote = useRenameNote()
   const renameFolder = useRenameFolder()
   const duplicateNote = useDuplicateNote()
+  const renameAttachment = useRenameAttachment()
+  const batchMoveAttachments = useBatchMoveAttachments()
+  const batchDeleteAttachments = useBatchDeleteAttachments()
 
   // Rename handler — TreeRow already wires HT's renaming state. HT calls
   // back with the new leaf-name; we rebuild the new full path from the
@@ -106,6 +112,11 @@ export default function FolderTree() {
       parts[parts.length - 1] = newName
       const new_path = parts.join('/')
       renameFolder.mutateAsync({ old_path: folder.name, new_path }).catch(() => toast.error('Rename failed'))
+    } else if (p.kind === 'attachment') {
+      const parts = p.path.split('/')
+      parts[parts.length - 1] = newName
+      const new_path = parts.join('/')
+      renameAttachment.mutateAsync({ old_path: p.path, new_path }).catch(() => toast.error('Rename failed'))
     }
   }
 
@@ -123,6 +134,9 @@ export default function FolderTree() {
     const folderIds = parsed
       .filter((p) => p.kind === 'folder' && !isSyntheticFolderId((p as { id: string }).id))
       .map((p) => (p as { id: string }).id)
+    const attachmentPaths = parsed
+      .filter((p) => p.kind === 'attachment')
+      .map((p) => (p as { path: string }).path)
     // 'root' is the backend sentinel for the vault root; a folder target uses
     // its marker id. Note→root has no optimistic patch (root notes live under a
     // different cache key than the by-id folder lists), so a moved note briefly
@@ -131,6 +145,11 @@ export default function FolderTree() {
     const dest = target.kind === 'root' ? 'root' : target.id
     if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: dest })
     if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
+    if (attachmentPaths.length) {
+      // Attachment batch-move takes a folder name string, not an id.
+      const destFolder = target.kind === 'root' ? '' : (folders?.find((f) => f.id === target.id)?.name ?? '')
+      batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder })
+    }
   }
 
   // The loader fires this on cache-miss when a folder is expanded. Shares the
@@ -242,6 +261,9 @@ export default function FolderTree() {
         ? [{ kind: 'folder', path: folder.name, childCount: direct + descendants }]
         : [{ kind: 'folder', path: folder.name }]
     }
+    if (p.kind === 'attachment') {
+      return [{ kind: 'file', path: p.path }]
+    }
     return []
   }
 
@@ -255,9 +277,11 @@ export default function FolderTree() {
     return rootNotes.find((n) => n.id === id)
   }
 
-  function kindOf(itemId: string): 'file' | 'folder' {
+  function kindOf(itemId: string): 'file' | 'folder' | 'attachment' {
     const p = parseItemId(itemId)
-    return p.kind === 'folder' ? 'folder' : 'file'
+    if (p.kind === 'folder') return 'folder'
+    if (p.kind === 'attachment') return 'attachment'
+    return 'file'
   }
 
   function titleForItem(itemId: string): string {
@@ -269,6 +293,9 @@ export default function FolderTree() {
     if (p.kind === 'note') {
       const n = lookupNote(p.id)
       return n?.title || n?.path.split('/').pop() || 'Note'
+    }
+    if (p.kind === 'attachment') {
+      return p.path.split('/').pop() ?? p.path
     }
     return ''
   }
@@ -333,9 +360,10 @@ export default function FolderTree() {
     }
   }
 
-  function partition(itemIds: string[]): { noteIds: string[]; folderIds: string[] } {
+  function partition(itemIds: string[]): { noteIds: string[]; folderIds: string[]; attachmentPaths: string[] } {
     const noteIds: string[] = []
     const folderIds: string[] = []
+    const attachmentPaths: string[] = []
     for (const id of itemIds) {
       const p = parseItemId(id)
       if (p.kind === 'note') noteIds.push(p.id)
@@ -343,29 +371,38 @@ export default function FolderTree() {
       // to a batch mutation. Unreachable today (their rows expose no menu), but
       // a guard here keeps any future bulk-select path from 404ing.
       else if (p.kind === 'folder' && !isSyntheticFolderId(p.id)) folderIds.push(p.id)
+      else if (p.kind === 'attachment') attachmentPaths.push(p.path)
     }
-    return { noteIds, folderIds }
+    return { noteIds, folderIds, attachmentPaths }
   }
 
   function commitDelete() {
     if (dialog.kind !== 'delete') return
-    const { noteIds, folderIds } = partition(dialog.itemIds)
+    const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds)
     if (noteIds.length) batchDeleteNotes.mutate({ ids: noteIds })
     if (folderIds.length) batchDeleteFolders.mutate({ ids: folderIds })
+    if (attachmentPaths.length) batchDeleteAttachments.mutate({ paths: attachmentPaths })
     tree.setSelectedItems([])
     setDialog({ kind: 'none' })
   }
 
   function commitMove(targetFolderName: string) {
     if (dialog.kind !== 'move') return
-    const target = folders?.find((f) => f.name === targetFolderName)
-    if (!target) {
-      setDialog({ kind: 'none' })
-      return
+    const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds)
+    // Notes and folders need a folder id; attachments take the folder name directly.
+    // When the selection contains notes or folders, we must resolve the target folder.
+    if (noteIds.length || folderIds.length) {
+      const target = folders?.find((f) => f.name === targetFolderName)
+      if (!target) {
+        setDialog({ kind: 'none' })
+        return
+      }
+      if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
+      if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
     }
-    const { noteIds, folderIds } = partition(dialog.itemIds)
-    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
-    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
+    if (attachmentPaths.length) {
+      batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName })
+    }
     tree.setSelectedItems([])
     setDialog({ kind: 'none' })
   }
