@@ -1,0 +1,133 @@
+{
+  "components": {
+    "responses": {},
+    "schemas": {
+      "HealthStatus": {
+        "description": "Service health status.",
+        "example": {
+          "status": "ok",
+          "version": "0.5.464"
+        },
+        "properties": {
+          "checks": {
+            "additionalProperties": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "description": "Per-dependency status map (present on /deep only)",
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "status": {
+            "description": "ok | degraded",
+            "example": "ok",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "version": {
+            "description": "Running app version",
+            "example": "0.5.464",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthStatus",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.HealthStatus",
+        "x-validate": null
+      }
+    },
+    "securitySchemes": {
+      "apiKey": {
+        "description": "Personal API key (Bearer <key>).",
+        "in": "header",
+        "name": "authorization",
+        "type": "apiKey"
+      },
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "Clerk/local JWT or OAuth access token.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "REST API for Engram — notes, search, sync, billing, and MCP.",
+    "title": "Engram API",
+    "version": "0.5.464"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/health": {
+      "get": {
+        "callbacks": {},
+        "description": "Cheap liveness check. Always 200 if the app is up.",
+        "operationId": "EngramWeb.HealthController.index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Service is up"
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": []
+      }
+    },
+    "/api/health/deep": {
+      "get": {
+        "callbacks": {},
+        "description": "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
+        "operationId": "EngramWeb.HealthController.deep",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "All critical deps ok"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Degraded"
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": []
+      }
+    }
+  },
+  "security": [],
+  "servers": [
+    {
+      "description": "Production",
+      "url": "https://api.engram.page",
+      "variables": {}
+    }
+  ],
+  "tags": []
+}
