@@ -117,7 +117,7 @@ jobs:
           owner: engram-app
           repositories: Engram-obsidian
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve plugin SHA
         id: plugin-sha
@@ -317,7 +317,7 @@ jobs:
     outputs:
       image: ${{ steps.tag.outputs.image }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Compute image tag
         id: tag
@@ -400,7 +400,7 @@ jobs:
       build-dev-key: ${{ steps.keys.outputs.build-dev }}
       build-test-key: ${{ steps.keys.outputs.build-test }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ + deps/ for incremental compile
 
@@ -484,7 +484,7 @@ jobs:
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -569,7 +569,7 @@ jobs:
           # obsidian-update workflow can leave `core.sparseCheckout=true` and
           # skip-worktree bits on the shared workspace index. `git sparse-checkout
           # disable` clears the config but NOT the index bits, so a subsequent
-          # `actions/checkout@v6 --clean:false` lands an empty working tree
+          # `actions/checkout@v7 --clean:false` lands an empty working tree
           # (mix.exs missing, etc.). Nuke `.git` when poison is detected so the
           # next checkout reclones cleanly. Untracked caches (_build/, deps/,
           # node_modules/) survive — they live outside .git.
@@ -578,7 +578,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -1037,7 +1037,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -1214,7 +1214,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -1286,7 +1286,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -1458,7 +1458,7 @@ jobs:
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Forbid TODO*.md files
         run: |
@@ -1500,7 +1500,7 @@ jobs:
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
@@ -1562,7 +1562,7 @@ jobs:
     # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
     # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need history to diff against origin/main. depth=50 is plenty for
           # PR-sized diffs and avoids the full clone cost.
@@ -1645,7 +1645,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -1704,7 +1704,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -1873,7 +1873,7 @@ jobs:
       PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
       MIX_ENV: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -2049,7 +2049,7 @@ jobs:
     # frontend/bun.lock changed vs origin/main. On main itself, run
     # unconditionally (audits the just-merged state).
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need history to diff against origin/main in the guard step.
           fetch-depth: 50
@@ -2129,7 +2129,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -2246,7 +2246,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -2607,7 +2607,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # need tags for `git describe --exact-match` (vtag)
 
@@ -2934,7 +2934,7 @@ jobs:
           repositories: engram-infra
 
       - name: Checkout engram-infra
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: engram-app/engram-infra
           token: ${{ steps.app-token.outputs.token }}
@@ -3094,7 +3094,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need parent commit so the guard's HEAD~1 diff works.
           fetch-depth: 2
@@ -3159,7 +3159,7 @@ jobs:
       group: deploy-frontend-prod
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need the parent commit to diff the merge for frontend changes.
           fetch-depth: 2
