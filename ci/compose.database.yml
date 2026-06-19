@@ -7,7 +7,7 @@
 #   bin/engram rpc <put/get/delete round-trip>
 # against this stack to exercise the bytea adapter end-to-end.
 #
-#   ENGRAM_CI_IMAGE=<tag> docker compose -f docker-compose.ci-database.yml \
+#   ENGRAM_CI_IMAGE=<tag> docker compose -f ci/compose.database.yml \
 #     -p engram-ci-db up -d --no-build --wait
 
 name: engram-ci-db
@@ -16,7 +16,7 @@ services:
   engram:
     image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
     build:
-      context: .
+      context: ..
       args:
         # Bare image refs; runner's HTTPS_PROXY config caches via FastRaid
         # transparently (see docs/context/runner-vm-setup.md Gotcha #6).

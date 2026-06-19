@@ -201,7 +201,7 @@ jobs:
               Dockerfile entrypoint.sh .dockerignore \
               mix.lock \
               .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf \
-              docker-compose.ci.yml docker-compose.ci-local.yml docker-compose.ci-database.yml \
+              ci/compose.yml ci/compose.local.yml ci/compose.database.yml \
               .github/workflows/verify.yml
             echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
           } | sha256sum | cut -d' ' -f1)
@@ -364,7 +364,7 @@ jobs:
           IMAGE_LOCAL="engram-ci:${HASH}"
           if ! docker image inspect "$IMAGE_LOCAL" >/dev/null 2>&1; then
             ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
-              docker compose -f docker-compose.ci.yml build engram
+              docker compose -f ci/compose.yml build engram
             docker image inspect "$IMAGE_LOCAL" >/dev/null
           fi
 
@@ -548,7 +548,7 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
-          docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Orphan Xvfb cleanup is scoped to THIS run's display range only,
           # so a concurrent e2e-clerk on a different run_number bucket isn't
@@ -689,10 +689,10 @@ jobs:
             # keeps the failure legible: a registry miss fails here with the
             # real ref instead of a confusing Docker Hub denial during `up`.
             docker pull "$ENGRAM_CI_IMAGE"
-            # ENGRAM_CI_IMAGE pins docker-compose.ci.yml's `image:` to that
+            # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that
             # exact tag. `--no-build` keeps startup honest — never a silent
             # rebuild; the image must already exist (now pulled above).
-            docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" up -d --no-build --wait
+            docker compose -f ci/compose.yml -p "$CI_PROJECT" up -d --no-build --wait
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -936,7 +936,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p ci-artifacts
-          docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
+          docker compose -f ci/compose.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
           cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
@@ -976,7 +976,7 @@ jobs:
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
-          docker compose -f docker-compose.ci.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           # Prune dangling images + volumes to reclaim disk
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
@@ -1209,19 +1209,19 @@ jobs:
           CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
           CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
         run: |
-          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          docker compose -f ci/compose.database.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           # Pull the prebuilt image from the FastRaid registry — this runner
           # may differ from the host that built it (see prebuild-ci-image).
           docker pull "$ENGRAM_CI_IMAGE"
           # --no-build: reuse the image the prebuild-ci-image job already built.
-          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" up -d --no-build --wait
+          docker compose -f ci/compose.database.yml -p "$CI_PROJECT" up -d --no-build --wait
 
       - name: Round-trip attachment bytes through Postgres
         run: |
           # rpc runs on the booted node, so it proves runtime.exs selected the
           # Database adapter AND the on-boot migration created storage_objects.
           # Any failed match raises; the sentinel grep is the authoritative gate.
-          OUT=$(docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" exec -T engram \
+          OUT=$(docker compose -f ci/compose.database.yml -p "$CI_PROJECT" exec -T engram \
             /app/bin/engram rpc '
               key = "999/1/ci-smoke.bin"
               data = :crypto.strong_rand_bytes(64)
@@ -1238,12 +1238,12 @@ jobs:
 
       - name: Collect logs on failure
         if: failure()
-        run: docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" logs || true
+        run: docker compose -f ci/compose.database.yml -p "$CI_PROJECT" logs || true
 
       - name: Tear down
         if: always()
         run: |
-          docker compose -f docker-compose.ci-database.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker compose -f ci/compose.database.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
 
@@ -1478,19 +1478,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Scan CLAUDE.md files for known-stale facts
+      - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
           set -euo pipefail
-          # CLAUDE.md should reflect CURRENT product state. Patterns below are
-          # known-dead facts per workspace memory entries:
+          # CLAUDE.md / AGENTS.md should reflect CURRENT product state. Patterns
+          # below are known-dead facts per workspace memory entries:
           #   - dead domains  → [[project_domain]]
           #   - dead pricing  → [[project_pricing_model]] (v2 reanchored $10/$20)
           #   - dead org refs → [[project_engram_app_org_complete]]
           # Stripe references are intentionally NOT linted — too noisy
           # against legitimate "Stripe removed" historical context.
-          mapfile -t files < <(find . -name 'CLAUDE.md' -type f -not -path './.git/*')
+          # AGENTS.md is the canonical AI doc; CLAUDE.md is a symlink to it
+          # (symlinks are not -type f, so AGENTS.md is what actually gets scanned).
+          mapfile -t files < <(find . \( -name 'CLAUDE.md' -o -name 'AGENTS.md' \) -type f -not -path './.git/*')
           if [ ${#files[@]} -eq 0 ]; then
-            echo "OK — no CLAUDE.md files in repo."
+            echo "OK — no CLAUDE.md / AGENTS.md files in repo."
             exit 0
           fi
           echo "Scanning: ${files[*]}"
@@ -2131,7 +2133,7 @@ jobs:
           CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
         run: |
-          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+          docker compose -f ci/compose.yml -f ci/compose.local.yml \
             -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
 
           # Clean up stale Qdrant collection
@@ -2140,10 +2142,10 @@ jobs:
           # Pull the prebuilt image from the FastRaid registry — this runner
           # may differ from the host that built it (see prebuild-ci-image).
           docker pull "$ENGRAM_CI_IMAGE"
-          # ENGRAM_CI_IMAGE pins docker-compose.ci.yml's `image:` to that tag;
+          # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that tag;
           # --no-build keeps startup honest (no silent rebuild) now that the
           # image is guaranteed present via the pull above.
-          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+          docker compose -f ci/compose.yml -f ci/compose.local.yml \
             -p "$CI_PROJECT" up -d --no-build --wait
 
           # Wait for health
@@ -2155,7 +2157,7 @@ jobs:
             sleep 1
           done
           echo "::error::Local auth stack failed to start"
-          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+          docker compose -f ci/compose.yml -f ci/compose.local.yml \
             -p "$CI_PROJECT" logs
           exit 1
 
@@ -2175,7 +2177,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p ci-artifacts-local
-          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+          docker compose -f ci/compose.yml -f ci/compose.local.yml \
             -p "$CI_PROJECT" logs > ci-artifacts-local/docker-compose.log 2>&1
 
       - name: Upload failure artifacts
@@ -2190,7 +2192,7 @@ jobs:
         if: always()
         run: |
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
-          docker compose -f docker-compose.ci.yml -f docker-compose.ci-local.yml \
+          docker compose -f ci/compose.yml -f ci/compose.local.yml \
             -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           rm -rf ci-artifacts-local/
@@ -2348,7 +2350,7 @@ jobs:
           # env. Without an override, :rate_limit_auth defaults to 10 req/60s
           # and the local-auth + dark-mode + mobile suites collectively burst
           # past it on /api/auth/register → 429s. Matches the value already
-          # set in docker-compose.ci-local.yml for the e2e-local job.
+          # set in ci/compose.local.yml for the e2e-local job.
           RATE_LIMIT_AUTH_OVERRIDE: "1000"
           # Same for PreAuthRateLimit (vault pipeline, default 600 req/60s):
           # browser suites that create notes burst /api/notes past it → 429s.
@@ -2356,7 +2358,7 @@ jobs:
           PRE_AUTH_RATE_LIMIT_OVERRIDE: "100000"
           # Production self-host default is invite_only; pin "open" so the
           # Playwright fixtures (which register multiple users) don't 403 with
-          # invite_required. Matches docker-compose.ci-local.yml for e2e-local.
+          # invite_required. Matches ci/compose.local.yml for e2e-local.
           ENGRAM_DEFAULT_REGISTRATION_MODE: open
           PW_LOCAL_BACKEND_PORT: ${{ steps.ports.outputs.pw_local_backend_port }}
           PW_LOCAL_VITE_PORT: ${{ steps.ports.outputs.pw_local_vite_port }}

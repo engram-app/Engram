@@ -1,9 +1,9 @@
 # Ephemeral CI test stack — Ollama on FastRaid (GPU), Qdrant on SlowRaid (AVX2).
 #
 # Always invoke with explicit project name for stable container names:
-#   docker compose -f docker-compose.ci.yml -p engram-ci up -d --build --wait
+#   docker compose -f ci/compose.yml -p engram-ci up -d --build --wait
 #   python3 -m pytest e2e/tests/ -v  # E2E tests run against this stack
-#   docker compose -f docker-compose.ci.yml -p engram-ci down -v --remove-orphans
+#   docker compose -f ci/compose.yml -p engram-ci down -v --remove-orphans
 #
 # Container names: engram-ci-engram-1, engram-ci-postgres-1.
 #
@@ -25,7 +25,7 @@ services:
     # dev falls back to `engram-ci:local` (built by `docker compose build`).
     image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
     build:
-      context: .
+      context: ..
       args:
         # Bare image refs; the runner's HTTPS_PROXY config caches via FastRaid
         # (rpardini docker-registry-proxy at 10.0.20.214:5000) transparently —
@@ -78,7 +78,7 @@ services:
       # POST /api/auth/device + /auth/device/authorize + /auth/token/refresh
       # well above the prod default 10 req/60s/IP from the test runner's
       # single source IP — collisions yield flaky 429 "rate_limited" failures.
-      # Mirrors the override in docker-compose.ci-local.yml.
+      # Mirrors the override in ci/compose.local.yml.
       # CI=true gates the override on (runtime.exs / Engram.RuntimeConfig): the
       # backend only honors RATE_LIMIT_AUTH_OVERRIDE when CI=true, so a stray
       # copy of this var can never weaken the limiter in prod. Inherited by the

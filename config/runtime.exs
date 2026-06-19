@@ -231,7 +231,7 @@ end
 
 # Rate-limit override for CI/E2E stacks only, gated on CI=true so a stray
 # RATE_LIMIT_AUTH_OVERRIDE in a prod task def can never weaken the auth
-# limiter. CI stacks (docker-compose.ci*.yml, the Playwright runner) set
+# limiter. CI stacks (ci/compose*.yml, the Playwright runner) set
 # CI=true; production never does. See Engram.RuntimeConfig.
 case Engram.RuntimeConfig.rate_limit_auth_override(&System.get_env/1) do
   {:ok, limit} ->
