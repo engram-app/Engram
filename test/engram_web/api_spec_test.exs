@@ -75,4 +75,28 @@ defmodule EngramWeb.ApiSpecTest do
       assert %OpenApiSpex.Schema{type: :object} = EngramWeb.Schemas.Error.schema()
     end
   end
+
+  describe "Notes paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "POST /api/notes documents request + 201/409/422/413", %{spec: spec} do
+      op = spec.paths["/api/notes"].post
+      assert op.tags == ["Notes"]
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [201, 409, 413, 422]
+    end
+
+    test "GET /api/notes/changes documents since/limit/fields/cursor", %{spec: spec} do
+      op = spec.paths["/api/notes/changes"].get
+      names = Enum.map(op.parameters, & &1.name)
+      assert :since in names and :limit in names and :fields in names and :cursor in names
+      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 400)
+    end
+
+    test "by-id show documents id path param + 404", %{spec: spec} do
+      op = spec.paths["/api/notes/by-id/{id}"].get
+      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path))
+      assert Map.has_key?(op.responses, 404)
+    end
+  end
 end
