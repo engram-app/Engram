@@ -65,6 +65,7 @@ import {
   useRenameNote,
   useReverseCancel,
   useSearch,
+  useUploadAttachment,
 } from './queries'
 
 let qc: QueryClient
@@ -1467,5 +1468,44 @@ describe('useBatchDeleteAttachments', () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
+  })
+})
+
+describe('useUploadAttachment', () => {
+  function wrapper() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const Wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    )
+    return { qc, Wrapper }
+  }
+
+  beforeEach(() => {
+    post.mockReset()
+  })
+
+  it('POSTs the upload payload and invalidates attachments + folders', async () => {
+    post.mockResolvedValue({ attachment: { id: 'a1', path: 'pic.png' } })
+    const { qc, Wrapper } = wrapper()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper })
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        path: 'pic.png',
+        mime_type: 'image/png',
+        content_base64: 'AAAA',
+        mtime: 1718000000,
+      })
+    })
+
+    expect(post).toHaveBeenCalledWith('/attachments', {
+      path: 'pic.png',
+      mime_type: 'image/png',
+      content_base64: 'AAAA',
+      mtime: 1718000000,
+    })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['attachments', '42'] })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['folders', '42'] })
   })
 })

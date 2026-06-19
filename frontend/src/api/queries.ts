@@ -194,6 +194,27 @@ export function useAttachments() {
   return query
 }
 
+export function useUploadAttachment() {
+  const qc = useQueryClient()
+  const vaultId = useActiveVaultId()
+  return useMutation<
+    { attachment: AttachmentSummary },
+    Error,
+    { path: string; mime_type?: string; content_base64: string; mtime: number }
+  >({
+    mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>('/attachments', body),
+    onSuccess: () => {
+      // New attachment row + its folder's count both change. The tree reads
+      // attachments from ['attachments', vaultId]; folder counts from
+      // ['folders', vaultId]. 402s (disabled / text-only / too-large / quota)
+      // throw LimitExceededError AND open the global UpgradeRequiredDialog via
+      // the client's upgradeHandler — nothing to handle here.
+      qc.invalidateQueries({ queryKey: ['attachments', vaultId] })
+      qc.invalidateQueries({ queryKey: ['folders', vaultId] })
+    },
+  })
+}
+
 // The vault root has no folder-marker row (the by-id endpoint requires a
 // non-null id), so it keys its note list under this sentinel — the same value
 // the backend already uses as the batch-move root target. One id-space, one
