@@ -936,6 +936,26 @@ jobs:
       # ------------------------------------------------------------------
       # Cleanup — MUST kill everything, even on cancel/failure
       # ------------------------------------------------------------------
+      # Reap stale e2e Clerk orphans on EVERY run (not just the throttled
+      # hourly cron, which GitHub fires only ~every 3-5h and a CI burst
+      # outpaces). Runs `if: always()` so it fires even when pytest is
+      # hard-killed before its session_cleanup fixture (helpers/clerk.py
+      # ClerkClient.cleanup_tracked) could delete this run's users. The
+      # `--older-than 1h` age filter protects any concurrent run's in-flight
+      # users — same safety belt the cron uses — so this never races a
+      # sibling. Together: per-run fixture cleanup handles this run's users
+      # immediately; this step + cron mop up crashed-run orphans frequently.
+      - name: Reap stale Clerk orphans (>1h)
+        if: always()
+        env:
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
+            echo "E2E_CLERK_SECRET_KEY not set — skipping orphan reap." >&2
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h || true
+
       - name: Collect failure logs
         if: failure()
         run: |
