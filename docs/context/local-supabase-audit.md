@@ -89,13 +89,13 @@ supabase start --workdir ~/supabase-engram-audit
 1. **No AVX2 on this CPU** — see Failed Approaches. Build CLI with `GOAMD64=v1`.
 2. **Encryption at rest** — notes/vaults are per-user-DEK, AAD-bound AES-GCM with HMAC lookup columns; plaintext columns are gone. Seed only through the app contexts.
 3. **Boot canary** — the app boots `BootCanaryGuard`, which wraps/unwraps a canary row in `system_canaries` using `ENCRYPTION_MASTER_KEY`. Seed once with key A then re-run with key B → boot fails: `boot canary unwrap failed: :invalid_wrapping`. Fix: pin ONE stable master key (`~/supabase-engram-audit/.master_key`). If the canary is already wrapped under a lost key on this throwaway DB (no real encrypted data to protect): `DELETE FROM system_canaries;` then re-run.
-4. **RLS role grant** — `Repo.with_tenant/2` does `SET LOCAL ROLE engram_app` + `SET LOCAL app.current_tenant`. Supabase's `postgres` user is not a true superuser and isn't a member of `engram_app`, so writes fail with `42501 permission denied to set role "engram_app"`. The `engram_app` role itself already exists (created by migration `20260403000846_add_rls_policies`). Fix: `GRANT engram_app TO postgres;` (run as postgres via the `docker exec ... psql` above).
+4. **RLS role grant** — `Repo.with_tenant/2` does `SET LOCAL ROLE engram_app` + `SET LOCAL app.current_tenant`. Supabase's `postgres` user is not a true superuser and isn't a member of `engram_app`, so writes fail with `42501 permission denied to set role "engram_app"`. The `engram_app` role itself already exists (created by the schema baseline `20260602000000_baseline.exs`; the original `20260403000846_add_rls_policies` migration was collapsed into the baseline in #401). Fix: `GRANT engram_app TO postgres;` (run as postgres via the `docker exec ... psql` above).
 5. **Embeddings / Oban** — `upsert_note` enqueues Oban `:embed` jobs that would call Voyage AI + Qdrant (external/cloud). `dev_seeds.exs` pauses the `:embed` and `:reindex` queues before inserting, so nothing fires; jobs stay queued in `oban_jobs` (harmless, and realistic queue data for the audit).
 6. **Studio is loopback-only** — reach via SSH tunnel or the LAN IP (Docker publishes on `0.0.0.0`); firewalld may need port 54323 opened.
 
 ## References
 - Seed script: `backend/priv/repo/dev_seeds.exs`
 - Dev config honoring `DATABASE_URL`: `backend/config/dev.exs`
-- RLS migration creating `engram_app`: `backend/priv/repo/migrations/20260403000846_add_rls_policies.exs`
+- RLS/role setup creating `engram_app`: `backend/priv/repo/migrations/20260602000000_baseline.exs` (the per-migration `20260403000846_add_rls_policies.exs` was collapsed into this baseline in #401)
 - Schema/RLS background: `backend/docs/context/database-schema-rls.md`
 - Supabase CLI monorepo: https://github.com/supabase/cli (`apps/cli-go/`)
