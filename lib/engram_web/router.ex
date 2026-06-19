@@ -32,6 +32,12 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  # OpenAPI spec serving — PutApiSpec needs its `module:` option, which a
+  # bare `pipe_through` can't supply, so it lives in its own pipeline.
+  pipeline :openapi do
+    plug OpenApiSpex.Plug.PutApiSpec, module: EngramWeb.ApiSpec
+  end
+
   # SPA shell pipeline — HTML responses with strict browser-security headers.
   # x-frame-options=DENY is critical for /oauth/consent: without it the consent
   # UI could be iframed by an attacker site and the approval click hijacked.
@@ -117,6 +123,14 @@ defmodule EngramWeb.Router do
     pipe_through :api
     get "/health", HealthController, :index
     get "/health/deep", HealthController, :deep
+  end
+
+  # OpenAPI spec — public, no auth. Drives the docs site + CI drift gate.
+  # No EngramWeb alias on this scope: RenderSpec is an open_api_spex plug,
+  # not an Engram controller.
+  scope "/api" do
+    pipe_through [:api, :openapi]
+    get "/openapi", OpenApiSpex.Plug.RenderSpec, []
   end
 
   # Full dependency matrix for humans + Grafana. Admin-gated so the
