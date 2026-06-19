@@ -15,7 +15,7 @@ defmodule EngramWeb.SearchController do
   @overfetch_factor 4
   @min_overfetch 20
 
-  operation :search,
+  operation(:search,
     summary: "Search notes (vector / keyword / hybrid)",
     tags: ["Search"],
     request_body: {"Search query", "application/json", Schemas.SearchRequest, required: true},
@@ -24,6 +24,7 @@ defmodule EngramWeb.SearchController do
       forbidden: {"cross_vault requires Pro", "application/json", Schemas.Error},
       unprocessable_entity: {"Missing query", "application/json", Schemas.Error}
     ]
+  )
 
   def search(conn, %{"query" => query} = params) do
     user = conn.assigns.current_user

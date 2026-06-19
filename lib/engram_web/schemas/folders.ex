@@ -2,6 +2,7 @@ defmodule EngramWeb.Schemas.Folder do
   @moduledoc "A folder node."
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "Folder",
     type: :object,
@@ -19,6 +20,7 @@ defmodule EngramWeb.Schemas.FoldersResponse do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FoldersResponse",
     type: :object,
@@ -31,6 +33,7 @@ defmodule EngramWeb.Schemas.FolderNamesResponse do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FolderNamesResponse",
     type: :object,
@@ -48,6 +51,7 @@ defmodule EngramWeb.Schemas.FolderListResponse do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FolderListResponse",
     type: :object,
@@ -63,6 +67,7 @@ defmodule EngramWeb.Schemas.FolderNotesResponse do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FolderNotesResponse",
     type: :object,
@@ -75,6 +80,7 @@ defmodule EngramWeb.Schemas.CreateFolderRequest do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "CreateFolderRequest",
     type: :object,
@@ -86,6 +92,7 @@ end
 defmodule EngramWeb.Schemas.FolderResponse do
   @moduledoc false
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FolderResponse",
     type: :object,
@@ -98,6 +105,7 @@ defmodule EngramWeb.Schemas.FolderRenameResponse do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "FolderRenameResponse",
     type: :object,
@@ -114,6 +122,7 @@ defmodule EngramWeb.Schemas.BatchMoveFoldersRequest do
   @moduledoc false
   alias OpenApiSpex.Schema
   require OpenApiSpex
+
   OpenApiSpex.schema(%{
     title: "BatchMoveFoldersRequest",
     type: :object,

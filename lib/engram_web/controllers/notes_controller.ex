@@ -7,16 +7,18 @@ defmodule EngramWeb.NotesController do
 
   @max_note_bytes 10 * 1024 * 1024
 
-  operation :upsert,
+  operation(:upsert,
     summary: "Create or update a note",
     tags: ["Notes"],
-    request_body: {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},
+    request_body:
+      {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},
     responses: [
       created: {"Created/updated", "application/json", Schemas.NoteResponse},
       conflict: {"Version conflict", "application/json", Schemas.Conflict},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error},
       request_entity_too_large: {"Note exceeds 10MB", "application/json", Schemas.Error}
     ]
+  )
 
   def upsert(conn, params) do
     content = params["content"] || params[:content] || ""
@@ -73,7 +75,7 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :append,
+  operation(:append,
     summary: "Append text to a note (creating it if absent)",
     tags: ["Notes"],
     request_body: {"Path + text", "application/json", Schemas.AppendRequest, required: true},
@@ -81,6 +83,7 @@ defmodule EngramWeb.NotesController do
       ok: {"Appended", "application/json", Schemas.AppendResponse},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
+  )
 
   def append(conn, %{"path" => path, "text" => text}) do
     user = conn.assigns.current_user
@@ -122,14 +125,17 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :show,
+  operation(:show,
     summary: "Get a note by path",
     tags: ["Notes"],
-    parameters: [path: [in: :path, type: :string, required: true, description: "Note path (slash-separated)"]],
+    parameters: [
+      path: [in: :path, type: :string, required: true, description: "Note path (slash-separated)"]
+    ],
     responses: [
       ok: {"Note", "application/json", Schemas.Note},
       not_found: {"No such note", "application/json", Schemas.Error}
     ]
+  )
 
   def show(conn, %{"path" => path_parts}) do
     user = conn.assigns.current_user
@@ -142,7 +148,7 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :rename,
+  operation(:rename,
     summary: "Rename / move a note",
     tags: ["Notes"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
@@ -151,6 +157,7 @@ defmodule EngramWeb.NotesController do
       not_found: {"No such note", "application/json", Schemas.Error},
       conflict: {"Target exists / version conflict", "application/json", Schemas.Error}
     ]
+  )
 
   def rename(conn, %{"old_path" => old_path, "new_path" => new_path}) do
     user = conn.assigns.current_user
@@ -168,11 +175,12 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :delete,
+  operation(:delete,
     summary: "Delete a note by path",
     tags: ["Notes"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Note path"]],
     responses: [ok: {"Deleted", "application/json", Schemas.DeletedFlag}]
+  )
 
   def delete(conn, %{"path" => path_parts}) do
     user = conn.assigns.current_user
@@ -182,7 +190,7 @@ defmodule EngramWeb.NotesController do
     json(conn, %{deleted: true})
   end
 
-  operation :show_by_id,
+  operation(:show_by_id,
     summary: "Get a note by id",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
@@ -191,6 +199,7 @@ defmodule EngramWeb.NotesController do
       bad_request: {"Invalid UUID", "application/json", Schemas.Error},
       not_found: {"No such note", "application/json", Schemas.Error}
     ]
+  )
 
   def show_by_id(conn, %{"id" => id_str}) do
     user = conn.assigns.current_user
@@ -205,7 +214,7 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :delete_by_id,
+  operation(:delete_by_id,
     summary: "Delete a note by id",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
@@ -214,6 +223,7 @@ defmodule EngramWeb.NotesController do
       bad_request: {"Invalid UUID", "application/json", Schemas.Error},
       not_found: {"No such note", "application/json", Schemas.Error}
     ]
+  )
 
   def delete_by_id(conn, %{"id" => id_str}) do
     user = conn.assigns.current_user
@@ -228,19 +238,25 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  operation :changes,
+  operation(:changes,
     summary: "List note changes since a cursor (keyset pagination)",
     tags: ["Notes"],
     parameters: [
       since: [in: :query, type: :string, required: true, description: "ISO8601 timestamp cursor"],
       limit: [in: :query, type: :integer, required: false, description: "Max rows (<=500)"],
       fields: [in: :query, type: :string, required: false, description: "\"meta\" or \"all\""],
-      cursor: [in: :query, type: :string, required: false, description: "Opaque pagination cursor"]
+      cursor: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Opaque pagination cursor"
+      ]
     ],
     responses: [
       ok: {"Changes page", "application/json", Schemas.ChangesResponse},
       bad_request: {"Invalid since/limit/fields/cursor", "application/json", Schemas.Error}
     ]
+  )
 
   # Protocol rev — keyset pagination. Requests without `limit` are still
   # capped at the server max (500) and gain `has_more`/`next_cursor`; old
@@ -347,7 +363,7 @@ defmodule EngramWeb.NotesController do
 
   @batch_upsert_max 100
 
-  operation :batch_upsert,
+  operation(:batch_upsert,
     summary: "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
     tags: ["Notes"],
     request_body: {"Notes array", "application/json", Schemas.BatchUpsertRequest, required: true},
@@ -355,6 +371,7 @@ defmodule EngramWeb.NotesController do
       ok: {"Per-note results", "application/json", Schemas.BatchUpsertResponse},
       bad_request: {"Invalid array / >100 items", "application/json", Schemas.Error}
     ]
+  )
 
   def batch_upsert(conn, %{"notes" => notes}) when is_list(notes) do
     cond do
@@ -444,7 +461,7 @@ defmodule EngramWeb.NotesController do
   defp batch_errors_json(%Ecto.Changeset{} = changeset), do: format_errors(changeset)
   defp batch_errors_json(other), do: other
 
-  operation :batch_delete,
+  operation(:batch_delete,
     summary: "Delete notes by id (idempotent)",
     tags: ["Notes"],
     request_body: {"Note ids", "application/json", Schemas.BatchIdsRequest, required: true},
@@ -454,6 +471,7 @@ defmodule EngramWeb.NotesController do
       not_found: {"Some ids not found", "application/json", Schemas.Error},
       conflict: {"Conflict", "application/json", Schemas.Error}
     ]
+  )
 
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
@@ -487,16 +505,18 @@ defmodule EngramWeb.NotesController do
     conn |> put_status(400) |> json(%{error: "missing required param: ids"})
   end
 
-  operation :batch_move,
+  operation(:batch_move,
     summary: "Move notes to a folder (idempotent)",
     tags: ["Notes"],
-    request_body: {"Ids + target folder", "application/json", Schemas.BatchMoveNotesRequest, required: true},
+    request_body:
+      {"Ids + target folder", "application/json", Schemas.BatchMoveNotesRequest, required: true},
     responses: [
       ok: {"Moved count", "application/json", Schemas.MovedCount},
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
       conflict: {"Conflict", "application/json", Schemas.Error}
     ]
+  )
 
   def batch_move(conn, %{"ids" => ids, "target_folder_id" => tgt}) when is_list(ids) do
     user = conn.assigns.current_user

@@ -5,10 +5,11 @@ defmodule EngramWeb.FoldersController do
   alias Engram.Notes
   alias EngramWeb.Schemas
 
-  operation :index,
+  operation(:index,
     summary: "List folders",
     tags: ["Folders"],
     responses: [ok: {"Folders", "application/json", Schemas.FoldersResponse}]
+  )
 
   def index(conn, _params) do
     user = conn.assigns.current_user
@@ -49,10 +50,11 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
-  operation :explicit,
+  operation(:explicit,
     summary: "List explicitly-created (empty-capable) folders",
     tags: ["Folders"],
     responses: [ok: {"Folder names", "application/json", Schemas.FolderNamesResponse}]
+  )
 
   def explicit(conn, _params) do
     user = conn.assigns.current_user
@@ -61,7 +63,7 @@ defmodule EngramWeb.FoldersController do
     json(conn, %{folders: Enum.map(names, &%{name: &1})})
   end
 
-  operation :list,
+  operation(:list,
     summary: "List notes in a folder (metadata only)",
     tags: ["Folders"],
     parameters: [folder: [in: :query, type: :string, required: true, description: "Folder path"]],
@@ -69,6 +71,7 @@ defmodule EngramWeb.FoldersController do
       ok: {"Folder notes", "application/json", Schemas.FolderListResponse},
       bad_request: {"Missing folder param", "application/json", Schemas.Error}
     ]
+  )
 
   def list(conn, %{"folder" => folder}) do
     user = conn.assigns.current_user
@@ -85,7 +88,7 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(400) |> json(%{error: "folder parameter is required"})
   end
 
-  operation :list_notes,
+  operation(:list_notes,
     summary: "List notes in a folder by id (metadata only)",
     tags: ["Folders"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Folder UUID"]],
@@ -94,6 +97,7 @@ defmodule EngramWeb.FoldersController do
       bad_request: {"Invalid UUID", "application/json", Schemas.Error},
       not_found: {"No such folder", "application/json", Schemas.Error}
     ]
+  )
 
   def list_notes(conn, %{"id" => id_str}) do
     with {:ok, id} <- Ecto.UUID.cast(id_str),
@@ -110,14 +114,16 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
-  operation :create,
+  operation(:create,
     summary: "Create a folder",
     tags: ["Folders"],
-    request_body: {"Folder path", "application/json", Schemas.CreateFolderRequest, required: true},
+    request_body:
+      {"Folder path", "application/json", Schemas.CreateFolderRequest, required: true},
     responses: [
       created: {"Created", "application/json", Schemas.FolderResponse},
       unprocessable_entity: {"Empty/root folder rejected", "application/json", Schemas.Error}
     ]
+  )
 
   def create(conn, %{"folder" => folder}) when is_binary(folder) do
     user = conn.assigns.current_user
@@ -145,11 +151,12 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
-  operation :delete,
+  operation(:delete,
     summary: "Delete a folder by path",
     tags: ["Folders"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Folder path"]],
     responses: [no_content: "Deleted (empty body)"]
+  )
 
   def delete(conn, %{"path" => path_segments}) do
     user = conn.assigns.current_user
@@ -171,7 +178,7 @@ defmodule EngramWeb.FoldersController do
     end
   end
 
-  operation :rename,
+  operation(:rename,
     summary: "Rename / move a folder",
     tags: ["Folders"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
@@ -180,6 +187,7 @@ defmodule EngramWeb.FoldersController do
       not_found: {"No such folder", "application/json", Schemas.Error},
       conflict: {"Target exists", "application/json", Schemas.Error}
     ]
+  )
 
   def rename(conn, %{"old_path" => old_path, "new_path" => new_path}) do
     user = conn.assigns.current_user
@@ -212,7 +220,7 @@ defmodule EngramWeb.FoldersController do
   # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
   # follow-up (after-commit hook).
 
-  operation :batch_delete,
+  operation(:batch_delete,
     summary: "Delete folders by id (idempotent)",
     tags: ["Folders"],
     request_body: {"Folder ids", "application/json", Schemas.BatchIdsRequest, required: true},
@@ -222,6 +230,7 @@ defmodule EngramWeb.FoldersController do
       not_found: {"Some ids not found", "application/json", Schemas.Error},
       conflict: {"Conflict", "application/json", Schemas.Error}
     ]
+  )
 
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
@@ -255,16 +264,18 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(400) |> json(%{error: "missing required param: ids"})
   end
 
-  operation :batch_move,
+  operation(:batch_move,
     summary: "Move folders under a new parent (idempotent)",
     tags: ["Folders"],
-    request_body: {"Ids + target parent", "application/json", Schemas.BatchMoveFoldersRequest, required: true},
+    request_body:
+      {"Ids + target parent", "application/json", Schemas.BatchMoveFoldersRequest, required: true},
     responses: [
       ok: {"Moved count", "application/json", Schemas.MovedCount},
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
       conflict: {"Conflict", "application/json", Schemas.Error}
     ]
+  )
 
   def batch_move(conn, %{"ids" => ids, "target_parent_id" => tgt}) when is_list(ids) do
     user = conn.assigns.current_user
