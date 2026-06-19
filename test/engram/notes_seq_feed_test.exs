@@ -32,6 +32,24 @@ defmodule Engram.NotesSeqFeedTest do
     {:ok, %{changes: []}} = Notes.list_changes_by_seq(user, vault, last.seq, after_id: last.id)
   end
 
+  test "single note rename emits an old-path tombstone in the seq feed", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
+
+    {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)
+    assert Enum.any?(all, &(&1.path == "a.md" and &1.deleted))
+    assert Enum.any?(all, &(&1.path == "b.md" and not &1.deleted))
+  end
+
+  test "rename tombstone does not block re-create at the old path", %{user: user, vault: vault} do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
+    assert {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A2"})
+  end
+
   test "paginates with limit + has_more", %{user: user, vault: vault} do
     for i <- 1..3, do: Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => "x"})
     {:ok, p1} = Notes.list_changes_by_seq(user, vault, 0, limit: 2)
