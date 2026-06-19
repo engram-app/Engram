@@ -6,6 +6,7 @@ defmodule EngramWeb.HealthController do
 
   operation(:index,
     summary: "Liveness probe",
+    security: [],
     description: "Cheap liveness check. Always 200 if the app is up.",
     responses: [
       ok: {"Service is up", "application/json", HealthStatus}
@@ -18,6 +19,7 @@ defmodule EngramWeb.HealthController do
 
   operation(:deep,
     summary: "Readiness probe",
+    security: [],
     description:
       "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
     responses: [

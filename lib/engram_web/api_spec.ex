@@ -11,7 +11,7 @@ defmodule EngramWeb.ApiSpec do
   @behaviour OpenApiSpex.OpenApi
 
   alias EngramWeb.Router
-  alias OpenApiSpex.{Components, Info, OpenApi, Paths, SecurityScheme, Server}
+  alias OpenApiSpex.{Components, Info, OpenApi, Paths, SecurityScheme, Server, Tag}
 
   # OpenAPI document version = the API *contract* version, deliberately NOT
   # the app build version (`Application.spec(:engram, :vsn)`). Tying it to the
@@ -29,10 +29,17 @@ defmodule EngramWeb.ApiSpec do
         description: "REST API for Engram — notes, search, sync, billing, and MCP.",
         version: @api_version
       },
+      security: [%{"bearerAuth" => []}],
       servers: [
         %Server{url: "https://api.engram.page", description: "Production"}
       ],
       paths: Paths.from_router(Router),
+      tags: [
+        %Tag{name: "Notes", description: "Create, read, update, delete, and sync notes."},
+        %Tag{name: "Folders", description: "Browse and manage folders."},
+        %Tag{name: "Search", description: "Vector, keyword, and hybrid search."},
+        %Tag{name: "Tags", description: "List vault tags."}
+      ],
       components: %Components{
         # Engram accepts all credentials on the same `Authorization: Bearer`
         # header — Clerk/local JWTs, OAuth access tokens, and personal API

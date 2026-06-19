@@ -51,4 +51,28 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 200)
     end
   end
+
+  describe "foundation" do
+    test "global security defaults to bearerAuth" do
+      spec = EngramWeb.ApiSpec.spec()
+      assert spec.security == [%{"bearerAuth" => []}]
+    end
+
+    test "health operations opt out of global security (public)" do
+      spec = EngramWeb.ApiSpec.spec()
+      assert spec.paths["/api/health"].get.security == []
+    end
+
+    test "declares Notes/Folders/Search/Tags tags" do
+      spec = EngramWeb.ApiSpec.spec()
+      names = Enum.map(spec.tags, & &1.name)
+      assert "Notes" in names and "Folders" in names
+      assert "Search" in names and "Tags" in names
+    end
+
+    test "shared schemas resolve" do
+      assert %OpenApiSpex.Schema{type: :object} = EngramWeb.Schemas.Note.schema()
+      assert %OpenApiSpex.Schema{type: :object} = EngramWeb.Schemas.Error.schema()
+    end
+  end
 end
