@@ -65,10 +65,10 @@ frontend-dev:      ## Run Vite dev server standalone
 # --- CI Stack ---
 
 ci-up:             ## Start CI stack (port 8100)
-	docker compose -f docker-compose.ci.yml -p engram-ci up -d --build --wait
+	docker compose -f ci/compose.yml -p engram-ci up -d --build --wait
 
 ci-down:           ## Tear down CI stack
-	docker compose -f docker-compose.ci.yml -p engram-ci down -v --remove-orphans
+	docker compose -f ci/compose.yml -p engram-ci down -v --remove-orphans
 
 ci-e2e: ci-up      ## Bring up CI stack and run e2e tests
 	cd e2e && ENGRAM_API_URL=http://localhost:8100 python3 -m pytest tests/ -v
