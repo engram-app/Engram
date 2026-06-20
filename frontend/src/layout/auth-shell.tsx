@@ -10,7 +10,7 @@ type AuthShellProps = {
 
 export default function AuthShell({ actions, navLabel, children }: AuthShellProps) {
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
+    <main className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <span className="flex items-center gap-2 text-lg font-semibold text-foreground">
           <img src="/engram-mark.svg" alt="" className="size-6" />

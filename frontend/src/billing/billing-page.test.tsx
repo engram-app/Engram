@@ -201,10 +201,12 @@ describe('BillingPage — Paddle effect cleanup', () => {
     const openMock = vi.fn()
     initializePaddleMock.mockImplementation(async () => ({ Checkout: { open: openMock, close: vi.fn() } }))
 
-    const { container, queryByText } = renderBilling({ inline: true })
+    const { container, queryAllByText } = renderBilling({ inline: true })
 
-    // Wait for the Paddle instance to land and plan cards to render
-    await waitFor(() => expect(queryByText('Starter')).toBeInTheDocument())
+    // Wait for the Paddle instance to land and plan cards to render. "Starter"
+    // appears twice — the desktop card grid and the mobile accordion are both
+    // in the DOM (CSS, not JS, hides one), so assert on the count.
+    await waitFor(() => expect(queryAllByText('Starter').length).toBeGreaterThan(0))
 
     const startButtons = container.querySelectorAll('button')
     const startBtn = Array.from(startButtons).find((b) => b.textContent === 'Start free trial')
@@ -217,7 +219,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
 
     // Plan cards hidden, mount target rendered, Paddle.Checkout.open invoked
     expect(container.querySelector('.paddle-checkout')).not.toBeNull()
-    expect(queryByText('Starter')).not.toBeInTheDocument()
+    expect(queryAllByText('Starter')).toHaveLength(0)
     expect(openMock).toHaveBeenCalledTimes(1)
   })
 
@@ -229,9 +231,10 @@ describe('BillingPage — Paddle effect cleanup', () => {
       return { Checkout: { open: vi.fn(), close: vi.fn() } }
     })
 
-    const { container, queryByText } = renderBilling({ inline: true })
+    const { container, queryAllByText } = renderBilling({ inline: true })
 
-    await waitFor(() => expect(queryByText('Starter')).toBeInTheDocument())
+    // "Starter" renders twice (desktop card + mobile accordion); assert count.
+    await waitFor(() => expect(queryAllByText('Starter').length).toBeGreaterThan(0))
     const startBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Start free trial',
     )!
@@ -249,7 +252,7 @@ describe('BillingPage — Paddle effect cleanup', () => {
 
     // Mount target gone, plan cards back
     expect(container.querySelector('.paddle-checkout')).toBeNull()
-    expect(queryByText('Starter')).toBeInTheDocument()
+    expect(queryAllByText('Starter').length).toBeGreaterThan(0)
   })
 
   it('onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner', async () => {

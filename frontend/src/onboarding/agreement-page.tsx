@@ -89,7 +89,7 @@ export default function AgreementPage() {
         ) : (
           <>
             {tosText ? (
-              <ScrollArea className="h-80 rounded-lg border border-border bg-background lg:h-[60vh]">
+              <ScrollArea className="h-[44dvh] rounded-lg border border-border bg-background sm:h-80 lg:h-[60vh]">
                 <div className="p-4">
                   <LegalDoc source={tosText} />
                 </div>

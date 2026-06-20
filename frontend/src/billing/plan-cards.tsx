@@ -1,4 +1,6 @@
+import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ctaFilled, ctaOutline } from '@/lib/ui-classes'
 import type { BillingCadence } from '../api/queries'
 
 export type PlanTier = 'starter' | 'pro'
@@ -8,6 +10,43 @@ export interface PlanCardCatalog {
   monthlyPrice: number
   annualPrice: number
   features: string[]
+}
+
+// Display price for a plan at the given cadence. Single formatter so the
+// monthly/annual string is identical everywhere it's shown (full cards +
+// mobile accordion rows).
+export function formatPlanPrice(
+  catalog: Pick<PlanCardCatalog, 'monthlyPrice' | 'annualPrice'>,
+  cadence: BillingCadence,
+): string {
+  return cadence === 'monthly' ? `$${catalog.monthlyPrice}/mo` : `$${catalog.annualPrice}/yr`
+}
+
+// Free tier display copy. Not a PlanTier (no Paddle price / checkout), but
+// centralized here alongside the paid catalog so the onboarding accordion and
+// the desktop free-link can't drift.
+export const FREE_TIER = {
+  name: 'Free',
+  price: '$0',
+  summary: '10k notes · 1 vault · markdown only',
+  features: ['10k notes', '1 vault', 'Markdown only', 'Upgrade anytime'],
+} as const
+
+// Feature checklist shared by the full card and the accordion row. `className`
+// merges extra layout (e.g. `flex-1` on the full card).
+function FeatureList({ features, className }: { features: string[]; className?: string }) {
+  return (
+    <ul className={cn('space-y-1 text-sm text-muted-foreground', className)}>
+      {features.map((f) => (
+        <li key={f} className="flex items-center gap-2">
+          <span className="text-primary" aria-hidden="true">
+            &#10003;
+          </span>
+          {f}
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
@@ -50,9 +89,9 @@ export function CadenceToggle({
           aria-checked={cadence === 'monthly'}
           onClick={() => onChange('monthly')}
           className={cn(
-            'rounded-full px-4 py-1.5 font-medium transition',
+            'inline-flex items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition',
             cadence === 'monthly'
-              ? 'bg-background text-foreground shadow-sm'
+              ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:text-foreground',
           )}
         >
@@ -63,13 +102,21 @@ export function CadenceToggle({
           aria-checked={cadence === 'annual'}
           onClick={() => onChange('annual')}
           className={cn(
-            'rounded-full px-4 py-1.5 font-medium transition',
+            'inline-flex items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition',
             cadence === 'annual'
-              ? 'bg-background text-foreground shadow-sm'
+              ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:text-foreground',
           )}
         >
-          Annual <span className="ml-1 text-xs text-primary">save 17%</span>
+          Annual{' '}
+          <span
+            className={cn(
+              'ml-1 text-xs',
+              cadence === 'annual' ? 'text-primary-foreground/90' : 'text-primary',
+            )}
+          >
+            save 17%
+          </span>
         </button>
       </div>
     </div>
@@ -111,7 +158,7 @@ export function PlanCard({
   ctaLabel = 'Start free trial',
   ctaSubLabel,
 }: PlanCardProps) {
-  const price = cadence === 'monthly' ? `$${monthlyPrice}/mo` : `$${annualPrice}/yr`
+  const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence)
   const subPrice =
     cadence === 'annual'
       ? `$${(annualPrice / 12).toFixed(2)}/mo billed yearly`
@@ -156,16 +203,7 @@ export function PlanCard({
       <h3 className="text-lg font-semibold">{name}</h3>
       <p className="text-2xl font-bold">{price}</p>
       <p className="-mt-3 text-xs text-muted-foreground">{subPrice}</p>
-      <ul className="flex-1 space-y-1 text-sm text-muted-foreground">
-        {features.map((f) => (
-          <li key={f} className="flex items-center gap-2">
-            <span className="text-primary" aria-hidden="true">
-              &#10003;
-            </span>
-            {f}
-          </li>
-        ))}
-      </ul>
+      <FeatureList features={features} className="flex-1" />
       <div className="flex flex-col gap-1">
         {current ? (
           // Inert positive indicator instead of a disabled button: same
@@ -189,9 +227,7 @@ export function PlanCard({
                 // recommended (onboarding's Pro) and selected (change-plan's
                 // chosen target) get filled-primary CTA so the actionable
                 // card has weight. idle stays a clean outline.
-                state === 'recommended' || state === 'selected'
-                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                  : 'border border-input bg-transparent text-foreground hover:bg-accent',
+                state === 'recommended' || state === 'selected' ? ctaFilled : ctaOutline,
               )}
             >
               {ctaLabel}
@@ -201,6 +237,111 @@ export function PlanCard({
             )}
           </>
         )}
+      </div>
+    </li>
+  )
+}
+
+// Collapsible secondary tier for the mobile plan step. The header (always
+// visible) carries the name + formatted price + a one-line gist so basic
+// comparison survives while collapsed; tapping reveals the full feature list
+// and CTA. Open/close is controlled by the parent so the rows behave as a
+// strict accordion (one open at a time). Price is pre-formatted so this stays
+// cadence-agnostic and reusable for the $0 Free row (different handler).
+export function PlanAccordionRow({
+  name,
+  price,
+  summary,
+  features,
+  ctaLabel,
+  ctaNote,
+  onClick,
+  open,
+  onOpen,
+  disabled = false,
+  recommended = false,
+  quietCta = false,
+}: {
+  name: string
+  price: string
+  summary: string
+  features: string[]
+  ctaLabel: string
+  ctaNote?: string
+  onClick: () => void
+  open: boolean
+  onOpen: () => void
+  disabled?: boolean
+  recommended?: boolean
+  quietCta?: boolean
+}) {
+  return (
+    <li
+      className={cn(
+        'overflow-hidden rounded-lg border bg-card transition-colors',
+        // The open tier carries the primary border; the Popular pill (keyed to
+        // `recommended`) stays on Pro regardless of which row is open.
+        open ? 'border-primary ring-1 ring-primary' : 'border-border',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 p-4 text-left"
+      >
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-x-2 text-sm font-semibold text-foreground">
+            <span>{name}</span>
+            {recommended && (
+              <span className="inline-flex items-center rounded-full bg-primary px-2 pb-[2px] pt-[4px] text-[10px] font-semibold uppercase leading-none tracking-wide text-primary-foreground">
+                Popular
+              </span>
+            )}
+            <span className="font-normal text-muted-foreground">· {price}</span>
+          </span>
+          <span className="block text-xs text-muted-foreground">{summary}</span>
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className={cn(
+            'size-4 shrink-0 text-muted-foreground/50 transition-transform duration-150',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      {/* Smooth height animation via the grid 0fr→1fr technique: content is
+          always rendered (so it can animate both ways) and clipped by the inner
+          overflow-hidden; a fade adds polish. */}
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows] duration-200 ease-out',
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="px-4 pb-4">
+            <FeatureList features={features} />
+            <button
+              type="button"
+              onClick={onClick}
+              disabled={disabled}
+              tabIndex={open ? 0 : -1}
+              className={cn(
+                'mt-3 w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                // Paid tiers get the strong filled CTA; Free is intentionally
+                // quieter (outline) so it doesn't pull weight from the revenue
+                // tiers.
+                quietCta ? ctaOutline : ctaFilled,
+              )}
+            >
+              {ctaLabel}
+            </button>
+            {ctaNote && (
+              <p className="mt-1.5 text-center text-xs text-muted-foreground">{ctaNote}</p>
+            )}
+          </div>
+        </div>
       </div>
     </li>
   )
