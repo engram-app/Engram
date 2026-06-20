@@ -38,7 +38,15 @@ defmodule EngramWeb.ApiSpec do
         %Tag{name: "Notes", description: "Create, read, update, delete, and sync notes."},
         %Tag{name: "Folders", description: "Browse and manage folders."},
         %Tag{name: "Search", description: "Vector, keyword, and hybrid search."},
-        %Tag{name: "Tags", description: "List vault tags."}
+        %Tag{name: "Tags", description: "List vault tags."},
+        %Tag{
+          name: "Vaults",
+          description: "Create, manage, soft-delete, restore, and purge vaults."
+        },
+        %Tag{
+          name: "Account",
+          description: "Current user profile, storage usage, and account deletion."
+        }
       ],
       components: %Components{
         # Engram accepts all credentials on the same `Authorization: Bearer`

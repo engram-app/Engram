@@ -1,7 +1,15 @@
 defmodule EngramWeb.UsersController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Accounts
+
+  operation(:me,
+    summary: "Get the current user",
+    tags: ["Account"],
+    responses: [ok: {"Current user", "application/json", Schemas.UserResponse}]
+  )
 
   def me(conn, _params) do
     user = conn.assigns.current_user
@@ -15,6 +23,17 @@ defmodule EngramWeb.UsersController do
       }
     })
   end
+
+  operation(:update,
+    summary: "Update the current user's profile",
+    tags: ["Account"],
+    request_body:
+      {"Profile fields", "application/json", Schemas.UpdateProfileRequest, required: true},
+    responses: [
+      ok: {"Updated user", "application/json", Schemas.UserResponse},
+      unprocessable_entity: {"Validation error", "application/json", Schemas.ValidationError}
+    ]
+  )
 
   def update(conn, params) do
     user = conn.assigns.current_user
@@ -44,6 +63,22 @@ defmodule EngramWeb.UsersController do
         |> json(%{error: "validation_failed", details: details})
     end
   end
+
+  operation(:delete,
+    summary: "Delete the current user's account",
+    tags: ["Account"],
+    description: "Irreversible. Requires the account password for confirmation.",
+    request_body:
+      {"Password confirmation", "application/json", Schemas.DeleteAccountRequest, required: true},
+    responses: [
+      ok: {"Account deleted", "application/json", Schemas.OkFlag},
+      bad_request: {"password_required", "application/json", Schemas.MessageError},
+      forbidden: {"invalid_password", "application/json", Schemas.MessageError},
+      conflict:
+        {"last_admin — cannot delete the only admin", "application/json", Schemas.MessageError},
+      unprocessable_entity: {"delete_failed", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def delete(conn, %{"password" => password}) when is_binary(password) do
     user = conn.assigns.current_user

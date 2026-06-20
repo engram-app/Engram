@@ -138,4 +138,83 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 200)
     end
   end
+
+  describe "Vaults paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "declares Vaults + Account tags", %{spec: spec} do
+      names = Enum.map(spec.tags, & &1.name)
+      assert "Vaults" in names and "Account" in names
+    end
+
+    test "GET /api/vaults documents deleted + user_code query params", %{spec: spec} do
+      op = spec.paths["/api/vaults"].get
+      assert op.tags == ["Vaults"]
+      names = Enum.map(op.parameters, & &1.name)
+      assert :deleted in names and :user_code in names
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "POST /api/vaults documents request + 201/402/422", %{spec: spec} do
+      op = spec.paths["/api/vaults"].post
+      assert op.tags == ["Vaults"]
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [201, 402, 422]
+    end
+
+    test "POST /api/vaults/register documents request + 200/201/400/402", %{spec: spec} do
+      op = spec.paths["/api/vaults/register"].post
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402]
+    end
+
+    test "GET /api/vaults/{id} documents id path param + 404", %{spec: spec} do
+      op = spec.paths["/api/vaults/{id}"].get
+      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path and &1.required))
+      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 404)
+    end
+
+    test "DELETE /api/vaults/{id} documents 200/404", %{spec: spec} do
+      op = spec.paths["/api/vaults/{id}"].delete
+      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 404)
+    end
+
+    test "POST /api/vaults/{id}/restore documents 200/402/404", %{spec: spec} do
+      op = spec.paths["/api/vaults/{id}/restore"].post
+      assert Enum.sort(Map.keys(op.responses)) == [200, 402, 404]
+    end
+
+    test "POST /api/vaults/{id}/purge documents 200/404", %{spec: spec} do
+      op = spec.paths["/api/vaults/{id}/purge"].post
+      assert Enum.sort(Map.keys(op.responses)) == [200, 404]
+    end
+  end
+
+  describe "Account paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "GET /api/me returns the current user", %{spec: spec} do
+      op = spec.paths["/api/me"].get
+      assert op.tags == ["Account"]
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "PATCH /api/me documents request + 200/422", %{spec: spec} do
+      op = spec.paths["/api/me"].patch
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 422]
+    end
+
+    test "DELETE /api/me documents request + 200/400/403/409/422", %{spec: spec} do
+      op = spec.paths["/api/me"].delete
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 403, 409, 422]
+    end
+
+    test "GET /api/user/storage documents 200", %{spec: spec} do
+      op = spec.paths["/api/user/storage"].get
+      assert op.tags == ["Account"]
+      assert Map.has_key?(op.responses, 200)
+    end
+  end
 end

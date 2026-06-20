@@ -1,5 +1,7 @@
 defmodule EngramWeb.VaultsController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
@@ -7,6 +9,26 @@ defmodule EngramWeb.VaultsController do
   @zero_counts %{notes: 0, attachments: 0}
 
   # ── index ──────────────────────────────────────────────────────────────────
+
+  operation(:index,
+    summary: "List vaults",
+    tags: ["Vaults"],
+    parameters: [
+      deleted: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Pass \"true\" to list soft-deleted vaults instead of active ones."
+      ],
+      user_code: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Device-link user code; echoes a `suggested_vault_name`."
+      ]
+    ],
+    responses: [ok: {"Vaults", "application/json", Schemas.VaultsResponse}]
+  )
 
   def index(conn, %{"deleted" => "true"}) do
     user = conn.assigns.current_user
@@ -45,6 +67,18 @@ defmodule EngramWeb.VaultsController do
 
   # ── create ─────────────────────────────────────────────────────────────────
 
+  operation(:create,
+    summary: "Create a vault",
+    tags: ["Vaults"],
+    request_body:
+      {"Vault attributes", "application/json", Schemas.CreateVaultRequest, required: true},
+    responses: [
+      created: {"Created", "application/json", Schemas.VaultResponse},
+      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
+      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
+    ]
+  )
+
   def create(conn, params) do
     user = conn.assigns.current_user
 
@@ -72,6 +106,16 @@ defmodule EngramWeb.VaultsController do
   end
 
   # ── show ───────────────────────────────────────────────────────────────────
+
+  operation(:show,
+    summary: "Get a vault by id",
+    tags: ["Vaults"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
+    responses: [
+      ok: {"Vault", "application/json", Schemas.VaultResponse},
+      not_found: {"No such vault", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
@@ -103,6 +147,19 @@ defmodule EngramWeb.VaultsController do
 
   # ── update ─────────────────────────────────────────────────────────────────
 
+  operation(:update,
+    summary: "Update a vault",
+    tags: ["Vaults"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
+    request_body:
+      {"Fields to change", "application/json", Schemas.UpdateVaultRequest, required: true},
+    responses: [
+      ok: {"Updated", "application/json", Schemas.VaultResponse},
+      not_found: {"No such vault", "application/json", Schemas.MessageError},
+      unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
+    ]
+  )
+
   def update(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
     attrs = Map.take(params, ["name", "description", "is_default"])
@@ -129,6 +186,16 @@ defmodule EngramWeb.VaultsController do
 
   # ── delete ─────────────────────────────────────────────────────────────────
 
+  operation(:delete,
+    summary: "Soft-delete a vault",
+    tags: ["Vaults"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
+    responses: [
+      ok: {"Soft-deleted (restorable for 30 days)", "application/json", Schemas.VaultDeleted},
+      not_found: {"No such vault", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
@@ -145,6 +212,17 @@ defmodule EngramWeb.VaultsController do
   end
 
   # ── restore ──────────────────────────────────────────────────────────────────
+
+  operation(:restore,
+    summary: "Restore a soft-deleted vault",
+    tags: ["Vaults"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
+    responses: [
+      ok: {"Restored", "application/json", Schemas.VaultResponse},
+      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
+      not_found: {"No such vault", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def restore(conn, %{"id" => id}) do
     user = conn.assigns.current_user
@@ -176,6 +254,17 @@ defmodule EngramWeb.VaultsController do
 
   # ── purge (immediate hard delete) ──────────────────────────────────────────────
 
+  operation(:purge,
+    summary: "Permanently purge a vault",
+    tags: ["Vaults"],
+    description: "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
+    parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
+    responses: [
+      ok: {"Purged", "application/json", Schemas.VaultPurged},
+      not_found: {"No such vault", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def purge(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
@@ -195,6 +284,22 @@ defmodule EngramWeb.VaultsController do
   # encrypted at rest by definition; per-note reads decrypt on demand.
 
   # ── register ───────────────────────────────────────────────────────────────
+
+  operation(:register,
+    summary: "Register or fetch a vault by client_id (idempotent)",
+    tags: ["Vaults"],
+    description:
+      "Used by the plugin on first sync. Returns 201 with `status: created` for a new " <>
+        "vault, or 200 with `status: existing` when the client_id already maps to one.",
+    request_body:
+      {"Name + client_id", "application/json", Schemas.RegisterVaultRequest, required: true},
+    responses: [
+      ok: {"Existing vault", "application/json", Schemas.RegisterVaultResponse},
+      created: {"Newly created vault", "application/json", Schemas.RegisterVaultResponse},
+      bad_request: {"name and client_id are required", "application/json", Schemas.MessageError},
+      payment_required: {"Vault cap reached", "application/json", Schemas.LimitError}
+    ]
+  )
 
   def register(conn, params) do
     user = conn.assigns.current_user

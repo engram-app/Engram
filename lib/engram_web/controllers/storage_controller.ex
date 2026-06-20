@@ -1,5 +1,7 @@
 defmodule EngramWeb.StorageController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Attachments
   alias Engram.Billing
@@ -9,6 +11,12 @@ defmodule EngramWeb.StorageController do
   # unbounded (Billing.effective_limit returns :unlimited).
   @selfhost_max_file_bytes 524_288_000
   @max_storage_bytes 1_073_741_824
+
+  operation(:index,
+    summary: "Get storage usage and caps",
+    tags: ["Account"],
+    responses: [ok: {"Storage usage", "application/json", Schemas.StorageUsage}]
+  )
 
   def index(conn, _params) do
     user = conn.assigns.current_user
