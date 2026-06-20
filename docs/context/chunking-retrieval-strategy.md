@@ -10,7 +10,7 @@ Layered strategy for chunking notes and retrieving relevant content. Each priori
 
 ## Current State
 
-Heading-aware chunking at ~512 tokens / 50 overlap (approximate, word-based ~4 chars/token — Voyage API handles actual tokenization). Folder-aware context prepended before embedding. **Hybrid search (dense + BM25 keyword) shipped in #610** — see below.
+Heading-aware chunking at ~512 tokens (≈2048 chars), no overlap — large sections are sub-chunked at word boundaries with no carry-over (`parsers/markdown.ex` `split_text/2`). Approximate, word-based ~4 chars/token — Voyage API handles actual tokenization. Folder-aware context prepended before embedding. **Hybrid search (dense + BM25 keyword) shipped in #610** — see below.
 
 ### Hybrid keyword search (shipped #610)
 Per-chunk sparse vectors live alongside the dense vector in the same Qdrant point. Tokens are NOT stored as plaintext: each token is `HMAC(user_DEK, token) → u32` (no plaintext keywords at rest). Real BM25 scoring uses Qdrant's server-side IDF with client-side TF / length-norm; an NFKC + CJK-bigram tokenizer feeds both index and query. The two legs are fused server-side via Reciprocal Rank Fusion (RRF), so the hybrid `score` is an RRF rank score, NOT a cosine similarity. Callers pick a leg via `?mode=` on `GET /api/search`:
