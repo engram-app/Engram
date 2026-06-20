@@ -1,0 +1,92 @@
+name: Sync OpenAPI spec to marketing
+
+# When the canonical spec changes on main, open a PR in engram-marketing
+# updating the copy the docs site renders. The backend is the source of
+# truth (openapi.json is drift-gated in CI on PRs); this just propagates it.
+#
+# Mirrors the engram-infra image-bump job in verify.yml: App token →
+# checkout target repo → edit file → peter-evans/create-pull-request.
+#
+# Required App permissions on engram-marketing:
+#   - contents: read & write      (push the bot branch)
+#   - pull-requests: read & write (open the PR)
+# The org App already grants these on engram-infra / Engram-obsidian, so it
+# is very likely installed org-wide. If a step below 403s, fix the App
+# installation/permissions in the org App settings.
+on:
+  push:
+    branches: [main]
+    paths: ["openapi.json"]
+
+# Serialize overlapping merges so two rapid spec changes don't race on the
+# shared bot branch.
+concurrency:
+  group: sync-openapi-to-marketing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: [self-hosted, linux, x64, isolated]
+    steps:
+      - name: Checkout backend (for openapi.json)
+        uses: actions/checkout@v6
+
+      - name: Generate engram-marketing App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: engram-marketing
+
+      - name: Checkout engram-marketing
+        uses: actions/checkout@v6
+        with:
+          repository: engram-app/engram-marketing
+          token: ${{ steps.app-token.outputs.token }}
+          path: marketing
+          ref: main
+          # peter-evans/create-pull-request@v8 sets its own Authorization
+          # header on push; persist-credentials=true leaves the checkout's
+          # basic-auth extraheader in git config and the second header
+          # triggers GitHub's "Duplicate header: Authorization" 400.
+          persist-credentials: false
+
+      - name: Copy spec into marketing
+        run: cp openapi.json marketing/src/openapi/engram.json
+
+      - name: Open / update PR in engram-marketing
+        uses: peter-evans/create-pull-request@v8
+        with:
+          path: marketing
+          token: ${{ steps.app-token.outputs.token }}
+          branch: bot/sync-openapi-spec
+          delete-branch: true
+          # engram-marketing's ruleset enforces required_signatures = true.
+          # sign-commits routes the commit through the GraphQL
+          # createCommitOnBranch mutation, which GitHub auto-signs on behalf
+          # of the App. Without this the bot commit is unsigned and the PR
+          # blocks at merge with "Commits must have verified signatures."
+          sign-commits: true
+          commit-message: |
+            docs: sync OpenAPI spec from backend
+
+            Automated sync from engram-app/Engram@${{ github.sha }}.
+          title: "docs: sync OpenAPI spec from backend"
+          body: |
+            Automated sync of `src/openapi/engram.json` from the backend's
+            generated OpenAPI spec.
+
+            Source commit: ${{ github.repository }}@${{ github.sha }}
+
+            The backend is the source of truth (`openapi.json`, drift-gated
+            in CI). This PR updates the copy the docs site renders at
+            `/docs/api`. Marketing CI (Build) validates the spec renders;
+            merge to deploy.
+          labels: |
+            automated
+            docs
