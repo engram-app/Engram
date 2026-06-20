@@ -3,6 +3,13 @@
     "responses": {},
     "schemas": {
       "BatchMoveFoldersRequest": {
+        "example": {
+          "ids": [
+            "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+            "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f90"
+          ],
+          "target_parent_id": "root"
+        },
         "properties": {
           "ids": {
             "items": {
@@ -385,6 +392,9 @@
         "x-validate": null
       },
       "UpdateProfileRequest": {
+        "example": {
+          "display_name": "Ada Lovelace"
+        },
         "properties": {
           "display_name": {
             "nullable": true,
@@ -413,6 +423,9 @@
         "x-validate": null
       },
       "CreateApiKeyRequest": {
+        "example": {
+          "name": "CI pipeline"
+        },
         "properties": {
           "name": {
             "type": "string",
@@ -536,6 +549,10 @@
         "x-validate": null
       },
       "RegisterVaultRequest": {
+        "example": {
+          "client_id": "obsidian-9f1b2c3d4e5f",
+          "name": "My Vault"
+        },
         "properties": {
           "client_id": {
             "description": "Client-generated stable vault id.",
@@ -581,6 +598,13 @@
         "x-validate": null
       },
       "AttachmentBatchMoveRequest": {
+        "example": {
+          "paths": [
+            "assets/diagram.png",
+            "assets/logo.svg"
+          ],
+          "target_folder": "archive/assets"
+        },
         "properties": {
           "paths": {
             "items": {
@@ -700,6 +724,11 @@
         "x-validate": null
       },
       "UploadAttachmentRequest": {
+        "example": {
+          "content_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "mime_type": "image/png",
+          "path": "assets/diagram.png"
+        },
         "properties": {
           "content_base64": {
             "description": "Base64-encoded file bytes.",
@@ -730,6 +759,10 @@
         "x-validate": null
       },
       "RenameRequest": {
+        "example": {
+          "new_path": "Archive/Engram.md",
+          "old_path": "Projects/Engram.md"
+        },
         "properties": {
           "new_path": {
             "type": "string",
@@ -958,6 +991,10 @@
         "x-validate": null
       },
       "UpdateVaultRequest": {
+        "example": {
+          "is_default": true,
+          "name": "Research (renamed)"
+        },
         "properties": {
           "description": {
             "nullable": true,
@@ -1337,6 +1374,12 @@
         "x-validate": null
       },
       "AttachmentBatchDeleteRequest": {
+        "example": {
+          "paths": [
+            "assets/diagram.png",
+            "assets/old-logo.svg"
+          ]
+        },
         "properties": {
           "paths": {
             "items": {
@@ -1542,6 +1585,12 @@
         "x-validate": null
       },
       "BatchIdsRequest": {
+        "example": {
+          "ids": [
+            "9f1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+            "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+          ]
+        },
         "properties": {
           "ids": {
             "items": {
@@ -1581,6 +1630,9 @@
         "x-validate": null
       },
       "DeleteAccountRequest": {
+        "example": {
+          "password": "correct horse battery staple"
+        },
         "properties": {
           "password": {
             "format": "password",
@@ -1829,6 +1881,24 @@
         "x-validate": null
       },
       "BatchUpsertRequest": {
+        "example": {
+          "notes": [
+            {
+              "content": "# Engram\n\nAn AI-powered personal knowledge base.\n",
+              "mtime": 1.7189e9,
+              "path": "Projects/Engram.md",
+              "tags": [
+                "project",
+                "ai"
+              ]
+            },
+            {
+              "content": "## 2026-06-20\n\n- Shipped the batch upsert endpoint.\n",
+              "mtime": 1.7189001e9,
+              "path": "Daily/2026-06-20.md"
+            }
+          ]
+        },
         "properties": {
           "notes": {
             "items": {
@@ -1849,6 +1919,9 @@
         "x-validate": null
       },
       "CreatePatRequest": {
+        "example": {
+          "name": "Claude Desktop"
+        },
         "properties": {
           "name": {
             "type": "string",
@@ -1971,6 +2044,11 @@
         "x-validate": null
       },
       "CreateVaultRequest": {
+        "example": {
+          "description": "Papers and reading notes.",
+          "is_default": false,
+          "name": "Research"
+        },
         "properties": {
           "description": {
             "nullable": true,
@@ -2511,6 +2589,13 @@
         "x-validate": null
       },
       "BatchMoveNotesRequest": {
+        "example": {
+          "ids": [
+            "9f1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+            "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+          ],
+          "target_folder_id": "7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f"
+        },
         "properties": {
           "ids": {
             "items": {

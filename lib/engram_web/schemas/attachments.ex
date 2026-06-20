@@ -83,7 +83,13 @@ defmodule EngramWeb.Schemas.UploadAttachmentRequest do
         description: "Detected from path if omitted."
       }
     },
-    required: [:path, :content_base64]
+    required: [:path, :content_base64],
+    example: %{
+      "path" => "assets/diagram.png",
+      "content_base64" =>
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "mime_type" => "image/png"
+    }
   })
 end
 
@@ -168,7 +174,11 @@ defmodule EngramWeb.Schemas.AttachmentBatchMoveRequest do
       paths: %Schema{type: :array, items: %Schema{type: :string}},
       target_folder: %Schema{type: :string}
     },
-    required: [:paths, :target_folder]
+    required: [:paths, :target_folder],
+    example: %{
+      "paths" => ["assets/diagram.png", "assets/logo.svg"],
+      "target_folder" => "archive/assets"
+    }
   })
 end
 
@@ -181,7 +191,10 @@ defmodule EngramWeb.Schemas.AttachmentBatchDeleteRequest do
     title: "AttachmentBatchDeleteRequest",
     type: :object,
     properties: %{paths: %Schema{type: :array, items: %Schema{type: :string}}},
-    required: [:paths]
+    required: [:paths],
+    example: %{
+      "paths" => ["assets/diagram.png", "assets/old-logo.svg"]
+    }
   })
 end
 
