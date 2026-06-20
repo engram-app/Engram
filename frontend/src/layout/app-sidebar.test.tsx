@@ -17,6 +17,11 @@ let billingEnabled = true
 vi.mock('../auth/use-auth-adapter', () => ({
   useAuthAdapter: () => ({ user: { email: 'test@example.com', imageUrl: null }, logout: vi.fn() }),
 }))
+// AppSidebar → FilesPanel → FolderActions reads useAttachmentUpload; stub the
+// provider so the sidebar renders without an AttachmentUploadProvider wrapper.
+vi.mock('../viewer/attachment-upload/provider', () => ({
+  useAttachmentUpload: () => ({ openUpload: vi.fn() }),
+}))
 vi.mock('../api/queries', async () => {
   const actual = await vi.importActual<typeof import('../api/queries')>('../api/queries')
   return {

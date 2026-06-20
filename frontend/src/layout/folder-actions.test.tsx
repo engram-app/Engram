@@ -3,10 +3,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { navigate, post, toastError } = vi.hoisted(() => ({
+const { navigate, post, toastError, openUpload } = vi.hoisted(() => ({
   navigate: vi.fn(),
   post: vi.fn(),
   toastError: vi.fn(),
+  openUpload: vi.fn(),
+}))
+
+vi.mock('../viewer/attachment-upload/provider', () => ({
+  useAttachmentUpload: () => ({ openUpload }),
+}))
+
+// Controllable demo flag — null (not demo) by default; flip per test.
+let demoActive = false
+vi.mock('../onboarding/tour/demo-vault-provider', () => ({
+  useDemoVaultOptional: () => (demoActive ? { active: true } : null),
 }))
 
 vi.mock('react-router', async () => {
@@ -66,6 +77,8 @@ describe('FolderActions', () => {
     navigate.mockReset()
     post.mockReset()
     toastError.mockReset()
+    openUpload.mockReset()
+    demoActive = false
   })
 
   it('creates a note in the active folder when New note is clicked', async () => {
@@ -102,6 +115,19 @@ describe('FolderActions', () => {
     await waitFor(() => {
       expect(navigate).toHaveBeenCalledWith('/note/7')
     })
+  })
+
+  it('opens the upload flow targeting the active folder when Upload is clicked', () => {
+    renderWithProviders()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }))
+    // Seeded active note lives in folder "foo" (see renderWithProviders).
+    expect(openUpload).toHaveBeenCalledWith(undefined, 'foo')
+  })
+
+  it('hides the Upload button on demo vaults', () => {
+    demoActive = true
+    renderWithProviders()
+    expect(screen.queryByRole('button', { name: 'Upload attachment' })).toBeNull()
   })
 
   it('uses the target folder label in the New note tooltip trigger', () => {

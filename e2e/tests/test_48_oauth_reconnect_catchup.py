@@ -32,7 +32,10 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping OAuth reconnect tests",
 )
 
-RT_TIMEOUT = 15  # generous for reconnect + catch-up overhead
+# Reconnect + catch-up round-trip budget under e2e-clerk load. 15s flaked
+# (#643); aligned with test_47 + test_78's 30s budget (#565). Clerk-only
+# (skipif below), so one generous constant suffices.
+RT_TIMEOUT = 30
 
 
 def _log_latency(label: str, t0: float) -> float:

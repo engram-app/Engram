@@ -117,7 +117,7 @@ jobs:
           owner: engram-app
           repositories: Engram-obsidian
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve plugin SHA
         id: plugin-sha
@@ -146,11 +146,15 @@ jobs:
             AUTH=(-H "Accept: application/vnd.github+json")
           fi
 
+          # --retry-all-errors so a transient connection reset (curl 35/52/56)
+          # — not just HTTP 5xx — is retried. A single blip here is fatal:
+          # the whole pipeline gates on fingerprint's output, so one reset
+          # cascades to unit-tests/e2e-*/prebuild-* (#576).
           resolve_sha() {
-            curl -fsS "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
+            curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/$1" | jq -r '.sha'
           }
           branch_exists() {
-            curl -fsS -o /dev/null "${AUTH[@]}" "${API}/branches/$1"
+            curl -fsS -o /dev/null --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/branches/$1"
           }
 
           if [ -n "$DISPATCH_REF" ]; then
@@ -313,7 +317,7 @@ jobs:
     outputs:
       image: ${{ steps.tag.outputs.image }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Compute image tag
         id: tag
@@ -396,7 +400,7 @@ jobs:
       build-dev-key: ${{ steps.keys.outputs.build-dev }}
       build-test-key: ${{ steps.keys.outputs.build-test }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ + deps/ for incremental compile
 
@@ -480,7 +484,7 @@ jobs:
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -565,7 +569,7 @@ jobs:
           # obsidian-update workflow can leave `core.sparseCheckout=true` and
           # skip-worktree bits on the shared workspace index. `git sparse-checkout
           # disable` clears the config but NOT the index bits, so a subsequent
-          # `actions/checkout@v6 --clean:false` lands an empty working tree
+          # `actions/checkout@v7 --clean:false` lands an empty working tree
           # (mix.exs missing, etc.). Nuke `.git` when poison is detected so the
           # next checkout reclones cleanly. Untracked caches (_build/, deps/,
           # node_modules/) survive — they live outside .git.
@@ -574,7 +578,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -916,7 +920,7 @@ jobs:
           API="https://api.github.com/repos/engram-app/Engram-obsidian"
           AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           # Resolve to full 40-char SHA (short SHAs from manual dispatches won't work)
-          PLUGIN_SHA=$(curl -fsS "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
+          PLUGIN_SHA=$(curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/commits/${SHORT_SHA}" | jq -r '.sha')
           # Determine overall E2E result from prior steps
           if [ "${{ job.status }}" = "success" ]; then
             STATE="success"
@@ -925,13 +929,33 @@ jobs:
             STATE="failure"
             DESC="E2E tests failed"
           fi
-          curl -fsS -X POST "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
+          curl -fsS -X POST --retry 3 --retry-all-errors --retry-delay 2 "${AUTH[@]}" "${API}/statuses/${PLUGIN_SHA}" \
             -d "$(jq -nc --arg state "$STATE" --arg context "backend/e2e" --arg description "$DESC" --arg target_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                   '{state:$state, context:$context, description:$description, target_url:$target_url}')"
 
       # ------------------------------------------------------------------
       # Cleanup — MUST kill everything, even on cancel/failure
       # ------------------------------------------------------------------
+      # Reap stale e2e Clerk orphans on EVERY run (not just the throttled
+      # hourly cron, which GitHub fires only ~every 3-5h and a CI burst
+      # outpaces). Runs `if: always()` so it fires even when pytest is
+      # hard-killed before its session_cleanup fixture (helpers/clerk.py
+      # ClerkClient.cleanup_tracked) could delete this run's users. The
+      # `--older-than 1h` age filter protects any concurrent run's in-flight
+      # users — same safety belt the cron uses — so this never races a
+      # sibling. Together: per-run fixture cleanup handles this run's users
+      # immediately; this step + cron mop up crashed-run orphans frequently.
+      - name: Reap stale Clerk orphans (>1h)
+        if: always()
+        env:
+          E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "${E2E_CLERK_SECRET_KEY}" ]; then
+            echo "E2E_CLERK_SECRET_KEY not set — skipping orphan reap." >&2
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h || true
+
       - name: Collect failure logs
         if: failure()
         run: |
@@ -1013,7 +1037,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -1214,7 +1238,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -1286,7 +1310,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
@@ -1458,7 +1482,7 @@ jobs:
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Forbid TODO*.md files
         run: |
@@ -1500,7 +1524,7 @@ jobs:
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Scan CLAUDE.md / AGENTS.md files for known-stale facts
         run: |
@@ -1562,7 +1586,7 @@ jobs:
     # provisioned text — DCR endpoint crashed with Postgrex.EncodeError on
     # every register. Spec: workspace docs/superpowers/specs/2026-05-30-deploy-guardrails-design.md
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need history to diff against origin/main. depth=50 is plenty for
           # PR-sized diffs and avoids the full clone cost.
@@ -1645,7 +1669,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -1704,7 +1728,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -1873,7 +1897,7 @@ jobs:
       PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
       MIX_ENV: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -2049,7 +2073,7 @@ jobs:
     # frontend/bun.lock changed vs origin/main. On main itself, run
     # unconditionally (audits the just-merged state).
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need history to diff against origin/main in the guard step.
           fetch-depth: 50
@@ -2129,7 +2153,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -2246,7 +2270,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -2607,7 +2631,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # need tags for `git describe --exact-match` (vtag)
 
@@ -2934,7 +2958,7 @@ jobs:
           repositories: engram-infra
 
       - name: Checkout engram-infra
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: engram-app/engram-infra
           token: ${{ steps.app-token.outputs.token }}
@@ -3094,7 +3118,7 @@ jobs:
             rm -rf .git
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need parent commit so the guard's HEAD~1 diff works.
           fetch-depth: 2
@@ -3159,7 +3183,7 @@ jobs:
       group: deploy-frontend-prod
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need the parent commit to diff the merge for frontend changes.
           fetch-depth: 2

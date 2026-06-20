@@ -11,7 +11,15 @@ const { setActiveVaultId } = vi.hoisted(() => ({ setActiveVaultId: vi.fn() }))
 vi.mock('../api/active-vault', () => ({ setActiveVaultId }))
 
 const authState = vi.hoisted(() => ({ current: { isSignedIn: true } as { isSignedIn: boolean } }))
-vi.mock('../auth/use-auth-adapter', () => ({ useAuthAdapter: () => authState.current }))
+// useAuthAdapter must expose getToken: DeviceLinkPage mounts useVaultReadyEvents,
+// whose effect calls `await getToken()`. Without it the fire-and-forget connect()
+// rejects with "getToken is not a function" (an unhandled rejection that fails the
+// run even though assertions pass). Returning null makes connect() early-return —
+// no socket opened in the unit test. Spread authState last so per-test isSignedIn
+// still applies.
+vi.mock('../auth/use-auth-adapter', () => ({
+  useAuthAdapter: () => ({ getToken: () => Promise.resolve(null), ...authState.current }),
+}))
 
 vi.mock('../theme/theme-toggle', () => ({
   default: () => <button type="button">theme</button>,

@@ -1,4 +1,4 @@
-import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical } from 'lucide-react'
+import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical, Upload } from 'lucide-react'
 import { Fragment } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/tooltip'
 import { useCreateFolder, useCreateNote } from '@/api/queries'
 import { useActiveFolder } from '@/lib/active-folder'
+import { useAttachmentUpload } from '../viewer/attachment-upload/provider'
+import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 import { type SortKey, useFolderTreeState } from './folder-tree-context'
 
 const ICON = 'size-5'
@@ -59,6 +61,9 @@ export default function FolderActions() {
 
   const createNote = useCreateNote()
   const createFolder = useCreateFolder()
+  const { openUpload } = useAttachmentUpload()
+  // Demo vaults are read-only previews — no upload affordance during the tour.
+  const demoActive = useDemoVaultOptional()?.active === true
 
   return (
     <section
@@ -97,6 +102,23 @@ export default function FolderActions() {
           </TooltipTrigger>
           <TooltipContent>Creates in {targetLabel}</TooltipContent>
         </Tooltip>
+
+        {!demoActive && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Upload attachment"
+                className={BUTTON}
+                onClick={() => openUpload(undefined, activeFolder)}
+              >
+                <Upload className={ICON} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Upload an attachment</TooltipContent>
+          </Tooltip>
+        )}
       </TooltipProvider>
 
       <DropdownMenu>

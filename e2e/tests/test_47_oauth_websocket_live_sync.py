@@ -33,7 +33,11 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping OAuth WebSocket tests",
 )
 
-RT_TIMEOUT = 10  # slightly more generous than test_45 for OAuth overhead
+# WS round-trip budget under e2e-clerk load (2-worker xdist + Clerk-auth
+# latency). 10s flaked repeatedly (#643); matches test_78's proven 30s
+# budget (#565). These tests only run under e2e-clerk (skipif below), so a
+# single generous constant is correct — no variant branching needed.
+RT_TIMEOUT = 30
 
 
 def _log_latency(label: str, t0: float) -> float:
