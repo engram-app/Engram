@@ -239,5 +239,31 @@ defmodule EngramWeb.TelemetryTest do
       assert EngramWeb.Telemetry.websocket_poll_period() == :timer.seconds(30),
              "WS gauge cadence is a contract — 30s balances spike-visibility against per-tick cost"
     end
+
+    test "engram.crypto.rotate.dek.snoozed.count carries no per-user label (cardinality guard)" do
+      metric =
+        Enum.find(
+          EngramWeb.Telemetry.metrics(),
+          &(&1.name == [:engram, :crypto, :rotate, :dek, :snoozed, :count])
+        )
+
+      assert metric, "expected an engram.crypto.rotate.dek.snoozed.count metric"
+
+      refute :user_id in metric.tags,
+             "snoozed counter must NOT tag :user_id — one Prometheus series per user is unbounded cardinality (#517)"
+    end
+
+    test "engram.embed.rate_limited.count carries no per-vault label (cardinality guard)" do
+      metric =
+        Enum.find(
+          EngramWeb.Telemetry.metrics(),
+          &(&1.name == [:engram, :embed, :rate_limited, :count])
+        )
+
+      assert metric, "expected an engram.embed.rate_limited.count metric"
+
+      refute :vault_id in metric.tags,
+             "rate_limited counter must NOT tag :vault_id — one Prometheus series per vault is unbounded cardinality (#517)"
+    end
   end
 end
