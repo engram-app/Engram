@@ -1,14 +1,74 @@
 import { readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Plugin } from 'vite'
+import type { HtmlTagDescriptor, Plugin } from 'vite'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
+import { bootstrapConfigFromEnv } from './scripts/bootstrap-config'
 /// <reference types="vitest" />
 
 const apiTarget = process.env.VITE_API_TARGET ?? 'http://localhost:4000'
+
+// Saas-only bootstrap optimizations, gated on VITE_INLINE_BOOTSTRAP_CONFIG=1
+// (set by `bun run build:saas`). The selfhost build leaves the flag unset, so
+// this plugin is a no-op and the SSR-injected / fetched config path is wholly
+// untouched. It does three things to cut time-to-login-modal:
+//   1. preconnect + dns-prefetch to clerk.engram.page so the TLS handshake to
+//      Clerk's FAPI happens DURING main-bundle parse, not after React mounts.
+//   2. inline window.__ENGRAM_CONFIG__ so loadConfig() resolves synchronously
+//      and the SPA never blocks first render on a /config.json round trip.
+//   3. modulepreload the Clerk vendor + auth-provider + sign-in chunks so they
+//      download in parallel with the main bundle instead of in a lazy waterfall.
+function inlineBootstrap(): Plugin {
+  const CLERK_CHUNKS = new Set(['clerk-auth-provider', 'clerk-sign-in'])
+  return {
+    name: 'engram-inline-bootstrap',
+    apply: 'build',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, ctx) {
+        if (process.env.VITE_INLINE_BOOTSTRAP_CONFIG !== '1') return
+
+        const { config, errors } = bootstrapConfigFromEnv(process.env)
+        if (errors.length > 0) {
+          throw new Error(`[inline-bootstrap] ${errors.join('; ')}`)
+        }
+
+        const tags: HtmlTagDescriptor[] = [
+          {
+            tag: 'link',
+            attrs: { rel: 'preconnect', href: 'https://clerk.engram.page', crossorigin: '' },
+            injectTo: 'head-prepend',
+          },
+          {
+            tag: 'link',
+            attrs: { rel: 'dns-prefetch', href: 'https://clerk.engram.page' },
+            injectTo: 'head-prepend',
+          },
+          {
+            tag: 'script',
+            children: `window.__ENGRAM_CONFIG__=${JSON.stringify(config)}`,
+            injectTo: 'head',
+          },
+        ]
+
+        for (const output of Object.values(ctx.bundle ?? {})) {
+          if (output.type === 'chunk' && CLERK_CHUNKS.has(output.name)) {
+            tags.push({
+              tag: 'link',
+              attrs: { rel: 'modulepreload', href: `/${output.fileName}` },
+              injectTo: 'head',
+            })
+          }
+        }
+
+        return { html, tags }
+      },
+    },
+  }
+}
 
 // Sentry source-map upload + release tagging. Active only when
 // SENTRY_AUTH_TOKEN is present at build time (i.e. CI on the deploy
@@ -70,6 +130,9 @@ export default defineConfig({
     }),
     // Backstop for builds where Sentry is disabled (no auth token).
     stripSourceMaps(buildOutDir),
+    // Saas-only: inline config + preconnect + clerk modulepreload (no-op
+    // unless VITE_INLINE_BOOTSTRAP_CONFIG=1).
+    inlineBootstrap(),
   ],
   resolve: {
     alias: {
