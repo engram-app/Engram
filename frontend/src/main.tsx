@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import * as Sentry from '@sentry/react'
-import posthog from 'posthog-js'
 import { Toaster } from '@/components/ui/sonner'
 import { createAppRouter, installAppRouter } from './router'
 import { queryClient } from './api/query-client'
@@ -54,18 +53,25 @@ if (cfBeaconToken) {
 // [[project_observability_stack_plan]]. The identify call happens in
 // the Clerk auth provider as soon as the user resolves, NOT here —
 // firing it pre-auth would burn a permanent anonymous distinct_id.
+// posthog-js (~80 KB) is dynamically imported so it stays OUT of the eager
+// main bundle that gates first paint / the login modal. init is fire-and-
+// forget and identify happens later in the Clerk auth provider, so nothing on
+// the critical path needs posthog synchronously. The clerk-auth-provider
+// imports it too, so both resolve to one shared async chunk.
 const posthogKey = import.meta.env.VITE_POSTHOG_KEY
 const posthogHost = import.meta.env.VITE_POSTHOG_HOST ?? 'https://us.i.posthog.com'
 if (posthogKey) {
-  posthog.init(posthogKey, {
-    api_host: posthogHost,
-    persistence: 'memory',
-    autocapture: false,
-    capture_pageview: false,
-    capture_pageleave: false,
-    disable_session_recording: true,
-    // Honor the browser's DNT signal as belt-and-suspenders.
-    respect_dnt: true,
+  void import('posthog-js').then(({ default: posthog }) => {
+    posthog.init(posthogKey, {
+      api_host: posthogHost,
+      persistence: 'memory',
+      autocapture: false,
+      capture_pageview: false,
+      capture_pageleave: false,
+      disable_session_recording: true,
+      // Honor the browser's DNT signal as belt-and-suspenders.
+      respect_dnt: true,
+    })
   })
 }
 
