@@ -53,6 +53,12 @@ defmodule EngramWeb.SyncController do
   operation(:changes,
     operation_id: "sync-changes",
     summary: "Pull the unified note + attachment change feed",
+    description:
+      "Pulls one ordered page of the merged note and attachment change feed, each entry tagged " <>
+        "with its `type`, using keyset pagination via an opaque `cursor` (`has_more` + `next_cursor`). " <>
+        "`fields=meta` strips note content; `limit` is capped at 500. The cursor the client sends is " <>
+        "recorded as its durably-applied device watermark, and a cursor older than the retention " <>
+        "window returns 410.",
     tags: ["Sync"],
     parameters: [
       limit: [in: :query, type: :integer, required: false, description: "Max rows (≤500)"],

@@ -8,6 +8,10 @@ defmodule EngramWeb.FoldersController do
   operation(:index,
     operation_id: "folders-index",
     summary: "List folders",
+    description:
+      "Returns every folder in the current vault with its note count, plus a stable marker id " <>
+        "and parent id so clients can rebuild the folder hierarchy. Derived (no-marker) folders " <>
+        "and the root return a null id and are not eligible as parents.",
     tags: ["Folders"],
     responses: [ok: {"Folders", "application/json", Schemas.FoldersResponse}]
   )
@@ -54,6 +58,9 @@ defmodule EngramWeb.FoldersController do
   operation(:explicit,
     operation_id: "folders-explicit",
     summary: "List explicitly-created (empty-capable) folders",
+    description:
+      "Returns the names of folders that were created explicitly (via a folder marker) and can " <>
+        "therefore exist while empty, as opposed to folders merely derived from note paths.",
     tags: ["Folders"],
     responses: [ok: {"Folder names", "application/json", Schemas.FolderNamesResponse}]
   )
@@ -68,6 +75,9 @@ defmodule EngramWeb.FoldersController do
   operation(:list,
     operation_id: "folders-list",
     summary: "List notes in a folder (metadata only)",
+    description:
+      "Returns metadata (no content) for the notes in the folder named by the required `folder` " <>
+        "query param. Returns 400 when the param is missing.",
     tags: ["Folders"],
     parameters: [folder: [in: :query, type: :string, required: true, description: "Folder path"]],
     responses: [
@@ -94,6 +104,9 @@ defmodule EngramWeb.FoldersController do
   operation(:list_notes,
     operation_id: "folders-list-notes",
     summary: "List notes in a folder by id (metadata only)",
+    description:
+      "Returns metadata (no content) for the notes in the folder identified by its marker UUID. " <>
+        "Returns 400 for a malformed UUID and 404 when no such folder exists.",
     tags: ["Folders"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Folder UUID"]],
     responses: [
@@ -121,6 +134,9 @@ defmodule EngramWeb.FoldersController do
   operation(:create,
     operation_id: "folders-create",
     summary: "Create a folder",
+    description:
+      "Creates an explicit folder marker so the folder can exist while empty. Returns 201 with " <>
+        "the folder (count 0). An empty or root folder path is rejected with 422.",
     tags: ["Folders"],
     request_body:
       {"Folder path", "application/json", Schemas.CreateFolderRequest, required: true},
@@ -159,6 +175,9 @@ defmodule EngramWeb.FoldersController do
   operation(:delete,
     operation_id: "folders-delete",
     summary: "Delete a folder by path",
+    description:
+      "Removes the folder marker for the given path. Idempotent — deleting a non-existent or " <>
+        "never-encrypted folder still returns 204.",
     tags: ["Folders"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Folder path"]],
     responses: [no_content: "Deleted (empty body)"]
@@ -187,6 +206,10 @@ defmodule EngramWeb.FoldersController do
   operation(:rename,
     operation_id: "folders-rename",
     summary: "Rename / move a folder",
+    description:
+      "Renames or moves a folder from `old_path` to `new_path`, re-homing every note beneath it, " <>
+        "and returns the affected note count. Returns 404 when the source folder does not exist and " <>
+        "409 when the target path is already occupied.",
     tags: ["Folders"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -230,6 +253,10 @@ defmodule EngramWeb.FoldersController do
   operation(:batch_delete,
     operation_id: "folders-batch-delete",
     summary: "Delete folders by id (idempotent)",
+    description:
+      "Deletes multiple folders by marker id in a single transaction and returns the deleted " <>
+        "count. Requires the `X-Idempotency-Key` header — a retry within the TTL replays the cached " <>
+        "result. Returns 404/409 (with the offending `item_id`) if any id is missing or conflicts.",
     tags: ["Folders"],
     request_body: {"Folder ids", "application/json", Schemas.BatchIdsRequest, required: true},
     responses: [
@@ -275,6 +302,10 @@ defmodule EngramWeb.FoldersController do
   operation(:batch_move,
     operation_id: "folders-batch-move",
     summary: "Move folders under a new parent (idempotent)",
+    description:
+      "Re-parents multiple folders under `target_parent_id` (or the literal `\"root\"` for top " <>
+        "level) in one transaction and returns the moved count. Requires the `X-Idempotency-Key` " <>
+        "header. Returns 404 for a missing id and 409 (with `item_id`) on a conflict or a cycle.",
     tags: ["Folders"],
     request_body:
       {"Ids + target parent", "application/json", Schemas.BatchMoveFoldersRequest, required: true},

@@ -31,6 +31,10 @@ defmodule EngramWeb.ConnectionsController do
   operation(:delete_oauth,
     operation_id: "connections-delete-oauth",
     summary: "Revoke an OAuth client connection",
+    description:
+      "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no " <>
+        "longer mint access tokens. Pass `vault_id` to scope the revoke to a single vault; omit it " <>
+        "to revoke the client across all vaults. Session-auth only.",
     tags: ["Connections"],
     parameters: [
       client_id: [in: :path, type: :string, required: true, description: "OAuth client id"],
@@ -100,6 +104,9 @@ defmodule EngramWeb.ConnectionsController do
   operation(:delete_device,
     operation_id: "connections-delete-device",
     summary: "Revoke a device connection",
+    description:
+      "Revokes a linked device family (e.g. an Obsidian plugin install) by its family id, " <>
+        "invalidating its refresh tokens. Session-auth only.",
     tags: ["Connections"],
     parameters: [
       family_id: [in: :path, type: :string, required: true, description: "Device family id"]
@@ -127,6 +134,9 @@ defmodule EngramWeb.ConnectionsController do
   operation(:delete_pat,
     operation_id: "connections-delete-pat",
     summary: "Revoke a personal access token",
+    description:
+      "Revokes the personal access token (API key) with the given UUID so it can no longer " <>
+        "authenticate. Returns 404 for an unknown or malformed id. Session-auth only.",
     tags: ["Connections"],
     parameters: [
       id: [in: :path, type: :string, required: true, description: "PAT (API key) UUID"]

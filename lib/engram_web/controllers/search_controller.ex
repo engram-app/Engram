@@ -18,6 +18,11 @@ defmodule EngramWeb.SearchController do
   operation(:search,
     operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
+    description:
+      "Searches the current vault and returns one result per matching note (chunk hits are " <>
+        "grouped by note, ranked by best chunk score). `mode` selects vector, keyword, or hybrid " <>
+        "(default) retrieval, and results may be narrowed by `tags` or `folder`. Setting " <>
+        "`cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise).",
     tags: ["Search"],
     request_body: {"Search query", "application/json", Schemas.SearchRequest, required: true},
     responses: [

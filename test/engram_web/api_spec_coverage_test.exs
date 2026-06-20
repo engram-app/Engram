@@ -25,18 +25,7 @@ defmodule EngramWeb.ApiSpecCoverageTest do
   # Operations still missing a prose `description` (backfill: PR #2).
   # MUST ONLY SHRINK — a new endpoint earns its way off this list by being
   # documented, never onto it.
-  @pending_description ~w(
-    account-me account-storage account-update apikeys-list apikeys-revoke
-    attachments-batch-delete attachments-batch-move attachments-changes
-    attachments-delete attachments-index attachments-rename attachments-upload
-    connections-delete-device connections-delete-oauth connections-delete-pat
-    folders-batch-delete folders-batch-move folders-create folders-delete
-    folders-explicit folders-index folders-list folders-list-notes folders-rename
-    notes-append notes-batch-delete notes-batch-move notes-batch-upsert
-    notes-changes notes-delete notes-delete-by-id notes-rename notes-show
-    notes-show-by-id notes-upsert search sync-changes tags
-    vaults-create vaults-delete vaults-index vaults-restore vaults-show vaults-update
-  )
+  @pending_description ~w()
 
   # Operations whose JSON request body still lacks a top-level `example`
   # (backfill follow-up). MUST ONLY SHRINK.

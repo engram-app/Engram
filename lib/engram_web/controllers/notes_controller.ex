@@ -10,6 +10,10 @@ defmodule EngramWeb.NotesController do
   operation(:upsert,
     operation_id: "notes-upsert",
     summary: "Create or update a note",
+    description:
+      "Creates a note or updates the existing one at the same path. Concurrent edits are guarded " <>
+        "by mtime — a stale write returns 409 with the current server note. Notes over 10MB are " <>
+        "rejected with 413, and exceeding the plan's note cap returns 402.",
     tags: ["Notes"],
     request_body:
       {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},
@@ -79,6 +83,10 @@ defmodule EngramWeb.NotesController do
   operation(:append,
     operation_id: "notes-append",
     summary: "Append text to a note (creating it if absent)",
+    description:
+      "Appends `text` to the note at `path`, returning `created: false`. If the note does not " <>
+        "exist it is created with a heading derived from the filename plus the text, returning " <>
+        "`created: true`.",
     tags: ["Notes"],
     request_body: {"Path + text", "application/json", Schemas.AppendRequest, required: true},
     responses: [
@@ -130,6 +138,9 @@ defmodule EngramWeb.NotesController do
   operation(:show,
     operation_id: "notes-show",
     summary: "Get a note by path",
+    description:
+      "Returns the full note (including content) at the given slash-separated path, or 404 if " <>
+        "no note exists there.",
     tags: ["Notes"],
     parameters: [
       path: [in: :path, type: :string, required: true, description: "Note path (slash-separated)"]
@@ -154,6 +165,10 @@ defmodule EngramWeb.NotesController do
   operation(:rename,
     operation_id: "notes-rename",
     summary: "Rename / move a note",
+    description:
+      "Moves the note from `old_path` to `new_path` and returns the updated note. Returns 404 " <>
+        "when the source note is missing and 409 when the target path already exists or the note " <>
+        "version conflicts.",
     tags: ["Notes"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -182,6 +197,9 @@ defmodule EngramWeb.NotesController do
   operation(:delete,
     operation_id: "notes-delete",
     summary: "Delete a note by path",
+    description:
+      "Deletes the note at the given path. Idempotent — deleting a non-existent note still " <>
+        "returns `deleted: true`.",
     tags: ["Notes"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Note path"]],
     responses: [ok: {"Deleted", "application/json", Schemas.DeletedFlag}]
@@ -198,6 +216,9 @@ defmodule EngramWeb.NotesController do
   operation(:show_by_id,
     operation_id: "notes-show-by-id",
     summary: "Get a note by id",
+    description:
+      "Returns the full note (including content) for the given note UUID. Returns 400 for a " <>
+        "malformed UUID and 404 when no such note exists in the vault.",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
     responses: [
@@ -223,6 +244,9 @@ defmodule EngramWeb.NotesController do
   operation(:delete_by_id,
     operation_id: "notes-delete-by-id",
     summary: "Delete a note by id",
+    description:
+      "Deletes the note with the given UUID. Returns 400 for a malformed UUID and 404 when no " <>
+        "such note exists.",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
     responses: [
@@ -248,6 +272,11 @@ defmodule EngramWeb.NotesController do
   operation(:changes,
     operation_id: "notes-changes",
     summary: "List note changes since a cursor (keyset pagination)",
+    description:
+      "Returns one keyset-paginated page of note changes (creates, updates, deletes) updated at " <>
+        "or after the `since` timestamp, including `has_more` and `next_cursor`. `limit` is capped " <>
+        "at 500 and `fields=meta` omits note content. `server_time` is the high-water mark this page " <>
+        "is complete through, so legacy clients can advance `since` without skipping rows.",
     tags: ["Notes"],
     parameters: [
       since: [in: :query, type: :string, required: true, description: "ISO8601 timestamp cursor"],
@@ -374,6 +403,11 @@ defmodule EngramWeb.NotesController do
   operation(:batch_upsert,
     operation_id: "notes-batch-upsert",
     summary: "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
+    description:
+      "Creates or updates up to 100 notes in one request, returning a per-note result " <>
+        "(`ok`, `conflict`, or `error`) so a single bad or oversized (>10MB) note does not fail the " <>
+        "batch. More than 100 notes returns 400, and exceeding the plan's note cap returns 402. " <>
+        "Requires the `X-Idempotency-Key` header for safe retries.",
     tags: ["Notes"],
     request_body: {"Notes array", "application/json", Schemas.BatchUpsertRequest, required: true},
     responses: [
@@ -473,6 +507,10 @@ defmodule EngramWeb.NotesController do
   operation(:batch_delete,
     operation_id: "notes-batch-delete",
     summary: "Delete notes by id (idempotent)",
+    description:
+      "Deletes multiple notes by id in a single transaction and returns the deleted count. " <>
+        "Requires the `X-Idempotency-Key` header for safe retries. Returns 404/409 (with the " <>
+        "offending `item_id`) if any id is missing or conflicts.",
     tags: ["Notes"],
     request_body: {"Note ids", "application/json", Schemas.BatchIdsRequest, required: true},
     responses: [
@@ -518,6 +556,10 @@ defmodule EngramWeb.NotesController do
   operation(:batch_move,
     operation_id: "notes-batch-move",
     summary: "Move notes to a folder (idempotent)",
+    description:
+      "Moves multiple notes into the folder identified by `target_folder_id` (or the literal " <>
+        "`\"root\"` for the vault root) in one transaction and returns the moved count. Requires the " <>
+        "`X-Idempotency-Key` header. Returns 404/409 (with `item_id`) if any id is missing or conflicts.",
     tags: ["Notes"],
     request_body:
       {"Ids + target folder", "application/json", Schemas.BatchMoveNotesRequest, required: true},
