@@ -972,6 +972,16 @@ class CdpClient:
             se.api.pushAttachment = fail;
             se.api.deleteAttachment = fail;
             se.api.health = async () => false;
+            // Set the offline flag DETERMINISTICALLY rather than waiting for
+            // the engine to react to a failed push. The engine only flips
+            // `offline` on its health/error path (a push must fire, fail, and
+            // categorize as network) — under e2e-clerk load that reaction lags
+            // past the test's poll window, so `assert offline` and the
+            // restore-time queue flush (gated on offline) raced and failed
+            // (#635). Nothing flips it back during the offline phase: every
+            // push method + health() are stubbed above, so no goOnline path
+            // can fire until restore_online().
+            se.offline = true;
             return 'offline simulated';
         }})()
         """
