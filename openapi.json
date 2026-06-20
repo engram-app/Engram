@@ -320,6 +320,36 @@
         "x-struct": "Elixir.EngramWeb.Schemas.MovedCount",
         "x-validate": null
       },
+      "ApiKeyCreated": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "key": {
+            "description": "Raw secret — store it now; never shown again.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "name"
+        ],
+        "title": "ApiKeyCreated",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ApiKeyCreated",
+        "x-validate": null
+      },
       "ChangesResponse": {
         "properties": {
           "changes": {
@@ -380,6 +410,22 @@
         "title": "AttachmentResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentResponse",
+        "x-validate": null
+      },
+      "CreateApiKeyRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateApiKeyRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.CreateApiKeyRequest",
         "x-validate": null
       },
       "MessageError": {
@@ -762,6 +808,43 @@
         "x-struct": "Elixir.EngramWeb.Schemas.LogIngestRequest",
         "x-validate": null
       },
+      "ApiKeyMeta": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "last_used": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ApiKeyMeta",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ApiKeyMeta",
+        "x-validate": null
+      },
       "AttachmentChange": {
         "properties": {
           "deleted": {
@@ -1101,6 +1184,15 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderResponse",
         "x-validate": null
       },
+      "ConnectionsList": {
+        "items": {
+          "$ref": "#/components/schemas/Connection"
+        },
+        "title": "ConnectionsList",
+        "type": "array",
+        "x-struct": "Elixir.EngramWeb.Schemas.ConnectionsList",
+        "x-validate": null
+      },
       "VaultsResponse": {
         "properties": {
           "suggested_vault_name": {
@@ -1292,6 +1384,127 @@
         "x-struct": "Elixir.EngramWeb.Schemas.User",
         "x-validate": null
       },
+      "Connection": {
+        "properties": {
+          "client_id": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "connected_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "first_ip": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "first_user_agent": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "key_id": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "kind": {
+            "example": "oauth",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "logo": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "redirect_uris": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "nullable": true,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "scope": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "slug": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "software_id": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "software_version": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_name": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "verified": {
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "Connection",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Connection",
+        "x-validate": null
+      },
       "RegisterVaultResponse": {
         "allOf": [
           {
@@ -1469,6 +1682,25 @@
         "x-struct": "Elixir.EngramWeb.Schemas.CreateFolderRequest",
         "x-validate": null
       },
+      "ApiKeysResponse": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyMeta"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "ApiKeysResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ApiKeysResponse",
+        "x-validate": null
+      },
       "ValidationError": {
         "properties": {
           "details": {
@@ -1602,6 +1834,22 @@
         "title": "BatchUpsertRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertRequest",
+        "x-validate": null
+      },
+      "CreatePatRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreatePatRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.CreatePatRequest",
         "x-validate": null
       },
       "NoteMeta": {
@@ -2429,6 +2677,44 @@
         ]
       }
     },
+    "/api/connections/pat/{id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "connections-delete-pat",
+        "parameters": [
+          {
+            "description": "PAT (API key) UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (empty body)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such PAT"
+          }
+        },
+        "summary": "Revoke a personal access token",
+        "tags": [
+          "Connections"
+        ]
+      }
+    },
     "/api/sync/manifest": {
       "get": {
         "callbacks": {},
@@ -2854,6 +3140,44 @@
         "summary": "Get an attachment",
         "tags": [
           "Attachments"
+        ]
+      }
+    },
+    "/api/connections/device/{family_id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "connections-delete-device",
+        "parameters": [
+          {
+            "description": "Device family id",
+            "in": "path",
+            "name": "family_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (empty body)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such connection"
+          }
+        },
+        "summary": "Revoke a device connection",
+        "tags": [
+          "Connections"
         ]
       }
     },
@@ -3750,6 +4074,51 @@
         ]
       }
     },
+    "/api/connections/pat": {
+      "post": {
+        "callbacks": {},
+        "description": "The raw `key` is returned once. Subject to the per-plan PAT creation limit.",
+        "operationId": "connections-create-pat",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePatRequest"
+              }
+            }
+          },
+          "description": "PAT name",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            },
+            "description": "Created (raw key)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Blank/invalid name"
+          }
+        },
+        "summary": "Create a personal access token",
+        "tags": [
+          "Connections"
+        ]
+      }
+    },
     "/api/search": {
       "post": {
         "callbacks": {},
@@ -4030,6 +4399,96 @@
         "summary": "List notes in a folder (metadata only)",
         "tags": [
           "Folders"
+        ]
+      }
+    },
+    "/api/api-keys": {
+      "get": {
+        "callbacks": {},
+        "operationId": "apikeys-list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeysResponse"
+                }
+              }
+            },
+            "description": "API keys"
+          }
+        },
+        "summary": "List API keys",
+        "tags": [
+          "API Keys"
+        ]
+      },
+      "post": {
+        "callbacks": {},
+        "description": "The raw `key` is returned once in this response and never again.",
+        "operationId": "apikeys-create",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "description": "Key name",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            },
+            "description": "Created (raw key)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Create an API key",
+        "tags": [
+          "API Keys"
+        ]
+      }
+    },
+    "/api/connections": {
+      "get": {
+        "callbacks": {},
+        "description": "OAuth client families, device families, and PATs. Session-auth only.",
+        "operationId": "connections-list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionsList"
+                }
+              }
+            },
+            "description": "Connections"
+          }
+        },
+        "summary": "List active connections",
+        "tags": [
+          "Connections"
         ]
       }
     },
@@ -4413,6 +4872,61 @@
         ]
       }
     },
+    "/api/api-keys/{id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "apikeys-revoke",
+        "parameters": [
+          {
+            "description": "API key UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedFlag"
+                }
+              }
+            },
+            "description": "Revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Invalid id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such key"
+          }
+        },
+        "summary": "Revoke an API key",
+        "tags": [
+          "API Keys"
+        ]
+      }
+    },
     "/api/folders/rename": {
       "post": {
         "callbacks": {},
@@ -4528,6 +5042,55 @@
         "summary": "Move notes to a folder (idempotent)",
         "tags": [
           "Notes"
+        ]
+      }
+    },
+    "/api/connections/oauth/{client_id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "connections-delete-oauth",
+        "parameters": [
+          {
+            "description": "OAuth client id",
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Scope revoke to one vault",
+            "in": "query",
+            "name": "vault_id",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (empty body)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such connection"
+          }
+        },
+        "summary": "Revoke an OAuth client connection",
+        "tags": [
+          "Connections"
         ]
       }
     },
@@ -4722,6 +5285,14 @@
     {
       "description": "Client remote-log ingestion and retrieval.",
       "name": "Logs"
+    },
+    {
+      "description": "Create, list, and revoke personal API keys.",
+      "name": "API Keys"
+    },
+    {
+      "description": "List and revoke OAuth clients, devices, and PATs.",
+      "name": "Connections"
     }
   ]
 }
