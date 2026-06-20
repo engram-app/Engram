@@ -147,7 +147,8 @@ defmodule EngramWeb.Telemetry do
       counter("engram.crypto.rotate.dek.snoozed.count",
         event_name: [:engram, :crypto, :rotate, :dek, :snoozed],
         measurement: :count,
-        tags: [:user_id],
+        # No :user_id tag — one Prometheus series per user is unbounded
+        # cardinality (#517). user_id stays in event metadata for logs.
         description: "T3.7 per-user DEK rotation snoozed because lock held by another rotation"
       ),
       counter("engram.crypto.aad_rebind.attachment_skipped.count",
@@ -211,7 +212,8 @@ defmodule EngramWeb.Telemetry do
       # / StatsD / OTel) picks them up without a second PR. Pinned by
       # `test/engram_web/telemetry_test.exs`.
       counter("engram.embed.rate_limited.count",
-        tags: [:vault_id],
+        # No :vault_id tag — one Prometheus series per vault is unbounded
+        # cardinality (#517). vault_id stays in event metadata for logs.
         description:
           "Real Voyage 429 (post-network) — each event = one snoozed EmbedNote job. Layer 1 surface. Non-zero = either real Voyage rate-limit hits OR Layer 2 leaking; use `engram.embed.client_rate_limited.count` to distinguish."
       ),
