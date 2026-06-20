@@ -46,7 +46,14 @@ defmodule EngramWeb.ApiSpec do
         %Tag{
           name: "Account",
           description: "Current user profile, storage usage, and account deletion."
-        }
+        },
+        %Tag{
+          name: "Attachments",
+          description: "Upload, fetch, move, and delete binary attachments."
+        },
+        %Tag{name: "Sync", description: "Vault manifest and the unified change feed."},
+        %Tag{name: "Embedding", description: "Embedding/index progress."},
+        %Tag{name: "Logs", description: "Client remote-log ingestion and retrieval."}
       ],
       components: %Components{
         # Engram accepts all credentials on the same `Authorization: Bearer`

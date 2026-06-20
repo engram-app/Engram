@@ -1,5 +1,6 @@
 defmodule EngramWeb.SyncController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   import Ecto.Query
 
@@ -8,6 +9,15 @@ defmodule EngramWeb.SyncController do
   alias Engram.Crypto.Envelope
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias EngramWeb.Schemas
+
+  operation(:manifest,
+    operation_id: "sync-manifest",
+    summary: "Get the full vault manifest",
+    tags: ["Sync"],
+    description: "Every live note + attachment path and content hash, for sync reconciliation.",
+    responses: [ok: {"Manifest", "application/json", Schemas.ManifestResponse}]
+  )
 
   def manifest(conn, _params) do
     user = conn.assigns.current_user
@@ -40,6 +50,22 @@ defmodule EngramWeb.SyncController do
   Pull-carries-ack: records the device watermark from the *incoming* cursor
   (what the client has durably applied), NOT the new page's max seq.
   """
+  operation(:changes,
+    operation_id: "sync-changes",
+    summary: "Pull the unified note + attachment change feed",
+    tags: ["Sync"],
+    parameters: [
+      limit: [in: :query, type: :integer, required: false, description: "Max rows (≤500)"],
+      fields: [in: :query, type: :string, required: false, description: "\"meta\" or \"all\""],
+      cursor: [in: :query, type: :string, required: false, description: "Opaque keyset cursor"]
+    ],
+    responses: [
+      ok: {"Changes page", "application/json", Schemas.SyncChangesResponse},
+      bad_request: {"Invalid cursor", "application/json", Schemas.MessageError},
+      gone: {"Cursor older than retention window", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def changes(conn, params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault

@@ -1,9 +1,29 @@
 defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Storage.MimeWhitelist
+
+  operation(:upload,
+    operation_id: "attachments-upload",
+    summary: "Upload an attachment (base64 JSON)",
+    tags: ["Attachments"],
+    request_body:
+      {"Attachment bytes", "application/json", Schemas.UploadAttachmentRequest, required: true},
+    responses: [
+      ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
+      bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
+      payment_required:
+        {"Attachments require a paid plan / quota", "application/json", Schemas.LimitError},
+      unsupported_media_type:
+        {"MIME or extension not allowed", "application/json", Schemas.MimeRejected},
+      unprocessable_entity: {"Missing/invalid content", "application/json", Schemas.MessageError},
+      bad_gateway: {"Storage backend failure", "application/json", Schemas.MessageError}
+    ]
+  )
 
   # Free-tier launch §4.5 — attachments are a paid-tier feature. Gate at the
   # top of the upload action so Free users 402 BEFORE any S3 work, file
@@ -109,6 +129,20 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  operation(:rename,
+    operation_id: "attachments-rename",
+    summary: "Rename / move an attachment",
+    tags: ["Attachments"],
+    request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
+    responses: [
+      ok: {"Renamed", "application/json", Schemas.AttachmentRenameResponse},
+      payment_required:
+        {"Attachments require a paid plan", "application/json", Schemas.LimitError},
+      not_found: {"No such attachment", "application/json", Schemas.MessageError},
+      conflict: {"Target exists", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def rename(conn, %{"old_path" => old_path, "new_path" => new_path}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
@@ -138,6 +172,23 @@ defmodule EngramWeb.AttachmentsController do
         conn |> put_status(404) |> json(%{error: "not_found"})
     end
   end
+
+  operation(:batch_move,
+    operation_id: "attachments-batch-move",
+    summary: "Move attachments to a folder (idempotent)",
+    tags: ["Attachments"],
+    request_body:
+      {"Paths + target folder", "application/json", Schemas.AttachmentBatchMoveRequest,
+       required: true},
+    responses: [
+      ok: {"Moved count", "application/json", Schemas.MovedCount},
+      bad_request: {"Missing params", "application/json", Schemas.MessageError},
+      payment_required:
+        {"Attachments require a paid plan", "application/json", Schemas.LimitError},
+      not_found: {"An item was not found", "application/json", Schemas.BatchItemError},
+      conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError}
+    ]
+  )
 
   def batch_move(conn, %{"paths" => paths, "target_folder" => target}) when is_list(paths) do
     user = conn.assigns.current_user
@@ -180,6 +231,18 @@ defmodule EngramWeb.AttachmentsController do
 
   # Intentionally NOT billing-gated: deleting is cleanup, never trap a downgraded
   # user with attachments they can't remove. Mirrors notes-delete staying open.
+  operation(:batch_delete,
+    operation_id: "attachments-batch-delete",
+    summary: "Delete attachments by path (idempotent)",
+    tags: ["Attachments"],
+    request_body:
+      {"Paths", "application/json", Schemas.AttachmentBatchDeleteRequest, required: true},
+    responses: [
+      ok: {"Deleted count", "application/json", Schemas.DeletedCount},
+      bad_request: {"Missing paths", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def batch_delete(conn, %{"paths" => paths}) when is_list(paths) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
@@ -193,6 +256,16 @@ defmodule EngramWeb.AttachmentsController do
   def batch_delete(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: paths"})
   end
+
+  operation(:index,
+    operation_id: "attachments-index",
+    summary: "List attachments (metadata only)",
+    tags: ["Attachments"],
+    responses: [
+      ok: {"Attachments", "application/json", Schemas.AttachmentsResponse},
+      internal_server_error: {"Listing failed", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def index(conn, _params) do
     user = conn.assigns.current_user
@@ -222,6 +295,29 @@ defmodule EngramWeb.AttachmentsController do
         conn |> put_status(500) |> json(%{error: "failed to list attachments"})
     end
   end
+
+  operation(:show,
+    operation_id: "attachments-show",
+    summary: "Get an attachment",
+    tags: ["Attachments"],
+    description:
+      "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes instead.",
+    parameters: [
+      path: [in: :path, type: :string, required: true, description: "Attachment path"],
+      raw: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "\"1\" streams raw bytes instead of JSON."
+      ]
+    ],
+    responses: [
+      ok: {"Attachment", "application/json", Schemas.AttachmentWithContent},
+      not_found: {"No such attachment", "application/json", Schemas.MessageError},
+      bad_gateway: {"Storage fetch failed", "application/json", Schemas.MessageError},
+      internal_server_error: {"Fetch error", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def show(conn, %{"path" => path_parts} = params) do
     user = conn.assigns.current_user
@@ -270,6 +366,14 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  operation(:delete,
+    operation_id: "attachments-delete",
+    summary: "Delete an attachment",
+    tags: ["Attachments"],
+    parameters: [path: [in: :path, type: :string, required: true, description: "Attachment path"]],
+    responses: [ok: {"Deleted", "application/json", Schemas.AttachmentDeleted}]
+  )
+
   def delete(conn, %{"path" => path_parts}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
@@ -278,6 +382,19 @@ defmodule EngramWeb.AttachmentsController do
     Attachments.delete_attachment(user, vault, path)
     json(conn, %{deleted: true, path: path})
   end
+
+  operation(:changes,
+    operation_id: "attachments-changes",
+    summary: "List attachment changes since a timestamp",
+    tags: ["Attachments"],
+    parameters: [
+      since: [in: :query, type: :string, required: true, description: "ISO 8601 timestamp cursor"]
+    ],
+    responses: [
+      ok: {"Changes", "application/json", Schemas.AttachmentChangesResponse},
+      bad_request: {"Missing/invalid since", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def changes(conn, %{"since" => since_str}) do
     user = conn.assigns.current_user

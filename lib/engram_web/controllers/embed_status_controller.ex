@@ -1,10 +1,19 @@
 defmodule EngramWeb.EmbedStatusController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   import Ecto.Query
 
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias EngramWeb.Schemas
+
+  operation(:index,
+    operation_id: "embed-status",
+    summary: "Get embedding/index progress",
+    tags: ["Embedding"],
+    responses: [ok: {"Index status", "application/json", Schemas.EmbedStatusResponse}]
+  )
 
   def index(conn, _params) do
     user = conn.assigns.current_user
