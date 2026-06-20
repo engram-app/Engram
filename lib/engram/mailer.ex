@@ -16,6 +16,7 @@ defmodule Engram.Mailer do
   alias Engram.Accounts.User
   alias Engram.Email.Suppression
   alias Engram.Email.Template
+  alias Engram.Email.Tokens
 
   require Logger
 
@@ -31,7 +32,7 @@ defmodule Engram.Mailer do
     memory you can hand to any AI tool you use.</mj-text>
     <mj-text>To get started, install the Engram plugin in Obsidian and connect
     it to your account. Your notes start syncing immediately.</mj-text>
-    <mj-button href="#{@install_url}" background-color="#{Engram.Email.Tokens.brand_purple()}" color="#{Engram.Email.Tokens.brand_purple_fg()}">Install the Engram plugin</mj-button>
+    <mj-button href="#{@install_url}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Install the Engram plugin</mj-button>
     <mj-text>— The Engram team</mj-text>
     """
 
@@ -140,7 +141,7 @@ defmodule Engram.Mailer do
     <mj-text>It will be permanently removed on #{purge_date}. Until then you can
     restore it — or, if you meant to delete it, remove it permanently now — from
     your vault settings.</mj-text>
-    <mj-button href="#{manage_url}" background-color="#5b5bd6">Manage vault</mj-button>
+    <mj-button href="#{manage_url}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Manage vault</mj-button>
     <mj-text>No action is needed if you want it gone; it will be cleaned up
     automatically.</mj-text>
     """
