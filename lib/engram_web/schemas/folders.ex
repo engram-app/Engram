@@ -131,6 +131,13 @@ defmodule EngramWeb.Schemas.BatchMoveFoldersRequest do
       ids: %Schema{type: :array, items: %Schema{type: :string, format: :uuid}},
       target_parent_id: %Schema{type: :string, description: "Parent folder UUID or \"root\"."}
     },
-    required: [:ids, :target_parent_id]
+    required: [:ids, :target_parent_id],
+    example: %{
+      "ids" => [
+        "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+        "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f90"
+      ],
+      "target_parent_id" => "root"
+    }
   })
 end

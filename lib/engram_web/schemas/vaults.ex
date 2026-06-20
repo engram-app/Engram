@@ -76,7 +76,12 @@ defmodule EngramWeb.Schemas.CreateVaultRequest do
       description: %Schema{type: :string, nullable: true},
       is_default: %Schema{type: :boolean}
     },
-    required: [:name]
+    required: [:name],
+    example: %{
+      "name" => "Research",
+      "description" => "Papers and reading notes.",
+      "is_default" => false
+    }
   })
 end
 
@@ -92,6 +97,10 @@ defmodule EngramWeb.Schemas.UpdateVaultRequest do
       name: %Schema{type: :string},
       description: %Schema{type: :string, nullable: true},
       is_default: %Schema{type: :boolean}
+    },
+    example: %{
+      "name" => "Research (renamed)",
+      "is_default" => true
     }
   })
 end
@@ -108,7 +117,11 @@ defmodule EngramWeb.Schemas.RegisterVaultRequest do
       name: %Schema{type: :string},
       client_id: %Schema{type: :string, description: "Client-generated stable vault id."}
     },
-    required: [:name, :client_id]
+    required: [:name, :client_id],
+    example: %{
+      "name" => "My Vault",
+      "client_id" => "obsidian-9f1b2c3d4e5f"
+    }
   })
 end
 

@@ -38,7 +38,8 @@ defmodule EngramWeb.Schemas.CreateApiKeyRequest do
     title: "CreateApiKeyRequest",
     type: :object,
     properties: %{name: %Schema{type: :string}},
-    required: [:name]
+    required: [:name],
+    example: %{"name" => "CI pipeline"}
   })
 end
 
@@ -110,6 +111,7 @@ defmodule EngramWeb.Schemas.CreatePatRequest do
     title: "CreatePatRequest",
     type: :object,
     properties: %{name: %Schema{type: :string}},
-    required: [:name]
+    required: [:name],
+    example: %{"name" => "Claude Desktop"}
   })
 end

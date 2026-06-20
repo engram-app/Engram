@@ -46,7 +46,11 @@ defmodule EngramWeb.Schemas.RenameRequest do
     title: "RenameRequest",
     type: :object,
     properties: %{old_path: %Schema{type: :string}, new_path: %Schema{type: :string}},
-    required: [:old_path, :new_path]
+    required: [:old_path, :new_path],
+    example: %{
+      "old_path" => "Projects/Engram.md",
+      "new_path" => "Archive/Engram.md"
+    }
   })
 end
 
@@ -132,7 +136,22 @@ defmodule EngramWeb.Schemas.BatchUpsertRequest do
     properties: %{
       notes: %Schema{type: :array, maxItems: 100, items: EngramWeb.Schemas.UpsertNoteRequest}
     },
-    required: [:notes]
+    required: [:notes],
+    example: %{
+      "notes" => [
+        %{
+          "path" => "Projects/Engram.md",
+          "content" => "# Engram\n\nAn AI-powered personal knowledge base.\n",
+          "mtime" => 1_718_900_000.0,
+          "tags" => ["project", "ai"]
+        },
+        %{
+          "path" => "Daily/2026-06-20.md",
+          "content" => "## 2026-06-20\n\n- Shipped the batch upsert endpoint.\n",
+          "mtime" => 1_718_900_100.0
+        }
+      ]
+    }
   })
 end
 
@@ -179,7 +198,13 @@ defmodule EngramWeb.Schemas.BatchIdsRequest do
     title: "BatchIdsRequest",
     type: :object,
     properties: %{ids: %Schema{type: :array, items: %Schema{type: :string, format: :uuid}}},
-    required: [:ids]
+    required: [:ids],
+    example: %{
+      "ids" => [
+        "9f1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+      ]
+    }
   })
 end
 
@@ -195,6 +220,13 @@ defmodule EngramWeb.Schemas.BatchMoveNotesRequest do
       ids: %Schema{type: :array, items: %Schema{type: :string, format: :uuid}},
       target_folder_id: %Schema{type: :string, description: "Folder UUID or \"root\"."}
     },
-    required: [:ids, :target_folder_id]
+    required: [:ids, :target_folder_id],
+    example: %{
+      "ids" => [
+        "9f1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+        "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+      ],
+      "target_folder_id" => "7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f"
+    }
   })
 end

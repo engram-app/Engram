@@ -36,7 +36,8 @@ defmodule EngramWeb.Schemas.UpdateProfileRequest do
   OpenApiSpex.schema(%{
     title: "UpdateProfileRequest",
     type: :object,
-    properties: %{display_name: %Schema{type: :string, nullable: true}}
+    properties: %{display_name: %Schema{type: :string, nullable: true}},
+    example: %{"display_name" => "Ada Lovelace"}
   })
 end
 
@@ -49,7 +50,8 @@ defmodule EngramWeb.Schemas.DeleteAccountRequest do
     title: "DeleteAccountRequest",
     type: :object,
     properties: %{password: %Schema{type: :string, format: :password}},
-    required: [:password]
+    required: [:password],
+    example: %{"password" => "correct horse battery staple"}
   })
 end
 

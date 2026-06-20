@@ -29,14 +29,7 @@ defmodule EngramWeb.ApiSpecCoverageTest do
 
   # Operations whose JSON request body still lacks a top-level `example`
   # (backfill follow-up). MUST ONLY SHRINK.
-  @pending_request_example ~w(
-    account-delete account-update apikeys-create
-    attachments-batch-delete attachments-batch-move attachments-rename
-    attachments-upload connections-create-pat
-    folders-batch-delete folders-batch-move folders-rename
-    notes-batch-delete notes-batch-move notes-batch-upsert notes-rename
-    vaults-create vaults-register vaults-update
-  )
+  @pending_request_example ~w()
 
   setup_all do
     %{spec: EngramWeb.ApiSpec.spec()}
