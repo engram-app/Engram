@@ -13,6 +13,10 @@ defmodule EngramWeb.VaultsController do
   operation(:index,
     operation_id: "vaults-index",
     summary: "List vaults",
+    description:
+      "Lists the user's active vaults with their note and attachment counts. Pass `deleted=true` " <>
+        "to list soft-deleted vaults instead, or `user_code` to also echo a `suggested_vault_name` " <>
+        "for an in-progress device link.",
     tags: ["Vaults"],
     parameters: [
       deleted: [
@@ -71,6 +75,9 @@ defmodule EngramWeb.VaultsController do
   operation(:create,
     operation_id: "vaults-create",
     summary: "Create a vault",
+    description:
+      "Creates a new vault for the user and returns it with zeroed content counts. Returns 402 " <>
+        "when the plan's vault cap is reached and 422 on validation errors.",
     tags: ["Vaults"],
     request_body:
       {"Vault attributes", "application/json", Schemas.CreateVaultRequest, required: true},
@@ -112,6 +119,10 @@ defmodule EngramWeb.VaultsController do
   operation(:show,
     operation_id: "vaults-show",
     summary: "Get a vault by id",
+    description:
+      "Returns the vault with the given UUID along with its current note and attachment counts, " <>
+        "or 404 if it does not exist or belong to the user. Opening a vault also emits a " <>
+        "`vault_opened` analytics event.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     responses: [
@@ -153,6 +164,9 @@ defmodule EngramWeb.VaultsController do
   operation(:update,
     operation_id: "vaults-update",
     summary: "Update a vault",
+    description:
+      "Updates a vault's `name`, `description`, or `is_default` flag and returns the updated " <>
+        "vault. Returns 404 when no such vault exists and 422 on validation errors.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     request_body:
@@ -193,6 +207,9 @@ defmodule EngramWeb.VaultsController do
   operation(:delete,
     operation_id: "vaults-delete",
     summary: "Soft-delete a vault",
+    description:
+      "Soft-deletes the vault, keeping it restorable for 30 days before it is permanently purged. " <>
+        "Returns 404 when no such vault exists.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     responses: [
@@ -221,6 +238,9 @@ defmodule EngramWeb.VaultsController do
   operation(:restore,
     operation_id: "vaults-restore",
     summary: "Restore a soft-deleted vault",
+    description:
+      "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when " <>
+        "restoring would exceed the plan's vault cap and 404 when no such vault exists.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     responses: [

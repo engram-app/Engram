@@ -8,6 +8,7 @@ defmodule EngramWeb.TagsController do
   operation(:index,
     operation_id: "tags",
     summary: "List all tags in the vault",
+    description: "Returns the distinct set of tags used across all notes in the current vault.",
     tags: ["Tags"],
     responses: [ok: {"Tags", "application/json", Schemas.TagsResponse}]
   )

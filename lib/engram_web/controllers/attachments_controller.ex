@@ -10,6 +10,11 @@ defmodule EngramWeb.AttachmentsController do
   operation(:upload,
     operation_id: "attachments-upload",
     summary: "Upload an attachment (base64 JSON)",
+    description:
+      "Uploads an attachment supplied as base64 JSON to the vault's storage backend. Attachments " <>
+        "are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME " <>
+        "type and extension must pass the whitelist (415), the file must be within the per-plan size " <>
+        "and total-quota limits (402), and a storage backend failure returns 502.",
     tags: ["Attachments"],
     request_body:
       {"Attachment bytes", "application/json", Schemas.UploadAttachmentRequest, required: true},
@@ -132,6 +137,10 @@ defmodule EngramWeb.AttachmentsController do
   operation(:rename,
     operation_id: "attachments-rename",
     summary: "Rename / move an attachment",
+    description:
+      "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments " <>
+        "enabled (402 otherwise). Returns 404 when the source is missing and 409 when the target " <>
+        "path already exists.",
     tags: ["Attachments"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -176,6 +185,10 @@ defmodule EngramWeb.AttachmentsController do
   operation(:batch_move,
     operation_id: "attachments-batch-move",
     summary: "Move attachments to a folder (idempotent)",
+    description:
+      "Moves multiple attachments (by path) into `target_folder` and returns the moved count. " <>
+        "Requires a plan with attachments enabled (402 otherwise) and the `X-Idempotency-Key` header. " <>
+        "Returns 404/409 (with the offending `item_path`) if an item is missing or conflicts at the target.",
     tags: ["Attachments"],
     request_body:
       {"Paths + target folder", "application/json", Schemas.AttachmentBatchMoveRequest,
@@ -234,6 +247,10 @@ defmodule EngramWeb.AttachmentsController do
   operation(:batch_delete,
     operation_id: "attachments-batch-delete",
     summary: "Delete attachments by path (idempotent)",
+    description:
+      "Deletes multiple attachments by path and returns the deleted count. Deliberately not " <>
+        "billing-gated so a downgraded user can always clean up. Requires the `X-Idempotency-Key` " <>
+        "header for safe retries.",
     tags: ["Attachments"],
     request_body:
       {"Paths", "application/json", Schemas.AttachmentBatchDeleteRequest, required: true},
@@ -260,6 +277,9 @@ defmodule EngramWeb.AttachmentsController do
   operation(:index,
     operation_id: "attachments-index",
     summary: "List attachments (metadata only)",
+    description:
+      "Returns metadata (path, MIME type, size, timestamps — no bytes) for every attachment in " <>
+        "the current vault. Returns 500 if the listing fails.",
     tags: ["Attachments"],
     responses: [
       ok: {"Attachments", "application/json", Schemas.AttachmentsResponse},
@@ -369,6 +389,9 @@ defmodule EngramWeb.AttachmentsController do
   operation(:delete,
     operation_id: "attachments-delete",
     summary: "Delete an attachment",
+    description:
+      "Deletes the attachment at the given path. Idempotent — always returns `deleted: true` " <>
+        "with the path, and is not billing-gated so downgraded users can still remove files.",
     tags: ["Attachments"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Attachment path"]],
     responses: [ok: {"Deleted", "application/json", Schemas.AttachmentDeleted}]
@@ -386,6 +409,10 @@ defmodule EngramWeb.AttachmentsController do
   operation(:changes,
     operation_id: "attachments-changes",
     summary: "List attachment changes since a timestamp",
+    description:
+      "Returns attachment changes (including deletions, flagged via `deleted`) updated at or " <>
+        "after the `since` ISO 8601 timestamp, plus a `server_time` watermark for the next poll. " <>
+        "A missing or invalid `since` returns 400.",
     tags: ["Attachments"],
     parameters: [
       since: [in: :query, type: :string, required: true, description: "ISO 8601 timestamp cursor"]

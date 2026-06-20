@@ -8,6 +8,9 @@ defmodule EngramWeb.AuthController do
   operation(:list_api_keys,
     operation_id: "apikeys-list",
     summary: "List API keys",
+    description:
+      "Lists the authenticated user's API keys as metadata only (id, name, created and " <>
+        "last-used timestamps). The raw key secret is never returned after creation.",
     tags: ["API Keys"],
     responses: [ok: {"API keys", "application/json", Schemas.ApiKeysResponse}]
   )
@@ -58,6 +61,9 @@ defmodule EngramWeb.AuthController do
   operation(:revoke_api_key,
     operation_id: "apikeys-revoke",
     summary: "Revoke an API key",
+    description:
+      "Permanently revokes the API key with the given UUID so it can no longer authenticate. " <>
+        "Returns 400 for a malformed id and 404 when no such key belongs to the user.",
     tags: ["API Keys"],
     parameters: [id: [in: :path, type: :string, required: true, description: "API key UUID"]],
     responses: [

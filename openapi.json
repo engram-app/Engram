@@ -2559,6 +2559,7 @@
     "/api/notes": {
       "post": {
         "callbacks": {},
+        "description": "Creates a note or updates the existing one at the same path. Concurrent edits are guarded by mtime — a stale write returns 409 with the current server note. Notes over 10MB are rejected with 413, and exceeding the plan's note cap returns 402.",
         "operationId": "notes-upsert",
         "parameters": [],
         "requestBody": {
@@ -2623,6 +2624,7 @@
     "/api/vaults/{id}/restore": {
       "post": {
         "callbacks": {},
+        "description": "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when restoring would exceed the plan's vault cap and 404 when no such vault exists.",
         "operationId": "vaults-restore",
         "parameters": [
           {
@@ -2678,6 +2680,7 @@
     "/api/folders/explicit": {
       "get": {
         "callbacks": {},
+        "description": "Returns the names of folders that were created explicitly (via a folder marker) and can therefore exist while empty, as opposed to folders merely derived from note paths.",
         "operationId": "folders-explicit",
         "parameters": [],
         "responses": {
@@ -2701,6 +2704,7 @@
     "/api/connections/pat/{id}": {
       "delete": {
         "callbacks": {},
+        "description": "Revokes the personal access token (API key) with the given UUID so it can no longer authenticate. Returns 404 for an unknown or malformed id. Session-auth only.",
         "operationId": "connections-delete-pat",
         "parameters": [
           {
@@ -2763,6 +2767,7 @@
     "/api/notes/batch": {
       "post": {
         "callbacks": {},
+        "description": "Creates or updates up to 100 notes in one request, returning a per-note result (`ok`, `conflict`, or `error`) so a single bad or oversized (>10MB) note does not fail the batch. More than 100 notes returns 400, and exceeding the plan's note cap returns 402. Requires the `X-Idempotency-Key` header for safe retries.",
         "operationId": "notes-batch-upsert",
         "parameters": [],
         "requestBody": {
@@ -2807,6 +2812,7 @@
     "/api/notes/append": {
       "post": {
         "callbacks": {},
+        "description": "Appends `text` to the note at `path`, returning `created: false`. If the note does not exist it is created with a heading derived from the filename plus the text, returning `created: true`.",
         "operationId": "notes-append",
         "parameters": [],
         "requestBody": {
@@ -2851,6 +2857,7 @@
     "/api/folders/batch-move": {
       "post": {
         "callbacks": {},
+        "description": "Re-parents multiple folders under `target_parent_id` (or the literal `\"root\"` for top level) in one transaction and returns the moved count. Requires the `X-Idempotency-Key` header. Returns 404 for a missing id and 409 (with `item_id`) on a conflict or a cycle.",
         "operationId": "folders-batch-move",
         "parameters": [],
         "requestBody": {
@@ -2915,6 +2922,7 @@
     "/api/notes/changes": {
       "get": {
         "callbacks": {},
+        "description": "Returns one keyset-paginated page of note changes (creates, updates, deletes) updated at or after the `since` timestamp, including `has_more` and `next_cursor`. `limit` is capped at 500 and `fields=meta` omits note content. `server_time` is the high-water mark this page is complete through, so legacy clients can advance `since` without skipping rows.",
         "operationId": "notes-changes",
         "parameters": [
           {
@@ -2993,6 +3001,7 @@
     "/api/folders/batch-delete": {
       "post": {
         "callbacks": {},
+        "description": "Deletes multiple folders by marker id in a single transaction and returns the deleted count. Requires the `X-Idempotency-Key` header — a retry within the TTL replays the cached result. Returns 404/409 (with the offending `item_id`) if any id is missing or conflicts.",
         "operationId": "folders-batch-delete",
         "parameters": [],
         "requestBody": {
@@ -3057,6 +3066,7 @@
     "/api/attachments/*path": {
       "delete": {
         "callbacks": {},
+        "description": "Deletes the attachment at the given path. Idempotent — always returns `deleted: true` with the path, and is not billing-gated so downgraded users can still remove files.",
         "operationId": "attachments-delete",
         "parameters": [
           {
@@ -3167,6 +3177,7 @@
     "/api/connections/device/{family_id}": {
       "delete": {
         "callbacks": {},
+        "description": "Revokes a linked device family (e.g. an Obsidian plugin install) by its family id, invalidating its refresh tokens. Session-auth only.",
         "operationId": "connections-delete-device",
         "parameters": [
           {
@@ -3380,6 +3391,7 @@
       },
       "get": {
         "callbacks": {},
+        "description": "Returns the authenticated user's id, email, role, and display name.",
         "operationId": "account-me",
         "parameters": [],
         "responses": {
@@ -3401,6 +3413,7 @@
       },
       "patch": {
         "callbacks": {},
+        "description": "Updates the authenticated user's mutable profile fields (currently `display_name`) and returns the updated user.",
         "operationId": "account-update",
         "parameters": [],
         "requestBody": {
@@ -3445,6 +3458,7 @@
     "/api/sync/changes": {
       "get": {
         "callbacks": {},
+        "description": "Pulls one ordered page of the merged note and attachment change feed, each entry tagged with its `type`, using keyset pagination via an opaque `cursor` (`has_more` + `next_cursor`). `fields=meta` strips note content; `limit` is capped at 500. The cursor the client sends is recorded as its durably-applied device watermark, and a cursor older than the retention window returns 410.",
         "operationId": "sync-changes",
         "parameters": [
           {
@@ -3522,6 +3536,7 @@
     "/api/attachments/changes": {
       "get": {
         "callbacks": {},
+        "description": "Returns attachment changes (including deletions, flagged via `deleted`) updated at or after the `since` ISO 8601 timestamp, plus a `server_time` watermark for the next poll. A missing or invalid `since` returns 400.",
         "operationId": "attachments-changes",
         "parameters": [
           {
@@ -3567,6 +3582,7 @@
     "/api/folders": {
       "get": {
         "callbacks": {},
+        "description": "Returns every folder in the current vault with its note count, plus a stable marker id and parent id so clients can rebuild the folder hierarchy. Derived (no-marker) folders and the root return a null id and are not eligible as parents.",
         "operationId": "folders-index",
         "parameters": [],
         "responses": {
@@ -3588,6 +3604,7 @@
       },
       "post": {
         "callbacks": {},
+        "description": "Creates an explicit folder marker so the folder can exist while empty. Returns 201 with the folder (count 0). An empty or root folder path is rejected with 422.",
         "operationId": "folders-create",
         "parameters": [],
         "requestBody": {
@@ -3678,6 +3695,7 @@
     "/api/notes/rename": {
       "post": {
         "callbacks": {},
+        "description": "Moves the note from `old_path` to `new_path` and returns the updated note. Returns 404 when the source note is missing and 409 when the target path already exists or the note version conflicts.",
         "operationId": "notes-rename",
         "parameters": [],
         "requestBody": {
@@ -3732,6 +3750,7 @@
     "/api/attachments/batch-move": {
       "post": {
         "callbacks": {},
+        "description": "Moves multiple attachments (by path) into `target_folder` and returns the moved count. Requires a plan with attachments enabled (402 otherwise) and the `X-Idempotency-Key` header. Returns 404/409 (with the offending `item_path`) if an item is missing or conflicts at the target.",
         "operationId": "attachments-batch-move",
         "parameters": [],
         "requestBody": {
@@ -3806,6 +3825,7 @@
     "/api/notes/*path": {
       "delete": {
         "callbacks": {},
+        "description": "Deletes the note at the given path. Idempotent — deleting a non-existent note still returns `deleted: true`.",
         "operationId": "notes-delete",
         "parameters": [
           {
@@ -3839,6 +3859,7 @@
       },
       "get": {
         "callbacks": {},
+        "description": "Returns the full note (including content) at the given slash-separated path, or 404 if no note exists there.",
         "operationId": "notes-show",
         "parameters": [
           {
@@ -3884,6 +3905,7 @@
     "/api/attachments/batch-delete": {
       "post": {
         "callbacks": {},
+        "description": "Deletes multiple attachments by path and returns the deleted count. Deliberately not billing-gated so a downgraded user can always clean up. Requires the `X-Idempotency-Key` header for safe retries.",
         "operationId": "attachments-batch-delete",
         "parameters": [],
         "requestBody": {
@@ -3928,6 +3950,7 @@
     "/api/vaults": {
       "get": {
         "callbacks": {},
+        "description": "Lists the user's active vaults with their note and attachment counts. Pass `deleted=true` to list soft-deleted vaults instead, or `user_code` to also echo a `suggested_vault_name` for an in-progress device link.",
         "operationId": "vaults-index",
         "parameters": [
           {
@@ -3972,6 +3995,7 @@
       },
       "post": {
         "callbacks": {},
+        "description": "Creates a new vault for the user and returns it with zeroed content counts. Returns 402 when the plan's vault cap is reached and 422 on validation errors.",
         "operationId": "vaults-create",
         "parameters": [],
         "requestBody": {
@@ -4026,6 +4050,7 @@
     "/api/user/storage": {
       "get": {
         "callbacks": {},
+        "description": "Returns the user's current attachment storage usage and file count alongside the total storage cap and the per-file size limit resolved from their plan. On self-host (limits not enforced) the per-file cap is reported as the Pro ceiling.",
         "operationId": "account-storage",
         "parameters": [],
         "responses": {
@@ -4049,6 +4074,7 @@
     "/api/folders/*path": {
       "delete": {
         "callbacks": {},
+        "description": "Removes the folder marker for the given path. Idempotent — deleting a non-existent or never-encrypted folder still returns 204.",
         "operationId": "folders-delete",
         "parameters": [
           {
@@ -4077,6 +4103,7 @@
     "/api/tags": {
       "get": {
         "callbacks": {},
+        "description": "Returns the distinct set of tags used across all notes in the current vault.",
         "operationId": "tags",
         "parameters": [],
         "responses": {
@@ -4145,6 +4172,7 @@
     "/api/search": {
       "post": {
         "callbacks": {},
+        "description": "Searches the current vault and returns one result per matching note (chunk hits are grouped by note, ranked by best chunk score). `mode` selects vector, keyword, or hybrid (default) retrieval, and results may be narrowed by `tags` or `folder`. Setting `cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise).",
         "operationId": "search",
         "parameters": [],
         "requestBody": {
@@ -4199,6 +4227,7 @@
     "/api/notes/batch-delete": {
       "post": {
         "callbacks": {},
+        "description": "Deletes multiple notes by id in a single transaction and returns the deleted count. Requires the `X-Idempotency-Key` header for safe retries. Returns 404/409 (with the offending `item_id`) if any id is missing or conflicts.",
         "operationId": "notes-batch-delete",
         "parameters": [],
         "requestBody": {
@@ -4263,6 +4292,7 @@
     "/api/folders/by-id/{id}/notes": {
       "get": {
         "callbacks": {},
+        "description": "Returns metadata (no content) for the notes in the folder identified by its marker UUID. Returns 400 for a malformed UUID and 404 when no such folder exists.",
         "operationId": "folders-list-notes",
         "parameters": [
           {
@@ -4383,6 +4413,7 @@
     "/api/folders/list": {
       "get": {
         "callbacks": {},
+        "description": "Returns metadata (no content) for the notes in the folder named by the required `folder` query param. Returns 400 when the param is missing.",
         "operationId": "folders-list",
         "parameters": [
           {
@@ -4428,6 +4459,7 @@
     "/api/api-keys": {
       "get": {
         "callbacks": {},
+        "description": "Lists the authenticated user's API keys as metadata only (id, name, created and last-used timestamps). The raw key secret is never returned after creation.",
         "operationId": "apikeys-list",
         "parameters": [],
         "responses": {
@@ -4551,6 +4583,7 @@
     "/api/attachments/rename": {
       "post": {
         "callbacks": {},
+        "description": "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments enabled (402 otherwise). Returns 404 when the source is missing and 409 when the target path already exists.",
         "operationId": "attachments-rename",
         "parameters": [],
         "requestBody": {
@@ -4639,6 +4672,7 @@
     "/api/vaults/{id}": {
       "delete": {
         "callbacks": {},
+        "description": "Soft-deletes the vault, keeping it restorable for 30 days before it is permanently purged. Returns 404 when no such vault exists.",
         "operationId": "vaults-delete",
         "parameters": [
           {
@@ -4682,6 +4716,7 @@
       },
       "get": {
         "callbacks": {},
+        "description": "Returns the vault with the given UUID along with its current note and attachment counts, or 404 if it does not exist or belong to the user. Opening a vault also emits a `vault_opened` analytics event.",
         "operationId": "vaults-show",
         "parameters": [
           {
@@ -4725,6 +4760,7 @@
       },
       "patch": {
         "callbacks": {},
+        "description": "Updates a vault's `name`, `description`, or `is_default` flag and returns the updated vault. Returns 404 when no such vault exists and 422 on validation errors.",
         "operationId": "vaults-update",
         "parameters": [
           {
@@ -4791,6 +4827,7 @@
     "/api/notes/by-id/{id}": {
       "delete": {
         "callbacks": {},
+        "description": "Deletes the note with the given UUID. Returns 400 for a malformed UUID and 404 when no such note exists.",
         "operationId": "notes-delete-by-id",
         "parameters": [
           {
@@ -4844,6 +4881,7 @@
       },
       "get": {
         "callbacks": {},
+        "description": "Returns the full note (including content) for the given note UUID. Returns 400 for a malformed UUID and 404 when no such note exists in the vault.",
         "operationId": "notes-show-by-id",
         "parameters": [
           {
@@ -4899,6 +4937,7 @@
     "/api/api-keys/{id}": {
       "delete": {
         "callbacks": {},
+        "description": "Permanently revokes the API key with the given UUID so it can no longer authenticate. Returns 400 for a malformed id and 404 when no such key belongs to the user.",
         "operationId": "apikeys-revoke",
         "parameters": [
           {
@@ -4954,6 +4993,7 @@
     "/api/folders/rename": {
       "post": {
         "callbacks": {},
+        "description": "Renames or moves a folder from `old_path` to `new_path`, re-homing every note beneath it, and returns the affected note count. Returns 404 when the source folder does not exist and 409 when the target path is already occupied.",
         "operationId": "folders-rename",
         "parameters": [],
         "requestBody": {
@@ -5008,6 +5048,7 @@
     "/api/notes/batch-move": {
       "post": {
         "callbacks": {},
+        "description": "Moves multiple notes into the folder identified by `target_folder_id` (or the literal `\"root\"` for the vault root) in one transaction and returns the moved count. Requires the `X-Idempotency-Key` header. Returns 404/409 (with `item_id`) if any id is missing or conflicts.",
         "operationId": "notes-batch-move",
         "parameters": [],
         "requestBody": {
@@ -5072,6 +5113,7 @@
     "/api/connections/oauth/{client_id}": {
       "delete": {
         "callbacks": {},
+        "description": "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no longer mint access tokens. Pass `vault_id` to scope the revoke to a single vault; omit it to revoke the client across all vaults. Session-auth only.",
         "operationId": "connections-delete-oauth",
         "parameters": [
           {
@@ -5121,6 +5163,7 @@
     "/api/attachments": {
       "get": {
         "callbacks": {},
+        "description": "Returns metadata (path, MIME type, size, timestamps — no bytes) for every attachment in the current vault. Returns 500 if the listing fails.",
         "operationId": "attachments-index",
         "parameters": [],
         "responses": {
@@ -5152,6 +5195,7 @@
       },
       "post": {
         "callbacks": {},
+        "description": "Uploads an attachment supplied as base64 JSON to the vault's storage backend. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME type and extension must pass the whitelist (415), the file must be within the per-plan size and total-quota limits (402), and a storage backend failure returns 502.",
         "operationId": "attachments-upload",
         "parameters": [],
         "requestBody": {

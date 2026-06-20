@@ -8,6 +8,7 @@ defmodule EngramWeb.UsersController do
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",
+    description: "Returns the authenticated user's id, email, role, and display name.",
     tags: ["Account"],
     responses: [ok: {"Current user", "application/json", Schemas.UserResponse}]
   )
@@ -28,6 +29,9 @@ defmodule EngramWeb.UsersController do
   operation(:update,
     operation_id: "account-update",
     summary: "Update the current user's profile",
+    description:
+      "Updates the authenticated user's mutable profile fields (currently `display_name`) " <>
+        "and returns the updated user.",
     tags: ["Account"],
     request_body:
       {"Profile fields", "application/json", Schemas.UpdateProfileRequest, required: true},
