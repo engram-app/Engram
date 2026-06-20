@@ -53,7 +53,12 @@ defmodule EngramWeb.ApiSpec do
         },
         %Tag{name: "Sync", description: "Vault manifest and the unified change feed."},
         %Tag{name: "Embedding", description: "Embedding/index progress."},
-        %Tag{name: "Logs", description: "Client remote-log ingestion and retrieval."}
+        %Tag{name: "Logs", description: "Client remote-log ingestion and retrieval."},
+        %Tag{name: "API Keys", description: "Create, list, and revoke personal API keys."},
+        %Tag{
+          name: "Connections",
+          description: "List and revoke OAuth clients, devices, and PATs."
+        }
       ],
       components: %Components{
         # Engram accepts all credentials on the same `Authorization: Bearer`

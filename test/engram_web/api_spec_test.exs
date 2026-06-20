@@ -310,4 +310,59 @@ defmodule EngramWeb.ApiSpecTest do
       assert :level in names and :category in names and :since in names and :limit in names
     end
   end
+
+  describe "API Keys / Connections paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "declares API Keys + Connections tags", %{spec: spec} do
+      names = Enum.map(spec.tags, & &1.name)
+      assert "API Keys" in names and "Connections" in names
+    end
+
+    test "GET /api/api-keys documents 200", %{spec: spec} do
+      op = spec.paths["/api/api-keys"].get
+      assert op.tags == ["API Keys"]
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "POST /api/api-keys documents request + 200/422", %{spec: spec} do
+      op = spec.paths["/api/api-keys"].post
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 422]
+    end
+
+    test "DELETE /api/api-keys/{id} documents id param + 200/400/404", %{spec: spec} do
+      op = spec.paths["/api/api-keys/{id}"].delete
+      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path))
+      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 404]
+    end
+
+    test "GET /api/connections documents 200", %{spec: spec} do
+      op = spec.paths["/api/connections"].get
+      assert op.tags == ["Connections"]
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "DELETE /api/connections/oauth/{client_id} documents client_id + vault_id + 204/404", %{
+      spec: spec
+    } do
+      op = spec.paths["/api/connections/oauth/{client_id}"].delete
+      names = Enum.map(op.parameters, & &1.name)
+      assert :client_id in names and :vault_id in names
+      assert Enum.sort(Map.keys(op.responses)) == [204, 404]
+    end
+
+    test "POST /api/connections/pat documents request + 201/422", %{spec: spec} do
+      op = spec.paths["/api/connections/pat"].post
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [201, 422]
+    end
+
+    test "DELETE /api/connections/pat/{id} + device/{family_id} are 204/404", %{spec: spec} do
+      pat = spec.paths["/api/connections/pat/{id}"].delete
+      dev = spec.paths["/api/connections/device/{family_id}"].delete
+      assert Enum.sort(Map.keys(pat.responses)) == [204, 404]
+      assert Enum.sort(Map.keys(dev.responses)) == [204, 404]
+    end
+  end
 end

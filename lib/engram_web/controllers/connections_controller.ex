@@ -8,14 +8,44 @@ defmodule EngramWeb.ConnectionsController do
   enumerate or alter its sibling credentials.
   """
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+
   alias Engram.Connections
+  alias EngramWeb.Schemas
 
   plug EngramWeb.Plugs.EnforcePatCreation when action in [:create_pat]
+
+  operation(:index,
+    operation_id: "connections-list",
+    summary: "List active connections",
+    tags: ["Connections"],
+    description: "OAuth client families, device families, and PATs. Session-auth only.",
+    responses: [ok: {"Connections", "application/json", Schemas.ConnectionsList}]
+  )
 
   def index(conn, _params) do
     user = conn.assigns.current_user
     json(conn, Enum.map(Connections.list_for_user(user), &serialize/1))
   end
+
+  operation(:delete_oauth,
+    operation_id: "connections-delete-oauth",
+    summary: "Revoke an OAuth client connection",
+    tags: ["Connections"],
+    parameters: [
+      client_id: [in: :path, type: :string, required: true, description: "OAuth client id"],
+      vault_id: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Scope revoke to one vault"
+      ]
+    ],
+    responses: [
+      no_content: "Revoked (empty body)",
+      not_found: {"No such connection", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def delete_oauth(conn, %{"client_id" => client_id} = params) do
     user = conn.assigns.current_user
@@ -31,6 +61,18 @@ defmodule EngramWeb.ConnectionsController do
         |> json(%{error: "not_found"})
     end
   end
+
+  operation(:create_pat,
+    operation_id: "connections-create-pat",
+    summary: "Create a personal access token",
+    tags: ["Connections"],
+    description: "The raw `key` is returned once. Subject to the per-plan PAT creation limit.",
+    request_body: {"PAT name", "application/json", Schemas.CreatePatRequest, required: true},
+    responses: [
+      created: {"Created (raw key)", "application/json", Schemas.ApiKeyCreated},
+      unprocessable_entity: {"Blank/invalid name", "application/json", Schemas.Error}
+    ]
+  )
 
   def create_pat(conn, params) do
     user = conn.assigns.current_user
@@ -55,6 +97,19 @@ defmodule EngramWeb.ConnectionsController do
     end
   end
 
+  operation(:delete_device,
+    operation_id: "connections-delete-device",
+    summary: "Revoke a device connection",
+    tags: ["Connections"],
+    parameters: [
+      family_id: [in: :path, type: :string, required: true, description: "Device family id"]
+    ],
+    responses: [
+      no_content: "Revoked (empty body)",
+      not_found: {"No such connection", "application/json", Schemas.MessageError}
+    ]
+  )
+
   def delete_device(conn, %{"family_id" => family_id}) do
     user = conn.assigns.current_user
 
@@ -68,6 +123,19 @@ defmodule EngramWeb.ConnectionsController do
         |> json(%{error: "not_found"})
     end
   end
+
+  operation(:delete_pat,
+    operation_id: "connections-delete-pat",
+    summary: "Revoke a personal access token",
+    tags: ["Connections"],
+    parameters: [
+      id: [in: :path, type: :string, required: true, description: "PAT (API key) UUID"]
+    ],
+    responses: [
+      no_content: "Revoked (empty body)",
+      not_found: {"No such PAT", "application/json", Schemas.MessageError}
+    ]
+  )
 
   def delete_pat(conn, %{"id" => id_str}) do
     user = conn.assigns.current_user
