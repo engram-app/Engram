@@ -23,6 +23,14 @@ async def test_offline_queue_replay(vault_a, cdp_a, api_sync):
     await cdp_a.simulate_offline()
     await asyncio.sleep(0.3)
 
+    # simulate_offline() sets the offline flag deterministically (see
+    # cdp.py) — it must NOT depend on the engine reactively flipping offline
+    # after a failed push, which lags under e2e-clerk load (#635). Guard the
+    # contract: offline is in effect immediately, before any edits.
+    assert await cdp_a.get_offline_status(), (
+        "simulate_offline() must put the engine offline deterministically"
+    )
+
     try:
         # Write 2 files — push attempts will fail and enqueue
         write_note(vault_a, path1, "# Offline Note 1\nQueued while offline")

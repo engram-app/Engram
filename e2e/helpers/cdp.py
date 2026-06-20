@@ -972,6 +972,18 @@ class CdpClient:
             se.api.pushAttachment = fail;
             se.api.deleteAttachment = fail;
             se.api.health = async () => false;
+            // Drive the REAL offline transition deterministically instead of
+            // waiting for the engine to react to a failed push. The engine
+            // only flips `offline` on its health/error path (a push must fire,
+            // fail, and categorize as network) — under e2e-clerk load that
+            // reaction lags past the test's poll window, so `assert offline`
+            // and the restore-time queue flush raced and failed (#635).
+            // goOffline() sets offline + starts the health-check loop; with
+            // health() stubbed to false above, nothing flips it back until
+            // restore_online() calls goOnline(). Using the engine's own
+            // transition (vs. poking the flag) keeps the health-check timer
+            // state consistent so restore is symmetric.
+            se.goOffline();
             return 'offline simulated';
         }})()
         """
@@ -999,6 +1011,13 @@ class CdpClient:
             delete se._origPushAttachment;
             delete se._origDeleteAttachment;
             delete se._origHealth;
+            // Drive the REAL online transition: clears `offline` (so file
+            // events stop being re-enqueued mid-flush), stops the health-check
+            // timer, and kicks off a flush. Symmetric with goOffline() in
+            // simulate_offline(); the awaited flushQueue() below then makes the
+            // drain deterministic. Without going online the engine stays in
+            // offline-enqueue mode and the queue oscillates instead of draining.
+            if (se.offline) se.goOnline();
             return 'online restored';
         }})()
         """
