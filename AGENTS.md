@@ -322,6 +322,7 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 | `docs/context/exunit-application-env-races.md` | Why `Application.put_env` in `async: true` tests is a flake source (global ETS; the SQL sandbox doesn't isolate app env) |
 | `docs/context/e2e-vault-registration-diagnostics.md` | Diagnostic ladder for `Vault not registered after 15s` E2E failures — don't just bump the timeout |
 | `docs/context/local-dev-preview-stack.md` | Preview frontend changes against a locally-running real backend |
+| `docs/context/openapi-docs-pipeline.md` | OpenAPI 3.0 spec via open_api_spex: root doc, schema modules, committed `openapi.json` artifact, drift-gate CI step, how to annotate endpoints + exclude admin actions, HostRewrite allowlist gotcha, version-recompile gotcha, alphabetical-key-order gotcha |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS

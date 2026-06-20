@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.473",
+      version: "0.5.474",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -70,6 +70,10 @@ defmodule Engram.MixProject do
       {:uuidv7, "~> 1.0"},
       {:bandit, "~> 1.5"},
       {:dns_cluster, "~> 0.2.0"},
+
+      # OpenAPI 3.0 spec generated from controller annotations; served at
+      # GET /api/openapi and dumped to openapi.json (drift-gated in CI).
+      {:open_api_spex, "~> 3.21"},
 
       # Auth
       {:joken, "~> 2.6"},

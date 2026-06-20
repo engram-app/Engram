@@ -1142,6 +1142,30 @@ jobs:
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
           mix test --warnings-as-errors --slowest 20
 
+      - name: OpenAPI spec drift gate
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+        run: |
+          # Regenerate the spec and fail if it differs from the committed
+          # openapi.json. Keeps the docs source-of-truth honest: any
+          # controller annotation change must be accompanied by a regen
+          # (mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json).
+          #
+          # Compare SEMANTICALLY (sort keys), not byte-wise: open_api_spex/Jason
+          # does not sort the components.schemas map, and Erlang map iteration
+          # order can differ between the machine that generated the committed
+          # file and this CI runner. On large specs that surfaces as pure
+          # key-ordering "drift" with identical content. Normalizing both sides
+          # with sort_keys compares meaning, not insertion order.
+          MIX_ENV=test mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true /tmp/openapi.generated.json
+          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" openapi.json /tmp/openapi.committed.norm.json
+          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" /tmp/openapi.generated.json /tmp/openapi.generated.norm.json
+          if ! diff -u /tmp/openapi.committed.norm.json /tmp/openapi.generated.norm.json; then
+            echo "::error::openapi.json is stale. Run: mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json"
+            exit 1
+          fi
+          echo "OpenAPI spec is up to date."
+
       - name: Lint DB schema (splinter)
         run: |
           # splinter (priv/repo/splinter.sql) references Supabase's API roles,

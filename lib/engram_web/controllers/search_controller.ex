@@ -1,5 +1,7 @@
 defmodule EngramWeb.SearchController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Notes
   alias Engram.Search
@@ -12,6 +14,17 @@ defmodule EngramWeb.SearchController do
   # the same note silently cap the result list well below N.
   @overfetch_factor 4
   @min_overfetch 20
+
+  operation(:search,
+    summary: "Search notes (vector / keyword / hybrid)",
+    tags: ["Search"],
+    request_body: {"Search query", "application/json", Schemas.SearchRequest, required: true},
+    responses: [
+      ok: {"Results", "application/json", Schemas.SearchResponse},
+      forbidden: {"cross_vault requires Pro", "application/json", Schemas.Error},
+      unprocessable_entity: {"Missing query", "application/json", Schemas.Error}
+    ]
+  )
 
   def search(conn, %{"query" => query} = params) do
     user = conn.assigns.current_user
