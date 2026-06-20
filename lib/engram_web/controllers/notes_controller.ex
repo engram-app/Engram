@@ -8,6 +8,7 @@ defmodule EngramWeb.NotesController do
   @max_note_bytes 10 * 1024 * 1024
 
   operation(:upsert,
+    operation_id: "notes-upsert",
     summary: "Create or update a note",
     tags: ["Notes"],
     request_body:
@@ -76,6 +77,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:append,
+    operation_id: "notes-append",
     summary: "Append text to a note (creating it if absent)",
     tags: ["Notes"],
     request_body: {"Path + text", "application/json", Schemas.AppendRequest, required: true},
@@ -126,6 +128,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:show,
+    operation_id: "notes-show",
     summary: "Get a note by path",
     tags: ["Notes"],
     parameters: [
@@ -149,6 +152,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:rename,
+    operation_id: "notes-rename",
     summary: "Rename / move a note",
     tags: ["Notes"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
@@ -176,6 +180,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:delete,
+    operation_id: "notes-delete",
     summary: "Delete a note by path",
     tags: ["Notes"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Note path"]],
@@ -191,6 +196,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:show_by_id,
+    operation_id: "notes-show-by-id",
     summary: "Get a note by id",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
@@ -215,6 +221,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:delete_by_id,
+    operation_id: "notes-delete-by-id",
     summary: "Delete a note by id",
     tags: ["Notes"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Note UUID"]],
@@ -239,6 +246,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:changes,
+    operation_id: "notes-changes",
     summary: "List note changes since a cursor (keyset pagination)",
     tags: ["Notes"],
     parameters: [
@@ -364,6 +372,7 @@ defmodule EngramWeb.NotesController do
   @batch_upsert_max 100
 
   operation(:batch_upsert,
+    operation_id: "notes-batch-upsert",
     summary: "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
     tags: ["Notes"],
     request_body: {"Notes array", "application/json", Schemas.BatchUpsertRequest, required: true},
@@ -462,6 +471,7 @@ defmodule EngramWeb.NotesController do
   defp batch_errors_json(other), do: other
 
   operation(:batch_delete,
+    operation_id: "notes-batch-delete",
     summary: "Delete notes by id (idempotent)",
     tags: ["Notes"],
     request_body: {"Note ids", "application/json", Schemas.BatchIdsRequest, required: true},
@@ -506,6 +516,7 @@ defmodule EngramWeb.NotesController do
   end
 
   operation(:batch_move,
+    operation_id: "notes-batch-move",
     summary: "Move notes to a folder (idempotent)",
     tags: ["Notes"],
     request_body:

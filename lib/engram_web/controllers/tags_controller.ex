@@ -6,6 +6,7 @@ defmodule EngramWeb.TagsController do
   alias Engram.Notes
 
   operation(:index,
+    operation_id: "tags",
     summary: "List all tags in the vault",
     tags: ["Tags"],
     responses: [ok: {"Tags", "application/json", Schemas.TagsResponse}]

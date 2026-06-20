@@ -16,6 +16,7 @@ defmodule EngramWeb.SearchController do
   @min_overfetch 20
 
   operation(:search,
+    operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
     tags: ["Search"],
     request_body: {"Search query", "application/json", Schemas.SearchRequest, required: true},

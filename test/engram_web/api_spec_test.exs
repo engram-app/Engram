@@ -139,6 +139,39 @@ defmodule EngramWeb.ApiSpecTest do
     end
   end
 
+  describe "operationId slugs" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "every operation sets an explicit, slug-clean operationId", %{spec: spec} do
+      ids =
+        for {_path, item} <- spec.paths,
+            verb <- [:get, :post, :patch, :put, :delete],
+            op = Map.get(item, verb),
+            not is_nil(op),
+            do: op.operationId
+
+      assert ids != []
+
+      for id <- ids do
+        # No default `EngramWeb.SomeController.action` ids leak through — those
+        # slugify to unreadable mush (engramweb...controlleraction).
+        refute id =~ "Controller", "operationId still defaulted: #{id}"
+        refute id =~ ".", "operationId should be hyphenated, not dotted: #{id}"
+        assert id =~ ~r/^[a-z0-9-]+$/, "operationId not slug-clean: #{id}"
+      end
+
+      # Unique across the whole spec (slugs must not collide).
+      assert length(ids) == length(Enum.uniq(ids))
+    end
+
+    test "known endpoints carry their expected operationId", %{spec: spec} do
+      assert spec.paths["/api/notes"].post.operationId == "notes-upsert"
+      assert spec.paths["/api/vaults/{id}/restore"].post.operationId == "vaults-restore"
+      assert spec.paths["/api/me"].get.operationId == "account-me"
+      assert spec.paths["/api/search"].post.operationId == "search"
+    end
+  end
+
   describe "Vaults paths" do
     setup do: %{spec: EngramWeb.ApiSpec.spec()}
 
