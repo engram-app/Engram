@@ -173,7 +173,7 @@ function SourceScreen({
   onCommitFresh,
 }: SourceScreenProps) {
   return (
-    <AuthPanel className="flex flex-col gap-6">
+    <AuthPanel className="flex flex-col gap-5">
       <header className="flex flex-col gap-2">
         <h1 className={heading}>Let's get your notes in.</h1>
         <p className="text-sm text-muted-foreground">
@@ -239,7 +239,7 @@ function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
       onClick={onClick}
       aria-pressed={selected}
       className={
-        'group flex flex-col gap-2 rounded-xl border p-5 text-left transition ' +
+        'group flex flex-col gap-2 rounded-xl border p-4 text-left transition sm:p-5 ' +
         (selected
           ? 'border-primary bg-accent/40'
           : 'border-border bg-background hover:border-primary hover:bg-accent/30')
@@ -287,7 +287,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
       : 'waiting'
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       <h2 className="text-lg font-semibold text-foreground">
         Install the Engram Vault Sync plugin
       </h2>
@@ -373,7 +373,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
   const disabled = isCommitting || name.trim().length === 0
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-5">
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       <h2 className="text-base font-semibold text-foreground">Name your first vault</h2>
       <p className="text-sm text-muted-foreground">
         A vault is a folder for related notes. We'll seed it with a welcome

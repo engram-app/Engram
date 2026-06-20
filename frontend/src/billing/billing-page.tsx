@@ -16,7 +16,16 @@ import { useTheme } from '../theme/theme-provider'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CadenceToggle, PLAN_CATALOG, PlanCard } from './plan-cards'
+import {
+  CadenceToggle,
+  PLAN_CATALOG,
+  PlanCard,
+  PlanAccordionRow,
+  formatPlanPrice,
+  FREE_TIER,
+} from './plan-cards'
+import { ctaFilled, ctaOutline } from '@/lib/ui-classes'
+import { cn } from '@/lib/utils'
 import CurrentPlanCard from './current-plan-card'
 import PaymentMethodCard from './payment-method-card'
 import BillingHistoryTable from './billing-history-table'
@@ -33,6 +42,14 @@ const COOLDOWN_MS = 15_000
 
 const INLINE_FRAME_TARGET = 'paddle-checkout'
 
+// Dev-only: Paddle's checkout iframe can't embed on a non-default-port
+// localhost origin (its frame-ancestors only allows the bare host at :80/:443),
+// so `vite dev` swaps the real frame for a stub that lets you walk the whole
+// onboarding flow. `import.meta.env.DEV` is false in production builds, so this
+// path is compiled out and never ships. Excluded under `TEST` so unit tests
+// exercise the real inline-frame path (vitest sets DEV=true too).
+const DEV_FAKE_CHECKOUT = import.meta.env.DEV && !import.meta.env.TEST
+
 async function downloadInvoice(transactionId: string) {
   try {
     const { url } = await api.get<{ url: string }>(`/billing/transactions/${transactionId}/invoice`)
@@ -45,9 +62,21 @@ async function downloadInvoice(transactionId: string) {
 interface BillingPageProps {
   hideHeading?: boolean
   onActivated?: (status: OnboardingStatus) => void
+  // Onboarding-only: renders a "Free" row in the mobile accordion group so all
+  // tiers share one open-at-a-time state. Settings omits it (no free option
+  // there). Routes through a different handler than the paid checkout.
+  freeOption?: { onContinue: () => void; loading?: boolean }
+  // Onboarding-only: fired when the inline Paddle checkout view opens/closes so
+  // the wrapper can hide its own chrome (header, free link) during payment.
+  onCheckoutActiveChange?: (active: boolean) => void
 }
 
-export default function BillingPage({ hideHeading = false, onActivated }: BillingPageProps) {
+export default function BillingPage({
+  hideHeading = false,
+  onActivated,
+  freeOption,
+  onCheckoutActiveChange,
+}: BillingPageProps) {
   // Onboarding mounts BillingPage with onActivated; settings does not. The
   // prop's presence is what flips Paddle from overlay → inline. Inline gives
   // the wizard step a continuous look (plan cards swap to Paddle's frame in
@@ -68,6 +97,9 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   // call Checkout.close() on push activation or cooldown without re-init.
   const paddleRef = useRef<Paddle | undefined>(undefined)
   const [cadence, setCadence] = useState<BillingCadence>('monthly')
+  // Mobile tier accordion: which row is expanded. Exactly one is always open
+  // (re-clicking the open tier keeps it open); Pro is the default.
+  const [openTier, setOpenTier] = useState<'pro' | 'starter' | 'free'>('pro')
 
   // View states for the plan-picker section.
   //   idle      → plan cards visible
@@ -76,6 +108,10 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   const [checkingOut, setCheckingOut] = useState(false)
   const [completedAt, setCompletedAt] = useState<number | null>(null)
   const [slow, setSlow] = useState(false)
+  // Onboarding-only bridge: held from activation until the redirect fires, so we
+  // show a single steady "finishing up" view instead of flashing the empty plan
+  // picker while queries invalidate + status refetches.
+  const [finalizing, setFinalizing] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
   // Inline panel state for the in-app cancel + plan-change flows (replaces
   // the previous openPortal('cancel') / portal-redirect path).
@@ -111,6 +147,12 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   // and (in onboarding mode) fetch the fresh onboarding/status to decide
   // where to route the user next.
   const handleSubscriptionActivated = useCallback(async () => {
+    // Onboarding: hold a steady "finishing up" view across the async work below
+    // so we never flash the empty plan picker before the redirect. Gate on the
+    // fire latch too: a duplicate/late activation broadcast after the first
+    // fire must NOT re-raise `finalizing` (the reset/navigate path below is
+    // skipped once fired, which would otherwise strand the spinner forever).
+    if (onActivatedRef.current && !onActivatedFiredRef.current) setFinalizing(true)
     paddleRef.current?.Checkout.close()
     setCheckingOut(false)
     setCompletedAt(null)
@@ -133,6 +175,7 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
         }
       } catch (err) {
         console.error('failed to refetch onboarding/status after activation', err)
+        setFinalizing(false)
       }
     }
   }, [qc])
@@ -244,6 +287,11 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
   // div is in the DOM before Paddle tries to find it.
   const handleStartCheckout = useCallback(
     (tier: 'starter' | 'pro') => {
+      // Dev stub: skip the (un-embeddable) Paddle frame, show the stand-in.
+      if (DEV_FAKE_CHECKOUT) {
+        setCheckingOut(true)
+        return
+      }
       if (!paddle || !config) return
       if (isInline) setCheckingOut(true)
       // Paddle finds the .paddle-checkout div by class — the div is rendered
@@ -260,6 +308,37 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
     },
     [paddle, config, cadence, isInline],
   )
+
+  // Dev stub success: satisfy the backend onboarding gate via the free-tier
+  // path (the only billing decision we can make without Paddle) so the wizard
+  // advances to the next step. Dev-only; never invoked in production.
+  const handleDevCheckoutSuccess = useCallback(async () => {
+    setFinalizing(true)
+    try {
+      const status = await api.post<OnboardingStatus>('/onboarding/accept_free_tier')
+      qc.setQueryData(['onboarding', 'status'], status)
+      setCheckingOut(false)
+      // Honor the at-most-once latch like the real activation path, so a
+      // trailing push/mount-fire can't double-invoke onActivated.
+      if (!onActivatedFiredRef.current) {
+        onActivatedFiredRef.current = true
+        onActivatedRef.current?.(status)
+      }
+    } catch {
+      setFinalizing(false)
+      toast.error('Could not simulate checkout. Please try again.')
+    }
+  }, [qc])
+
+  // Tell the onboarding wrapper when the inline checkout view is showing (paddle
+  // frame or the slow-activation banner) so it can hide its own header + free
+  // link during payment. Ref-mirrored so the effect only depends on the boolean.
+  const checkoutActive = isInline && (checkingOut || slow || finalizing)
+  const onCheckoutActiveChangeRef = useRef(onCheckoutActiveChange)
+  onCheckoutActiveChangeRef.current = onCheckoutActiveChange
+  useEffect(() => {
+    onCheckoutActiveChangeRef.current?.(checkoutActive)
+  }, [checkoutActive])
 
   if (isLoading || !billing) {
     return <BillingPageSkeleton hideHeading={hideHeading} />
@@ -356,7 +435,15 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
 
       {needsSubscription && (
         <section className="space-y-4">
-          {slow ? (
+          {finalizing ? (
+            <section
+              aria-live="polite"
+              className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+            >
+              <Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">Setting up your account…</p>
+            </section>
+          ) : slow ? (
             <SlowActivationBanner
               transactionId={transactionId}
               onRefresh={() => window.location.reload()}
@@ -374,7 +461,36 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
               >
                 ← Choose a different plan
               </button>
-              <div className={INLINE_FRAME_TARGET} />
+              {DEV_FAKE_CHECKOUT ? (
+                <div className="rounded-lg border border-dashed border-primary/50 bg-muted/30 p-6 text-center">
+                  <p className="text-sm font-medium text-foreground">Test checkout (dev only)</p>
+                  <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+                    Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
+                    flow. Not shown in production.
+                  </p>
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
+                    <button
+                      type="button"
+                      onClick={handleDevCheckoutSuccess}
+                      className={cn('rounded-lg px-4 py-2 text-sm font-medium transition', ctaFilled)}
+                    >
+                      Simulate successful payment
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCheckingOut(false)
+                        toast.error('Payment did not go through. Please try again.')
+                      }}
+                      className={cn('rounded-lg px-4 py-2 text-sm font-medium transition', ctaOutline)}
+                    >
+                      Simulate failure
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className={INLINE_FRAME_TARGET} />
+              )}
             </>
           ) : (
             <>
@@ -385,7 +501,8 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
                 </>
               )}
               <CadenceToggle cadence={cadence} onChange={setCadence} />
-              <ul className="grid items-stretch gap-4 sm:grid-cols-2">
+              {/* Desktop: side-by-side full cards. */}
+              <ul className="hidden items-stretch gap-4 sm:grid sm:grid-cols-2">
                 <PlanCard
                   name={PLAN_CATALOG.starter.name}
                   cadence={cadence}
@@ -407,6 +524,50 @@ export default function BillingPage({ hideHeading = false, onActivated }: Billin
                   disabled={!checkoutReady}
                   recommended
                 />
+              </ul>
+              {/* Mobile: all tiers as a single one-open-at-a-time accordion.
+                  Pro is open by default + visually emphasized; opening any tier
+                  collapses the others. */}
+              <ul className="flex flex-col gap-2 sm:hidden">
+                <PlanAccordionRow
+                  name={PLAN_CATALOG.pro.name}
+                  price={formatPlanPrice(PLAN_CATALOG.pro, cadence)}
+                  summary="15 vaults · 15 GB · unlimited AI"
+                  features={PLAN_CATALOG.pro.features}
+                  ctaLabel="Choose Pro"
+                  ctaNote="7-day free trial · cancel anytime"
+                  onClick={() => handleStartCheckout('pro')}
+                  disabled={!checkoutReady}
+                  recommended
+                  open={openTier === 'pro'}
+                  onOpen={() => setOpenTier('pro')}
+                />
+                <PlanAccordionRow
+                  name={PLAN_CATALOG.starter.name}
+                  price={formatPlanPrice(PLAN_CATALOG.starter, cadence)}
+                  summary="5 vaults · 3 GB · 500 AI queries/day"
+                  features={PLAN_CATALOG.starter.features}
+                  ctaLabel="Choose Starter"
+                  ctaNote="7-day free trial · cancel anytime"
+                  onClick={() => handleStartCheckout('starter')}
+                  disabled={!checkoutReady}
+                  open={openTier === 'starter'}
+                  onOpen={() => setOpenTier('starter')}
+                />
+                {freeOption && (
+                  <PlanAccordionRow
+                    name={FREE_TIER.name}
+                    price={FREE_TIER.price}
+                    summary={FREE_TIER.summary}
+                    features={[...FREE_TIER.features]}
+                    ctaLabel="Choose Free"
+                    onClick={freeOption.onContinue}
+                    disabled={freeOption.loading}
+                    quietCta
+                    open={openTier === 'free'}
+                    onOpen={() => setOpenTier('free')}
+                  />
+                )}
               </ul>
             </>
           )}

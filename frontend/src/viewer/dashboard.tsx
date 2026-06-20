@@ -97,7 +97,7 @@ export default function Dashboard() {
   return (
     <section
       aria-label="Welcome"
-      className="flex h-full flex-col items-center justify-center"
+      className="flex h-full flex-col items-center justify-center px-6"
       data-tour="dashboard-root"
     >
       <Card className="max-w-md text-center">

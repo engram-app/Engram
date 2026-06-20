@@ -94,8 +94,8 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
   const canContinue = tools.size > 0 && !isPending
 
   return (
-    <AuthPanel className="flex flex-col gap-6">
-      <header className="flex flex-col gap-3">
+    <AuthPanel className="flex flex-col gap-5">
+      <header className="flex flex-col gap-2">
         <h1 className={heading}>Which AI tools do you use?</h1>
         <p className="text-base text-foreground">
           We'll tailor your setup around the tools you already work with.
@@ -115,7 +115,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
         </p>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <ToolColumn
           title="AI assistants"
           options={TOOL_ASSISTANTS}
@@ -189,7 +189,7 @@ function ToolColumn({
       </legend>
       <div className={innerClass}>
         {options.map((opt) => (
-          <label key={opt.slug} className={selectableRow(selected.has(opt.slug))}>
+          <label key={opt.slug} className={selectableRow(selected.has(opt.slug), true)}>
             <Checkbox
               checked={selected.has(opt.slug)}
               onCheckedChange={() => onToggle(opt.slug)}

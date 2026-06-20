@@ -8,10 +8,10 @@ type AuthPanelProps = {
 
 export default function AuthPanel({ children, className }: AuthPanelProps) {
   return (
-    <section className="m-auto w-full max-w-2xl px-4 py-6">
+    <section className="m-auto w-full max-w-2xl px-4 py-4 sm:py-6">
       <div
         className={cn(
-          'rounded-2xl border border-border bg-background p-5 sm:p-6',
+          'rounded-2xl border border-border bg-background p-4 sm:p-6',
           className,
         )}
       >
