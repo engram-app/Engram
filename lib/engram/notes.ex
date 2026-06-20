@@ -192,53 +192,34 @@ defmodule Engram.Notes do
       |> Note.changeset(attrs)
       |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
 
-    # Insert inside a SAVEPOINT (nested transaction). A concurrent insert of the
-    # same folder races us: find_folder_marker saw :not_found, then this insert
-    # hits the `notes_user_vault_folder_marker` unique index. Without the
-    # savepoint that violation aborts the WHOLE enclosing Repo.with_tenant
-    # transaction — its trailing role-reset query then fails with
-    # 25P02 (in_failed_sql_transaction), so the re-fetch below can't run and the
-    # caller 500s. The savepoint scopes the rollback to just this insert, leaving
-    # the tenant transaction healthy so we can collapse to the winner's marker.
-    insert_result =
-      Repo.transaction(fn ->
-        case Repo.insert(changeset) do
-          {:ok, marker} -> marker
-          {:error, changeset} -> Repo.rollback(changeset)
+    # INSERT ... ON CONFLICT DO NOTHING on the folder-marker partial unique
+    # index. A concurrent create of the same folder races us: find_folder_marker
+    # saw :not_found, then this insert collides on `notes_user_vault_folder_marker`.
+    # A bare insert would raise a unique violation that aborts the WHOLE enclosing
+    # Repo.with_tenant transaction — its trailing role-reset query then 25P02s and
+    # the caller 500s. ON CONFLICT DO NOTHING no-ops the loser's insert at the SQL
+    # level instead, leaving the transaction healthy. Folder creation is
+    # idempotent, so we collapse to whichever live marker now occupies the path
+    # (ours if we won, the winner's otherwise). The index is partial
+    # (WHERE deleted_at IS NULL), so the occupant is always a LIVE marker; match
+    # deleted_at: nil explicitly to stay correct even if find_folder_marker (no
+    # deleted_at filter) ever returns a tombstone. No conflict_target — the only
+    # unique index a kind="folder" row can violate is notes_user_vault_folder_marker;
+    # a bare DO NOTHING (as the insert_all sites elsewhere do) sidesteps the
+    # partial-index conflict_target fragment-matching footgun.
+    case Repo.insert(changeset, on_conflict: :nothing) do
+      {:ok, _} ->
+        case find_folder_marker(user, vault, folder_hmac) do
+          {:ok, %Note{deleted_at: nil} = marker} ->
+            {:ok, hydrate_folder_marker(marker, dek)}
+
+          _ ->
+            {:error, Ecto.Changeset.add_error(changeset, :folder, "insert raced and vanished")}
         end
-      end)
 
-    case insert_result do
-      {:ok, marker} ->
-        {:ok, hydrate_folder_marker(marker, dek)}
-
-      {:error, %Ecto.Changeset{errors: errors}} = err ->
-        # Race: concurrent insert of the same marker collapses to the
-        # winner. Re-fetch and return rather than surface a constraint
-        # error — keeps the API idempotent under load. The unique index is
-        # partial (WHERE deleted_at IS NULL), so the conflict winner is always
-        # a LIVE marker; match deleted_at: nil explicitly so this stays correct
-        # even if find_folder_marker (no deleted_at filter) ever returns a
-        # tombstone, rather than hydrating a soft-deleted row.
-        if has_unique_conflict?(errors) do
-          case find_folder_marker(user, vault, folder_hmac) do
-            {:ok, %Note{deleted_at: nil} = existing} ->
-              {:ok, hydrate_folder_marker(existing, dek)}
-
-            _ ->
-              err
-          end
-        else
-          err
-        end
+      {:error, changeset} ->
+        {:error, changeset}
     end
-  end
-
-  defp has_unique_conflict?(errors) do
-    Enum.any?(errors, fn
-      {_field, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
-      _ -> false
-    end)
   end
 
   @doc """
@@ -463,41 +444,40 @@ defmodule Engram.Notes do
           seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
           changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
-          # Insert inside a SAVEPOINT (nested transaction). Concurrent upserts of
-          # the same new path both saw `nil` on the lookup above; the loser hits
-          # the `notes_user_vault_path_v2` unique index. Without the savepoint
-          # that violation aborts the whole tenant transaction — its trailing
-          # role-reset query then fails with 25P02 → the controller 500s (which
-          # the plugin's offline-queue flush treats as a hard error: it breaks
-          # the drain and flips offline, so the queue never empties — the
-          # test_24 replay flake). The savepoint scopes the rollback to the
-          # insert, keeping the tenant txn alive so we can report a version
-          # conflict (→ 409) the client reconciles, exactly like a stale-version
-          # write.
-          insert_result =
-            Repo.transaction(fn ->
-              case Repo.insert(changeset) do
-                {:ok, note} -> note
-                {:error, changeset} -> Repo.rollback(changeset)
-              end
-            end)
+          # INSERT ... ON CONFLICT DO NOTHING on the live-note partial unique
+          # index. A concurrent upsert of the same new path raced us — both saw
+          # `nil` on the lookup above, so both reach here. A bare insert would
+          # raise a `notes_user_vault_path_v2` unique violation that aborts the
+          # whole tenant transaction (its trailing role-reset query then 25P02s
+          # → controller 500), and the plugin's offline-queue flush treats a 500
+          # as fatal (breaks the drain, flips offline) — the test_24 replay
+          # flake. ON CONFLICT DO NOTHING no-ops the loser's insert at the SQL
+          # level instead, leaving the transaction healthy. We then re-fetch and
+          # compare ids to tell winner (we inserted our row) from loser (someone
+          # else's row now occupies the path). No conflict_target — the only
+          # unique index a kind="note" row can violate is notes_user_vault_path_v2;
+          # a bare DO NOTHING (matching the insert_all sites elsewhere in this
+          # module) sidesteps the partial-index conflict_target fragment-matching
+          # footgun.
+          case Repo.insert(changeset, on_conflict: :nothing) do
+            {:ok, _} ->
+              case Repo.one(lookup_query) do
+                %Note{id: ^note_id} = inserted ->
+                  :ok = UsageMeters.inc_notes_count(user.id, 1)
+                  {:ok, {nil, inserted}}
 
-          case insert_result do
-            {:ok, note} ->
-              :ok = UsageMeters.inc_notes_count(user.id, 1)
-              {:ok, {nil, note}}
+                %Note{} = existing ->
+                  # Concurrent create won; report a version conflict (→ 409) the
+                  # client reconciles, exactly like a stale-version write.
+                  {:conflict, existing}
 
-            {:error, %Ecto.Changeset{errors: errors}} = err ->
-              if has_unique_conflict?(errors) do
-                # Concurrent create won the race; the path now exists. Surface it
-                # as a conflict against the winner's row rather than 500ing.
-                case Repo.one(lookup_query) do
-                  %Note{} = existing -> {:conflict, existing}
-                  nil -> err
-                end
-              else
-                err
+                nil ->
+                  {:error,
+                   Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
               end
+
+            {:error, changeset} ->
+              {:error, changeset}
           end
         end
     end
