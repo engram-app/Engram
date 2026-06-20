@@ -250,4 +250,64 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 200)
     end
   end
+
+  describe "Attachments / Sync / Embedding / Logs paths" do
+    setup do: %{spec: EngramWeb.ApiSpec.spec()}
+
+    test "declares Attachments/Sync/Embedding/Logs tags", %{spec: spec} do
+      names = Enum.map(spec.tags, & &1.name)
+      assert "Attachments" in names and "Sync" in names
+      assert "Embedding" in names and "Logs" in names
+    end
+
+    test "POST /api/attachments documents request + 200/400/402/415/422/502", %{spec: spec} do
+      op = spec.paths["/api/attachments"].post
+      assert op.tags == ["Attachments"]
+      assert op.requestBody
+      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 402, 415, 422, 502]
+    end
+
+    test "GET /api/attachments/*path documents raw query param + 404", %{spec: spec} do
+      op = spec.paths["/api/attachments/*path"].get
+      names = Enum.map(op.parameters, & &1.name)
+      assert :path in names and :raw in names
+      assert Map.has_key?(op.responses, 404)
+    end
+
+    test "GET /api/attachments/changes documents since + 400", %{spec: spec} do
+      op = spec.paths["/api/attachments/changes"].get
+      assert Enum.any?(op.parameters, &(&1.name == :since and &1.required))
+      assert Map.has_key?(op.responses, 400)
+    end
+
+    test "GET /api/sync/manifest documents 200", %{spec: spec} do
+      op = spec.paths["/api/sync/manifest"].get
+      assert op.tags == ["Sync"]
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "GET /api/sync/changes documents 200/400/410", %{spec: spec} do
+      op = spec.paths["/api/sync/changes"].get
+      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 410]
+    end
+
+    test "GET /api/embed-status documents 200", %{spec: spec} do
+      op = spec.paths["/api/embed-status"].get
+      assert op.tags == ["Embedding"]
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "POST /api/logs documents request + 200", %{spec: spec} do
+      op = spec.paths["/api/logs"].post
+      assert op.tags == ["Logs"]
+      assert op.requestBody
+      assert Map.has_key?(op.responses, 200)
+    end
+
+    test "GET /api/logs documents level/category/since/limit query params", %{spec: spec} do
+      op = spec.paths["/api/logs"].get
+      names = Enum.map(op.parameters, & &1.name)
+      assert :level in names and :category in names and :since in names and :limit in names
+    end
+  end
 end

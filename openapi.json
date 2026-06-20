@@ -368,6 +368,20 @@
         "x-struct": "Elixir.EngramWeb.Schemas.UpdateProfileRequest",
         "x-validate": null
       },
+      "AttachmentResponse": {
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/AttachmentMeta"
+          }
+        },
+        "required": [
+          "attachment"
+        ],
+        "title": "AttachmentResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentResponse",
+        "x-validate": null
+      },
       "MessageError": {
         "properties": {
           "error": {
@@ -438,6 +452,38 @@
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
         "x-validate": null
       },
+      "SyncChangesResponse": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/SyncChange"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "has_more": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "next_cursor": {
+            "description": "Opaque keyset cursor; null on the last page.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "changes",
+          "has_more"
+        ],
+        "title": "SyncChangesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SyncChangesResponse",
+        "x-validate": null
+      },
       "RegisterVaultRequest": {
         "properties": {
           "client_id": {
@@ -461,6 +507,78 @@
         "x-struct": "Elixir.EngramWeb.Schemas.RegisterVaultRequest",
         "x-validate": null
       },
+      "ManifestEntry": {
+        "properties": {
+          "content_hash": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ManifestEntry",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ManifestEntry",
+        "x-validate": null
+      },
+      "AttachmentBatchMoveRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "target_folder": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "paths",
+          "target_folder"
+        ],
+        "title": "AttachmentBatchMoveRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentBatchMoveRequest",
+        "x-validate": null
+      },
+      "AttachmentDeleted": {
+        "properties": {
+          "deleted": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "deleted",
+          "path"
+        ],
+        "title": "AttachmentDeleted",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentDeleted",
+        "x-validate": null
+      },
       "AppendRequest": {
         "properties": {
           "path": {
@@ -481,6 +599,79 @@
         "title": "AppendRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.AppendRequest",
+        "x-validate": null
+      },
+      "LogIngestResponse": {
+        "properties": {
+          "count": {
+            "description": "Number of log lines persisted.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ok": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "ok",
+          "count"
+        ],
+        "title": "LogIngestResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LogIngestResponse",
+        "x-validate": null
+      },
+      "LogsResponse": {
+        "properties": {
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/LogRecord"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "logs"
+        ],
+        "title": "LogsResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LogsResponse",
+        "x-validate": null
+      },
+      "UploadAttachmentRequest": {
+        "properties": {
+          "content_base64": {
+            "description": "Base64-encoded file bytes.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "description": "Detected from path if omitted.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path",
+          "content_base64"
+        ],
+        "title": "UploadAttachmentRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UploadAttachmentRequest",
         "x-validate": null
       },
       "RenameRequest": {
@@ -550,6 +741,128 @@
         "title": "FolderNamesResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.FolderNamesResponse",
+        "x-validate": null
+      },
+      "LogIngestRequest": {
+        "properties": {
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/LogInput"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "logs"
+        ],
+        "title": "LogIngestRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LogIngestRequest",
+        "x-validate": null
+      },
+      "AttachmentChange": {
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "size_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "AttachmentChange",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentChange",
+        "x-validate": null
+      },
+      "SyncChange": {
+        "properties": {
+          "content": {
+            "description": "Note body — present only when fields=all.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "content_hash": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "deleted": {
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "seq": {
+            "description": "Per-vault ordering key.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "type": {
+            "enum": [
+              "note",
+              "attachment"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "type",
+          "seq"
+        ],
+        "title": "SyncChange",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SyncChange",
         "x-validate": null
       },
       "UpdateVaultRequest": {
@@ -644,6 +957,91 @@
         "x-struct": "Elixir.EngramWeb.Schemas.LimitError",
         "x-validate": null
       },
+      "MimeRejected": {
+        "properties": {
+          "error": {
+            "example": "mime_not_allowed",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "extension": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "MimeRejected",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.MimeRejected",
+        "x-validate": null
+      },
+      "AttachmentMeta": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "description": "Client mtime (epoch seconds)",
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "example": "assets/diagram.png",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "size_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "AttachmentMeta",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentMeta",
+        "x-validate": null
+      },
       "SearchResponse": {
         "properties": {
           "results": {
@@ -661,6 +1059,32 @@
         "title": "SearchResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.SearchResponse",
+        "x-validate": null
+      },
+      "AttachmentRenameResponse": {
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/AttachmentMeta"
+          },
+          "new_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "old_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "renamed": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "AttachmentRenameResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentRenameResponse",
         "x-validate": null
       },
       "FolderResponse": {
@@ -703,6 +1127,70 @@
         "x-struct": "Elixir.EngramWeb.Schemas.VaultsResponse",
         "x-validate": null
       },
+      "LogRecord": {
+        "properties": {
+          "category": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "level": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "message": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "platform": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "plugin_version": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "stack": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ts": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "LogRecord",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LogRecord",
+        "x-validate": null
+      },
       "VaultResponse": {
         "properties": {
           "vault": {
@@ -715,6 +1203,57 @@
         "title": "VaultResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.VaultResponse",
+        "x-validate": null
+      },
+      "EmbedStatusResponse": {
+        "properties": {
+          "indexed": {
+            "description": "Notes whose embedding matches current content.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "pending": {
+            "description": "Notes awaiting (re)embedding.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "total": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "total",
+          "indexed",
+          "pending"
+        ],
+        "title": "EmbedStatusResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.EmbedStatusResponse",
+        "x-validate": null
+      },
+      "AttachmentBatchDeleteRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "AttachmentBatchDeleteRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentBatchDeleteRequest",
         "x-validate": null
       },
       "User": {
@@ -995,6 +1534,56 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderListResponse",
         "x-validate": null
       },
+      "LogInput": {
+        "properties": {
+          "category": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "level": {
+            "example": "error",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "message": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "platform": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "plugin_version": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "stack": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ts": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "LogInput",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LogInput",
+        "x-validate": null
+      },
       "BatchUpsertRequest": {
         "properties": {
           "notes": {
@@ -1102,6 +1691,25 @@
         "x-struct": "Elixir.EngramWeb.Schemas.Conflict",
         "x-validate": null
       },
+      "AttachmentsResponse": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "attachments"
+        ],
+        "title": "AttachmentsResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentsResponse",
+        "x-validate": null
+      },
       "CreateVaultRequest": {
         "properties": {
           "description": {
@@ -1127,6 +1735,67 @@
         "title": "CreateVaultRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.CreateVaultRequest",
+        "x-validate": null
+      },
+      "AttachmentWithContent": {
+        "properties": {
+          "content_base64": {
+            "description": "Base64-encoded file bytes.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mime_type": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "format": "float",
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "size_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path",
+          "content_base64"
+        ],
+        "title": "AttachmentWithContent",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentWithContent",
         "x-validate": null
       },
       "DeletedFlag": {
@@ -1200,6 +1869,53 @@
         "title": "UpsertNoteRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UpsertNoteRequest",
+        "x-validate": null
+      },
+      "ManifestResponse": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/ManifestEntry"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "change_seq": {
+            "description": "Current per-vault sequence watermark.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/ManifestEntry"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "total_attachments": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "total_notes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "notes",
+          "attachments",
+          "total_notes",
+          "total_attachments",
+          "change_seq"
+        ],
+        "title": "ManifestResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ManifestResponse",
         "x-validate": null
       },
       "RenameNoteResponse": {
@@ -1315,6 +2031,53 @@
         "title": "UserResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UserResponse",
+        "x-validate": null
+      },
+      "AttachmentChangesResponse": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentChange"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "server_time": {
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "changes"
+        ],
+        "title": "AttachmentChangesResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentChangesResponse",
+        "x-validate": null
+      },
+      "BatchItemError": {
+        "properties": {
+          "error": {
+            "example": "conflict",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "item_path": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "BatchItemError",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchItemError",
         "x-validate": null
       },
       "FolderRenameResponse": {
@@ -1524,41 +2287,20 @@
   },
   "openapi": "3.0.0",
   "paths": {
-    "/api/folders": {
-      "get": {
-        "callbacks": {},
-        "operationId": "folders-index",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FoldersResponse"
-                }
-              }
-            },
-            "description": "Folders"
-          }
-        },
-        "summary": "List folders",
-        "tags": [
-          "Folders"
-        ]
-      },
+    "/api/notes": {
       "post": {
         "callbacks": {},
-        "operationId": "folders-create",
+        "operationId": "notes-upsert",
         "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateFolderRequest"
+                "$ref": "#/components/schemas/UpsertNoteRequest"
               }
             }
           },
-          "description": "Folder path",
+          "description": "Note to upsert",
           "required": true
         },
         "responses": {
@@ -1566,11 +2308,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FolderResponse"
+                  "$ref": "#/components/schemas/NoteResponse"
                 }
               }
             },
-            "description": "Created"
+            "description": "Created/updated"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            },
+            "description": "Version conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Note exceeds 10MB"
           },
           "422": {
             "content": {
@@ -1580,24 +2342,24 @@
                 }
               }
             },
-            "description": "Empty/root folder rejected"
+            "description": "Validation error"
           }
         },
-        "summary": "Create a folder",
+        "summary": "Create or update a note",
         "tags": [
-          "Folders"
+          "Notes"
         ]
       }
     },
-    "/api/folders/*path": {
-      "delete": {
+    "/api/vaults/{id}/restore": {
+      "post": {
         "callbacks": {},
-        "operationId": "folders-delete",
+        "operationId": "vaults-restore",
         "parameters": [
           {
-            "description": "Folder path",
+            "description": "Vault UUID",
             "in": "path",
-            "name": "path",
+            "name": "id",
             "required": true,
             "schema": {
               "type": "string",
@@ -1607,30 +2369,104 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Deleted (empty body)"
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponse"
+                }
+              }
+            },
+            "description": "Restored"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Vault cap reached"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
           }
         },
-        "summary": "Delete a folder by path",
+        "summary": "Restore a soft-deleted vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/folders/explicit": {
+      "get": {
+        "callbacks": {},
+        "operationId": "folders-explicit",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderNamesResponse"
+                }
+              }
+            },
+            "description": "Folder names"
+          }
+        },
+        "summary": "List explicitly-created (empty-capable) folders",
         "tags": [
           "Folders"
         ]
       }
     },
-    "/api/folders/batch-delete": {
+    "/api/sync/manifest": {
+      "get": {
+        "callbacks": {},
+        "description": "Every live note + attachment path and content hash, for sync reconciliation.",
+        "operationId": "sync-manifest",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManifestResponse"
+                }
+              }
+            },
+            "description": "Manifest"
+          }
+        },
+        "summary": "Get the full vault manifest",
+        "tags": [
+          "Sync"
+        ]
+      }
+    },
+    "/api/notes/batch": {
       "post": {
         "callbacks": {},
-        "operationId": "folders-batch-delete",
+        "operationId": "notes-batch-upsert",
         "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BatchIdsRequest"
+                "$ref": "#/components/schemas/BatchUpsertRequest"
               }
             }
           },
-          "description": "Folder ids",
+          "description": "Notes array",
           "required": true
         },
         "responses": {
@@ -1638,11 +2474,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DeletedCount"
+                  "$ref": "#/components/schemas/BatchUpsertResponse"
                 }
               }
             },
-            "description": "Deleted count"
+            "description": "Per-note results"
           },
           "400": {
             "content": {
@@ -1652,32 +2488,56 @@
                 }
               }
             },
-            "description": "Invalid ids"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Some ids not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Conflict"
+            "description": "Invalid array / >100 items"
           }
         },
-        "summary": "Delete folders by id (idempotent)",
+        "summary": "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
         "tags": [
-          "Folders"
+          "Notes"
+        ]
+      }
+    },
+    "/api/notes/append": {
+      "post": {
+        "callbacks": {},
+        "operationId": "notes-append",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendRequest"
+              }
+            }
+          },
+          "description": "Path + text",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendResponse"
+                }
+              }
+            },
+            "description": "Appended"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Append text to a note (creating it if absent)",
+        "tags": [
+          "Notes"
         ]
       }
     },
@@ -1745,94 +2605,49 @@
         ]
       }
     },
-    "/api/folders/by-id/{id}/notes": {
+    "/api/notes/changes": {
       "get": {
         "callbacks": {},
-        "operationId": "folders-list-notes",
+        "operationId": "notes-changes",
         "parameters": [
           {
-            "description": "Folder UUID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FolderNotesResponse"
-                }
-              }
-            },
-            "description": "Folder notes"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid UUID"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "No such folder"
-          }
-        },
-        "summary": "List notes in a folder by id (metadata only)",
-        "tags": [
-          "Folders"
-        ]
-      }
-    },
-    "/api/folders/explicit": {
-      "get": {
-        "callbacks": {},
-        "operationId": "folders-explicit",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FolderNamesResponse"
-                }
-              }
-            },
-            "description": "Folder names"
-          }
-        },
-        "summary": "List explicitly-created (empty-capable) folders",
-        "tags": [
-          "Folders"
-        ]
-      }
-    },
-    "/api/folders/list": {
-      "get": {
-        "callbacks": {},
-        "operationId": "folders-list",
-        "parameters": [
-          {
-            "description": "Folder path",
+            "description": "ISO8601 timestamp cursor",
             "in": "query",
-            "name": "folder",
+            "name": "since",
             "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Max rows (<=500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "\"meta\" or \"all\"",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Opaque pagination cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
             "schema": {
               "type": "string",
               "x-struct": null,
@@ -1845,11 +2660,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FolderListResponse"
+                  "$ref": "#/components/schemas/ChangesResponse"
                 }
               }
             },
-            "description": "Folder notes"
+            "description": "Changes page"
           },
           "400": {
             "content": {
@@ -1859,29 +2674,29 @@
                 }
               }
             },
-            "description": "Missing folder param"
+            "description": "Invalid since/limit/fields/cursor"
           }
         },
-        "summary": "List notes in a folder (metadata only)",
+        "summary": "List note changes since a cursor (keyset pagination)",
         "tags": [
-          "Folders"
+          "Notes"
         ]
       }
     },
-    "/api/folders/rename": {
+    "/api/folders/batch-delete": {
       "post": {
         "callbacks": {},
-        "operationId": "folders-rename",
+        "operationId": "folders-batch-delete",
         "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RenameRequest"
+                "$ref": "#/components/schemas/BatchIdsRequest"
               }
             }
           },
-          "description": "Old + new path",
+          "description": "Folder ids",
           "required": true
         },
         "responses": {
@@ -1889,11 +2704,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FolderRenameResponse"
+                  "$ref": "#/components/schemas/DeletedCount"
                 }
               }
             },
-            "description": "Renamed"
+            "description": "Deleted count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid ids"
           },
           "404": {
             "content": {
@@ -1903,7 +2728,7 @@
                 }
               }
             },
-            "description": "No such folder"
+            "description": "Some ids not found"
           },
           "409": {
             "content": {
@@ -1913,69 +2738,223 @@
                 }
               }
             },
-            "description": "Target exists"
+            "description": "Conflict"
           }
         },
-        "summary": "Rename / move a folder",
+        "summary": "Delete folders by id (idempotent)",
         "tags": [
           "Folders"
         ]
       }
     },
-    "/api/health": {
-      "get": {
+    "/api/attachments/*path": {
+      "delete": {
         "callbacks": {},
-        "description": "Cheap liveness check. Always 200 if the app is up.",
-        "operationId": "health",
-        "parameters": [],
+        "operationId": "attachments-delete",
+        "parameters": [
+          {
+            "description": "Attachment path",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthStatus"
+                  "$ref": "#/components/schemas/AttachmentDeleted"
                 }
               }
             },
-            "description": "Service is up"
+            "description": "Deleted"
           }
         },
-        "security": [],
-        "summary": "Liveness probe",
-        "tags": []
+        "summary": "Delete an attachment",
+        "tags": [
+          "Attachments"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "description": "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes instead.",
+        "operationId": "attachments-show",
+        "parameters": [
+          {
+            "description": "Attachment path",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "\"1\" streams raw bytes instead of JSON.",
+            "in": "query",
+            "name": "raw",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentWithContent"
+                }
+              }
+            },
+            "description": "Attachment"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such attachment"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Fetch error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage fetch failed"
+          }
+        },
+        "summary": "Get an attachment",
+        "tags": [
+          "Attachments"
+        ]
       }
     },
-    "/api/health/deep": {
+    "/api/logs": {
       "get": {
         "callbacks": {},
-        "description": "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
-        "operationId": "health-deep",
-        "parameters": [],
+        "operationId": "logs-list",
+        "parameters": [
+          {
+            "description": "Filter by level",
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Filter by category",
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "ISO 8601 lower bound",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Max rows",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthStatus"
+                  "$ref": "#/components/schemas/LogsResponse"
                 }
               }
             },
-            "description": "All critical deps ok"
+            "description": "Logs"
+          }
+        },
+        "summary": "List ingested logs",
+        "tags": [
+          "Logs"
+        ]
+      },
+      "post": {
+        "callbacks": {},
+        "operationId": "logs-ingest",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogIngestRequest"
+              }
+            }
           },
-          "503": {
+          "description": "Log lines",
+          "required": true
+        },
+        "responses": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthStatus"
+                  "$ref": "#/components/schemas/LogIngestResponse"
                 }
               }
             },
-            "description": "Degraded"
+            "description": "Persisted count"
           }
         },
-        "security": [],
-        "summary": "Readiness probe",
-        "tags": []
+        "summary": "Ingest client logs",
+        "tags": [
+          "Logs"
+        ]
       }
     },
     "/api/me": {
@@ -2116,20 +3095,163 @@
         ]
       }
     },
-    "/api/notes": {
+    "/api/sync/changes": {
+      "get": {
+        "callbacks": {},
+        "operationId": "sync-changes",
+        "parameters": [
+          {
+            "description": "Max rows (≤500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "\"meta\" or \"all\"",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Opaque keyset cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncChangesResponse"
+                }
+              }
+            },
+            "description": "Changes page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Cursor older than retention window"
+          }
+        },
+        "summary": "Pull the unified note + attachment change feed",
+        "tags": [
+          "Sync"
+        ]
+      }
+    },
+    "/api/attachments/changes": {
+      "get": {
+        "callbacks": {},
+        "operationId": "attachments-changes",
+        "parameters": [
+          {
+            "description": "ISO 8601 timestamp cursor",
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentChangesResponse"
+                }
+              }
+            },
+            "description": "Changes"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Missing/invalid since"
+          }
+        },
+        "summary": "List attachment changes since a timestamp",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
+    "/api/folders": {
+      "get": {
+        "callbacks": {},
+        "operationId": "folders-index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FoldersResponse"
+                }
+              }
+            },
+            "description": "Folders"
+          }
+        },
+        "summary": "List folders",
+        "tags": [
+          "Folders"
+        ]
+      },
       "post": {
         "callbacks": {},
-        "operationId": "notes-upsert",
+        "operationId": "folders-create",
         "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpsertNoteRequest"
+                "$ref": "#/components/schemas/CreateFolderRequest"
               }
             }
           },
-          "description": "Note to upsert",
+          "description": "Folder path",
           "required": true
         },
         "responses": {
@@ -2137,31 +3259,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NoteResponse"
+                  "$ref": "#/components/schemas/FolderResponse"
                 }
               }
             },
-            "description": "Created/updated"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Conflict"
-                }
-              }
-            },
-            "description": "Version conflict"
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Note exceeds 10MB"
+            "description": "Created"
           },
           "422": {
             "content": {
@@ -2171,12 +3273,186 @@
                 }
               }
             },
-            "description": "Validation error"
+            "description": "Empty/root folder rejected"
           }
         },
-        "summary": "Create or update a note",
+        "summary": "Create a folder",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/vaults/{id}/purge": {
+      "post": {
+        "callbacks": {},
+        "description": "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
+        "operationId": "vaults-purge",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultPurged"
+                }
+              }
+            },
+            "description": "Purged"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          }
+        },
+        "summary": "Permanently purge a vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/notes/rename": {
+      "post": {
+        "callbacks": {},
+        "operationId": "notes-rename",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "description": "Old + new path",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameNoteResponse"
+                }
+              }
+            },
+            "description": "Renamed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target exists / version conflict"
+          }
+        },
+        "summary": "Rename / move a note",
         "tags": [
           "Notes"
+        ]
+      }
+    },
+    "/api/attachments/batch-move": {
+      "post": {
+        "callbacks": {},
+        "operationId": "attachments-batch-move",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentBatchMoveRequest"
+              }
+            }
+          },
+          "description": "Paths + target folder",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedCount"
+                }
+              }
+            },
+            "description": "Moved count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Missing params"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Attachments require a paid plan"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchItemError"
+                }
+              }
+            },
+            "description": "An item was not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchItemError"
+                }
+              }
+            },
+            "description": "An item conflicts at target"
+          }
+        },
+        "summary": "Move attachments to a folder (idempotent)",
+        "tags": [
+          "Attachments"
         ]
       }
     },
@@ -2258,108 +3534,20 @@
         ]
       }
     },
-    "/api/notes/append": {
+    "/api/attachments/batch-delete": {
       "post": {
         "callbacks": {},
-        "operationId": "notes-append",
+        "operationId": "attachments-batch-delete",
         "parameters": [],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AppendRequest"
+                "$ref": "#/components/schemas/AttachmentBatchDeleteRequest"
               }
             }
           },
-          "description": "Path + text",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppendResponse"
-                }
-              }
-            },
-            "description": "Appended"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Validation error"
-          }
-        },
-        "summary": "Append text to a note (creating it if absent)",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/batch": {
-      "post": {
-        "callbacks": {},
-        "operationId": "notes-batch-upsert",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BatchUpsertRequest"
-              }
-            }
-          },
-          "description": "Notes array",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BatchUpsertResponse"
-                }
-              }
-            },
-            "description": "Per-note results"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid array / >100 items"
-          }
-        },
-        "summary": "Upsert up to 100 notes (idempotent via X-Idempotency-Key)",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/batch-delete": {
-      "post": {
-        "callbacks": {},
-        "operationId": "notes-batch-delete",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BatchIdsRequest"
-              }
-            }
-          },
-          "description": "Note ids",
+          "description": "Paths",
           "required": true
         },
         "responses": {
@@ -2377,440 +3565,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "$ref": "#/components/schemas/MessageError"
                 }
               }
             },
-            "description": "Invalid ids"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Some ids not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Conflict"
+            "description": "Missing paths"
           }
         },
-        "summary": "Delete notes by id (idempotent)",
+        "summary": "Delete attachments by path (idempotent)",
         "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/batch-move": {
-      "post": {
-        "callbacks": {},
-        "operationId": "notes-batch-move",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BatchMoveNotesRequest"
-              }
-            }
-          },
-          "description": "Ids + target folder",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MovedCount"
-                }
-              }
-            },
-            "description": "Moved count"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid input"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Some ids not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Conflict"
-          }
-        },
-        "summary": "Move notes to a folder (idempotent)",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/by-id/{id}": {
-      "delete": {
-        "callbacks": {},
-        "operationId": "notes-delete-by-id",
-        "parameters": [
-          {
-            "description": "Note UUID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeletedFlag"
-                }
-              }
-            },
-            "description": "Deleted"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid UUID"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "No such note"
-          }
-        },
-        "summary": "Delete a note by id",
-        "tags": [
-          "Notes"
-        ]
-      },
-      "get": {
-        "callbacks": {},
-        "operationId": "notes-show-by-id",
-        "parameters": [
-          {
-            "description": "Note UUID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Note"
-                }
-              }
-            },
-            "description": "Note"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid UUID"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "No such note"
-          }
-        },
-        "summary": "Get a note by id",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/changes": {
-      "get": {
-        "callbacks": {},
-        "operationId": "notes-changes",
-        "parameters": [
-          {
-            "description": "ISO8601 timestamp cursor",
-            "in": "query",
-            "name": "since",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "Max rows (<=500)",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "\"meta\" or \"all\"",
-            "in": "query",
-            "name": "fields",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          },
-          {
-            "description": "Opaque pagination cursor",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChangesResponse"
-                }
-              }
-            },
-            "description": "Changes page"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid since/limit/fields/cursor"
-          }
-        },
-        "summary": "List note changes since a cursor (keyset pagination)",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/notes/rename": {
-      "post": {
-        "callbacks": {},
-        "operationId": "notes-rename",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RenameRequest"
-              }
-            }
-          },
-          "description": "Old + new path",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RenameNoteResponse"
-                }
-              }
-            },
-            "description": "Renamed"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "No such note"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Target exists / version conflict"
-          }
-        },
-        "summary": "Rename / move a note",
-        "tags": [
-          "Notes"
-        ]
-      }
-    },
-    "/api/search": {
-      "post": {
-        "callbacks": {},
-        "operationId": "search",
-        "parameters": [],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SearchRequest"
-              }
-            }
-          },
-          "description": "Search query",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
-                }
-              }
-            },
-            "description": "Results"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "cross_vault requires Pro"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Missing query"
-          }
-        },
-        "summary": "Search notes (vector / keyword / hybrid)",
-        "tags": [
-          "Search"
-        ]
-      }
-    },
-    "/api/tags": {
-      "get": {
-        "callbacks": {},
-        "operationId": "tags",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TagsResponse"
-                }
-              }
-            },
-            "description": "Tags"
-          }
-        },
-        "summary": "List all tags in the vault",
-        "tags": [
-          "Tags"
-        ]
-      }
-    },
-    "/api/user/storage": {
-      "get": {
-        "callbacks": {},
-        "operationId": "account-storage",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StorageUsage"
-                }
-              }
-            },
-            "description": "Storage usage"
-          }
-        },
-        "summary": "Get storage usage and caps",
-        "tags": [
-          "Account"
+          "Attachments"
         ]
       }
     },
@@ -2912,6 +3676,253 @@
         ]
       }
     },
+    "/api/user/storage": {
+      "get": {
+        "callbacks": {},
+        "operationId": "account-storage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUsage"
+                }
+              }
+            },
+            "description": "Storage usage"
+          }
+        },
+        "summary": "Get storage usage and caps",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/api/folders/*path": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "folders-delete",
+        "parameters": [
+          {
+            "description": "Folder path",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (empty body)"
+          }
+        },
+        "summary": "Delete a folder by path",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "callbacks": {},
+        "operationId": "tags",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagsResponse"
+                }
+              }
+            },
+            "description": "Tags"
+          }
+        },
+        "summary": "List all tags in the vault",
+        "tags": [
+          "Tags"
+        ]
+      }
+    },
+    "/api/search": {
+      "post": {
+        "callbacks": {},
+        "operationId": "search",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "description": "Search query",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Results"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "cross_vault requires Pro"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing query"
+          }
+        },
+        "summary": "Search notes (vector / keyword / hybrid)",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/api/notes/batch-delete": {
+      "post": {
+        "callbacks": {},
+        "operationId": "notes-batch-delete",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIdsRequest"
+              }
+            }
+          },
+          "description": "Note ids",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
+              }
+            },
+            "description": "Deleted count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid ids"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Delete notes by id (idempotent)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/folders/by-id/{id}/notes": {
+      "get": {
+        "callbacks": {},
+        "operationId": "folders-list-notes",
+        "parameters": [
+          {
+            "description": "Folder UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderNotesResponse"
+                }
+              }
+            },
+            "description": "Folder notes"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such folder"
+          }
+        },
+        "summary": "List notes in a folder by id (metadata only)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
     "/api/vaults/register": {
       "post": {
         "callbacks": {},
@@ -2974,6 +3985,171 @@
         "summary": "Register or fetch a vault by client_id (idempotent)",
         "tags": [
           "Vaults"
+        ]
+      }
+    },
+    "/api/folders/list": {
+      "get": {
+        "callbacks": {},
+        "operationId": "folders-list",
+        "parameters": [
+          {
+            "description": "Folder path",
+            "in": "query",
+            "name": "folder",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderListResponse"
+                }
+              }
+            },
+            "description": "Folder notes"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing folder param"
+          }
+        },
+        "summary": "List notes in a folder (metadata only)",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/health/deep": {
+      "get": {
+        "callbacks": {},
+        "description": "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
+        "operationId": "health-deep",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "All critical deps ok"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Degraded"
+          }
+        },
+        "security": [],
+        "summary": "Readiness probe",
+        "tags": []
+      }
+    },
+    "/api/attachments/rename": {
+      "post": {
+        "callbacks": {},
+        "operationId": "attachments-rename",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "description": "Old + new path",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentRenameResponse"
+                }
+              }
+            },
+            "description": "Renamed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Attachments require a paid plan"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such attachment"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Target exists"
+          }
+        },
+        "summary": "Rename / move an attachment",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
+    "/api/embed-status": {
+      "get": {
+        "callbacks": {},
+        "operationId": "embed-status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedStatusResponse"
+                }
+              }
+            },
+            "description": "Index status"
+          }
+        },
+        "summary": "Get embedding/index progress",
+        "tags": [
+          "Embedding"
         ]
       }
     },
@@ -3129,14 +4305,13 @@
         ]
       }
     },
-    "/api/vaults/{id}/purge": {
-      "post": {
+    "/api/notes/by-id/{id}": {
+      "delete": {
         "callbacks": {},
-        "description": "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
-        "operationId": "vaults-purge",
+        "operationId": "notes-delete-by-id",
         "parameters": [
           {
-            "description": "Vault UUID",
+            "description": "Note UUID",
             "in": "path",
             "name": "id",
             "required": true,
@@ -3152,13 +4327,227 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VaultPurged"
+                  "$ref": "#/components/schemas/DeletedFlag"
                 }
               }
             },
-            "description": "Purged"
+            "description": "Deleted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Delete a note by id",
+        "tags": [
+          "Notes"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "operationId": "notes-show-by-id",
+        "parameters": [
+          {
+            "description": "Note UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            },
+            "description": "Note"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such note"
+          }
+        },
+        "summary": "Get a note by id",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/folders/rename": {
+      "post": {
+        "callbacks": {},
+        "operationId": "folders-rename",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          },
+          "description": "Old + new path",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderRenameResponse"
+                }
+              }
+            },
+            "description": "Renamed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such folder"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target exists"
+          }
+        },
+        "summary": "Rename / move a folder",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
+    "/api/notes/batch-move": {
+      "post": {
+        "callbacks": {},
+        "operationId": "notes-batch-move",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchMoveNotesRequest"
+              }
+            }
+          },
+          "description": "Ids + target folder",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedCount"
+                }
+              }
+            },
+            "description": "Moved count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Some ids not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Move notes to a folder (idempotent)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
+    "/api/attachments": {
+      "get": {
+        "callbacks": {},
+        "operationId": "attachments-index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentsResponse"
+                }
+              }
+            },
+            "description": "Attachments"
+          },
+          "500": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3166,42 +4555,49 @@
                 }
               }
             },
-            "description": "No such vault"
+            "description": "Listing failed"
           }
         },
-        "summary": "Permanently purge a vault",
+        "summary": "List attachments (metadata only)",
         "tags": [
-          "Vaults"
+          "Attachments"
         ]
-      }
-    },
-    "/api/vaults/{id}/restore": {
+      },
       "post": {
         "callbacks": {},
-        "operationId": "vaults-restore",
-        "parameters": [
-          {
-            "description": "Vault UUID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-struct": null,
-              "x-validate": null
+        "operationId": "attachments-upload",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadAttachmentRequest"
+              }
             }
-          }
-        ],
+          },
+          "description": "Attachment bytes",
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VaultResponse"
+                  "$ref": "#/components/schemas/AttachmentResponse"
                 }
               }
             },
-            "description": "Restored"
+            "description": "Uploaded"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Invalid base64"
           },
           "402": {
             "content": {
@@ -3211,9 +4607,19 @@
                 }
               }
             },
-            "description": "Vault cap reached"
+            "description": "Attachments require a paid plan / quota"
           },
-          "404": {
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MimeRejected"
+                }
+              }
+            },
+            "description": "MIME or extension not allowed"
+          },
+          "422": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3221,13 +4627,46 @@
                 }
               }
             },
-            "description": "No such vault"
+            "description": "Missing/invalid content"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage backend failure"
           }
         },
-        "summary": "Restore a soft-deleted vault",
+        "summary": "Upload an attachment (base64 JSON)",
         "tags": [
-          "Vaults"
+          "Attachments"
         ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "callbacks": {},
+        "description": "Cheap liveness check. Always 200 if the app is up.",
+        "operationId": "health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Service is up"
+          }
+        },
+        "security": [],
+        "summary": "Liveness probe",
+        "tags": []
       }
     }
   },
@@ -3267,6 +4706,22 @@
     {
       "description": "Current user profile, storage usage, and account deletion.",
       "name": "Account"
+    },
+    {
+      "description": "Upload, fetch, move, and delete binary attachments.",
+      "name": "Attachments"
+    },
+    {
+      "description": "Vault manifest and the unified change feed.",
+      "name": "Sync"
+    },
+    {
+      "description": "Embedding/index progress.",
+      "name": "Embedding"
+    },
+    {
+      "description": "Client remote-log ingestion and retrieval.",
+      "name": "Logs"
     }
   ]
 }

@@ -1,7 +1,17 @@
 defmodule EngramWeb.LogsController do
   use EngramWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.Schemas
 
   alias Engram.Logs
+
+  operation(:ingest,
+    operation_id: "logs-ingest",
+    summary: "Ingest client logs",
+    tags: ["Logs"],
+    request_body: {"Log lines", "application/json", Schemas.LogIngestRequest, required: true},
+    responses: [ok: {"Persisted count", "application/json", Schemas.LogIngestResponse}]
+  )
 
   def ingest(conn, %{"logs" => logs}) when is_list(logs) do
     user = conn.assigns.current_user
@@ -10,6 +20,19 @@ defmodule EngramWeb.LogsController do
   end
 
   def ingest(conn, _params), do: json(conn, %{ok: true, count: 0})
+
+  operation(:index,
+    operation_id: "logs-list",
+    summary: "List ingested logs",
+    tags: ["Logs"],
+    parameters: [
+      level: [in: :query, type: :string, required: false, description: "Filter by level"],
+      category: [in: :query, type: :string, required: false, description: "Filter by category"],
+      since: [in: :query, type: :string, required: false, description: "ISO 8601 lower bound"],
+      limit: [in: :query, type: :integer, required: false, description: "Max rows"]
+    ],
+    responses: [ok: {"Logs", "application/json", Schemas.LogsResponse}]
+  )
 
   def index(conn, params) do
     user = conn.assigns.current_user
