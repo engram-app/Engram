@@ -24,6 +24,21 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert String.contains?(String.downcase(allow_headers), "x-vault-id")
   end
 
+  test "preflight allows the X-Device-Id header the SPA sends on every request" do
+    # The web SPA sets X-Device-Id (api/client.ts, added in #630 for the
+    # cursor-pull gap-filler) on every request so the backend can attribute a
+    # sync cursor per device. If it is not in access-control-allow-headers the
+    # browser blocks the preflight and every authenticated call fails with a
+    # CORS error in prod (app.engram.page -> api.engram.page).
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> options("/api/health")
+
+    [allow_headers] = get_resp_header(conn, "access-control-allow-headers")
+    assert String.contains?(String.downcase(allow_headers), "x-device-id")
+  end
+
   test "preflight allows PATCH — the SPA verb for /onboarding/profile and friends" do
     # The web SPA's api client (api/client.ts) exposes patch (no put), and
     # several routes use PATCH: /onboarding/profile, /me, /vaults/:id,
