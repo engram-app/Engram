@@ -354,6 +354,37 @@
         "x-struct": "Elixir.EngramWeb.Schemas.ChangesResponse",
         "x-validate": null
       },
+      "UpdateProfileRequest": {
+        "properties": {
+          "display_name": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "UpdateProfileRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpdateProfileRequest",
+        "x-validate": null
+      },
+      "MessageError": {
+        "properties": {
+          "error": {
+            "example": "not found",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "MessageError",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.MessageError",
+        "x-validate": null
+      },
       "SearchRequest": {
         "properties": {
           "cross_vault": {
@@ -405,6 +436,29 @@
         "title": "SearchRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
+        "x-validate": null
+      },
+      "RegisterVaultRequest": {
+        "properties": {
+          "client_id": {
+            "description": "Client-generated stable vault id.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "name",
+          "client_id"
+        ],
+        "title": "RegisterVaultRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.RegisterVaultRequest",
         "x-validate": null
       },
       "AppendRequest": {
@@ -498,6 +552,98 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderNamesResponse",
         "x-validate": null
       },
+      "UpdateVaultRequest": {
+        "properties": {
+          "description": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "is_default": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "UpdateVaultRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpdateVaultRequest",
+        "x-validate": null
+      },
+      "LimitError": {
+        "properties": {
+          "current": {
+            "nullable": true,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "error": {
+            "example": "limit_exceeded",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "limit": {
+            "description": "Integer or boolean cap.",
+            "nullable": true,
+            "oneOf": [
+              {
+                "type": "integer",
+                "x-struct": null,
+                "x-validate": null
+              },
+              {
+                "type": "boolean",
+                "x-struct": null,
+                "x-validate": null
+              }
+            ],
+            "x-struct": null,
+            "x-validate": null
+          },
+          "limit_key": {
+            "example": "vaults_cap",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "reason": {
+            "example": "vaults_cap_exceeded",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "tier": {
+            "example": "free",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "upgrade_url": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error",
+          "reason"
+        ],
+        "title": "LimitError",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.LimitError",
+        "x-validate": null
+      },
       "SearchResponse": {
         "properties": {
           "results": {
@@ -531,6 +677,109 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderResponse",
         "x-validate": null
       },
+      "VaultsResponse": {
+        "properties": {
+          "suggested_vault_name": {
+            "description": "Present only when a `user_code` query param is supplied (device-link flow).",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vaults": {
+            "items": {
+              "$ref": "#/components/schemas/Vault"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "vaults"
+        ],
+        "title": "VaultsResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultsResponse",
+        "x-validate": null
+      },
+      "VaultResponse": {
+        "properties": {
+          "vault": {
+            "$ref": "#/components/schemas/Vault"
+          }
+        },
+        "required": [
+          "vault"
+        ],
+        "title": "VaultResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultResponse",
+        "x-validate": null
+      },
+      "User": {
+        "properties": {
+          "display_name": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "email": {
+            "format": "email",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "role": {
+            "example": "user",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "User",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.User",
+        "x-validate": null
+      },
+      "RegisterVaultResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Vault"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "created",
+                  "existing"
+                ],
+                "type": "string",
+                "x-struct": null,
+                "x-validate": null
+              }
+            },
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          }
+        ],
+        "title": "RegisterVaultResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.RegisterVaultResponse",
+        "x-validate": null
+      },
       "BatchIdsRequest": {
         "properties": {
           "ids": {
@@ -553,6 +802,118 @@
         "x-struct": "Elixir.EngramWeb.Schemas.BatchIdsRequest",
         "x-validate": null
       },
+      "OkFlag": {
+        "properties": {
+          "ok": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "OkFlag",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.OkFlag",
+        "x-validate": null
+      },
+      "DeleteAccountRequest": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "DeleteAccountRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.DeleteAccountRequest",
+        "x-validate": null
+      },
+      "Vault": {
+        "properties": {
+          "attachment_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "description": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "encrypted": {
+            "description": "Always true — vaults are encrypted at rest.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "is_default": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "note_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "purge_at": {
+            "description": "When a soft-deleted vault is hard-purged (deleted_at + 30d).",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "slug": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "Vault",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.Vault",
+        "x-validate": null
+      },
       "CreateFolderRequest": {
         "properties": {
           "folder": {
@@ -567,6 +928,29 @@
         "title": "CreateFolderRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.CreateFolderRequest",
+        "x-validate": null
+      },
+      "ValidationError": {
+        "properties": {
+          "details": {
+            "description": "field → [messages]",
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "error": {
+            "example": "validation_failed",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ValidationError",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.ValidationError",
         "x-validate": null
       },
       "DeletedCount": {
@@ -718,6 +1102,33 @@
         "x-struct": "Elixir.EngramWeb.Schemas.Conflict",
         "x-validate": null
       },
+      "CreateVaultRequest": {
+        "properties": {
+          "description": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "is_default": {
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateVaultRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.CreateVaultRequest",
+        "x-validate": null
+      },
       "DeletedFlag": {
         "properties": {
           "deleted": {
@@ -817,6 +1228,41 @@
         "x-struct": "Elixir.EngramWeb.Schemas.RenameNoteResponse",
         "x-validate": null
       },
+      "StorageUsage": {
+        "properties": {
+          "file_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "max_attachment_bytes": {
+            "description": "Per-file cap for the user's plan.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "max_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "used_bytes": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "used_bytes",
+          "file_count",
+          "max_bytes",
+          "max_attachment_bytes"
+        ],
+        "title": "StorageUsage",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.StorageUsage",
+        "x-validate": null
+      },
       "FolderNotesResponse": {
         "properties": {
           "notes": {
@@ -857,6 +1303,20 @@
         "x-struct": "Elixir.EngramWeb.Schemas.AppendResponse",
         "x-validate": null
       },
+      "UserResponse": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "title": "UserResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UserResponse",
+        "x-validate": null
+      },
       "FolderRenameResponse": {
         "properties": {
           "count": {
@@ -883,6 +1343,30 @@
         "title": "FolderRenameResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.FolderRenameResponse",
+        "x-validate": null
+      },
+      "VaultPurged": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "purged": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "purged",
+          "id"
+        ],
+        "title": "VaultPurged",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultPurged",
         "x-validate": null
       },
       "Error": {
@@ -968,6 +1452,30 @@
         "title": "BatchUpsertResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.BatchUpsertResponse",
+        "x-validate": null
+      },
+      "VaultDeleted": {
+        "properties": {
+          "deleted": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "deleted",
+          "id"
+        ],
+        "title": "VaultDeleted",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.VaultDeleted",
         "x-validate": null
       },
       "BatchMoveNotesRequest": {
@@ -1468,6 +1976,144 @@
         "security": [],
         "summary": "Readiness probe",
         "tags": []
+      }
+    },
+    "/api/me": {
+      "delete": {
+        "callbacks": {},
+        "description": "Irreversible. Requires the account password for confirmation.",
+        "operationId": "EngramWeb.UsersController.delete",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          },
+          "description": "Password confirmation",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkFlag"
+                }
+              }
+            },
+            "description": "Account deleted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "password_required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "invalid_password"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "last_admin — cannot delete the only admin"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "delete_failed"
+          }
+        },
+        "summary": "Delete the current user's account",
+        "tags": [
+          "Account"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.UsersController.me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Current user"
+          }
+        },
+        "summary": "Get the current user",
+        "tags": [
+          "Account"
+        ]
+      },
+      "patch": {
+        "callbacks": {},
+        "operationId": "EngramWeb.UsersController.update",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "description": "Profile fields",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Updated user"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Update the current user's profile",
+        "tags": [
+          "Account"
+        ]
       }
     },
     "/api/notes": {
@@ -2144,6 +2790,445 @@
           "Tags"
         ]
       }
+    },
+    "/api/user/storage": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.StorageController.index",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUsage"
+                }
+              }
+            },
+            "description": "Storage usage"
+          }
+        },
+        "summary": "Get storage usage and caps",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/api/vaults": {
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.index",
+        "parameters": [
+          {
+            "description": "Pass \"true\" to list soft-deleted vaults instead of active ones.",
+            "in": "query",
+            "name": "deleted",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Device-link user code; echoes a `suggested_vault_name`.",
+            "in": "query",
+            "name": "user_code",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultsResponse"
+                }
+              }
+            },
+            "description": "Vaults"
+          }
+        },
+        "summary": "List vaults",
+        "tags": [
+          "Vaults"
+        ]
+      },
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.create",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVaultRequest"
+              }
+            }
+          },
+          "description": "Vault attributes",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponse"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Vault cap reached"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Create a vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/vaults/register": {
+      "post": {
+        "callbacks": {},
+        "description": "Used by the plugin on first sync. Returns 201 with `status: created` for a new vault, or 200 with `status: existing` when the client_id already maps to one.",
+        "operationId": "EngramWeb.VaultsController.register",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterVaultRequest"
+              }
+            }
+          },
+          "description": "Name + client_id",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterVaultResponse"
+                }
+              }
+            },
+            "description": "Existing vault"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterVaultResponse"
+                }
+              }
+            },
+            "description": "Newly created vault"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "name and client_id are required"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Vault cap reached"
+          }
+        },
+        "summary": "Register or fetch a vault by client_id (idempotent)",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/vaults/{id}": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.delete",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultDeleted"
+                }
+              }
+            },
+            "description": "Soft-deleted (restorable for 30 days)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          }
+        },
+        "summary": "Soft-delete a vault",
+        "tags": [
+          "Vaults"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.show",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponse"
+                }
+              }
+            },
+            "description": "Vault"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          }
+        },
+        "summary": "Get a vault by id",
+        "tags": [
+          "Vaults"
+        ]
+      },
+      "patch": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.update",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVaultRequest"
+              }
+            }
+          },
+          "description": "Fields to change",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponse"
+                }
+              }
+            },
+            "description": "Updated"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Update a vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/vaults/{id}/purge": {
+      "post": {
+        "callbacks": {},
+        "description": "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
+        "operationId": "EngramWeb.VaultsController.purge",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultPurged"
+                }
+              }
+            },
+            "description": "Purged"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          }
+        },
+        "summary": "Permanently purge a vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
+    },
+    "/api/vaults/{id}/restore": {
+      "post": {
+        "callbacks": {},
+        "operationId": "EngramWeb.VaultsController.restore",
+        "parameters": [
+          {
+            "description": "Vault UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponse"
+                }
+              }
+            },
+            "description": "Restored"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Vault cap reached"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such vault"
+          }
+        },
+        "summary": "Restore a soft-deleted vault",
+        "tags": [
+          "Vaults"
+        ]
+      }
     }
   },
   "security": [
@@ -2174,6 +3259,14 @@
     {
       "description": "List vault tags.",
       "name": "Tags"
+    },
+    {
+      "description": "Create, manage, soft-delete, restore, and purge vaults.",
+      "name": "Vaults"
+    },
+    {
+      "description": "Current user profile, storage usage, and account deletion.",
+      "name": "Account"
     }
   ]
 }

@@ -115,3 +115,41 @@ defmodule EngramWeb.Schemas.MovedCount do
     required: [:moved]
   })
 end
+
+defmodule EngramWeb.Schemas.MessageError do
+  @moduledoc "Error body carrying a single machine-readable message under `error`."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "MessageError",
+    type: :object,
+    properties: %{error: %Schema{type: :string, example: "not found"}},
+    required: [:error]
+  })
+end
+
+defmodule EngramWeb.Schemas.LimitError do
+  @moduledoc "402 plan-limit body emitted by EngramWeb.LimitResponse."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "LimitError",
+    type: :object,
+    properties: %{
+      error: %Schema{type: :string, example: "limit_exceeded"},
+      reason: %Schema{type: :string, example: "vaults_cap_exceeded"},
+      tier: %Schema{type: :string, nullable: true, example: "free"},
+      limit_key: %Schema{type: :string, nullable: true, example: "vaults_cap"},
+      limit: %Schema{
+        nullable: true,
+        description: "Integer or boolean cap.",
+        oneOf: [%Schema{type: :integer}, %Schema{type: :boolean}]
+      },
+      current: %Schema{type: :integer, nullable: true},
+      upgrade_url: %Schema{type: :string, nullable: true}
+    },
+    required: [:error, :reason]
+  })
+end
