@@ -6,6 +6,7 @@ defmodule EngramWeb.FoldersController do
   alias EngramWeb.Schemas
 
   operation(:index,
+    operation_id: "folders-index",
     summary: "List folders",
     tags: ["Folders"],
     responses: [ok: {"Folders", "application/json", Schemas.FoldersResponse}]
@@ -51,6 +52,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:explicit,
+    operation_id: "folders-explicit",
     summary: "List explicitly-created (empty-capable) folders",
     tags: ["Folders"],
     responses: [ok: {"Folder names", "application/json", Schemas.FolderNamesResponse}]
@@ -64,6 +66,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:list,
+    operation_id: "folders-list",
     summary: "List notes in a folder (metadata only)",
     tags: ["Folders"],
     parameters: [folder: [in: :query, type: :string, required: true, description: "Folder path"]],
@@ -89,6 +92,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:list_notes,
+    operation_id: "folders-list-notes",
     summary: "List notes in a folder by id (metadata only)",
     tags: ["Folders"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Folder UUID"]],
@@ -115,6 +119,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:create,
+    operation_id: "folders-create",
     summary: "Create a folder",
     tags: ["Folders"],
     request_body:
@@ -152,6 +157,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:delete,
+    operation_id: "folders-delete",
     summary: "Delete a folder by path",
     tags: ["Folders"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Folder path"]],
@@ -179,6 +185,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:rename,
+    operation_id: "folders-rename",
     summary: "Rename / move a folder",
     tags: ["Folders"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
@@ -221,6 +228,7 @@ defmodule EngramWeb.FoldersController do
   # follow-up (after-commit hook).
 
   operation(:batch_delete,
+    operation_id: "folders-batch-delete",
     summary: "Delete folders by id (idempotent)",
     tags: ["Folders"],
     request_body: {"Folder ids", "application/json", Schemas.BatchIdsRequest, required: true},
@@ -265,6 +273,7 @@ defmodule EngramWeb.FoldersController do
   end
 
   operation(:batch_move,
+    operation_id: "folders-batch-move",
     summary: "Move folders under a new parent (idempotent)",
     tags: ["Folders"],
     request_body:

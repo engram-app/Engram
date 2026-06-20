@@ -13,6 +13,7 @@ defmodule EngramWeb.StorageController do
   @max_storage_bytes 1_073_741_824
 
   operation(:index,
+    operation_id: "account-storage",
     summary: "Get storage usage and caps",
     tags: ["Account"],
     responses: [ok: {"Storage usage", "application/json", Schemas.StorageUsage}]

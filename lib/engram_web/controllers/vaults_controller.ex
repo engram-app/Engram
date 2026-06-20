@@ -11,6 +11,7 @@ defmodule EngramWeb.VaultsController do
   # ── index ──────────────────────────────────────────────────────────────────
 
   operation(:index,
+    operation_id: "vaults-index",
     summary: "List vaults",
     tags: ["Vaults"],
     parameters: [
@@ -68,6 +69,7 @@ defmodule EngramWeb.VaultsController do
   # ── create ─────────────────────────────────────────────────────────────────
 
   operation(:create,
+    operation_id: "vaults-create",
     summary: "Create a vault",
     tags: ["Vaults"],
     request_body:
@@ -108,6 +110,7 @@ defmodule EngramWeb.VaultsController do
   # ── show ───────────────────────────────────────────────────────────────────
 
   operation(:show,
+    operation_id: "vaults-show",
     summary: "Get a vault by id",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
@@ -148,6 +151,7 @@ defmodule EngramWeb.VaultsController do
   # ── update ─────────────────────────────────────────────────────────────────
 
   operation(:update,
+    operation_id: "vaults-update",
     summary: "Update a vault",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
@@ -187,6 +191,7 @@ defmodule EngramWeb.VaultsController do
   # ── delete ─────────────────────────────────────────────────────────────────
 
   operation(:delete,
+    operation_id: "vaults-delete",
     summary: "Soft-delete a vault",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
@@ -214,6 +219,7 @@ defmodule EngramWeb.VaultsController do
   # ── restore ──────────────────────────────────────────────────────────────────
 
   operation(:restore,
+    operation_id: "vaults-restore",
     summary: "Restore a soft-deleted vault",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
@@ -255,6 +261,7 @@ defmodule EngramWeb.VaultsController do
   # ── purge (immediate hard delete) ──────────────────────────────────────────────
 
   operation(:purge,
+    operation_id: "vaults-purge",
     summary: "Permanently purge a vault",
     tags: ["Vaults"],
     description: "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
@@ -286,6 +293,7 @@ defmodule EngramWeb.VaultsController do
   # ── register ───────────────────────────────────────────────────────────────
 
   operation(:register,
+    operation_id: "vaults-register",
     summary: "Register or fetch a vault by client_id (idempotent)",
     tags: ["Vaults"],
     description:

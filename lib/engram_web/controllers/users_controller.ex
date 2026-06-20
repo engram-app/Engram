@@ -6,6 +6,7 @@ defmodule EngramWeb.UsersController do
   alias Engram.Accounts
 
   operation(:me,
+    operation_id: "account-me",
     summary: "Get the current user",
     tags: ["Account"],
     responses: [ok: {"Current user", "application/json", Schemas.UserResponse}]
@@ -25,6 +26,7 @@ defmodule EngramWeb.UsersController do
   end
 
   operation(:update,
+    operation_id: "account-update",
     summary: "Update the current user's profile",
     tags: ["Account"],
     request_body:
@@ -65,6 +67,7 @@ defmodule EngramWeb.UsersController do
   end
 
   operation(:delete,
+    operation_id: "account-delete",
     summary: "Delete the current user's account",
     tags: ["Account"],
     description: "Irreversible. Requires the account password for confirmation.",

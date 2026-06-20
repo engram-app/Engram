@@ -1527,7 +1527,7 @@
     "/api/folders": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.index",
+        "operationId": "folders-index",
         "parameters": [],
         "responses": {
           "200": {
@@ -1548,7 +1548,7 @@
       },
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.create",
+        "operationId": "folders-create",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -1592,7 +1592,7 @@
     "/api/folders/*path": {
       "delete": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.delete",
+        "operationId": "folders-delete",
         "parameters": [
           {
             "description": "Folder path",
@@ -1620,7 +1620,7 @@
     "/api/folders/batch-delete": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.batch_delete",
+        "operationId": "folders-batch-delete",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -1684,7 +1684,7 @@
     "/api/folders/batch-move": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.batch_move",
+        "operationId": "folders-batch-move",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -1748,7 +1748,7 @@
     "/api/folders/by-id/{id}/notes": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.list_notes",
+        "operationId": "folders-list-notes",
         "parameters": [
           {
             "description": "Folder UUID",
@@ -1803,7 +1803,7 @@
     "/api/folders/explicit": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.explicit",
+        "operationId": "folders-explicit",
         "parameters": [],
         "responses": {
           "200": {
@@ -1826,7 +1826,7 @@
     "/api/folders/list": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.list",
+        "operationId": "folders-list",
         "parameters": [
           {
             "description": "Folder path",
@@ -1871,7 +1871,7 @@
     "/api/folders/rename": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.FoldersController.rename",
+        "operationId": "folders-rename",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -1926,7 +1926,7 @@
       "get": {
         "callbacks": {},
         "description": "Cheap liveness check. Always 200 if the app is up.",
-        "operationId": "EngramWeb.HealthController.index",
+        "operationId": "health",
         "parameters": [],
         "responses": {
           "200": {
@@ -1949,7 +1949,7 @@
       "get": {
         "callbacks": {},
         "description": "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
-        "operationId": "EngramWeb.HealthController.deep",
+        "operationId": "health-deep",
         "parameters": [],
         "responses": {
           "200": {
@@ -1982,7 +1982,7 @@
       "delete": {
         "callbacks": {},
         "description": "Irreversible. Requires the account password for confirmation.",
-        "operationId": "EngramWeb.UsersController.delete",
+        "operationId": "account-delete",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2054,7 +2054,7 @@
       },
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.UsersController.me",
+        "operationId": "account-me",
         "parameters": [],
         "responses": {
           "200": {
@@ -2075,7 +2075,7 @@
       },
       "patch": {
         "callbacks": {},
-        "operationId": "EngramWeb.UsersController.update",
+        "operationId": "account-update",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2119,7 +2119,7 @@
     "/api/notes": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.upsert",
+        "operationId": "notes-upsert",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2183,7 +2183,7 @@
     "/api/notes/*path": {
       "delete": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.delete",
+        "operationId": "notes-delete",
         "parameters": [
           {
             "description": "Note path",
@@ -2216,7 +2216,7 @@
       },
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.show",
+        "operationId": "notes-show",
         "parameters": [
           {
             "description": "Note path (slash-separated)",
@@ -2261,7 +2261,7 @@
     "/api/notes/append": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.append",
+        "operationId": "notes-append",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2305,7 +2305,7 @@
     "/api/notes/batch": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.batch_upsert",
+        "operationId": "notes-batch-upsert",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2349,7 +2349,7 @@
     "/api/notes/batch-delete": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.batch_delete",
+        "operationId": "notes-batch-delete",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2413,7 +2413,7 @@
     "/api/notes/batch-move": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.batch_move",
+        "operationId": "notes-batch-move",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2477,7 +2477,7 @@
     "/api/notes/by-id/{id}": {
       "delete": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.delete_by_id",
+        "operationId": "notes-delete-by-id",
         "parameters": [
           {
             "description": "Note UUID",
@@ -2530,7 +2530,7 @@
       },
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.show_by_id",
+        "operationId": "notes-show-by-id",
         "parameters": [
           {
             "description": "Note UUID",
@@ -2585,7 +2585,7 @@
     "/api/notes/changes": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.changes",
+        "operationId": "notes-changes",
         "parameters": [
           {
             "description": "ISO8601 timestamp cursor",
@@ -2663,7 +2663,7 @@
     "/api/notes/rename": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.NotesController.rename",
+        "operationId": "notes-rename",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2717,7 +2717,7 @@
     "/api/search": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.SearchController.search",
+        "operationId": "search",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2771,7 +2771,7 @@
     "/api/tags": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.TagsController.index",
+        "operationId": "tags",
         "parameters": [],
         "responses": {
           "200": {
@@ -2794,7 +2794,7 @@
     "/api/user/storage": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.StorageController.index",
+        "operationId": "account-storage",
         "parameters": [],
         "responses": {
           "200": {
@@ -2817,7 +2817,7 @@
     "/api/vaults": {
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.index",
+        "operationId": "vaults-index",
         "parameters": [
           {
             "description": "Pass \"true\" to list soft-deleted vaults instead of active ones.",
@@ -2861,7 +2861,7 @@
       },
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.create",
+        "operationId": "vaults-create",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2916,7 +2916,7 @@
       "post": {
         "callbacks": {},
         "description": "Used by the plugin on first sync. Returns 201 with `status: created` for a new vault, or 200 with `status: existing` when the client_id already maps to one.",
-        "operationId": "EngramWeb.VaultsController.register",
+        "operationId": "vaults-register",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -2980,7 +2980,7 @@
     "/api/vaults/{id}": {
       "delete": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.delete",
+        "operationId": "vaults-delete",
         "parameters": [
           {
             "description": "Vault UUID",
@@ -3023,7 +3023,7 @@
       },
       "get": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.show",
+        "operationId": "vaults-show",
         "parameters": [
           {
             "description": "Vault UUID",
@@ -3066,7 +3066,7 @@
       },
       "patch": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.update",
+        "operationId": "vaults-update",
         "parameters": [
           {
             "description": "Vault UUID",
@@ -3133,7 +3133,7 @@
       "post": {
         "callbacks": {},
         "description": "Immediate, irreversible hard delete — skips the 30-day soft-delete window.",
-        "operationId": "EngramWeb.VaultsController.purge",
+        "operationId": "vaults-purge",
         "parameters": [
           {
             "description": "Vault UUID",
@@ -3178,7 +3178,7 @@
     "/api/vaults/{id}/restore": {
       "post": {
         "callbacks": {},
-        "operationId": "EngramWeb.VaultsController.restore",
+        "operationId": "vaults-restore",
         "parameters": [
           {
             "description": "Vault UUID",

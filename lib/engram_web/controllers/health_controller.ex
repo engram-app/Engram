@@ -5,6 +5,7 @@ defmodule EngramWeb.HealthController do
   alias EngramWeb.Schemas.HealthStatus
 
   operation(:index,
+    operation_id: "health",
     summary: "Liveness probe",
     security: [],
     description: "Cheap liveness check. Always 200 if the app is up.",
@@ -18,6 +19,7 @@ defmodule EngramWeb.HealthController do
   end
 
   operation(:deep,
+    operation_id: "health-deep",
     summary: "Readiness probe",
     security: [],
     description:
