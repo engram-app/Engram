@@ -340,7 +340,15 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id)
+              insert_new_note(
+                base_attrs,
+                user,
+                sanitized_path,
+                folder,
+                tags,
+                client_id,
+                lookup_query
+              )
 
             existing ->
               update_existing_note(
@@ -409,7 +417,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -455,13 +463,41 @@ defmodule Engram.Notes do
           seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
           changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
-          case Repo.insert(changeset) do
+          # Insert inside a SAVEPOINT (nested transaction). Concurrent upserts of
+          # the same new path both saw `nil` on the lookup above; the loser hits
+          # the `notes_user_vault_path_v2` unique index. Without the savepoint
+          # that violation aborts the whole tenant transaction — its trailing
+          # role-reset query then fails with 25P02 → the controller 500s (which
+          # the plugin's offline-queue flush treats as a hard error: it breaks
+          # the drain and flips offline, so the queue never empties — the
+          # test_24 replay flake). The savepoint scopes the rollback to the
+          # insert, keeping the tenant txn alive so we can report a version
+          # conflict (→ 409) the client reconciles, exactly like a stale-version
+          # write.
+          insert_result =
+            Repo.transaction(fn ->
+              case Repo.insert(changeset) do
+                {:ok, note} -> note
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+            end)
+
+          case insert_result do
             {:ok, note} ->
               :ok = UsageMeters.inc_notes_count(user.id, 1)
               {:ok, {nil, note}}
 
-            {:error, changeset} ->
-              {:error, changeset}
+            {:error, %Ecto.Changeset{errors: errors}} = err ->
+              if has_unique_conflict?(errors) do
+                # Concurrent create won the race; the path now exists. Surface it
+                # as a conflict against the winner's row rather than 500ing.
+                case Repo.one(lookup_query) do
+                  %Note{} = existing -> {:conflict, existing}
+                  nil -> err
+                end
+              else
+                err
+              end
           end
         end
     end
