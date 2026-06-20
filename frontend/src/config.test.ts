@@ -1,10 +1,22 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { loadConfig } from './config'
 
 describe('loadConfig', () => {
   beforeEach(() => {
     delete (window as { __ENGRAM_CONFIG__?: unknown }).__ENGRAM_CONFIG__
     vi.restoreAllMocks()
+    // Null out the VITE_* vars defaultConfig() reads so the no-config fallback
+    // is deterministic regardless of the dev's local .env. A saas-shape .env
+    // sets VITE_AUTH_PROVIDER=clerk, which otherwise makes the "falls back to
+    // local defaults" case read clerk and fail only on that machine (green in
+    // CI, where no such env exists).
+    vi.stubEnv('VITE_AUTH_PROVIDER', undefined)
+    vi.stubEnv('VITE_API_BASE', undefined)
+    vi.stubEnv('VITE_WS_BASE', undefined)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   it('reads apiBase + wsBase from window injection when present', async () => {
