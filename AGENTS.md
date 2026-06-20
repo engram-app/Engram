@@ -324,6 +324,7 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 | `docs/context/e2e-vault-registration-diagnostics.md` | Diagnostic ladder for `Vault not registered after 15s` E2E failures — don't just bump the timeout |
 | `docs/context/local-dev-preview-stack.md` | Preview frontend changes against a locally-running real backend |
 | `docs/context/openapi-docs-pipeline.md` | OpenAPI 3.0 spec via open_api_spex: root doc, schema modules, committed `openapi.json` artifact, drift-gate CI step, how to annotate endpoints + exclude admin actions, HostRewrite allowlist gotcha, version-recompile gotcha, alphabetical-key-order gotcha |
+| `docs/context/frontend-backend-deploy-skew-cors.md` | **Frontend/backend deploy skew** — frontend (Cloudflare Worker, merge-gated on `frontend/` touch) and backend (ECS, `release-v*` tag-gated) ship on DIFFERENT triggers, so a frontend-only deploy can push accumulated merged-but-undeployed frontend code live against an unreleased backend. 2026-06-20 incident: `x-device-id` SPA header (PR #630) reached prod via perf PR #673 before `cors.ex` allowlisted it → preflight failures. Fix PR #675 + deploy-chain gotchas (ECR plan race, no-rebase signed bot PR) |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
 ## Life OS
