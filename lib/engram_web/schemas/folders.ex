@@ -85,7 +85,8 @@ defmodule EngramWeb.Schemas.CreateFolderRequest do
     title: "CreateFolderRequest",
     type: :object,
     properties: %{folder: %Schema{type: :string}},
-    required: [:folder]
+    required: [:folder],
+    example: %{"folder" => "Projects/Engram"}
   })
 end
 

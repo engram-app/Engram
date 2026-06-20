@@ -8,6 +8,7 @@ defmodule EngramWeb.LogsController do
   operation(:ingest,
     operation_id: "logs-ingest",
     summary: "Ingest client logs",
+    "x-internal": true,
     tags: ["Logs"],
     request_body: {"Log lines", "application/json", Schemas.LogIngestRequest, required: true},
     responses: [ok: {"Persisted count", "application/json", Schemas.LogIngestResponse}]
@@ -24,6 +25,7 @@ defmodule EngramWeb.LogsController do
   operation(:index,
     operation_id: "logs-list",
     summary: "List ingested logs",
+    "x-internal": true,
     tags: ["Logs"],
     parameters: [
       level: [in: :query, type: :string, required: false, description: "Filter by level"],

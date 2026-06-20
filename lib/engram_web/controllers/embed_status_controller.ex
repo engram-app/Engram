@@ -11,6 +11,7 @@ defmodule EngramWeb.EmbedStatusController do
   operation(:index,
     operation_id: "embed-status",
     summary: "Get embedding/index progress",
+    "x-internal": true,
     tags: ["Embedding"],
     responses: [ok: {"Index status", "application/json", Schemas.EmbedStatusResponse}]
   )
