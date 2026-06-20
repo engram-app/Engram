@@ -14,7 +14,12 @@ defmodule EngramWeb.Schemas.SearchRequest do
       mode: %Schema{type: :string, enum: ["keyword", "vector", "hybrid"]},
       cross_vault: %Schema{type: :boolean, description: "Pro plan only."}
     },
-    required: [:query]
+    required: [:query],
+    example: %{
+      "query" => "omega-3 dosage",
+      "limit" => 5,
+      "mode" => "hybrid"
+    }
   })
 end
 

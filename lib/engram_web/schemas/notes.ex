@@ -27,7 +27,13 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
       folder: %Schema{type: :string, nullable: true},
       tags: %Schema{type: :array, items: %Schema{type: :string}}
     },
-    required: [:path, :mtime]
+    required: [:path, :mtime],
+    example: %{
+      "path" => "Projects/Engram.md",
+      "content" => "# Engram\n\nAn AI-powered personal knowledge base.\n",
+      "mtime" => 1_718_900_000.0,
+      "tags" => ["project", "ai"]
+    }
   })
 end
 
@@ -70,7 +76,11 @@ defmodule EngramWeb.Schemas.AppendRequest do
     title: "AppendRequest",
     type: :object,
     properties: %{path: %Schema{type: :string}, text: %Schema{type: :string}},
-    required: [:path, :text]
+    required: [:path, :text],
+    example: %{
+      "path" => "Daily/2026-06-20.md",
+      "text" => "\n- [ ] Ship the API docs coverage gate\n"
+    }
   })
 end
 

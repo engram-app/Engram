@@ -446,6 +446,11 @@
         "x-validate": null
       },
       "SearchRequest": {
+        "example": {
+          "limit": 5,
+          "mode": "hybrid",
+          "query": "omega-3 dosage"
+        },
         "properties": {
           "cross_vault": {
             "description": "Pro plan only.",
@@ -626,6 +631,10 @@
         "x-validate": null
       },
       "AppendRequest": {
+        "example": {
+          "path": "Daily/2026-06-20.md",
+          "text": "\n- [ ] Ship the API docs coverage gate\n"
+        },
         "properties": {
           "path": {
             "type": "string",
@@ -1667,6 +1676,9 @@
         "x-validate": null
       },
       "CreateFolderRequest": {
+        "example": {
+          "folder": "Projects/Engram"
+        },
         "properties": {
           "folder": {
             "type": "string",
@@ -2064,6 +2076,15 @@
         "x-validate": null
       },
       "UpsertNoteRequest": {
+        "example": {
+          "content": "# Engram\n\nAn AI-powered personal knowledge base.\n",
+          "mtime": 1.7189e9,
+          "path": "Projects/Engram.md",
+          "tags": [
+            "project",
+            "ai"
+          ]
+        },
         "properties": {
           "content": {
             "type": "string",
@@ -3246,7 +3267,8 @@
         "summary": "List ingested logs",
         "tags": [
           "Logs"
-        ]
+        ],
+        "x-internal": true
       },
       "post": {
         "callbacks": {},
@@ -3278,7 +3300,8 @@
         "summary": "Ingest client logs",
         "tags": [
           "Logs"
-        ]
+        ],
+        "x-internal": true
       }
     },
     "/api/me": {
@@ -4609,7 +4632,8 @@
         "summary": "Get embedding/index progress",
         "tags": [
           "Embedding"
-        ]
+        ],
+        "x-internal": true
       }
     },
     "/api/vaults/{id}": {
