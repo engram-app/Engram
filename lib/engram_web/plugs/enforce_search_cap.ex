@@ -18,9 +18,7 @@ defmodule EngramWeb.Plugs.EnforceSearchCap do
   """
 
   alias Engram.Billing
-  alias EngramWeb.{LimitResponse, RateLimiter}
-
-  @period_ms 86_400_000
+  alias EngramWeb.LimitResponse
 
   def init(opts), do: opts
 
@@ -81,10 +79,12 @@ defmodule EngramWeb.Plugs.EnforceSearchCap do
     end
   end
 
-  defp check(conn, user, key, bucket_prefix, limit) do
-    case RateLimiter.hit("#{bucket_prefix}:#{user.id}", @period_ms, limit) do
-      {:allow, _count} -> conn
-      {:deny, _retry_after_ms} -> deny(conn, key, limit)
+  # Token-bucket: capacity = daily allowance, refill = allowance/86_400 per sec
+  # → continuous regeneration, no reset cliff, no cron. Durable in Postgres.
+  defp check(conn, user, key, bucket_kind, limit) do
+    case Engram.Usage.DailyCap.spend(user.id, bucket_kind, limit, limit / 86_400) do
+      {:allow, _left} -> conn
+      {:deny, _retry} -> deny(conn, key, limit)
     end
   end
 

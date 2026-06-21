@@ -3,10 +3,8 @@ defmodule EngramWeb.Plugs.EnforceSearchCapTest do
 
   alias EngramWeb.Plugs.EnforceSearchCap
 
-  setup do
-    EngramWeb.RateLimiter.reset_buckets!()
-    :ok
-  end
+  # No setup needed — DataCase's DB sandbox gives a clean `usage_buckets`
+  # per test, so DailyCap buckets start empty automatically.
 
   describe "EnforceSearchCap" do
     setup %{conn: conn} do
