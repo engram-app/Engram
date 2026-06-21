@@ -610,6 +610,153 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "search_body/2 — body builder (no HTTP)" do
+    test "sets with_vector when requested" do
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1", with_vector: true)
+      assert body.with_vector == ["dense"]
+    end
+
+    test "does not set with_vector by default" do
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1")
+      refute Map.has_key?(body, :with_vector)
+    end
+
+    test "uses quantization ignore when full_precision" do
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1", full_precision: true)
+      assert body.params.quantization == %{ignore: true}
+    end
+
+    test "defaults to rescore when not full_precision (binary quant enabled by default)" do
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1")
+      assert body.params.quantization == %{rescore: true, oversampling: 3.0}
+    end
+
+    test "omits params entirely when binary quantization is disabled" do
+      ServiceConfig.put_override(:qdrant_binary_quantization, false)
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1")
+      refute Map.has_key?(body, :params)
+    end
+
+    test "full_precision overrides binary-quant-disabled — still sets ignore" do
+      ServiceConfig.put_override(:qdrant_binary_quantization, false)
+      body = Qdrant.search_body(%{some: :vec}, user_id: "u1", full_precision: true)
+      assert body.params.quantization == %{ignore: true}
+    end
+  end
+
+  describe "sparse_search_body/2 — body builder (no HTTP)" do
+    test "sets with_vector when requested" do
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.sparse_search_body(sparse, user_id: "u1", with_vector: true)
+      assert body.with_vector == ["dense"]
+    end
+
+    test "does not set with_vector by default" do
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.sparse_search_body(sparse, user_id: "u1")
+      refute Map.has_key?(body, :with_vector)
+    end
+
+    test "does not add quantization params (sparse leg has no quant config)" do
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.sparse_search_body(sparse, user_id: "u1")
+      refute Map.has_key?(body, :params)
+    end
+  end
+
+  describe "hybrid_search_body/3 — body builder (no HTTP)" do
+    test "sets with_vector at top level when requested" do
+      dense = List.duplicate(0.1, 4)
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1", with_vector: true)
+      assert body.with_vector == ["dense"]
+    end
+
+    test "does not set with_vector at top level by default" do
+      dense = List.duplicate(0.1, 4)
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
+      refute Map.has_key?(body, :with_vector)
+    end
+
+    test "puts quantization params on dense prefetch leg only when full_precision" do
+      dense = List.duplicate(0.1, 4)
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1", full_precision: true)
+      [dense_leg, sparse_leg] = body.prefetch
+      assert dense_leg.params.quantization == %{ignore: true}
+      refute Map.has_key?(sparse_leg, :params)
+    end
+
+    test "puts rescore params on dense prefetch leg only (default binary quant)" do
+      dense = List.duplicate(0.1, 4)
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
+      [dense_leg, sparse_leg] = body.prefetch
+      assert dense_leg.params.quantization == %{rescore: true, oversampling: 3.0}
+      refute Map.has_key?(sparse_leg, :params)
+    end
+
+    test "does not put quantization params on either leg when binary quant disabled" do
+      ServiceConfig.put_override(:qdrant_binary_quantization, false)
+      dense = List.duplicate(0.1, 4)
+      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
+      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
+      [dense_leg, sparse_leg] = body.prefetch
+      refute Map.has_key?(dense_leg, :params)
+      refute Map.has_key?(sparse_leg, :params)
+    end
+  end
+
+  describe "do_search result parser — :vector key" do
+    test "parsed result includes :vector key from vector.dense when present", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        resp = %{
+          "result" => [
+            %{
+              "id" => "uuid-1",
+              "score" => 0.95,
+              "payload" => %{"text" => "hello", "title" => "Note"},
+              "vector" => %{"dense" => [0.1, 0.2, 0.3]}
+            }
+          ]
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      vector = List.duplicate(0.1, 1024)
+      assert {:ok, [result]} = Qdrant.search("test_col", vector, user_id: "1", limit: 5)
+      assert result.vector == [0.1, 0.2, 0.3]
+    end
+
+    test "parsed result has no :vector key when vector is absent from response",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        resp = %{
+          "result" => [
+            %{
+              "id" => "uuid-1",
+              "score" => 0.9,
+              "payload" => %{"text" => "hello"}
+            }
+          ]
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+
+      vector = List.duplicate(0.1, 1024)
+      assert {:ok, [result]} = Qdrant.search("test_col", vector, user_id: "1", limit: 5)
+      # nil values are stripped by Enum.reject in do_search, so :vector absent
+      refute Map.has_key?(result, :vector)
+    end
+  end
+
   describe "authentication" do
     test "sends api-key header when qdrant_api_key is configured", %{bypass: bypass} do
       ServiceConfig.put_override(:qdrant_api_key, "test-qdrant-key")

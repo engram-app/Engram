@@ -366,28 +366,51 @@ defmodule Engram.Vector.Qdrant do
   """
   def search(col \\ nil, vector, search_opts) do
     col = col || collection()
-    limit = Keyword.get(search_opts, :limit, 5)
 
+    instrument(:search, fn ->
+      do_search(col, [json: search_body(vector, search_opts)] ++ req_opts())
+    end)
+  end
+
+  @doc false
+  def search_body(vector, search_opts) do
     base = %{
       query: vector,
       using: "dense",
       filter: tenant_filter(search_opts),
-      limit: limit,
+      limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
 
-    body =
-      if binary_quantization_enabled?() do
-        Map.put(base, :params, %{quantization: %{rescore: true, oversampling: 3.0}})
-      else
-        base
+    base
+    |> then(fn b ->
+      case quantization_params(search_opts) do
+        nil -> b
+        params -> Map.put(b, :params, params)
       end
-
-    opts = [json: body] ++ req_opts()
-
-    instrument(:search, fn ->
-      do_search(col, opts)
     end)
+    |> maybe_with_vector(search_opts)
+  end
+
+  # Per-query quantization params. full_precision bypasses binary quant
+  # (exact-cosine traversal over full floats); otherwise the binary funnel.
+  defp quantization_params(search_opts) do
+    cond do
+      Keyword.get(search_opts, :full_precision, false) ->
+        %{quantization: %{ignore: true}}
+
+      binary_quantization_enabled?() ->
+        %{quantization: %{rescore: true, oversampling: 3.0}}
+
+      true ->
+        nil
+    end
+  end
+
+  defp maybe_with_vector(body, search_opts) do
+    if Keyword.get(search_opts, :with_vector, false),
+      do: Map.put(body, :with_vector, ["dense"]),
+      else: body
   end
 
   # Extracted from search/3 so all three query shapes share tenant filtering.
@@ -413,17 +436,22 @@ defmodule Engram.Vector.Qdrant do
   """
   def sparse_search(col \\ nil, sparse, search_opts) do
     col = col || collection()
-    limit = Keyword.get(search_opts, :limit, 5)
 
-    body = %{
+    instrument(:sparse_search, fn ->
+      do_search(col, [json: sparse_search_body(sparse, search_opts)] ++ req_opts())
+    end)
+  end
+
+  @doc false
+  def sparse_search_body(sparse, search_opts) do
+    %{
       query: %{indices: sparse.indices, values: sparse.values},
       using: "keyword",
       filter: tenant_filter(search_opts),
-      limit: limit,
+      limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
-
-    instrument(:sparse_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
+    |> maybe_with_vector(search_opts)
   end
 
   @doc """
@@ -433,12 +461,29 @@ defmodule Engram.Vector.Qdrant do
   """
   def hybrid_search(col \\ nil, dense, sparse, search_opts) do
     col = col || collection()
-    limit = Keyword.get(search_opts, :limit, 5)
-    filter = tenant_filter(search_opts)
 
-    body = %{
+    instrument(:hybrid_search, fn ->
+      do_search(col, [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts())
+    end)
+  end
+
+  @doc false
+  def hybrid_search_body(dense, sparse, search_opts) do
+    filter = tenant_filter(search_opts)
+    limit = Keyword.get(search_opts, :limit, 5)
+
+    dense_leg =
+      %{query: dense, using: "dense", filter: filter, limit: limit}
+      |> then(fn leg ->
+        case quantization_params(search_opts) do
+          nil -> leg
+          params -> Map.put(leg, :params, params)
+        end
+      end)
+
+    %{
       prefetch: [
-        %{query: dense, using: "dense", filter: filter, limit: limit},
+        dense_leg,
         %{
           query: %{indices: sparse.indices, values: sparse.values},
           using: "keyword",
@@ -450,8 +495,7 @@ defmodule Engram.Vector.Qdrant do
       limit: limit,
       with_payload: true
     }
-
-    instrument(:hybrid_search, fn -> do_search(col, [json: body] ++ req_opts()) end)
+    |> maybe_with_vector(search_opts)
   end
 
   defp do_search(col, opts) do
@@ -465,6 +509,7 @@ defmodule Engram.Vector.Qdrant do
 
             %{
               score: p["score"],
+              vector: get_in(p, ["vector", "dense"]),
               text: Map.get(payload, "text"),
               title: Map.get(payload, "title"),
               heading_path: Map.get(payload, "heading_path"),
