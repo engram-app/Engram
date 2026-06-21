@@ -11,7 +11,7 @@ const { mutate, statusRef } = vi.hoisted(() => ({
       enabled: true,
       next_step: 'agreement',
       current_tos_version: '2026-05-19',
-      current_privacy_version: '2026-05-19',
+      current_privacy_version: '2026-06-20',
     } as Record<string, unknown>,
   },
 }))
@@ -56,7 +56,7 @@ describe('AgreementPage', () => {
       expect(mutate).toHaveBeenCalledWith(
         expect.objectContaining({
           tos_version: '2026-05-19',
-          privacy_version: '2026-05-19',
+          privacy_version: '2026-06-20',
         }),
       ),
     )
@@ -74,7 +74,7 @@ describe('AgreementPage', () => {
       expect(mutate).toHaveBeenCalledWith(
         expect.objectContaining({
           tos_version: '2026-05-19',
-          privacy_version: '2026-05-19',
+          privacy_version: '2026-06-20',
           tos_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
           privacy_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
         }),
