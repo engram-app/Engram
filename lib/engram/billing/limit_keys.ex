@@ -82,7 +82,7 @@ defmodule Engram.Billing.LimitKeys do
     },
     # Search-quality dials (per-tier, live-tunable via SearchProfile)
     search_full_precision: %{type: :boolean, defaults: %{free: false, starter: false, pro: false}},
-    search_diversity: %{type: :integer, defaults: %{free: 0, starter: 0, pro: 0}},
+    search_diversity: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     search_candidate_pool: %{type: :integer, defaults: %{free: 20, starter: 20, pro: 30}},
     search_query_model: %{type: :string, defaults: %{free: nil, starter: nil, pro: nil}}
   }

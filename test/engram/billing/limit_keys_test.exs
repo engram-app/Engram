@@ -163,8 +163,8 @@ defmodule Engram.Billing.LimitKeysTest do
 
   test "search dial defaults match the spec" do
     alias Engram.Billing.LimitKeys
-    assert LimitKeys.default_for(:search_diversity, :free) == 0
-    assert LimitKeys.default_for(:search_diversity, :pro) == 0
+    assert LimitKeys.default_for(:search_diversity, :free) == 30
+    assert LimitKeys.default_for(:search_diversity, :pro) == 30
     assert LimitKeys.default_for(:search_candidate_pool, :free) == 20
     assert LimitKeys.default_for(:search_candidate_pool, :pro) == 30
     assert LimitKeys.default_for(:search_full_precision, :pro) == false
