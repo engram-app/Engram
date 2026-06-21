@@ -234,6 +234,10 @@ defmodule Engram.Billing do
   defp normalize_capability(:integer, -1), do: nil
   defp normalize_capability(:integer, n) when is_integer(n), do: n
   defp normalize_capability(:integer, _), do: nil
+  # String setting (e.g. per-tier query model id): the value flows through;
+  # nil / :unlimited (enforcement off) / anything else → null on the wire.
+  defp normalize_capability(:string, value) when is_binary(value), do: value
+  defp normalize_capability(:string, _), do: nil
 
   @doc """
   Returns true when the user is not suspended. Tier defaults to `:free`
