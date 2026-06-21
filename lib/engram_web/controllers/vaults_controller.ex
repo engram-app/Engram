@@ -47,12 +47,7 @@ defmodule EngramWeb.VaultsController do
 
   def index(conn, params) do
     user = conn.assigns.current_user
-    vaults = Vaults.list_vaults(user)
-    counts = Vaults.content_counts_for(user, vaults)
-
-    payload = %{
-      vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))
-    }
+    payload = index_payload(user)
 
     payload =
       case Map.get(params, "user_code") do
@@ -68,6 +63,18 @@ defmodule EngramWeb.VaultsController do
       end
 
     json(conn, payload)
+  end
+
+  @doc """
+  Builds the base `GET /api/vaults` JSON map (`%{vaults: [...]}`) for a user.
+  Public so the consolidated `GET /api/bootstrap` endpoint serves the identical
+  list shape without the device-link `user_code` extension.
+  """
+  def index_payload(user) do
+    vaults = Vaults.list_vaults(user)
+    counts = Vaults.content_counts_for(user, vaults)
+
+    %{vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))}
   end
 
   # ── create ─────────────────────────────────────────────────────────────────

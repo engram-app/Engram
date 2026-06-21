@@ -611,25 +611,13 @@ if config_env() == :prod do
 
   config :engram, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  # Rate-limiter: opt into the cluster-shared Redis backend only when a store
-  # URL is provided (SaaS prod, ElastiCache — engram-infra#158). Self-host /
-  # any deploy without REDIS_URL stays on the per-node ETS default. The Redis
-  # limiter fails open + alerts if the store is unreachable (see RateLimiter).
-  if redis_url = System.get_env("REDIS_URL") do
-    config :engram, EngramWeb.RateLimiter, backend: :redis
-
-    # `:url` is the only valid runtime start option for the Hammer.Redis backend
-    # (Redix rejects unknown start keys). The key prefix and command timeout are
-    # compile-time `use Hammer` opts on the limiter module — see start_opts/1.
-    config :engram,
-           EngramWeb.RateLimiter.Redis,
-           EngramWeb.RateLimiter.Redis.start_opts(redis_url)
-
-    # Same opt-in for the per-user caches (ActivityCache, TermsCache): the shared
-    # store makes the activity debounce exact and terms-accept visible across all
-    # nodes instead of per-node. Reuses the same REDIS_URL on its own connection;
-    # fails open to the DB read-through if the store is unreachable (see Engram.Cache).
-    config :engram, Engram.Cache, backend: :redis, url: redis_url
+  # Rate-limiter: opt into the cluster-shared DistributedETS backend when the
+  # node is part of a named cluster (DNS_CLUSTER_QUERY set — SaaS prod ECS).
+  # Self-host / single-node deploys without DNS_CLUSTER_QUERY stay on the
+  # per-node ETS default. DistributedETS uses PubSub broadcast to keep
+  # counters eventually-consistent across the cluster; no external store needed.
+  if System.get_env("DNS_CLUSTER_QUERY") do
+    config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
   config :engram, EngramWeb.Endpoint,

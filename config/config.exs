@@ -149,8 +149,9 @@ config :engram,
 # avoid sandbox-checkout coupling at supervisor start.
 config :engram, :boot_canary_enabled, true
 
-# Rate limiter backend. Default ETS (per-node, single-node correct, no deps).
-# SaaS prod flips to :redis in runtime.exs when REDIS_URL is set (cluster-shared).
+# Rate limiter backend. Default :ets (per-node, no deps — self-host/dev/test).
+# SaaS clustered prod flips to :distributed_ets in runtime.exs when
+# DNS_CLUSTER_QUERY is set (cluster-shared via PubSub broadcast).
 config :engram, EngramWeb.RateLimiter, backend: :ets
 
 # Telemetry/log HMAC key for hashing user ids (Engram.Crypto.HMAC).

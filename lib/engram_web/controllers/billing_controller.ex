@@ -8,10 +8,19 @@ defmodule EngramWeb.BillingController do
   require Logger
 
   def status(conn, _params) do
-    user = conn.assigns.current_user
+    json(conn, status_payload(conn.assigns.current_user))
+  end
+
+  @doc """
+  Builds the `GET /api/billing/status` JSON map for a user. Public so the
+  consolidated `GET /api/bootstrap` endpoint serves the identical shape. Holds
+  the *volatile* slice (live trial countdown, connection counts, swap cooldown)
+  — the stable capability matrix is served separately via `Billing.capabilities/1`.
+  """
+  def status_payload(user) do
     sub = Billing.get_subscription(user)
 
-    json(conn, %{
+    %{
       tier: to_string(Billing.tier(user)),
       active: Billing.tier(user) in [:starter, :pro],
       trial_days_remaining: Billing.trial_days_remaining(user),
@@ -42,7 +51,7 @@ defmodule EngramWeb.BillingController do
       # window already elapsed). Lets /link render a cooldown-specific
       # banner + disable Authorize BEFORE the user trips the 402.
       device_swap_cooldown_remaining_hours: swap_cooldown_remaining(user)
-    })
+    }
   end
 
   # Mirrors `EnforceDeviceCap.remaining_cooldown_hours/2`: computed from

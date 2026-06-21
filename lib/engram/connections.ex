@@ -39,7 +39,7 @@ defmodule Engram.Connections do
   "Active" means: not revoked, not consumed (OAuth), not expired.
   Multiple tokens in the same rotation family collapse to 1 (DISTINCT).
   """
-  @spec count_active(integer(), kind()) :: non_neg_integer()
+  @spec count_active(Ecto.UUID.t(), kind()) :: non_neg_integer()
   def count_active(user_id, :obsidian) do
     oauth_active_count(user_id, "obsidian") + device_active_count(user_id)
   end
@@ -79,7 +79,7 @@ defmodule Engram.Connections do
   is inside the `device_swap_cooldown_hours` window after revoking a
   device. Family-grain (not row-grain): one revoke per swap.
   """
-  @spec most_recent_device_revoke(integer()) :: DateTime.t() | nil
+  @spec most_recent_device_revoke(Ecto.UUID.t()) :: DateTime.t() | nil
   def most_recent_device_revoke(user_id) do
     from(rt in DeviceRefreshToken,
       where: rt.user_id == ^user_id,

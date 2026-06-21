@@ -5,13 +5,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import OnboardingGate from './onboarding-gate'
 
 vi.mock('../api/queries', () => ({
-  useOnboardingStatus: vi.fn(),
+  useAppBootstrap: vi.fn(),
 }))
 
-import { useOnboardingStatus } from '../api/queries'
+import { useAppBootstrap } from '../api/queries'
 
-function renderWith(status: ReturnType<typeof useOnboardingStatus>) {
-  vi.mocked(useOnboardingStatus).mockReturnValue(status as never)
+// The gate reads onboarding state out of the consolidated bootstrap payload, so
+// wrap each onboarding status under `data.onboarding`.
+function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
+  vi.mocked(useAppBootstrap).mockReturnValue({
+    data: onboarding == null ? undefined : { onboarding },
+    isLoading: false,
+    isError: false,
+    ...rest,
+  } as never)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
@@ -31,84 +38,60 @@ function renderWith(status: ReturnType<typeof useOnboardingStatus>) {
 }
 
 describe('OnboardingGate', () => {
-  it('renders loading state while status query is pending', () => {
-    renderWith({ data: undefined, isLoading: true, isError: false } as never)
+  it('renders loading state while bootstrap query is pending', () => {
+    renderWith(null, { isLoading: true })
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
   })
 
   it('renders children when next_step is done', () => {
-    renderWith({
-      data: { enabled: true, next_step: 'done', terms_ok: true, subscription_ok: true },
-      isLoading: false,
-      isError: false,
-    } as never)
+    renderWith({ enabled: true, next_step: 'done', terms_ok: true, subscription_ok: true })
     expect(screen.getByText('dashboard')).toBeInTheDocument()
   })
 
   it('renders children when wizard is disabled (self-host)', () => {
-    renderWith({
-      data: { enabled: false, next_step: 'done' },
-      isLoading: false,
-      isError: false,
-    } as never)
+    renderWith({ enabled: false, next_step: 'done' })
     expect(screen.getByText('dashboard')).toBeInTheDocument()
   })
 
   it('redirects to /onboard/agreement when next_step=agreement', () => {
     renderWith({
-      data: {
-        enabled: true,
-        next_step: 'agreement',
-        terms_ok: false,
-        subscription_ok: false,
-      },
-      isLoading: false,
-      isError: false,
-    } as never)
+      enabled: true,
+      next_step: 'agreement',
+      terms_ok: false,
+      subscription_ok: false,
+    })
     expect(screen.getByText('agreement-step')).toBeInTheDocument()
   })
 
   it('redirects to /onboard/billing when next_step=billing', () => {
     renderWith({
-      data: {
-        enabled: true,
-        next_step: 'billing',
-        terms_ok: true,
-        subscription_ok: false,
-      },
-      isLoading: false,
-      isError: false,
-    } as never)
+      enabled: true,
+      next_step: 'billing',
+      terms_ok: true,
+      subscription_ok: false,
+    })
     expect(screen.getByText('billing-step')).toBeInTheDocument()
   })
 
   it('redirects to /onboard/tools when next_step=tools', () => {
     renderWith({
-      data: {
-        enabled: true,
-        next_step: 'tools',
-        terms_ok: true,
-        subscription_ok: true,
-        profile_complete: false,
-      },
-      isLoading: false,
-      isError: false,
-    } as never)
+      enabled: true,
+      next_step: 'tools',
+      terms_ok: true,
+      subscription_ok: true,
+      profile_complete: false,
+    })
     expect(screen.getByText('tools-step')).toBeInTheDocument()
   })
 
   it('redirects to /onboard/vault when next_step=vault', () => {
     renderWith({
-      data: {
-        enabled: true,
-        next_step: 'vault',
-        terms_ok: true,
-        subscription_ok: true,
-        profile_complete: false,
-      },
-      isLoading: false,
-      isError: false,
-    } as never)
+      enabled: true,
+      next_step: 'vault',
+      terms_ok: true,
+      subscription_ok: true,
+      profile_complete: false,
+    })
     expect(screen.getByText('vault-step')).toBeInTheDocument()
   })
 })

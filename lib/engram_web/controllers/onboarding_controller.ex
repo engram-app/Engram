@@ -6,18 +6,22 @@ defmodule EngramWeb.OnboardingController do
   alias EngramWeb.RequestMeta
 
   def status(conn, _params) do
-    user = conn.assigns.current_user
+    json(conn, status_payload(conn.assigns.current_user))
+  end
 
-    payload =
-      Onboarding.status(user)
-      |> Map.update!(:next_step, &Atom.to_string/1)
-      |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
-      |> reject_nil_notice()
-      |> reject_empty_profile()
-      |> Map.put(:actions, Onboarding.list_actions(user.id))
-      |> Map.put(:vault_count, Engram.Vaults.count_for(user))
-
-    json(conn, payload)
+  @doc """
+  Builds the `GET /api/onboarding/status` JSON map for a user. Public so the
+  consolidated `GET /api/bootstrap` endpoint serves the identical shape without
+  re-deriving the transforms.
+  """
+  def status_payload(user) do
+    Onboarding.status(user)
+    |> Map.update!(:next_step, &Atom.to_string/1)
+    |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
+    |> reject_nil_notice()
+    |> reject_empty_profile()
+    |> Map.put(:actions, Onboarding.list_actions(user.id))
+    |> Map.put(:vault_count, Engram.Vaults.count_for(user))
   end
 
   def record(conn, %{"action" => action}) when is_binary(action) do

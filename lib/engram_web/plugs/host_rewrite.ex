@@ -31,8 +31,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
   # Missing entries silently 404 in prod — guarded by a regression test.
   @api_top_segments ~w(
     notes folders search vaults attachments oauth mcp auth admin billing
-    tasks health user me onboarding api-keys connections tags sync logs
-    embed-status openapi
+    tasks health user me onboarding bootstrap api-keys connections tags sync
+    logs embed-status openapi
   )
 
   # Test-only accessor exposing the @api_top_segments allowlist so the

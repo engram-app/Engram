@@ -10,7 +10,17 @@ defmodule Engram.Vector.QdrantTest do
     bypass = Bypass.open()
     # Per-process override (not global put_env) so this suite runs async.
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    # ensure_collection now creates payload indexes (#626); stub them so tests
+    # asserting other behaviour don't trip on the index PUTs.
+    stub_payload_indexes(bypass)
     %{bypass: bypass}
+  end
+
+  # Tolerate the keyword payload-index PUTs ensure_collection fires per field.
+  defp stub_payload_indexes(bypass) do
+    Bypass.stub(bypass, "PUT", "/collections/:col/index", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
   end
 
   describe "ServiceConfig override" do
@@ -20,6 +30,7 @@ defmodule Engram.Vector.QdrantTest do
       # proving the read goes through ServiceConfig (the async-safety seam).
       override_bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{override_bypass.port}")
+      stub_payload_indexes(override_bypass)
 
       Bypass.expect_once(override_bypass, "PUT", "/collections/ovr_col", fn conn ->
         conn

@@ -13,6 +13,13 @@ defmodule Engram.Vector.Qdrant do
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
 
+  # Payload fields every tenant-scoped op filters on. Qdrant Cloud strict-mode
+  # rejects (400) a filter on an un-indexed field, so each must have a keyword
+  # index before any upsert/search/delete. `note_id` is not a live filter key
+  # today (deletes resolve via `path_hmac`) but is indexed to match the prod
+  # collection + future-proof. See #626.
+  @payload_index_fields ~w(user_id vault_id note_id path_hmac)
+
   defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
@@ -66,10 +73,24 @@ defmodule Engram.Vector.Qdrant do
   @doc """
   Ensure a collection exists with the given vector dimensions.
   Creates it if missing; no-ops if already present (Qdrant returns 200 either way).
+
+  On a fresh create, also creates the keyword payload indexes every
+  tenant-scoped filter depends on (#626). An existing collection already
+  carries them (indexes persist), so the steady-state path skips the work —
+  the only way to lose them is a drop+recreate, which re-enters the create
+  branch.
   """
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
 
+    case create_collection(col, dims) do
+      {:ok, :created} -> ensure_payload_indexes(col)
+      {:ok, :exists} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  defp create_collection(col, dims) do
     dense = %{size: dims, distance: "Cosine"}
 
     body =
@@ -89,8 +110,40 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:ensure_collection, fn ->
       case Req.put("#{base_url()}/collections/#{col}", opts) do
+        {:ok, %{status: status}} when status in [200, 201] -> {:ok, :created}
+        {:ok, %{status: 409}} -> existing_collection(col)
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  # 409 means the collection already exists. Confirm its shape is compatible
+  # and report `:exists` so the caller skips (re-)creating payload indexes,
+  # which an existing collection already carries.
+  defp existing_collection(col) do
+    with :ok <- verify_collection_shape(col), do: {:ok, :exists}
+  end
+
+  # Create a keyword payload index per filtered field, right after a fresh
+  # collection create. `?wait=true` blocks until each index is ready so the
+  # first upsert can't race an unbuilt index. Stops at the first failure so a
+  # real error surfaces.
+  defp ensure_payload_indexes(col) do
+    Enum.reduce_while(@payload_index_fields, :ok, fn field, :ok ->
+      case create_payload_index(col, field) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp create_payload_index(col, field) do
+    opts = [json: %{field_name: field, field_schema: "keyword"}] ++ req_opts()
+
+    instrument(:create_payload_index, fn ->
+      case Req.put("#{base_url()}/collections/#{col}/index?wait=true", opts) do
         {:ok, %{status: status}} when status in [200, 201] -> :ok
-        {:ok, %{status: 409}} -> verify_collection_shape(col)
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
