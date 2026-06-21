@@ -24,7 +24,12 @@ defmodule Engram.Legal.Seeder do
       "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."}
     },
     "privacy_policy" => %{
-      "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."}
+      "2026-06-20" => %{
+        material: true,
+        effective_date: nil,
+        changelog:
+          "Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors."
+      }
     }
   }
 
