@@ -46,6 +46,7 @@ defmodule EngramWeb.SearchController do
       [limit: chunk_limit, cross_vault: cross_vault, mode: parse_mode(params["mode"])]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
+      |> maybe_put_diversity(params["diversity"])
 
     case Search.search(user, vault, query, opts) do
       {:ok, results} ->
@@ -98,6 +99,18 @@ defmodule EngramWeb.SearchController do
   defp parse_mode("keyword"), do: :keyword
   defp parse_mode("vector"), do: :vector
   defp parse_mode(_), do: :hybrid
+
+  # When `diversity` is absent or unparseable, return opts unchanged so the
+  # SearchProfile default applies. Clamping to [0.0, 1.0] happens downstream
+  # in `Engram.Search`.
+  defp maybe_put_diversity(opts, nil), do: opts
+
+  defp maybe_put_diversity(opts, raw) do
+    case Float.parse(to_string(raw)) do
+      {f, _} -> Keyword.put(opts, :diversity, f)
+      :error -> opts
+    end
+  end
 
   # Collapse per-chunk Qdrant hits into one row per note. The web UI shows
   # a card per note; the MCP path bypasses this and gets raw chunks.

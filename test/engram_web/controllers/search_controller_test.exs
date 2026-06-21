@@ -330,6 +330,76 @@ defmodule EngramWeb.SearchControllerTest do
       assert vitd["match_count"] == 1
     end
 
+    test "passes diversity=0.5 to Search — Qdrant query requests vectors (MMR path)", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        decoded = Jason.decode!(body)
+        # diversity > 0 triggers the MMR path: Search requests dense vectors from
+        # Qdrant so MMR can compare cosine similarity between candidates.
+        assert decoded["with_vector"] == ["dense"],
+               "expected with_vector: [\"dense\"] when diversity=0.5, got: #{inspect(decoded["with_vector"])}"
+
+        # Return a valid point with a dense vector so the MMR pipeline succeeds.
+        points = [diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result")]
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "0.5"})
+      assert json_response(conn, 200)
+    end
+
+    test "out-of-range diversity=5 is clamped downstream — still returns 200", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # diversity=5 is parsed as a float and passed to Search; Search clamps it
+      # to 1.0. The request is still valid and returns a 200 with results.
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, _body, c} = Plug.Conn.read_body(c)
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "5"})
+      assert json_response(conn, 200)
+    end
+
+    test "unparseable diversity is silently ignored — still returns 200", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # diversity="not-a-float" → parse error → key omitted → profile default
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, _body, c} = Plug.Conn.read_body(c)
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "not-a-float"})
+      assert json_response(conn, 200)
+    end
+
     test "honors the requested note limit when more unique notes are available",
          %{conn: conn, bypass: bypass, user: user} do
       Engram.MockEmbedder
@@ -398,5 +468,37 @@ defmodule EngramWeb.SearchControllerTest do
     |> Engram.Vaults.list_vaults()
     |> Enum.find(& &1.is_default)
     |> Map.fetch!(:id)
+  end
+
+  # Like `chunk/6` but includes a dense vector so the MMR path can run
+  # (diversity > 0 requests `with_vector: ["dense"]` from Qdrant and MMR
+  # then calls cosine similarity on the returned vectors).
+  defp diverse_chunk(user, vault, qid, score, vector, text) do
+    {:ok, enc} =
+      Engram.Crypto.encrypt_qdrant_payload(
+        %{text: text, title: qid, heading_path: qid},
+        user,
+        "engram_notes",
+        qid
+      )
+
+    %{
+      "id" => qid,
+      "score" => score,
+      "vector" => %{"dense" => vector},
+      "payload" => %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
+        "source_path" => "#{qid}.md",
+        "tags" => [],
+        "user_id" => to_string(user.id),
+        "vault_id" => to_string(vault.id)
+      }
+    }
   end
 end
