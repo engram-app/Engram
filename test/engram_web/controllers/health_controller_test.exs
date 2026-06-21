@@ -61,7 +61,7 @@ defmodule EngramWeb.HealthControllerTest do
       assert is_map(body["checks"])
       # Each dep must appear with a status string ("ok" or "error: ...").
       # Reachability is asserted per-dep elsewhere; here we lock the shape.
-      for dep <- ~w(postgres qdrant redis s3 kms voyage paddle clerk_jwks) do
+      for dep <- ~w(postgres qdrant s3 kms voyage paddle clerk_jwks) do
         assert Map.has_key?(body["checks"], dep), "missing #{dep} in diagnostics matrix"
         assert is_binary(body["checks"][dep]), "#{dep} status must be a string"
       end

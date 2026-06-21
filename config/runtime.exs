@@ -620,17 +620,6 @@ if config_env() == :prod do
     config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
-  # Per-user caches (ActivityCache, TermsCache): opt into the shared Redis
-  # backend when REDIS_URL is provided. The rate limiter no longer uses Redis
-  # (Task 7); this block is retained for the cache store (Task 8 will review).
-  if redis_url = System.get_env("REDIS_URL") do
-    # Same opt-in for the per-user caches (ActivityCache, TermsCache): the shared
-    # store makes the activity debounce exact and terms-accept visible across all
-    # nodes instead of per-node. Reuses the same REDIS_URL on its own connection;
-    # fails open to the DB read-through if the store is unreachable (see Engram.Cache).
-    config :engram, Engram.Cache, backend: :redis, url: redis_url
-  end
-
   config :engram, EngramWeb.Endpoint,
     http: [
       # Enable IPv6 and bind on all interfaces.

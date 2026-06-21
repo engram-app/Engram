@@ -5,10 +5,7 @@ defmodule Engram.ApplicationTest do
     alias EngramWeb.RateLimiter
 
     setup do
-      on_exit(fn ->
-        Application.put_env(:engram, EngramWeb.RateLimiter, backend: :ets)
-        Application.delete_env(:engram, EngramWeb.RateLimiter.Redis)
-      end)
+      on_exit(fn -> Application.put_env(:engram, EngramWeb.RateLimiter, backend: :ets) end)
     end
 
     test "selects the ETS limiter by default" do
@@ -17,17 +14,13 @@ defmodule Engram.ApplicationTest do
       assert Keyword.has_key?(opts, :clean_period)
     end
 
-    test "selects the Redis limiter with its configured opts when backend is :redis" do
-      Application.put_env(:engram, RateLimiter, backend: :redis)
+    test "selects the DistributedETS limiter when backend is :distributed_ets" do
+      Application.put_env(:engram, RateLimiter, backend: :distributed_ets)
 
-      Application.put_env(:engram, EngramWeb.RateLimiter.Redis,
-        url: "redis://example",
-        key_prefix: "p:"
-      )
+      assert {EngramWeb.RateLimiter.DistributedETS, opts} =
+               Engram.Application.rate_limiter_child()
 
-      assert {EngramWeb.RateLimiter.Redis, opts} = Engram.Application.rate_limiter_child()
-      assert opts[:url] == "redis://example"
-      assert opts[:key_prefix] == "p:"
+      assert Keyword.has_key?(opts, :clean_period)
     end
   end
 

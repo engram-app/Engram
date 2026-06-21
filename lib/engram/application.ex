@@ -33,7 +33,6 @@ defmodule Engram.Application do
         Engram.Legal.VersionCache.Invalidator,
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
-        cache_store_child(),
         Engram.UsageMeters.ActivityCache,
         Engram.Usage.DailyCap.Cache,
         Engram.Onboarding.TermsCache,
@@ -178,16 +177,6 @@ defmodule Engram.Application do
   defp pyroscope_child do
     if Engram.Observability.Pyroscope.configured?() do
       Engram.Observability.Pyroscope
-    end
-  end
-
-  # Shared Redis/Valkey connection for the per-user caches (ActivityCache,
-  # TermsCache). Started only when the cache backend is :redis (REDIS_URL set,
-  # wired in runtime.exs); the ETS default needs no connection. Separate from
-  # the rate limiter's Hammer-managed connection — same URL, distinct pool.
-  defp cache_store_child do
-    if Engram.Cache.backend() == :redis do
-      {Engram.Cache.Redix, Application.get_env(:engram, Engram.Cache, [])}
     end
   end
 

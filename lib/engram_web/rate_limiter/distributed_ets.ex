@@ -62,7 +62,7 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
   @spec hit(String.t(), pos_integer(), non_neg_integer(), non_neg_integer()) ::
           {:allow, non_neg_integer()} | {:deny, non_neg_integer()}
   def hit(key, scale, limit, increment \\ 1) do
-    broadcast({:inc, key, scale, increment})
+    _ = broadcast({:inc, key, scale, increment})
     Local.hit(key, scale, limit, increment)
   end
 
