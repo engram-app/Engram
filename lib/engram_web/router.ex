@@ -258,6 +258,12 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.RotationLockCheck
     ]
 
+    # Consolidated first-load payload: onboarding + capabilities + vaults
+    # (+ billing when enabled) in one round-trip. Sits here (not the
+    # vault-scoped pipeline) so the SPA can fetch it before onboarding is
+    # complete to learn `next_step`.
+    get "/bootstrap", BootstrapController, :show
+
     # Onboarding wizard — status + TOS acceptance. Exempt from
     # RequireOnboarding (the plug is only on the vault-scoped pipeline)
     # so the wizard can actually function before completion.
