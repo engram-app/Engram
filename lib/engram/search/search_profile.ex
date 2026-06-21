@@ -29,34 +29,24 @@ defmodule Engram.Search.SearchProfile do
   @spec resolve(map()) :: t()
   def resolve(user) do
     %__MODULE__{
-      query_model: resolve_model(user, :search_query_model),
-      full_precision: feature?(user, :search_full_precision),
-      reranker: feature?(user, :reranker_enabled),
-      diversity: resolve_int(user, :search_diversity, 0) / 100.0,
-      candidate_pool: resolve_int(user, :search_candidate_pool, @default_pool)
+      query_model: as_model(Billing.effective_limit(user, :search_query_model)),
+      full_precision: as_bool(Billing.effective_limit(user, :search_full_precision)),
+      reranker: as_bool(Billing.effective_limit(user, :reranker_enabled)),
+      diversity: as_int(Billing.effective_limit(user, :search_diversity), 0) / 100.0,
+      candidate_pool: as_int(Billing.effective_limit(user, :search_candidate_pool), @default_pool)
     }
   end
 
+  # value coercers (operate on the already-resolved value, NOT the key)
+
   # `:unlimited` means limits are disabled (self-host) — grant quality features.
-  defp feature?(user, key) do
-    case Billing.effective_limit(user, key) do
-      true -> true
-      :unlimited -> true
-      _ -> false
-    end
-  end
+  defp as_bool(true), do: true
+  defp as_bool(:unlimited), do: true
+  defp as_bool(_), do: false
 
-  defp resolve_int(user, key, fallback) do
-    case Billing.effective_limit(user, key) do
-      n when is_integer(n) -> n
-      _ -> fallback
-    end
-  end
+  defp as_int(n, _fallback) when is_integer(n), do: n
+  defp as_int(_, fallback), do: fallback
 
-  defp resolve_model(user, key) do
-    case Billing.effective_limit(user, key) do
-      m when is_binary(m) -> m
-      _ -> nil
-    end
-  end
+  defp as_model(m) when is_binary(m), do: m
+  defp as_model(_), do: nil
 end
