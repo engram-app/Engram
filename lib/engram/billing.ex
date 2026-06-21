@@ -7,6 +7,7 @@ defmodule Engram.Billing do
   """
 
   import Ecto.Query
+  alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.PlanCache
   alias Engram.Billing.Subscription
@@ -189,6 +190,50 @@ defmodule Engram.Billing do
       _ -> nil
     end
   end
+
+  @doc """
+  Returns the user's full, JSON-ready entitlement snapshot:
+
+      %{tier: "free", limits: %{"notes_cap" => 10_000, "api_write_enabled" => false, ...}}
+
+  Every `LimitKeys` key is resolved through `effective_limit/2` and normalized:
+  integer caps stay integers (`:unlimited`/`nil`/`-1` → `null`), boolean
+  features stay booleans (`:unlimited` → `true`, the "limits disabled" sense).
+
+  Backed by `Engram.Billing.EntitlementCache` (24h TTL + explicit invalidation
+  on subscription/override changes) so the bootstrap path serves the whole
+  matrix from one ETS read. This is advisory UX state — server-side
+  `check_limit/3` / `check_feature/2` remain the authoritative gates.
+  """
+  @spec capabilities(Engram.Accounts.User.t()) :: %{tier: String.t(), limits: map()}
+  def capabilities(%Engram.Accounts.User{id: nil} = user), do: compute_capabilities(user)
+
+  def capabilities(%Engram.Accounts.User{} = user) do
+    EntitlementCache.fetch(user.id, fn -> compute_capabilities(user) end)
+  end
+
+  defp compute_capabilities(user) do
+    limits =
+      Map.new(LimitKeys.all(), fn key ->
+        value = normalize_capability(LimitKeys.type(key), effective_limit(user, key))
+        {Atom.to_string(key), value}
+      end)
+
+    %{tier: Atom.to_string(tier(user)), limits: limits}
+  end
+
+  # Boolean feature: :unlimited (enforcement off) opens the gate; explicit
+  # true/false flows through; anything else fails closed.
+  defp normalize_capability(:boolean, :unlimited), do: true
+  defp normalize_capability(:boolean, true), do: true
+  defp normalize_capability(:boolean, false), do: false
+  defp normalize_capability(:boolean, _), do: false
+  # Integer cap: "no cap" sentinels collapse to null for the wire.
+  defp normalize_capability(:integer, :unlimited), do: nil
+  defp normalize_capability(:integer, nil), do: nil
+  defp normalize_capability(:integer, -1), do: nil
+  defp normalize_capability(:integer, n) when is_integer(n), do: n
+  defp normalize_capability(:integer, _), do: nil
 
   @doc """
   Returns true when the user is not suspended. Tier defaults to `:free`
@@ -639,6 +684,10 @@ defmodule Engram.Billing do
     # tier/status flips can change the onboarding gate's subscription_ok,
     # so the cached pass verdict must re-derive.
     :ok = Engram.Onboarding.GateCache.evict(user_id)
+
+    # Same flip changes the user's tier and therefore their entire resolved
+    # limit matrix — drop the cached entitlement snapshot so it re-derives.
+    :ok = EntitlementCache.evict(user_id)
 
     # Carry the full plan snapshot so the plugin can re-gate attachments the
     # instant the subscription flips, without a follow-up fetch. `tier` stays

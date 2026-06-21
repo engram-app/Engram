@@ -619,6 +619,10 @@ export function useBillingStatus() {
   return useQuery({
     queryKey: ['billing', 'status'],
     queryFn: () => api.get<BillingStatus>('/billing/status'),
+    // Seeded fresh by useAppBootstrap on first load; mutations that change
+    // billing invalidate this key explicitly, so a short staleTime just
+    // suppresses a redundant refetch-on-mount of the seeded payload.
+    staleTime: 60_000,
   })
 }
 
@@ -765,6 +769,64 @@ export function useRecordOnboardingAction() {
       api.post<{ status: string }>('/onboarding/actions', { action }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['onboarding', 'status'] }),
     retry: 3,
+  })
+}
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────
+//
+// One round-trip on first load that returns onboarding + capabilities + vaults
+// (+ billing when enabled), replacing the serial onboarding/billing/vaults
+// fan-out the app used to make before becoming usable. See
+// docs/context/spa-state-injection.md for why this is a fetch (the SaaS HTML is
+// served by Cloudflare and can't inject per-user post-auth state at first paint).
+
+// Resolved entitlement matrix. Every LimitKeys key: an integer cap, a boolean
+// feature flag, or null (no cap / unlimited). Advisory for UX gating — the
+// server still enforces every limit authoritatively.
+export interface Capabilities {
+  tier: 'free' | 'starter' | 'pro'
+  limits: Record<string, number | boolean | null>
+}
+
+export interface BootstrapPayload {
+  onboarding: OnboardingStatus
+  capabilities: Capabilities
+  vaults: { vaults: Vault[] }
+  // Present only when billing is enabled (SaaS); absent on self-host.
+  billing?: BillingStatus
+}
+
+export function useCapabilities() {
+  return useQuery({
+    queryKey: ['capabilities'],
+    // Normally read straight from the cache seeded by useAppBootstrap (staleTime
+    // Infinity → no fetch). The queryFn is a fallback for any consumer that
+    // mounts before the gate's bootstrap seed lands.
+    queryFn: () => api.get<BootstrapPayload>('/bootstrap').then((b) => b.capabilities),
+    staleTime: Infinity,
+  })
+}
+
+/**
+ * Fetches the consolidated first-load payload and seeds the granular query
+ * caches (onboarding, billing, vaults, capabilities) so the hooks that read
+ * those keys resolve from cache instead of issuing their own requests. Mount
+ * this at the top of the authenticated tree (the onboarding gate) so the seed
+ * lands before any vault-scoped view mounts.
+ */
+export function useAppBootstrap() {
+  const qc = useQueryClient()
+  return useQuery({
+    queryKey: ['bootstrap'],
+    queryFn: async () => {
+      const data = await api.get<BootstrapPayload>('/bootstrap')
+      qc.setQueryData(['onboarding', 'status'], data.onboarding)
+      qc.setQueryData(['capabilities'], data.capabilities)
+      qc.setQueryData(['vaults'], data.vaults)
+      if (data.billing) qc.setQueryData(['billing', 'status'], data.billing)
+      return data
+    },
+    staleTime: Infinity,
   })
 }
 
@@ -938,6 +1000,10 @@ export function useVaults() {
     queryFn: () => api.get<{ vaults: Vault[] }>('/vaults'),
     select: (data) => data.vaults,
     enabled: !demo?.active,
+    // Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
+    // this key explicitly, so a short staleTime just suppresses the redundant
+    // refetch-on-mount of the seeded list.
+    staleTime: 60_000,
   })
   if (demo?.active && demo.vault) {
     const base = {
