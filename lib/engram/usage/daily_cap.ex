@@ -11,9 +11,10 @@ defmodule Engram.Usage.DailyCap do
   is the sustained rate (allowance / 86_400). There is no reset event — tokens
   regenerate continuously from `last_refill_at`, so there is no cron.
   """
-  require Logger
   alias Engram.Repo
   alias Engram.Usage.DailyCap.Cache
+
+  require Logger
 
   @type result :: {:allow, float()} | {:deny, non_neg_integer()}
 
