@@ -31,8 +31,7 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `DATABASE_SSL_MODE` | `verify_none` | `verify-full` → `verify_peer` w/ OS trust store + SNI + hostname check (:570). |
 | `SECRET_KEY_BASE` | — (required in prod, :597) | Phoenix cookie/secret signing. |
 | `JWT_SECRET` | — (required in prod, :604) | Joken default signer for internal JWTs (:610). |
-| `DNS_CLUSTER_QUERY` | unset | libcluster DNS query for BEAM node discovery (:612). |
-| `REDIS_URL` | unset | Opt-in shared rate-limiter + per-user cache backend (ElastiCache). Unset → per-node ETS. Fails open + alerts if unreachable (:618-632). |
+| `DNS_CLUSTER_QUERY` | unset | libcluster DNS query for BEAM node discovery (:612). When set, the rate limiter auto-selects the distributed ETS + Phoenix.PubSub backend; unset → plain ETS. |
 
 > `RELEASE_COOKIE` is consumed by the Elixir release runtime (`rel/`/`mix release`), not read in `runtime.exs`.
 
