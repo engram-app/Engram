@@ -1107,16 +1107,30 @@ export function useCreateVault() {
 // /billing/status + /billing/subscription so the StatusCard reflects the
 // new scheduled change immediately, before webhook sync catches up.
 
-function invalidateBilling(qc: QueryClient) {
-  qc.invalidateQueries({ queryKey: ['billing', 'status'] })
-  qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
+/**
+ * Invalidate every cache derived from the user's subscription state — the
+ * volatile billing slices AND the cached capability matrix (`['capabilities']`,
+ * the tier+limits map seeded by bootstrap). Call after ANY subscription change
+ * (checkout completed, activation push, plan change, cancel, reverse-cancel) so
+ * the tier badge, caps, plan-change "current" highlight, and free-tier gates
+ * all refresh together. Missing one key here is how an upgrade leaves the UI
+ * stuck on the old tier until a manual refresh (#603). Returns a promise so
+ * callers that need fresh data before navigating can await it.
+ */
+export function invalidateBillingState(qc: QueryClient) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ['billing', 'status'] }),
+    qc.invalidateQueries({ queryKey: ['billing', 'subscription'] }),
+    qc.invalidateQueries({ queryKey: ['billing', 'transactions'] }),
+    qc.invalidateQueries({ queryKey: ['capabilities'] }),
+  ])
 }
 
 export function useCancelSubscription() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => api.post<Record<string, unknown>>('/billing/cancel-subscription'),
-    onSuccess: () => invalidateBilling(qc),
+    onSuccess: () => invalidateBillingState(qc),
   })
 }
 
@@ -1124,7 +1138,7 @@ export function useReverseCancel() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => api.post<Record<string, unknown>>('/billing/reverse-cancel'),
-    onSuccess: () => invalidateBilling(qc),
+    onSuccess: () => invalidateBillingState(qc),
   })
 }
 
@@ -1160,7 +1174,7 @@ export function useConfirmPlanChange() {
       api.post<Record<string, unknown>>('/billing/plan-change/confirm', {
         target_price_id: targetPriceId,
       }),
-    onSuccess: () => invalidateBilling(qc),
+    onSuccess: () => invalidateBillingState(qc),
   })
 }
 

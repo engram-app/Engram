@@ -8,6 +8,7 @@ import {
   useBillingSubscriptionDetail,
   useBillingHistory,
   useMe,
+  invalidateBillingState,
   type BillingCadence,
   type OnboardingStatus,
 } from '../api/queries'
@@ -157,9 +158,7 @@ export default function BillingPage({
     setCheckingOut(false)
     setCompletedAt(null)
     setSlow(false)
-    await qc.invalidateQueries({ queryKey: ['billing', 'status'] })
-    await qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
-    await qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+    await invalidateBillingState(qc)
     await qc.invalidateQueries({ queryKey: ['onboarding', 'status'] })
 
     if (onActivatedRef.current && !onActivatedFiredRef.current) {
@@ -225,8 +224,7 @@ export default function BillingPage({
             const txn = (event.data as { transaction_id?: string } | undefined)?.transaction_id ?? null
             setTransactionId(txn)
             setCompletedAt((prev) => prev ?? Date.now())
-            qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
-            qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+            invalidateBillingState(qc)
             break
           }
           case CheckoutEventNames.CHECKOUT_COMPLETED: {
@@ -236,8 +234,7 @@ export default function BillingPage({
             // timer is the fallback if the push never arrives (and is also
             // armed here in case PAYMENT_INITIATED dropped).
             setCompletedAt((prev) => prev ?? Date.now())
-            qc.invalidateQueries({ queryKey: ['billing', 'subscription'] })
-            qc.invalidateQueries({ queryKey: ['billing', 'transactions'] })
+            invalidateBillingState(qc)
             break
           }
           case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED:
