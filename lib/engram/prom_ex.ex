@@ -28,7 +28,8 @@ defmodule Engram.PromEx do
       Engram.PromEx.Search,
       Engram.PromEx.Mcp,
       Engram.PromEx.Crypto,
-      Engram.PromEx.Reliability
+      Engram.PromEx.Reliability,
+      Engram.PromEx.Usage
     ]
   end
 
