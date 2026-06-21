@@ -11,4 +11,9 @@ defmodule Engram.Usage.DailyCap.CacheTest do
   test "unknown for never-marked keys" do
     assert :unknown = Cache.empty_until(12_345, "ext_search")
   end
+
+  test "returns :unknown after expiry" do
+    Cache.mark_empty(77, "inapp_search", 0)
+    assert :unknown = Cache.empty_until(77, "inapp_search")
+  end
 end
