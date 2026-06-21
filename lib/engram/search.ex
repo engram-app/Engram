@@ -310,4 +310,28 @@ defmodule Engram.Search do
       end
     end)
   end
+
+  @doc false
+  # Collapse ranked chunks to one representative per {vault_id, source_path}.
+  # The representative carries the highest-scoring chunk's score/vector/display
+  # fields; match_count is the number of chunks for that note in the input.
+  def collapse_to_notes(chunks) do
+    chunks
+    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
+    |> Enum.group_by(&{Map.get(&1, :vault_id), Map.fetch!(&1, :source_path)})
+    |> Enum.map(fn {{vault_id, path}, group} ->
+      best = Enum.max_by(group, & &1.score)
+
+      %{
+        source_path: path,
+        vault_id: vault_id,
+        title: Map.get(best, :title),
+        heading_path: Map.get(best, :heading_path),
+        text: Map.get(best, :text),
+        score: best.score,
+        vector: Map.get(best, :vector),
+        match_count: length(group)
+      }
+    end)
+  end
 end
