@@ -32,7 +32,7 @@ defmodule EngramWeb.HealthController do
 
   # ALB target group readiness probe. Only checks dependencies whose
   # absence makes EVERY request fail — Postgres is that one. Qdrant,
-  # Redis, S3 etc. stay OUT so a single dep outage cannot pull all tasks
+  # S3 etc. stay OUT so a single dep outage cannot pull all tasks
   # from rotation. Surface those via /api/health/diagnostics (auth-gated)
   # and per-dep CloudWatch/Grafana alarms.
   def deep(conn, _params) do
