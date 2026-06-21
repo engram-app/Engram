@@ -33,7 +33,6 @@ defmodule Engram.Application do
         Engram.Legal.VersionCache.Invalidator,
         EngramWeb.Presence,
         Engram.Crypto.DekCache,
-        cache_store_child(),
         Engram.UsageMeters.ActivityCache,
         Engram.Usage.DailyCap.Cache,
         Engram.Onboarding.TermsCache,
@@ -181,16 +180,6 @@ defmodule Engram.Application do
     end
   end
 
-  # Shared Redis/Valkey connection for the per-user caches (ActivityCache,
-  # TermsCache). Started only when the cache backend is :redis (REDIS_URL set,
-  # wired in runtime.exs); the ETS default needs no connection. Separate from
-  # the rate limiter's Hammer-managed connection — same URL, distinct pool.
-  defp cache_store_child do
-    if Engram.Cache.backend() == :redis do
-      {Engram.Cache.Redix, Application.get_env(:engram, Engram.Cache, [])}
-    end
-  end
-
   # One LISTEN/NOTIFY connection per node, shared by caches that subscribe
   # to Postgres triggers (OverrideCache today). auto_reconnect re-LISTENs
   # after a connection blip — Postgrex re-establishes the subscriptions on
@@ -215,15 +204,14 @@ defmodule Engram.Application do
     {Postgrex.Notifications, opts}
   end
 
-  # Start the concrete limiter matching the configured backend. ETS (default)
-  # needs only a clean_period; Redis needs connection opts (REDIS_URL, wired in
-  # runtime.exs). Same release artifact, runtime-selected — see EngramWeb.RateLimiter.
+  # Start the concrete limiter matching the configured backend. Both ETS backends
+  # need only a clean_period. Same release artifact, runtime-selected — see
+  # EngramWeb.RateLimiter.
   @doc false
   def rate_limiter_child do
     case EngramWeb.RateLimiter.backend() do
-      :redis ->
-        opts = Application.get_env(:engram, EngramWeb.RateLimiter.Redis, [])
-        {EngramWeb.RateLimiter.Redis, opts}
+      :distributed_ets ->
+        {EngramWeb.RateLimiter.DistributedETS, [clean_period: :timer.minutes(2)]}
 
       _ets ->
         {EngramWeb.RateLimiter.ETS, [clean_period: :timer.minutes(2)]}

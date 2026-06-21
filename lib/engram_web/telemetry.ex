@@ -228,32 +228,6 @@ defmodule EngramWeb.Telemetry do
           "Jobs that exhausted max_attempts and were dropped by Oban. Layer 3 surface — non-zero is a triage signal."
       ),
 
-      # Clustering-readiness — rate-limiter backend fail-open alert.
-      #
-      # The RateLimiter façade fails open and emits this event whenever the
-      # Redis backend is unreachable. Without this registration the "alert"
-      # half of fail-open+alert never reaches any reporter — a silently
-      # degraded limiter. Tag ONLY on :backend; :reason is inspect(reason)
-      # (unbounded-cardinality string) and stays as event metadata, never a
-      # metric tag.
-      counter("engram.rate_limiter.backend_error.count",
-        tags: [:backend],
-        description:
-          "Rate-limiter backend (Redis) unreachable — façade failed open and allowed the request. Non-zero means abuse protection is degraded; investigate the store."
-      ),
-
-      # Engram.Cache fails open and emits this whenever the Redis/Valkey store
-      # errors (per-user ActivityCache/TermsCache). As with the limiter above,
-      # this registration is what carries the "alert" half of fail-open+alert to
-      # a reporter — without it a degraded shared cache is silent. Tag on the
-      # bounded :cache (:activity|:terms) and :op (:get|:set); :reason is a
-      # bounded atom (Engram.Telemetry.error_kind/1) kept as event metadata.
-      counter("engram.cache.backend_error.count",
-        tags: [:cache, :op],
-        description:
-          "Per-user cache (Redis/Valkey) store error — façade failed open to the DB read-through. Non-zero means the shared cache is degraded; investigate the store."
-      ),
-
       # PR #244 — Paddle webhook reliability surfaces.
       #
       # Emitted via :telemetry.span/3 in EngramWeb.WebhookController.paddle/2.

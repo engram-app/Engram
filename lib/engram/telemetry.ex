@@ -7,13 +7,13 @@ defmodule Engram.Telemetry do
   Map an arbitrary failure reason to a bounded, log-safe atom for use as
   telemetry metadata.
 
-  **Security invariant — never forward the raw reason.** A Redix/connection
-  error term can carry the `REDIS_URL` (including its password), and a request
-  error can carry a Voyage Bearer token; telemetry metadata does **not** pass
-  through `Engram.Logger.RedactFilter`. Every caller that puts a failure reason
-  into telemetry metadata must route it through here so only a bounded atom (an
-  error class or exception module) escapes. The `is_atom/1` guard on the tuple
-  clause is load-bearing: a tuple whose leading element is not an atom (e.g.
+  **Security invariant — never forward the raw reason.** A connection error term
+  can carry secrets (passwords, API keys), and a request error can carry a
+  Voyage Bearer token; telemetry metadata does **not** pass through
+  `Engram.Logger.RedactFilter`. Every caller that puts a failure reason into
+  telemetry metadata must route it through here so only a bounded atom (an error
+  class or exception module) escapes. The `is_atom/1` guard on the tuple clause
+  is load-bearing: a tuple whose leading element is not an atom (e.g.
   `{"secret", _}`) falls through to `:other` rather than leaking the inner term.
   Only the leading tag escapes — every other element (a status body, bound
   params, a token) is dropped, whatever the tuple's size.

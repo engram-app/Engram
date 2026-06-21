@@ -32,7 +32,7 @@ defmodule EngramWeb.HealthController do
 
   # ALB target group readiness probe. Only checks dependencies whose
   # absence makes EVERY request fail — Postgres is that one. Qdrant,
-  # Redis, S3 etc. stay OUT so a single dep outage cannot pull all tasks
+  # S3 etc. stay OUT so a single dep outage cannot pull all tasks
   # from rotation. Surface those via /api/health/diagnostics (auth-gated)
   # and per-dep CloudWatch/Grafana alarms.
   def deep(conn, _params) do
@@ -59,7 +59,6 @@ defmodule EngramWeb.HealthController do
     checks = %{
       "postgres" => check_postgres(),
       "qdrant" => check_qdrant(),
-      "redis" => check_redis(),
       "s3" => check_s3(),
       "kms" => check_kms(),
       "voyage" => check_voyage(),
@@ -99,19 +98,6 @@ defmodule EngramWeb.HealthController do
     end
   rescue
     e -> "error: #{Exception.message(e)}"
-  end
-
-  defp check_redis do
-    case Engram.Cache.Redix.command(["PING"]) do
-      {:ok, "PONG"} -> "ok"
-      {:ok, _other} -> "error: unexpected_reply"
-      {:error, reason} -> "error: #{format_error(reason)}"
-    end
-  rescue
-    e -> "error: #{Exception.message(e)}"
-  catch
-    :exit, {:noproc, _} -> "error: not_started"
-    :exit, _reason -> "error: exit"
   end
 
   defp check_s3 do

@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.494",
+      version: "0.5.495",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -98,7 +98,6 @@ defmodule Engram.MixProject do
 
       # Rate limiting
       {:hammer, "~> 7.3"},
-      {:hammer_backend_redis, "~> 7.0"},
 
       # Telemetry & logging
       {:telemetry_metrics, "~> 1.0"},
