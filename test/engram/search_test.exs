@@ -575,6 +575,123 @@ defmodule Engram.SearchTest do
     end
   end
 
+  describe "search/4 diversity (MMR)" do
+    # Build a Qdrant point whose dense vector is preserved (Task 5) so MMR can
+    # measure inter-candidate similarity. text/title/heading are encrypted so
+    # the real decrypt path runs end-to-end.
+    defp diverse_point(user, vault, qid, score, vector, body) do
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: body, title: qid, heading_path: qid},
+          user,
+          "engram_notes",
+          qid
+        )
+
+      %{
+        "id" => qid,
+        "score" => score,
+        "vector" => %{"dense" => vector},
+        "payload" => %{
+          "text" => enc.text,
+          "title" => enc.title,
+          "heading_path" => enc.heading_path,
+          "text_nonce" => enc.text_nonce,
+          "title_nonce" => enc.title_nonce,
+          "heading_path_nonce" => enc.heading_path_nonce,
+          "aad_version" => enc.aad_version,
+          "source_path" => "#{qid}.md",
+          "tags" => [],
+          "user_id" => to_string(user.id),
+          "vault_id" => to_string(vault.id)
+        }
+      }
+    end
+
+    test "diversity: 1.0 opt pulls in a non-top-relevance candidate", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Two near-duplicate high-score chunks (vector [1,0]) and two orthogonal
+      # lower-score chunks (vector [0,1]). With diversity 1.0 + limit 2 MMR must
+      # pick one [1,0] then jump to a [0,1] (max marginal diversity).
+      points = [
+        diverse_point(user, vault, "a", 0.90, [1.0, 0.0], "near dup one"),
+        diverse_point(user, vault, "b", 0.89, [1.0, 0.0], "near dup two"),
+        diverse_point(user, vault, "c", 0.50, [0.0, 1.0], "diverse one"),
+        diverse_point(user, vault, "d", 0.40, [0.0, 1.0], "diverse two")
+      ]
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        # diversity > 0 must request vectors from Qdrant.
+        assert decoded["with_vector"] == ["dense"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points}))
+      end)
+
+      assert {:ok, results} = Search.search(user, vault, "q", limit: 2, diversity: 1.0)
+      assert length(results) == 2
+      paths = Enum.map(results, & &1.source_path)
+      assert "c.md" in paths or "d.md" in paths
+    end
+
+    test "diversity is clamped to [0,1] (>1 behaves like 1.0)", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      points = [
+        diverse_point(user, vault, "a", 0.90, [1.0, 0.0], "near dup one"),
+        diverse_point(user, vault, "b", 0.89, [1.0, 0.0], "near dup two"),
+        diverse_point(user, vault, "c", 0.50, [0.0, 1.0], "diverse one"),
+        diverse_point(user, vault, "d", 0.40, [0.0, 1.0], "diverse two")
+      ]
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points}))
+      end)
+
+      assert {:ok, results} = Search.search(user, vault, "q", limit: 2, diversity: 7.5)
+      paths = Enum.map(results, & &1.source_path)
+      assert "c.md" in paths or "d.md" in paths
+    end
+
+    test "default search (no diversity, free user) requests no vectors", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        # No diversity, free user, no reranker → with_vector must be absent/false.
+        refute decoded["with_vector"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      assert {:ok, []} = Search.search(user, vault, "q", limit: 2)
+    end
+  end
+
   describe "search/4 with encrypted vaults" do
     setup do
       Engram.Crypto.DekCache.invalidate_all()
