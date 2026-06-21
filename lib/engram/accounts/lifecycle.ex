@@ -167,6 +167,14 @@ defmodule Engram.Accounts.Lifecycle do
                skip_tenant_check: true
              )
 
+             # `usage_buckets` is a system table (no FK to users, so the cascade
+             # above does not reach it) — purge the user's rate-limit rows
+             # explicitly so they don't orphan on account deletion. Raw DELETE:
+             # the table has no Ecto schema and is written outside tenant scope.
+             Repo.query!("DELETE FROM usage_buckets WHERE user_id = $1::uuid", [
+               Ecto.UUID.dump!(user.id)
+             ])
+
              Repo.delete!(user, skip_tenant_check: true)
            end,
            skip_tenant_check: true

@@ -176,6 +176,27 @@ defmodule Engram.Accounts.LifecycleTest do
       assert String.length(hmac) == 64
     end
 
+    test "purges the user's usage_buckets rows (no FK, so cascade misses them)" do
+      user = insert(:user, external_id: nil)
+      uid = Ecto.UUID.dump!(user.id)
+
+      # Seed two operational rate-limit rows the cascade would otherwise orphan.
+      Repo.query!(
+        "INSERT INTO usage_buckets (user_id, kind, tokens, last_refill_at) VALUES ($1::uuid, $2, 9.0, now())",
+        [uid, "inapp_search"]
+      )
+
+      Repo.query!(
+        "INSERT INTO usage_buckets (user_id, kind, tokens, last_refill_at) VALUES ($1::uuid, $2, 5.0, now())",
+        [uid, "external_ai_search"]
+      )
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      assert %{rows: [[0]]} =
+               Repo.query!("SELECT count(*) FROM usage_buckets WHERE user_id = $1::uuid", [uid])
+    end
+
     test "with paddle sub + external_id: cancels Paddle + deletes Clerk + emits had_sub:true" do
       user = insert(:user, external_id: "user_clerk_xyz")
       sub = insert(:subscription, user: user, paddle_subscription_id: "sub_test_abc")
