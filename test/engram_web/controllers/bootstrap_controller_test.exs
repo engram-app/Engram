@@ -17,7 +17,9 @@ defmodule EngramWeb.BootstrapControllerTest do
   defp authed_conn(conn) do
     user = insert(:user, onboarding_profile: %{})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    grant_api_write!(user)
+    # No grant_api_write! — /api/bootstrap is GET-only and RequireApiWriteEnabled
+    # never gates GET/HEAD, so granting the paid feature here would wrongly flip
+    # the asserted free-tier api_write_enabled default (false) to true.
     {put_req_header(conn, "authorization", "Bearer #{raw_key}"), user}
   end
 
