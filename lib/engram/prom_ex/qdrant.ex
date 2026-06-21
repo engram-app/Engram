@@ -7,7 +7,7 @@ defmodule Engram.PromEx.Qdrant do
     * `[:engram, :qdrant, :request, :start]`
     * `[:engram, :qdrant, :request, :stop]` — `%{duration: native}`,
       metadata `%{op: atom, status: :ok | :error}` where `op` is one of
-      `:search | :upsert | :delete | :scroll | :ensure_collection | :set_payload | :collection_info`.
+      `:search | :upsert | :delete | :scroll | :ensure_collection | :create_payload_index | :set_payload | :collection_info`.
 
   Metrics:
 
