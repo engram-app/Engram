@@ -32,7 +32,8 @@ defmodule Engram.Search.SearchProfile do
       query_model: as_model(Billing.effective_limit(user, :search_query_model)),
       full_precision: as_bool(Billing.effective_limit(user, :search_full_precision)),
       reranker: as_bool(Billing.effective_limit(user, :reranker_enabled)),
-      diversity: as_int(Billing.effective_limit(user, :search_diversity), 0) / 100.0,
+      # fallback 30 = 0.3 default; self-host (:unlimited) gets MMR like every tier
+      diversity: as_int(Billing.effective_limit(user, :search_diversity), 30) / 100.0,
       candidate_pool: as_int(Billing.effective_limit(user, :search_candidate_pool), @default_pool)
     }
   end

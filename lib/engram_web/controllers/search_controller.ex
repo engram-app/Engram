@@ -107,8 +107,8 @@ defmodule EngramWeb.SearchController do
 
   defp maybe_put_diversity(opts, raw) do
     case Float.parse(to_string(raw)) do
-      {f, _} -> Keyword.put(opts, :diversity, f)
-      :error -> opts
+      {f, ""} -> Keyword.put(opts, :diversity, f)
+      _ -> opts
     end
   end
 

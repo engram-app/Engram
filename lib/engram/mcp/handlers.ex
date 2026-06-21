@@ -160,7 +160,7 @@ defmodule Engram.MCP.Handlers do
     description = args["description"] || ""
     limit = max(1, min(args["limit"] || 5, 10))
 
-    case Search.search(user, vault, description, limit: 10) do
+    case Search.search(user, vault, description, limit: 10, diversity: 0) do
       {:ok, results} when results != [] ->
         folder_counts =
           results
@@ -481,7 +481,7 @@ defmodule Engram.MCP.Handlers do
     if query == "" do
       ""
     else
-      case Search.search(user, vault, query, limit: 10) do
+      case Search.search(user, vault, query, limit: 10, diversity: 0) do
         {:ok, results} when results != [] ->
           folder_counts =
             results

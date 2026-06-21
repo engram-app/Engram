@@ -44,7 +44,9 @@ defmodule Engram.Search.MMR do
   defp mmr_score(item, selected, d) do
     max_sim =
       selected
-      |> Enum.map(fn s -> cosine(item.candidate.vector, s.candidate.vector) end)
+      |> Enum.map(fn s ->
+        cosine(Map.get(item.candidate, :vector), Map.get(s.candidate, :vector))
+      end)
       |> Enum.max(fn -> 0.0 end)
 
     (1.0 - d) * item.rel - d * max_sim

@@ -21,15 +21,6 @@ defmodule Engram.Search do
 
   defp reranker_active?, do: reranker() != Engram.Rerankers.None
 
-  # Pricing-v2 §G — rerank is a Pro-only feature. Even when an operator
-  # has globally configured Jina, Free + Starter users get the passthrough
-  # path (no extra candidate fetch, no Jina HTTP call). This is the
-  # server-side enforcement that lets the lint task remove
-  # `reranker_enabled` from its `@opt_outs`.
-  defp reranker_active_for?(user) do
-    reranker_active?() and Engram.Billing.check_feature(user, :reranker_enabled) == :ok
-  end
-
   defp query_embed_model, do: Application.get_env(:engram, :query_embed_model)
 
   defp embed_for_search(query, model) do
@@ -150,7 +141,7 @@ defmodule Engram.Search do
     # so MMR has more than `limit` to choose from. `candidate_pool` defaults to
     # 20 via the profile (SearchProfile.@default_pool).
     pool = max(limit * 4, profile.candidate_pool)
-    rerank_for_user? = reranker_active_for?(user)
+    rerank_for_user? = reranker_active?() and profile.reranker
     fetch_limit = if rerank_for_user? or need_vectors?, do: pool, else: limit
     # Keep the whole pool through the reranker when diversifying so MMR can see
     # it; otherwise the reranker cuts straight to `limit` (unchanged behavior).
