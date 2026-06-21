@@ -43,6 +43,10 @@ defmodule Engram.Application do
         # every node. Must start before OverrideCache.
         pg_notifications_child(),
         Engram.Billing.OverrideCache,
+        # Resolved-entitlement cache (tier + full LimitKeys matrix), keyed by
+        # user. Also LISTENs on user_limit_overrides_changed, so it must start
+        # after pg_notifications_child like OverrideCache.
+        Engram.Billing.EntitlementCache,
         Engram.Auth.SignupRejections,
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
