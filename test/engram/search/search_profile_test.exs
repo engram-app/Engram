@@ -22,10 +22,12 @@ defmodule Engram.Search.SearchProfileTest do
   test "free user (no plan) resolves to the off-by-default profile" do
     # insert_user/0 creates a user with no plan_id → falls through to
     # tier-default resolution (free tier) for all keys.
+    # search_diversity default is 30 (= 0.3): MMR is on by default as of the
+    # search-diversity-mmr feature branch.
     user = insert_user()
     p = SearchProfile.resolve(user)
 
-    assert p.diversity == 0.0
+    assert p.diversity == 0.3
     assert p.full_precision == false
     assert p.reranker == false
     assert p.candidate_pool == 20

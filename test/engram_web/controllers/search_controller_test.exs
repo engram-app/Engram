@@ -158,7 +158,10 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      conn = post(conn, "/api/search", %{query: "test", limit: 10})
+      # diversity: 0 disables MMR so the stub only sees the controller's
+      # grouping over-fetch (chunk_limit = note_limit * 4), not an MMR
+      # candidate-pool expansion on top. This isolates the grouping mechanic.
+      conn = post(conn, "/api/search", %{query: "test", limit: 10, diversity: "0"})
       assert %{"results" => []} = json_response(conn, 200)
     end
 
@@ -237,7 +240,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      conn = post(conn, "/api/search", %{query: "test", limit: 999})
+      # diversity: 0 isolates the controller's clamp + over-fetch mechanic from
+      # the MMR candidate-pool expansion that activates with the new 0.3 default.
+      conn = post(conn, "/api/search", %{query: "test", limit: 999, diversity: "0"})
       assert json_response(conn, 200)
     end
 
@@ -314,7 +319,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
       end)
 
-      conn = post(conn, "/api/search", %{query: "iron", limit: 5})
+      # diversity: 0 disables MMR so the stub doesn't need to supply vectors and
+      # the grouping/match_count mechanic is isolated from the MMR candidate path.
+      conn = post(conn, "/api/search", %{query: "iron", limit: 5, diversity: "0"})
       assert %{"results" => results} = json_response(conn, 200)
 
       # Two unique notes, sorted by best chunk score.
@@ -425,7 +432,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(result))
       end)
 
-      conn = post(conn, "/api/search", %{query: "note", limit: 3})
+      # diversity: 0 disables MMR (which requires vectors in stub results) so
+      # this test focuses purely on the note-limit enforcement after grouping.
+      conn = post(conn, "/api/search", %{query: "note", limit: 3, diversity: "0"})
       %{"results" => results} = json_response(conn, 200)
       assert length(results) == 3
     end

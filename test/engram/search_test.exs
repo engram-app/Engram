@@ -322,7 +322,10 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(resp))
       end)
 
-      assert {:ok, results} = Search.search(user, vault, "test query", limit: 2)
+      # diversity: 0.0 disables MMR so the Qdrant stub doesn't need to supply
+      # dense vectors — this test is specifically about reranker 4x over-fetch,
+      # not MMR candidate selection.
+      assert {:ok, results} = Search.search(user, vault, "test query", limit: 2, diversity: 0.0)
       assert length(results) == 2
       # Result 3 should be first (highest reranker score)
       assert hd(results).source_path == "test/note3.md"
@@ -390,7 +393,10 @@ defmodule Engram.SearchTest do
       # fail if the bypass receives a request; here we use Bypass.stub with
       # no expectation, and the test inherently fails Mox/Bypass if Jina is
       # hit (jina_bypass has no expect set up).
-      assert {:ok, [result]} = Search.search(user, vault, "test query", limit: 2)
+      # diversity: 0.0 isolates the §G reranker-skip gate from MMR (which with
+      # the new 0.3 default would over-fetch candidates and require vectors in
+      # the stub). This test's subject is "free user skips rerank", not MMR.
+      assert {:ok, [result]} = Search.search(user, vault, "test query", limit: 2, diversity: 0.0)
       assert result.source_path == "test/free.md"
     end
 
@@ -669,7 +675,7 @@ defmodule Engram.SearchTest do
       assert "c.md" in paths or "d.md" in paths
     end
 
-    test "default search (no diversity, free user) requests no vectors", %{
+    test "diversity 0 (explicit) requests no vectors", %{
       bypass: bypass,
       user: user,
       vault: vault
@@ -680,7 +686,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        # No diversity, free user, no reranker → with_vector must be absent/false.
+        # diversity 0, no reranker → MMR skipped → with_vector must be absent/false.
         refute decoded["with_vector"]
 
         conn
@@ -688,7 +694,30 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "q", limit: 2)
+      assert {:ok, []} = Search.search(user, vault, "q", limit: 2, diversity: 0.0)
+    end
+
+    test "default search (no diversity opt) requests with_vector: [\"dense\"] — MMR on by default",
+         %{bypass: bypass, user: user, vault: vault} do
+      # profile.diversity is now 30 (= 0.3) for all tiers, so a plain
+      # Search.search/3 with no diversity opt activates MMR and must request
+      # dense vectors from Qdrant so MMR can measure inter-candidate similarity.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["with_vector"] == ["dense"],
+               "expected with_vector: [\"dense\"] for default search (MMR on by default), got: #{inspect(decoded["with_vector"])}"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      assert {:ok, []} = Search.search(user, vault, "q")
     end
   end
 
