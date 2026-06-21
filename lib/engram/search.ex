@@ -130,6 +130,8 @@ defmodule Engram.Search do
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
 
+    # On the grouped path `limit` is the NOTE count, not the chunk count.
+    group? = Keyword.get(opts, :group_by_note, false)
     profile = SearchProfile.resolve(user)
     # Caller `:diversity` opt overrides the profile default; nil → profile
     # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ we need the
@@ -142,10 +144,15 @@ defmodule Engram.Search do
     # 20 via the profile (SearchProfile.@default_pool).
     pool = max(limit * 4, profile.candidate_pool)
     rerank_for_user? = reranker_active?() and profile.reranker
-    fetch_limit = if rerank_for_user? or need_vectors?, do: pool, else: limit
-    # Keep the whole pool through the reranker when diversifying so MMR can see
-    # it; otherwise the reranker cuts straight to `limit` (unchanged behavior).
-    rerank_keep = if need_vectors?, do: pool, else: limit
+    # Grouped path ALWAYS over-fetches the pool: grouping needs more than
+    # `note_limit` chunks to populate `note_limit` notes, and the full pool must
+    # also survive the reranker so collapse_to_notes sees every candidate (even
+    # at diversity 0, where it must not be starved down to `limit` chunks).
+    fetch_limit = if group? or rerank_for_user? or need_vectors?, do: pool, else: limit
+    # Keep the whole pool through the reranker when diversifying or grouping so
+    # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
+    # (unchanged chunk-path behavior).
+    rerank_keep = if group? or need_vectors?, do: pool, else: limit
 
     case translate_phase_b_filters(user, folder, tags) do
       {:ok, phase_b_kw} ->
@@ -168,8 +175,24 @@ defmodule Engram.Search do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
           with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
-            diversified = MMR.rerank(ranked, limit, diversity)
-            {:ok, rehydrate_display_fields(diversified, user)}
+            if group? do
+              # Rehydrate the WHOLE pool BEFORE grouping — collapse_to_notes keys
+              # on the decrypted source_path, so it must be filled in first. Then
+              # diversify at note granularity.
+              notes = collapse_to_notes(rehydrate_display_fields(ranked, user))
+
+              final =
+                if need_vectors? do
+                  MMR.rerank(notes, limit, diversity)
+                else
+                  notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)
+                end
+
+              {:ok, final}
+            else
+              diversified = MMR.rerank(ranked, limit, diversity)
+              {:ok, rehydrate_display_fields(diversified, user)}
+            end
           end
         end
 
