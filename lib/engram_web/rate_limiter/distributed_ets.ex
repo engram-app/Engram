@@ -31,33 +31,27 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
     @moduledoc false
     use GenServer
 
+    alias EngramWeb.RateLimiter.DistributedETS.Local
+
     def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
     @impl true
-    def init(_opts) do
-      :ok =
-        Phoenix.PubSub.subscribe(
-          EngramWeb.RateLimiter.DistributedETS.pubsub(),
-          EngramWeb.RateLimiter.DistributedETS.topic()
-        )
-
+    def init(opts) do
+      pubsub = Keyword.fetch!(opts, :pubsub)
+      topic = Keyword.fetch!(opts, :topic)
+      :ok = Phoenix.PubSub.subscribe(pubsub, topic)
       {:ok, %{}}
     end
 
     # Remote increment → apply to the local ETS counter WITHOUT re-broadcasting.
     @impl true
     def handle_info({:inc, key, scale, increment}, state) do
-      _ = EngramWeb.RateLimiter.DistributedETS.Local.inc(key, scale, increment)
+      _ = Local.inc(key, scale, increment)
       {:noreply, state}
     end
 
     def handle_info(_msg, state), do: {:noreply, state}
   end
-
-  @doc false
-  def pubsub, do: @pubsub
-  @doc false
-  def topic, do: @topic
 
   @spec hit(String.t(), pos_integer(), non_neg_integer(), non_neg_integer()) ::
           {:allow, non_neg_integer()} | {:deny, non_neg_integer()}
@@ -81,7 +75,7 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
   end
 
   def start_link(opts) do
-    children = [{Local, opts}, Listener]
+    children = [{Local, opts}, {Listener, pubsub: @pubsub, topic: @topic}]
     Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__.Supervisor)
   end
 end
