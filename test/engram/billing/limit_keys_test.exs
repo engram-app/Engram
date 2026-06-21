@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 27 catalog keys" do
+    test "returns the 31 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 27
+      assert length(keys) == 31
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -100,9 +100,9 @@ defmodule Engram.Billing.LimitKeysTest do
   end
 
   describe "env_var_names/0" do
-    test "emits 81 tuples (27 keys × 3 tiers)" do
+    test "emits 93 tuples (31 keys × 3 tiers)" do
       tuples = LimitKeys.env_var_names()
-      assert length(tuples) == 81
+      assert length(tuples) == 93
     end
 
     test "includes ENGRAM_FREE_NOTES_CAP" do
@@ -150,5 +150,24 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:attachments_text_only, :free) == true
     assert LimitKeys.default_for(:attachments_text_only, :starter) == false
     assert LimitKeys.default_for(:attachments_text_only, :pro) == false
+  end
+
+  test "search dial keys are defined with correct types" do
+    alias Engram.Billing.LimitKeys
+    assert LimitKeys.defined?(:search_full_precision)
+    assert LimitKeys.type(:search_full_precision) == :boolean
+    assert LimitKeys.type(:search_diversity) == :integer
+    assert LimitKeys.type(:search_candidate_pool) == :integer
+    assert LimitKeys.type(:search_query_model) == :string
+  end
+
+  test "search dial defaults match the spec" do
+    alias Engram.Billing.LimitKeys
+    assert LimitKeys.default_for(:search_diversity, :free) == 0
+    assert LimitKeys.default_for(:search_diversity, :pro) == 0
+    assert LimitKeys.default_for(:search_candidate_pool, :free) == 20
+    assert LimitKeys.default_for(:search_candidate_pool, :pro) == 30
+    assert LimitKeys.default_for(:search_full_precision, :pro) == false
+    assert LimitKeys.default_for(:search_query_model, :pro) == nil
   end
 end

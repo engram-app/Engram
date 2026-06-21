@@ -62,4 +62,16 @@ defmodule Engram.Billing.EnvLimitsTest do
       end
     end
   end
+
+  describe "parse!/3 — :string" do
+    test "parse! accepts a string value for :string keys" do
+      assert EnvLimits.parse!("voyage-4-large", :string, "ENV") == "voyage-4-large"
+    end
+
+    test "parse! rejects an empty string for :string keys" do
+      assert_raise ArgumentError, fn ->
+        EnvLimits.parse!("", :string, "ENGRAM_PRO_SEARCH_QUERY_MODEL")
+      end
+    end
+  end
 end
