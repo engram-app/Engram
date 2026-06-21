@@ -45,7 +45,7 @@ defmodule Engram.Usage.DailyCap do
   """
 
   defp do_spend(user_id, kind, capacity, refill_per_sec) do
-    {:ok, user_id_bin} = Ecto.UUID.dump(user_id)
+    user_id_bin = Ecto.UUID.dump!(user_id)
 
     case Repo.query(@sql, [user_id_bin, kind, capacity * 1.0, refill_per_sec]) do
       {:ok, %{rows: [[tokens]]}} ->
