@@ -140,7 +140,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert is_binary(hit["id"])
     end
 
-    test "over-fetches chunks so grouping can return the requested number of notes",
+    test "Search over-fetches a candidate pool so grouping can return the requested number of notes",
          %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
@@ -148,9 +148,8 @@ defmodule EngramWeb.SearchControllerTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
-        # Client requests 10 notes → controller asks Qdrant for 40 chunks
-        # (10 * @overfetch_factor) so multiple chunks per note don't cap
-        # the visible result set below 10 notes.
+        # Client requests 10 notes → Search asks Qdrant for max(10*4, 20)=40
+        # candidates so collapse_to_notes has enough chunks to populate 10 notes.
         assert decoded["limit"] == 40
 
         c
@@ -158,7 +157,10 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      conn = post(conn, "/api/search", %{query: "test", limit: 10})
+      # diversity: 0 disables MMR so the stub only sees the Search
+      # grouping pool expansion (max(note_limit*4, 20)), not an MMR
+      # candidate-pool expansion on top. This isolates the grouping mechanic.
+      conn = post(conn, "/api/search", %{query: "test", limit: 10, diversity: "0"})
       assert %{"results" => []} = json_response(conn, 200)
     end
 
@@ -222,14 +224,17 @@ defmodule EngramWeb.SearchControllerTest do
       assert json_response(conn, 422)
     end
 
-    test "clamps note limit then over-fetches chunks", %{conn: conn, bypass: bypass} do
+    test "clamps note limit; Search over-fetches a candidate pool for grouping", %{
+      conn: conn,
+      bypass: bypass
+    } do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
-        # 999 notes → clamped to 50 → 50 * 4 = 200 chunks asked of Qdrant.
+        # 999 notes → clamped to 50 → Search asks Qdrant for max(50*4, 20)=200 candidates.
         assert decoded["limit"] == 200
 
         c
@@ -237,7 +242,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      conn = post(conn, "/api/search", %{query: "test", limit: 999})
+      # diversity: 0 isolates the controller clamp + Search pool sizing from
+      # the MMR candidate-pool expansion that activates with the new 0.3 default.
+      conn = post(conn, "/api/search", %{query: "test", limit: 999, diversity: "0"})
       assert json_response(conn, 200)
     end
 
@@ -284,14 +291,14 @@ defmodule EngramWeb.SearchControllerTest do
       assert %{"results" => []} = json_response(conn, 200)
     end
 
-    test "groups repeated chunks from the same note into one result with match_count",
+    test "Search groups repeated chunks from the same note into one result with match_count",
          %{conn: conn, bypass: bypass, user: user} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       # Three top hits all point at the same note plus one different note —
-      # before the over-fetch + group_by_note fix, repeated chunks would
-      # crowd out the second note even though there were enough candidates.
+      # Search.collapse_to_notes groups them by {vault_id, source_path} and
+      # keeps the best chunk's score as the representative, with match_count.
       qdrant_result = %{
         "result" => [
           chunk("uuid-a1", 0.95, "Health/Iron Panel.md", "Iron Panel", "Ferritin section.", user),
@@ -314,7 +321,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
       end)
 
-      conn = post(conn, "/api/search", %{query: "iron", limit: 5})
+      # diversity: 0 disables MMR so the stub doesn't need to supply vectors;
+      # Search.collapse_to_notes runs without MMR reranking — isolates grouping.
+      conn = post(conn, "/api/search", %{query: "iron", limit: 5, diversity: "0"})
       assert %{"results" => results} = json_response(conn, 200)
 
       # Two unique notes, sorted by best chunk score.
@@ -330,7 +339,77 @@ defmodule EngramWeb.SearchControllerTest do
       assert vitd["match_count"] == 1
     end
 
-    test "honors the requested note limit when more unique notes are available",
+    test "passes diversity=0.5 to Search — Qdrant query requests vectors (MMR path)", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        decoded = Jason.decode!(body)
+        # diversity > 0 triggers the MMR path: Search requests dense vectors from
+        # Qdrant so MMR can compare cosine similarity between candidates.
+        assert decoded["with_vector"] == ["dense"],
+               "expected with_vector: [\"dense\"] when diversity=0.5, got: #{inspect(decoded["with_vector"])}"
+
+        # Return a valid point with a dense vector so the MMR pipeline succeeds.
+        points = [diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result")]
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "0.5"})
+      assert json_response(conn, 200)
+    end
+
+    test "out-of-range diversity=5 is clamped downstream — still returns 200", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # diversity=5 is parsed as a float and passed to Search; Search clamps it
+      # to 1.0. The request is still valid and returns a 200 with results.
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, _body, c} = Plug.Conn.read_body(c)
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "5"})
+      assert json_response(conn, 200)
+    end
+
+    test "unparseable diversity is silently ignored — still returns 200", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # diversity="not-a-float" → parse error → key omitted → profile default
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, _body, c} = Plug.Conn.read_body(c)
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      end)
+
+      conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "not-a-float"})
+      assert json_response(conn, 200)
+    end
+
+    test "honors the requested note limit — Search returns at most note_limit note-reps",
          %{conn: conn, bypass: bypass, user: user} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
@@ -355,7 +434,9 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(result))
       end)
 
-      conn = post(conn, "/api/search", %{query: "note", limit: 3})
+      # diversity: 0 disables MMR (which requires vectors in stub results);
+      # Search groups chunks → note-reps and returns at most note_limit=3.
+      conn = post(conn, "/api/search", %{query: "note", limit: 3, diversity: "0"})
       %{"results" => results} = json_response(conn, 200)
       assert length(results) == 3
     end
@@ -398,5 +479,37 @@ defmodule EngramWeb.SearchControllerTest do
     |> Engram.Vaults.list_vaults()
     |> Enum.find(& &1.is_default)
     |> Map.fetch!(:id)
+  end
+
+  # Like `chunk/6` but includes a dense vector so the MMR path can run
+  # (diversity > 0 requests `with_vector: ["dense"]` from Qdrant and MMR
+  # then calls cosine similarity on the returned vectors).
+  defp diverse_chunk(user, vault, qid, score, vector, text) do
+    {:ok, enc} =
+      Engram.Crypto.encrypt_qdrant_payload(
+        %{text: text, title: qid, heading_path: qid},
+        user,
+        "engram_notes",
+        qid
+      )
+
+    %{
+      "id" => qid,
+      "score" => score,
+      "vector" => %{"dense" => vector},
+      "payload" => %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
+        "source_path" => "#{qid}.md",
+        "tags" => [],
+        "user_id" => to_string(user.id),
+        "vault_id" => to_string(vault.id)
+      }
+    }
   end
 end

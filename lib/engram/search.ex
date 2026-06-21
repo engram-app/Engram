@@ -9,9 +9,9 @@ defmodule Engram.Search do
   """
 
   alias Engram.KeywordIndex
+  alias Engram.Search.MMR
+  alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
-
-  @min_candidates 20
 
   defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
 
@@ -21,23 +21,16 @@ defmodule Engram.Search do
 
   defp reranker_active?, do: reranker() != Engram.Rerankers.None
 
-  # Pricing-v2 §G — rerank is a Pro-only feature. Even when an operator
-  # has globally configured Jina, Free + Starter users get the passthrough
-  # path (no extra candidate fetch, no Jina HTTP call). This is the
-  # server-side enforcement that lets the lint task remove
-  # `reranker_enabled` from its `@opt_outs`.
-  defp reranker_active_for?(user) do
-    reranker_active?() and Engram.Billing.check_feature(user, :reranker_enabled) == :ok
-  end
-
   defp query_embed_model, do: Application.get_env(:engram, :query_embed_model)
 
-  defp embed_for_search(query) do
+  defp embed_for_search(query, model) do
     # `purpose: :query` routes through a separate Voyage rate-limit bucket
-    # so a bulk indexing burst can't starve synchronous user search.
-    case query_embed_model() do
+    # so a bulk indexing burst can't starve synchronous user search. `model`
+    # comes from the per-user SearchProfile; nil falls back to the global
+    # query-embed model (or the embedder default when that too is unset).
+    case model || query_embed_model() do
       nil -> embedder().embed_texts([query], purpose: :query)
-      model -> embedder().embed_texts([query], model: model, purpose: :query)
+      m -> embedder().embed_texts([query], model: m, purpose: :query)
     end
   end
 
@@ -137,9 +130,29 @@ defmodule Engram.Search do
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
 
-    # Fetch more candidates when reranking is active for THIS user (per-plan).
-    rerank_for_user? = reranker_active_for?(user)
-    fetch_limit = if rerank_for_user?, do: max(limit * 4, @min_candidates), else: limit
+    # On the grouped path `limit` is the NOTE count, not the chunk count.
+    group? = Keyword.get(opts, :group_by_note, false)
+    profile = SearchProfile.resolve(user)
+    # Caller `:diversity` opt overrides the profile default; nil → profile
+    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ we need the
+    # dense vectors back from Qdrant.
+    diversity = clamp_diversity(Keyword.get(opts, :diversity), profile.diversity)
+    need_vectors? = diversity > 0.0
+
+    # Over-fetch a candidate pool whenever we'll rerank (per-plan) OR diversify,
+    # so MMR has more than `limit` to choose from. `candidate_pool` defaults to
+    # 20 via the profile (SearchProfile.@default_pool).
+    pool = max(limit * 4, profile.candidate_pool)
+    rerank_for_user? = reranker_active?() and profile.reranker
+    # Grouped path ALWAYS over-fetches the pool: grouping needs more than
+    # `note_limit` chunks to populate `note_limit` notes, and the full pool must
+    # also survive the reranker so collapse_to_notes sees every candidate (even
+    # at diversity 0, where it must not be starved down to `limit` chunks).
+    fetch_limit = if group? or rerank_for_user? or need_vectors?, do: pool, else: limit
+    # Keep the whole pool through the reranker when diversifying or grouping so
+    # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
+    # (unchanged chunk-path behavior).
+    rerank_keep = if group? or need_vectors?, do: pool, else: limit
 
     case translate_phase_b_filters(user, folder, tags) do
       {:ok, phase_b_kw} ->
@@ -147,8 +160,10 @@ defmodule Engram.Search do
           [user_id: to_string(user.id), limit: fetch_limit]
           |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
           |> Keyword.merge(phase_b_kw)
+          |> Keyword.put(:with_vector, need_vectors?)
+          |> Keyword.put(:full_precision, profile.full_precision)
 
-        with {:ok, candidates} <- run_legs(mode, user, query, search_opts),
+        with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <-
                Engram.Crypto.decrypt_qdrant_candidates(
@@ -159,8 +174,25 @@ defmodule Engram.Search do
                ) do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
-          with {:ok, ranked} <- rerank_module.rerank(query, decrypted, limit) do
-            {:ok, rehydrate_display_fields(ranked, user)}
+          with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
+            if group? do
+              # Rehydrate the WHOLE pool BEFORE grouping — collapse_to_notes keys
+              # on the decrypted source_path, so it must be filled in first. Then
+              # diversify at note granularity.
+              notes = collapse_to_notes(rehydrate_display_fields(ranked, user))
+
+              final =
+                if need_vectors? do
+                  MMR.rerank(notes, limit, diversity)
+                else
+                  notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)
+                end
+
+              {:ok, final}
+            else
+              diversified = MMR.rerank(ranked, limit, diversity)
+              {:ok, rehydrate_display_fields(diversified, user)}
+            end
           end
         end
 
@@ -172,15 +204,25 @@ defmodule Engram.Search do
     end
   end
 
+  # nil → use the profile default; a number is clamped to [0.0, 1.0] and forced
+  # to a float (MMR's diversity==0.0 short-circuit relies on a float compare);
+  # anything else (defensive) → 0.0 (no diversity).
+  defp clamp_diversity(nil, default), do: clamp_diversity(default, 0.0)
+
+  defp clamp_diversity(v, _default) when is_number(v),
+    do: v |> max(0.0) |> min(1.0) |> :erlang.float()
+
+  defp clamp_diversity(_other, _default), do: 0.0
+
   # Vector leg: embed query → dense Qdrant search (existing behavior preserved).
-  defp run_legs(:vector, _user, query, search_opts) do
-    with {:ok, [vector]} <- embed_for_search(query) do
+  defp run_legs(:vector, _user, query, search_opts, profile) do
+    with {:ok, [vector]} <- embed_for_search(query, profile.query_model) do
       Qdrant.search(collection(), vector, search_opts)
     end
   end
 
   # Keyword leg: HMAC the query tokens → sparse Qdrant search. No DEK → empty.
-  defp run_legs(:keyword, user, query, search_opts) do
+  defp run_legs(:keyword, user, query, search_opts, _profile) do
     case sparse_query(user, query) do
       {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
       :no_vault -> {:ok, []}
@@ -190,8 +232,8 @@ defmodule Engram.Search do
   # Hybrid: dense + sparse fused server-side. No-DEK or empty-query degrades to
   # vector-only. Embedding failure (backend down/rate-limited) degrades to
   # keyword-only rather than failing a search the keyword leg could still serve.
-  defp run_legs(:hybrid, user, query, search_opts) do
-    case embed_for_search(query) do
+  defp run_legs(:hybrid, user, query, search_opts, profile) do
+    case embed_for_search(query, profile.query_model) do
       {:ok, [vector]} ->
         case sparse_query(user, query) do
           {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
@@ -289,6 +331,30 @@ defmodule Engram.Search do
         nil ->
           result
       end
+    end)
+  end
+
+  @doc false
+  # Collapse ranked chunks to one representative per {vault_id, source_path}.
+  # The representative carries the highest-scoring chunk's score/vector/display
+  # fields; match_count is the number of chunks for that note in the input.
+  def collapse_to_notes(chunks) do
+    chunks
+    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
+    |> Enum.group_by(&{Map.get(&1, :vault_id), Map.fetch!(&1, :source_path)})
+    |> Enum.map(fn {{vault_id, path}, group} ->
+      best = Enum.max_by(group, & &1.score)
+
+      %{
+        source_path: path,
+        vault_id: vault_id,
+        title: Map.get(best, :title),
+        heading_path: Map.get(best, :heading_path),
+        text: Map.get(best, :text),
+        score: best.score,
+        vector: Map.get(best, :vector),
+        match_count: length(group)
+      }
     end)
   end
 end

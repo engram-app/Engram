@@ -460,6 +460,7 @@
       },
       "SearchRequest": {
         "example": {
+          "diversity": 0.3,
           "limit": 5,
           "mode": "hybrid",
           "query": "omega-3 dosage"
@@ -468,6 +469,14 @@
           "cross_vault": {
             "description": "Pro plan only.",
             "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "diversity": {
+            "description": "Result diversity (MMR). 0 = most relevant (default, tuned per plan); 1 = most varied.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },

@@ -12,13 +12,21 @@ defmodule EngramWeb.Schemas.SearchRequest do
       tags: %Schema{type: :array, items: %Schema{type: :string}},
       folder: %Schema{type: :string},
       mode: %Schema{type: :string, enum: ["keyword", "vector", "hybrid"]},
-      cross_vault: %Schema{type: :boolean, description: "Pro plan only."}
+      cross_vault: %Schema{type: :boolean, description: "Pro plan only."},
+      diversity: %Schema{
+        type: :number,
+        minimum: 0.0,
+        maximum: 1.0,
+        description:
+          "Result diversity (MMR). 0 = most relevant (default, tuned per plan); 1 = most varied."
+      }
     },
     required: [:query],
     example: %{
       "query" => "omega-3 dosage",
       "limit" => 5,
-      "mode" => "hybrid"
+      "mode" => "hybrid",
+      "diversity" => 0.3
     }
   })
 end

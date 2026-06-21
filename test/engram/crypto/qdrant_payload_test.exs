@@ -352,5 +352,27 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       assert log =~ "error_kind=no_dek"
       assert log =~ "user_id=#{user.id}"
     end
+
+    test "preserves :vector field through decryption (regression guard)", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      # :vector is added by the Qdrant client before ranking (Task 4 in the
+      # MMR search-diversity wave). decrypt_qdrant_candidates must merge
+      # decrypted fields onto the original candidate map, not rebuild it,
+      # so that :vector and any other passthrough keys survive intact.
+      cand_with_vector = Map.put(enc, :vector, [0.1, 0.2, 0.3])
+
+      assert {:ok, [out]} =
+               Crypto.decrypt_qdrant_candidates(
+                 [cand_with_vector],
+                 user,
+                 vaults,
+                 "test_collection"
+               )
+
+      assert out.vector == [0.1, 0.2, 0.3]
+    end
   end
 end

@@ -79,7 +79,12 @@ defmodule Engram.Billing.LimitKeys do
     account_export_max_bytes: %{
       type: :integer,
       defaults: %{free: 1_000_000_000, starter: 200_000_000_000, pro: 200_000_000_000}
-    }
+    },
+    # Search-quality dials (per-tier, live-tunable via SearchProfile)
+    search_full_precision: %{type: :boolean, defaults: %{free: false, starter: false, pro: false}},
+    search_diversity: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
+    search_candidate_pool: %{type: :integer, defaults: %{free: 20, starter: 20, pro: 30}},
+    search_query_model: %{type: :string, defaults: %{free: nil, starter: nil, pro: nil}}
   }
 
   @keys Map.keys(@catalog)
@@ -95,10 +100,10 @@ defmodule Engram.Billing.LimitKeys do
   def defined?(key) when is_atom(key), do: key in @keys
   def defined?(_), do: false
 
-  @spec type(atom()) :: :integer | :boolean
+  @spec type(atom()) :: :integer | :boolean | :string
   def type(key) when key in @keys, do: @catalog |> Map.fetch!(key) |> Map.fetch!(:type)
 
-  @spec default_for(atom(), atom()) :: integer() | boolean() | nil
+  @spec default_for(atom(), atom()) :: integer() | boolean() | String.t() | nil
   def default_for(key, tier) when key in @keys and tier in @tiers,
     do: @catalog |> Map.fetch!(key) |> Map.fetch!(:defaults) |> Map.fetch!(tier)
 
