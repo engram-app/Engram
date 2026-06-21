@@ -3,10 +3,9 @@ defmodule EngramWeb.Plugs.EnforceSearchCapTest do
 
   alias EngramWeb.Plugs.EnforceSearchCap
 
-  setup do
-    EngramWeb.RateLimiter.reset_buckets!()
-    :ok
-  end
+  # The DB sandbox resets `usage_buckets` per test. Note DailyCap's ETS
+  # empty-verdict cache is global and NOT sandboxed — isolation there comes
+  # from each `insert(:user)` minting a unique UUID, so cache keys never collide.
 
   describe "EnforceSearchCap" do
     setup %{conn: conn} do
