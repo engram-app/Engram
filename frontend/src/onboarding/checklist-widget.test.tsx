@@ -127,7 +127,7 @@ describe('ChecklistWidget — per-tool rows', () => {
     expect(screen.getByText(/connect cursor/i)).toBeInTheDocument()
   })
 
-  it('auto-clears a tool row when a matching MCP connection exists', () => {
+  it('keeps a tool row visible (struck through) when a matching MCP connection exists', () => {
     onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude', 'cursor'] }
     connectionsValue = {
       data: [
@@ -155,7 +155,13 @@ describe('ChecklistWidget — per-tool rows', () => {
     }
     render(wrap(<ChecklistWidget onStartTour={() => {}} />))
 
-    expect(screen.queryByText(/connect claude/i)).not.toBeInTheDocument()
+    // Completed row stays — checked off, struck through, no actions — rather
+    // than vanishing (#604).
+    const claude = screen.getByText(/connect claude/i)
+    expect(claude).toBeInTheDocument()
+    expect(claude).toHaveClass('line-through')
+    expect(claude).toHaveTextContent('☑')
+    expect(screen.queryByLabelText(/dismiss connect claude/i)).toBeNull()
     expect(screen.getByText(/connect cursor/i)).toBeInTheDocument()
   })
 
@@ -221,7 +227,7 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
     expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
   })
 
-  it('hides the Obsidian row when an obsidian connection exists', () => {
+  it('keeps the Obsidian row visible (struck through) when an obsidian connection exists', () => {
     onboardingStatusValue.data!.profile = { uses_obsidian: true, tools: [] }
     connectionsValue = {
       data: [
@@ -240,7 +246,10 @@ describe('ChecklistWidget — Obsidian plugin row', () => {
     }
     render(wrap(<ChecklistWidget onStartTour={() => {}} />))
 
-    expect(screen.queryByText(/install.*obsidian/i)).toBeNull()
+    // Completed install row stays, struck through (#604).
+    const row = screen.getByText(/install.*obsidian/i)
+    expect(row).toBeInTheDocument()
+    expect(row).toHaveClass('line-through')
   })
 })
 
@@ -338,6 +347,58 @@ describe('ChecklistWidget — hide when empty', () => {
 
     const { container } = render(wrap(<ChecklistWidget onStartTour={() => {}} />))
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('ChecklistWidget — completed rows stay visible (#604)', () => {
+  it('renders a completed row checked off, struck through, with no action buttons', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude', 'cursor'] }
+    connectionsValue = {
+      data: [
+        {
+          kind: 'mcp', slug: 'claude', client_id: 'c1', key_id: null,
+          name: 'Claude', software_id: null, software_version: null,
+          verified: true, logo: null, vault_id: null, vault_name: null,
+          scope: 'mcp', last_used_at: null, connected_at: null,
+          first_user_agent: null, first_ip: null,
+          redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+        },
+      ],
+      isLoading: false,
+    }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    const claude = screen.getByText(/connect claude/i)
+    expect(claude).toHaveClass('line-through')
+    expect(claude).toHaveClass('text-muted-foreground')
+    expect(claude).toHaveTextContent('☑')
+
+    // Action affordances are suppressed on the completed row: only the
+    // still-active cursor row keeps its Setup guide link + dismiss button.
+    expect(screen.queryByLabelText(/dismiss connect claude/i)).toBeNull()
+    expect(screen.getAllByRole('link', { name: /setup guide/i })).toHaveLength(1)
+  })
+
+  it('counts a completed row in the progress readout while keeping it visible', () => {
+    onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ['claude', 'cursor'] }
+    connectionsValue = {
+      data: [
+        {
+          kind: 'mcp', slug: 'claude', client_id: 'c1', key_id: null,
+          name: 'Claude', software_id: null, software_version: null,
+          verified: true, logo: null, vault_id: null, vault_name: null,
+          scope: 'mcp', last_used_at: null, connected_at: null,
+          first_user_agent: null, first_ip: null,
+          redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+        },
+      ],
+      isLoading: false,
+    }
+    render(wrap(<ChecklistWidget onStartTour={() => {}} />))
+
+    // vault + tour + claude + cursor = 4 items, claude done = 1.
+    expect(screen.getByText(/1 of 4 done/i)).toBeInTheDocument()
+    expect(screen.getByText(/connect claude/i)).toBeInTheDocument()
   })
 })
 

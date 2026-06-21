@@ -19,7 +19,11 @@ interface Props {
 interface Item {
   key: string
   label: string
+  // `done` = genuinely completed (vault created, MCP/obsidian connection
+  // resolved). Completed rows stay visible, struck through. Dismissal is a
+  // separate user action (`dismissed`) that removes the row entirely.
   done: boolean
+  dismissed?: boolean
   docUrl?: string
   startTour?: () => void
   dismissible?: boolean
@@ -123,7 +127,8 @@ export function ChecklistWidget({ onStartTour }: Props) {
           {
             key: 'install_obsidian_plugin',
             label: 'Install the Obsidian plugin',
-            done: hasObsidianConnection || isDismissed('install_obsidian_plugin'),
+            done: hasObsidianConnection,
+            dismissed: isDismissed('install_obsidian_plugin'),
             docUrl: DOC_URLS.install_obsidian_plugin,
             dismissible: true,
           } as Item,
@@ -134,7 +139,10 @@ export function ChecklistWidget({ onStartTour }: Props) {
           {
             key: 'tour',
             label: 'Take the tour',
-            done: isDismissed('tour'),
+            // No in-row completion signal — `tour_completed` removes the row
+            // structurally (guard above). Only dismissal hides it here.
+            done: false,
+            dismissed: isDismissed('tour'),
             startTour: onStartTour,
             dismissible: true,
           } as Item,
@@ -144,16 +152,21 @@ export function ChecklistWidget({ onStartTour }: Props) {
       (slug): Item => ({
         key: slug,
         label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
-        done: isDismissed(slug) || connectedSlugs.has(slug),
+        done: connectedSlugs.has(slug),
+        dismissed: isDismissed(slug),
         docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
         dismissible: true,
       }),
     ),
   ]
 
-  const visible = items.filter((i) => !i.done)
+  // Dismissed rows are removed entirely (the × is "hide this"). Completed rows
+  // stay visible — struck through — so progress is felt, not silently erased.
+  // The whole widget retires only once nothing is left to act on.
+  const visible = items.filter((i) => !i.dismissed)
+  const hasActionable = items.some((i) => !i.done && !i.dismissed)
 
-  if (visible.length === 0) return null
+  if (!hasActionable) return null
 
   if (collapsed) {
     return (
@@ -172,7 +185,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
   }
 
   const total = items.length
-  const completed = items.filter((i) => i.done).length
+  const completed = items.filter((i) => i.done || i.dismissed).length
   const pct = total === 0 ? 0 : Math.round((completed / total) * 100)
 
   return (
@@ -213,33 +226,42 @@ export function ChecklistWidget({ onStartTour }: Props) {
             key={i.key}
             className="flex items-center justify-between gap-2 text-sm"
           >
-            <span className="flex items-center gap-2">
-              <span aria-hidden>☐</span>
+            <span
+              className={
+                i.done
+                  ? 'flex items-center gap-2 text-muted-foreground line-through'
+                  : 'flex items-center gap-2'
+              }
+            >
+              <span aria-hidden>{i.done ? '☑' : '☐'}</span>
               {i.label}
             </span>
-            <span className="flex items-center gap-1">
-              {i.startTour ? (
-                <Button size="sm" variant="outline" onClick={i.startTour}>
-                  Start
-                </Button>
-              ) : i.docUrl ? (
-                <Button asChild size="sm" variant="outline">
-                  <a href={i.docUrl} target="_blank" rel="noreferrer">
-                    Setup guide ↗
-                  </a>
-                </Button>
-              ) : null}
-              {i.dismissible && (
-                <button
-                  type="button"
-                  aria-label={`Dismiss ${i.label}`}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => dismiss(i.key)}
-                >
-                  ×
-                </button>
-              )}
-            </span>
+            {/* Completed rows carry no actions — just the checked-off label. */}
+            {!i.done && (
+              <span className="flex items-center gap-1">
+                {i.startTour ? (
+                  <Button size="sm" variant="outline" onClick={i.startTour}>
+                    Start
+                  </Button>
+                ) : i.docUrl ? (
+                  <Button asChild size="sm" variant="outline">
+                    <a href={i.docUrl} target="_blank" rel="noreferrer">
+                      Setup guide ↗
+                    </a>
+                  </Button>
+                ) : null}
+                {i.dismissible && (
+                  <button
+                    type="button"
+                    aria-label={`Dismiss ${i.label}`}
+                    className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => dismiss(i.key)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            )}
           </li>
         ))}
       </ul>
