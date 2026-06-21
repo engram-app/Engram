@@ -40,4 +40,9 @@ defmodule Engram.Search.MMRTest do
     b = c(0.8, nil)
     assert [^a, ^b] = MMR.rerank([a, b], 2, 1.0)
   end
+
+  test "empty candidate list returns empty" do
+    assert MMR.rerank([], 5, 1.0) == []
+    assert MMR.rerank([], 5, 0.0) == []
+  end
 end

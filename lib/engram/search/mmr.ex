@@ -13,7 +13,8 @@ defmodule Engram.Search.MMR do
   @spec rerank([map()], pos_integer(), float()) :: [map()]
   def rerank(candidates, limit, diversity)
 
-  def rerank(candidates, limit, +0.0), do: Enum.take(candidates, limit)
+  def rerank(candidates, limit, diversity) when diversity == 0.0,
+    do: Enum.take(candidates, limit)
 
   def rerank(candidates, limit, diversity)
       when is_list(candidates) and is_number(diversity) do
