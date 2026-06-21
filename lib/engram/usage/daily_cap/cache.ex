@@ -12,7 +12,7 @@ defmodule Engram.Usage.DailyCap.Cache do
 
   def start_link(_), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @spec mark_empty(integer(), String.t(), non_neg_integer()) :: :ok
+  @spec mark_empty(binary(), String.t(), non_neg_integer()) :: :ok
   def mark_empty(user_id, kind, retry_after_sec) do
     expires = System.monotonic_time(:millisecond) + retry_after_sec * 1000
     :ets.insert(@table, {{user_id, kind}, expires})
@@ -21,7 +21,7 @@ defmodule Engram.Usage.DailyCap.Cache do
     ArgumentError -> :ok
   end
 
-  @spec empty_until(integer(), String.t()) :: {:empty, non_neg_integer()} | :unknown
+  @spec empty_until(binary(), String.t()) :: {:empty, non_neg_integer()} | :unknown
   def empty_until(user_id, kind) do
     case :ets.lookup(@table, {user_id, kind}) do
       [{_, expires}] ->
@@ -37,7 +37,14 @@ defmodule Engram.Usage.DailyCap.Cache do
 
   @impl true
   def init(:ok) do
-    :ets.new(@table, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
+    :ets.new(@table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
     {:ok, %{}}
   end
 end

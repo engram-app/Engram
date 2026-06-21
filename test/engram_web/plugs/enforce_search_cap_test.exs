@@ -3,8 +3,9 @@ defmodule EngramWeb.Plugs.EnforceSearchCapTest do
 
   alias EngramWeb.Plugs.EnforceSearchCap
 
-  # No setup needed — DataCase's DB sandbox gives a clean `usage_buckets`
-  # per test, so DailyCap buckets start empty automatically.
+  # The DB sandbox resets `usage_buckets` per test. Note DailyCap's ETS
+  # empty-verdict cache is global and NOT sandboxed — isolation there comes
+  # from each `insert(:user)` minting a unique UUID, so cache keys never collide.
 
   describe "EnforceSearchCap" do
     setup %{conn: conn} do

@@ -15,9 +15,10 @@ defmodule Engram.Repo.Migrations.CreateUsageBuckets do
     end
 
     # No FK to users: hot-write operational table, no per-insert FK check.
-    # Orphan rows are harmless (self-refilling, throwaway) — account deletion
-    # cleanup and/or an Oban prune removes them. No ENABLE/FORCE ROW LEVEL
-    # SECURITY and no CREATE POLICY — system table.
+    # Trade-off: rows orphan on account deletion (no cascade). Harmless — rows
+    # are tiny, self-refilling, and never read for a deleted user. Wiring
+    # deletion-time cleanup / an Oban prune is a known follow-up, NOT yet done.
+    # No ENABLE/FORCE ROW LEVEL SECURITY and no CREATE POLICY — system table.
     execute(
       "GRANT SELECT, INSERT, UPDATE, DELETE ON usage_buckets TO engram_app",
       "REVOKE ALL ON usage_buckets FROM engram_app"
