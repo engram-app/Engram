@@ -525,7 +525,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case parse_int_list(ids) do
+    case parse_uuid_list(ids) do
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
@@ -575,7 +575,7 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    with {:ok, ids} <- parse_int_list(ids),
+    with {:ok, ids} <- parse_uuid_list(ids),
          {:ok, tgt} <- parse_move_target(tgt) do
       case Notes.batch_move_notes(user, vault, ids, tgt) do
         {:ok, %{moved: n}} ->
@@ -662,9 +662,9 @@ defmodule EngramWeb.NotesController do
   # bounded atom escapes; a %Note{} buried in a reason tuple never does).
   defp classify_reason(reason), do: Engram.Telemetry.error_kind(reason)
 
-  defp parse_int_list(list) when is_list(list) do
+  defp parse_uuid_list(list) when is_list(list) do
     Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
-      case parse_int(item) do
+      case parse_uuid(item) do
         {:ok, n} -> {:cont, {:ok, [n | acc]}}
         :error -> {:halt, :error}
       end
@@ -675,13 +675,13 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  defp parse_int(s) when is_binary(s), do: Ecto.UUID.cast(s)
-  defp parse_int(_), do: :error
+  defp parse_uuid(s) when is_binary(s), do: Ecto.UUID.cast(s)
+  defp parse_uuid(_), do: :error
 
   # Move target is either a folder-marker UUID or the literal "root" sentinel
   # (vault root — no marker). "root" must bypass the UUID cast.
   defp parse_move_target("root"), do: {:ok, "root"}
-  defp parse_move_target(s) when is_binary(s), do: parse_int(s)
+  defp parse_move_target(s) when is_binary(s), do: parse_uuid(s)
   defp parse_move_target(_), do: :error
 
   defp broadcast_batch(user, vault, payload) do
