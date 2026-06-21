@@ -48,6 +48,15 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
     def handle_info({:inc, key, scale, increment}, state) do
       _ = Local.inc(key, scale, increment)
       {:noreply, state}
+    rescue
+      error ->
+        require Logger
+
+        Logger.warning("rate limiter dropped a remote increment",
+          error_kind: Engram.Telemetry.error_kind(error)
+        )
+
+        {:noreply, state}
     end
 
     def handle_info(_msg, state), do: {:noreply, state}

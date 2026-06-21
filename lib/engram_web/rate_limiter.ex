@@ -41,6 +41,10 @@ defmodule EngramWeb.RateLimiter do
         _ets ->
           :ets.delete_all_objects(EngramWeb.RateLimiter.ETS)
       end
+    rescue
+      # Safe no-op when the backend's ETS table isn't started (e.g. the
+      # :distributed_ets supervisor isn't running under the current test config).
+      ArgumentError -> :ok
     end
   end
 end

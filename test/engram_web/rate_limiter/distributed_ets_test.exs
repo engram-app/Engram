@@ -4,8 +4,10 @@ defmodule EngramWeb.RateLimiter.DistributedETSTest do
 
   setup do
     start_supervised!({DistributedETS, [clean_period: :timer.minutes(1)]})
-    # Hammer's ETS table is created asynchronously in handle_continue.
-    Process.sleep(50)
+    # Hammer's ETS table is created synchronously in init/1, so start_supervised!
+    # returning is sufficient. Synchronize against the Listener to ensure it is
+    # subscribed before any test sends messages.
+    _ = :sys.get_state(EngramWeb.RateLimiter.DistributedETS.Listener)
     :ok
   end
 
@@ -25,7 +27,8 @@ defmodule EngramWeb.RateLimiter.DistributedETSTest do
   test "a remote :inc message applies to the local counter" do
     key = "remote:#{System.unique_integer([:positive])}"
     send(Process.whereis(DistributedETS.Listener), {:inc, key, 1000, 1})
-    Process.sleep(20)
+    # Flush the Listener mailbox so the :inc is applied before the assertion.
+    _ = :sys.get_state(Process.whereis(DistributedETS.Listener))
     # The remote inc consumed one slot; with limit 1 the next local hit denies.
     assert {:deny, _} = DistributedETS.hit(key, 1000, 1)
   end
