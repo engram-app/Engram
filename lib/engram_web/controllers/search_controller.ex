@@ -8,13 +8,6 @@ defmodule EngramWeb.SearchController do
 
   @max_search_limit 50
 
-  # The web client wants N unique notes, but Qdrant ranks chunks. We
-  # over-fetch chunks so grouping has enough material to populate the
-  # requested number of notes — without this, several top chunks from
-  # the same note silently cap the result list well below N.
-  @overfetch_factor 4
-  @min_overfetch 20
-
   operation(:search,
     operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
@@ -40,10 +33,13 @@ defmodule EngramWeb.SearchController do
     folder = params["folder"]
     cross_vault = Map.get(params, "cross_vault", false)
 
-    chunk_limit = max(note_limit * @overfetch_factor, @min_overfetch)
-
     opts =
-      [limit: chunk_limit, cross_vault: cross_vault, mode: parse_mode(params["mode"])]
+      [
+        limit: note_limit,
+        cross_vault: cross_vault,
+        mode: parse_mode(params["mode"]),
+        group_by_note: true
+      ]
       |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
       |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
       |> maybe_put_diversity(params["diversity"])
@@ -57,7 +53,18 @@ defmodule EngramWeb.SearchController do
 
         notes =
           results
-          |> group_by_note()
+          |> Enum.map(fn r ->
+            %{
+              id: nil,
+              path: r.source_path,
+              title: r.title || derive_title(r.source_path),
+              folder: derive_folder(r.source_path),
+              heading_path: r.heading_path,
+              snippet: r.text,
+              score: r.score,
+              match_count: r.match_count
+            }
+          end)
           |> Enum.take(note_limit)
           |> attach_ids(user, id_lookup_vault)
 
@@ -110,29 +117,6 @@ defmodule EngramWeb.SearchController do
       {f, ""} -> Keyword.put(opts, :diversity, f)
       _ -> opts
     end
-  end
-
-  # Collapse per-chunk Qdrant hits into one row per note. The web UI shows
-  # a card per note; the MCP path bypasses this and gets raw chunks.
-  defp group_by_note(chunks) do
-    chunks
-    |> Enum.reject(fn c -> is_nil(Map.get(c, :source_path)) end)
-    |> Enum.group_by(&Map.fetch!(&1, :source_path))
-    |> Enum.map(fn {path, group} ->
-      [best | _] = Enum.sort_by(group, & &1.score, :desc)
-
-      %{
-        id: nil,
-        path: path,
-        title: best[:title] || derive_title(path),
-        folder: derive_folder(path),
-        heading_path: best[:heading_path],
-        snippet: best[:text],
-        score: best.score,
-        match_count: length(group)
-      }
-    end)
-    |> Enum.sort_by(& &1.score, :desc)
   end
 
   # Batch-resolve note ids for the visible page only — runs once after
