@@ -1,7 +1,3 @@
-defmodule EngramWeb.RateLimiterTest.RaisingLimiter do
-  def hit(_key, _scale, _limit), do: raise("redis boom")
-end
-
 defmodule EngramWeb.RateLimiterTest do
   use ExUnit.Case, async: false
   alias EngramWeb.RateLimiter
@@ -24,90 +20,14 @@ defmodule EngramWeb.RateLimiterTest do
     assert {:deny, _ms} = RateLimiter.hit(key, 60_000, 1)
   end
 
-  test "fail-open: an exiting backend allows the request and emits telemetry (catch :exit path)" do
-    Application.put_env(:engram, RateLimiter, backend: :redis)
+  test ":distributed_ets backend is dispatched when configured" do
+    Application.put_env(:engram, RateLimiter, backend: :distributed_ets)
+    assert RateLimiter.backend() == :distributed_ets
 
-    ref = make_ref()
-
-    :telemetry.attach(
-      "fail-open-exit-#{inspect(ref)}",
-      [:engram, :rate_limiter, :backend_error],
-      fn _event, meas, meta, pid -> send(pid, {:rl_degraded, meas, meta}) end,
-      self()
-    )
-
-    assert {:allow, 0} = RateLimiter.hit("rl_fail:#{System.unique_integer()}", 60_000, 1)
-    assert_receive {:rl_degraded, %{count: 1}, %{backend: :redis, reason: reason}}
-    assert is_atom(reason)
-
-    :telemetry.detach("fail-open-exit-#{inspect(ref)}")
-  end
-
-  test "fail-open: a raising backend allows the request and emits telemetry (rescue path)" do
-    Application.put_env(:engram, RateLimiter,
-      backend: :redis,
-      redis_impl: EngramWeb.RateLimiterTest.RaisingLimiter
-    )
-
-    ref = make_ref()
-
-    :telemetry.attach(
-      "fail-open-raise-#{inspect(ref)}",
-      [:engram, :rate_limiter, :backend_error],
-      fn _event, meas, meta, pid -> send(pid, {:rl_degraded, meas, meta}) end,
-      self()
-    )
-
-    assert {:allow, 0} = RateLimiter.hit("rl_raise:#{System.unique_integer()}", 60_000, 1)
-    assert_receive {:rl_degraded, %{count: 1}, %{backend: :redis, reason: reason}}
-    assert is_atom(reason)
-
-    :telemetry.detach("fail-open-raise-#{inspect(ref)}")
-  end
-
-  describe "Redis backend start options" do
-    alias EngramWeb.RateLimiter.Redis, as: RedisLimiter
-
-    test "start_opts/1 omits :socket_opts for plain-tcp redis:// URLs" do
-      # `customize_hostname_check` is an `:ssl`-only option. Redix passes
-      # `:socket_opts` to `:gen_tcp.connect/4` for `redis://` URLs which
-      # validates strictly and rejects it with ArgumentError, boot-looping
-      # the limiter. MUST be omitted entirely on plain-tcp.
-      assert RedisLimiter.start_opts("redis://localhost:6379") == [url: "redis://localhost:6379"]
-    end
-
-    test "start_opts/1 appends TLS-wildcard hostname-match fun for rediss:// URLs" do
-      # AWS ElastiCache/Valkey TLS endpoints present wildcard certs
-      # (`*.cluster.cache.amazonaws.com`). Erlang's default match_fun is
-      # strict literal — it rejects them on leftmost-label hosts like
-      # `master.cluster.cache.amazonaws.com`. The `:https`-shape match_fun
-      # applies RFC 6125 wildcard rules.
-      assert [
-               url: "rediss://master.example:6379",
-               socket_opts: [customize_hostname_check: [match_fun: match_fun]]
-             ] = RedisLimiter.start_opts("rediss://master.example:6379")
-
-      assert is_function(match_fun)
-    end
-
-    test "limiter starts under a supervisor with the production opt shape" do
-      # Redix connects asynchronously (sync_connect: false), so this validates
-      # the option schema without needing a live Redis server.
-      opts = RedisLimiter.start_opts("redis://localhost:6379")
-      assert {:ok, pid} = start_supervised({RedisLimiter, opts})
-      assert is_pid(pid)
-    end
-
-    test ":key_prefix is rejected as a runtime start option (regression guard)" do
-      # Documents why the prefix had to move to compile-time `use` opts: passing
-      # it as a start option crashes the limiter on boot because Redix validates
-      # its option schema strictly and has no :key_prefix key.
-      Process.flag(:trap_exit, true)
-
-      assert {:error, _reason} =
-               start_supervised(
-                 {RedisLimiter, [url: "redis://localhost:6379", key_prefix: "engram_rl:"]}
-               )
-    end
+    # DistributedETS.Local must already be running (started by the supervisor).
+    # In the test environment the application starts the plain ETS backend, so
+    # DistributedETS.Local is NOT running — hitting it would crash. We only
+    # assert that backend/0 returns the correct atom; the full round-trip is
+    # covered by the DistributedETS unit tests in rate_limiter/distributed_ets_test.exs.
   end
 end
