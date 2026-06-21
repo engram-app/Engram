@@ -100,6 +100,14 @@ defmodule Engram.MCP.Tools do
                 "identifiers, code, or error strings; 'vector' for purely " <>
                 "conceptual/semantic queries; 'hybrid' (default) blends both.",
             "default" => "hybrid"
+          },
+          "diversity" => %{
+            "type" => "number",
+            "minimum" => 0,
+            "maximum" => 1,
+            "description" =>
+              "Result diversity (0 = most relevant, default tuned per plan; 1 = most varied). " <>
+                "Uses Maximal Marginal Relevance to reduce redundancy among results."
           }
         },
         "required" => ["query"]

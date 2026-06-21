@@ -41,11 +41,7 @@ defmodule Engram.MCP.Handlers do
 
   def handle("search_notes", user, vault, args) do
     query = args["query"] || ""
-    limit = min(args["limit"] || 5, 20)
-    tags = args["tags"]
-
-    opts = [limit: limit, mode: search_mode(args)]
-    opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
+    opts = build_search_opts(args)
 
     case Search.search(user, vault, query, opts) do
       {:ok, results} when results != [] ->
@@ -430,6 +426,25 @@ defmodule Engram.MCP.Handlers do
   end
 
   # -- Public helpers --
+
+  @doc """
+  Build the keyword opts list for `Engram.Search.search/4` from MCP tool args.
+
+  Assembles `:limit`, `:mode`, `:tags`, and (when given a number) `:diversity`
+  from the raw args map. Absent or non-numeric `diversity` is omitted so the
+  `SearchProfile` default applies.
+  """
+  def build_search_opts(args) do
+    limit = min(args["limit"] || 5, 20)
+    tags = args["tags"]
+
+    opts = [limit: limit, mode: search_mode(args)]
+    opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
+
+    if is_number(args["diversity"]),
+      do: Keyword.put(opts, :diversity, args["diversity"]),
+      else: opts
+  end
 
   @doc "Map the MCP `mode` arg to a Search mode (unknown → :hybrid)."
   def search_mode(args) do
