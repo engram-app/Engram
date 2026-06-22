@@ -393,7 +393,12 @@ export default function FolderTree() {
     // When the selection contains notes or folders, we must resolve the target folder.
     if (noteIds.length || folderIds.length) {
       const target = folders?.find((f) => f.name === targetFolderName)
-      if (!target) {
+      // A derived folder has a `syn:` id, not a real marker the backend can move
+      // into; sending it would fail server-side and optimistically strand items
+      // at root. Such folders are filtered out of the dialog's targets below, so
+      // this is a defensive guard.
+      if (!target || isSyntheticFolderId(target.id)) {
+        if (target) toast.error('That folder has no saved marker yet — open it once to create one.')
         setDialog({ kind: 'none' })
         return
       }
@@ -472,7 +477,9 @@ export default function FolderTree() {
       {dialog.kind === 'move' && (
         <MoveDialog
           nodes={dialog.nodes}
-          folders={folders.map((f) => ({ name: f.name }))}
+          // Only real-marker folders are valid move targets; derived folders
+          // (syn: ids) have no id the backend move endpoints can resolve.
+          folders={folders.filter((f) => !isSyntheticFolderId(f.id)).map((f) => ({ name: f.name }))}
           onPick={commitMove}
           onCancel={() => setDialog({ kind: 'none' })}
         />
