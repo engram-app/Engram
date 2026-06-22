@@ -45,19 +45,11 @@ defmodule EngramWeb.RequestLogger do
 
   @doc false
   def handle_event(@stop_event, %{duration: duration}, %{conn: conn}, _config) do
-    duration_ms = System.convert_time_unit(duration, :native, :millisecond)
-
-    Logger.log(
-      level_for_status(conn.status),
-      "#{conn.method} #{conn.status} in #{duration_ms}ms",
-      method: conn.method,
-      status: conn.status,
-      route: route(conn),
-      request_path: conn.request_path,
-      request_query: conn.query_string,
-      user_id: current_user_id(conn),
-      mtls_clientcert_subject: mtls_clientcert_subject(conn)
-    )
+    if suppress_request_log?(conn) do
+      :ok
+    else
+      emit_request_log(conn, duration)
+    end
   end
 
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
@@ -76,6 +68,35 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(_, _, _, _), do: :ok
+
+  defp emit_request_log(conn, duration) do
+    duration_ms = System.convert_time_unit(duration, :native, :millisecond)
+
+    Logger.log(
+      level_for_status(conn.status),
+      "#{conn.method} #{conn.status} in #{duration_ms}ms",
+      method: conn.method,
+      status: conn.status,
+      route: route(conn),
+      request_path: conn.request_path,
+      request_query: conn.query_string,
+      user_id: current_user_id(conn),
+      mtls_clientcert_subject: mtls_clientcert_subject(conn)
+    )
+  end
+
+  # ALB liveness (/health) and readiness (/health/deep) probes hit every task
+  # every 1-2s. Logging each successful one is pure noise — and at sustained
+  # volume it is the bulk of the log shipper's traffic, which can tip the Loki
+  # pipeline into a retry-amplification storm. Drop only the *successful*
+  # probes (status < 400); a degraded health check still logs at :error/:warning
+  # so a failing target stays visible. Keyed on the matched controller, never
+  # the path, so it can't be spoofed by an arbitrary /health-prefixed request.
+  defp suppress_request_log?(%Plug.Conn{status: status, private: private})
+       when is_integer(status) and status < 400,
+       do: private[:phoenix_controller] == EngramWeb.HealthController
+
+  defp suppress_request_log?(_), do: false
 
   # A 5xx flood must elevate above :info so level-keyed alerting sees it; a 4xx
   # is a client error worth a :warning; everything else stays :info.

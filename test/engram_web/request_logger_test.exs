@@ -255,6 +255,45 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.level == :info
   end
 
+  test "suppresses successful health-check probes (ALB hits these every 1-2s — pure noise)" do
+    for action <- [:index, :deep] do
+      conn = %Plug.Conn{
+        method: "GET",
+        request_path: "/health",
+        query_string: "",
+        status: 200,
+        private: %{phoenix_controller: EngramWeb.HealthController, phoenix_action: action}
+      }
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 1_000_000}, %{conn: conn})
+        end)
+
+      refute find_request_event(events),
+             "expected no log for successful HealthController##{action}, got: #{inspect(events)}"
+    end
+  end
+
+  test "still logs a degraded (non-2xx) health check so a failing readiness probe stays visible" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/health/deep",
+      query_string: "",
+      status: 503,
+      private: %{phoenix_controller: EngramWeb.HealthController, phoenix_action: :deep}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 1_000_000}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event, "a degraded (503) health check must still log"
+    assert event.level == :error
+  end
+
   test "logs a router_dispatch exception with route + bounded error_kind (no secret leak)" do
     conn = %Plug.Conn{
       method: "GET",
