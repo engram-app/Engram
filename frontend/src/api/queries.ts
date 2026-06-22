@@ -8,6 +8,7 @@ import {
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api, ApiError } from './client'
+import { isSyntheticFolderId, syntheticFolderId, syntheticFolderPath } from '../viewer/tree/synthesize-folders'
 import { useActiveVaultId } from './active-vault'
 import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
 import { collideBump } from '@/lib/collide-bump'
@@ -73,8 +74,15 @@ export interface User {
 // Hoisted so React Query treats the select identity as stable; otherwise an
 // inline arrow re-runs every render and returns a fresh array, breaking
 // memoized consumers (e.g. useEngramTree's rebuild useEffect).
-const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }) =>
-  data.folders.filter((f): f is Folder => f.id != null && f.name !== '')
+// The backend returns a null id for the synthetic root row (name === '') AND for
+// every *derived* folder (one that exists only because notes live in it — no
+// explicit marker row). Drop only the root row; give derived folders a stable
+// synthetic id keyed on their path so the `Folder.id: string` contract holds and
+// they aren't erased from the tree. synthesizeFolders then links parents/ancestors.
+const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
+  data.folders
+    .filter((f) => f.name !== '')
+    .map((f) => (f.id != null ? (f as Folder) : { ...f, id: syntheticFolderId(f.name) }))
 
 export function useFolders() {
   const vaultId = useActiveVaultId()
@@ -229,6 +237,15 @@ export const ROOT_FOLDER_ID = 'root'
 export function fetchNotesForFolderId(folderId: string): Promise<NoteSummary[]> {
   if (folderId === ROOT_FOLDER_ID) {
     return api.get<{ notes: NoteSummary[] }>('/folders/list?folder=').then((r) => r.notes)
+  }
+  // Derived/synthesized folders have no backend marker row, so the by-id endpoint
+  // can't resolve them. They carry a `syn:<path>` id — list their notes by path
+  // through the same endpoint root uses.
+  if (isSyntheticFolderId(folderId)) {
+    const path = syntheticFolderPath(folderId)
+    return api
+      .get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(path)}`)
+      .then((r) => r.notes)
   }
   return api
     .get<{ notes: NoteSummary[] }>(`/folders/by-id/${folderId}/notes`)

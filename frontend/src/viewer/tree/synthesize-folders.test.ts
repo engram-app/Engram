@@ -45,6 +45,30 @@ describe('synthesizeFolders', () => {
     expect(out.filter((f) => f.name === 'p')).toHaveLength(1)
   })
 
+  it('synthesizes missing ancestors from a note-folder path (no attachments)', () => {
+    // Backend returns only the leaf folder that holds notes; ancestors are absent.
+    const real: Folder[] = [{ id: 'syn:a/b/c', parent_id: null, name: 'a/b/c', count: 3 }]
+    const out = synthesizeFolders(real, [])
+    const a = out.find((f) => f.name === 'a')
+    const ab = out.find((f) => f.name === 'a/b')
+    const abc = out.find((f) => f.name === 'a/b/c')
+    expect(a).toMatchObject({ parent_id: null })
+    expect(ab).toMatchObject({ parent_id: a!.id })
+    expect(abc).toMatchObject({ id: 'syn:a/b/c', parent_id: ab!.id })
+  })
+
+  it('derives parent_id by path for flat note-folders the backend returned unparented', () => {
+    // Both come back parent_id:null (derived folders); x/y must nest under x.
+    const real: Folder[] = [
+      { id: 'syn:x', parent_id: null, name: 'x', count: 1 },
+      { id: 'syn:x/y', parent_id: null, name: 'x/y', count: 2 },
+    ]
+    const out = synthesizeFolders(real, [])
+    const x = out.find((f) => f.name === 'x')
+    const xy = out.find((f) => f.name === 'x/y')
+    expect(xy).toMatchObject({ parent_id: x!.id })
+  })
+
   it('isSyntheticFolderId distinguishes synthesized rows from real uuids', () => {
     const syn = synthesizeFolders([], [att('pics/a.png')]).find((f) => f.name === 'pics')
     expect(isSyntheticFolderId(syn!.id)).toBe(true)
