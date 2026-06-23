@@ -78,11 +78,12 @@ defmodule Engram.Crypto.RotationLock do
 
         Logger.error(
           "T3.7 RotationLock.release: user row vanished",
-          category: :crypto_rotation,
-          user_id: user_id,
-          table: :users,
-          row_id: user_id,
-          phase: :release
+          Engram.Logger.Metadata.with_category(:error, :crypto,
+            user_id: user_id,
+            table: :users,
+            row_id: user_id,
+            phase: :release
+          )
         )
 
         raise "T3.7 RotationLock.release: row vanished mid-rotation user_id=#{user_id}"

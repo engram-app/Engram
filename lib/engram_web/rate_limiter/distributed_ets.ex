@@ -62,8 +62,11 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
       error ->
         require Logger
 
-        Logger.warning("rate limiter dropped a remote increment",
-          error_kind: Engram.Telemetry.error_kind(error)
+        Logger.warning(
+          "rate limiter dropped a remote increment",
+          Engram.Logger.Metadata.with_category(:warning, :auth,
+            error_kind: Engram.Telemetry.error_kind(error)
+          )
         )
 
         :telemetry.execute(

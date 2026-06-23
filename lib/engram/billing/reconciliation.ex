@@ -22,6 +22,7 @@ defmodule Engram.Billing.Reconciliation do
   import Ecto.Query
 
   alias Engram.Billing.Subscription
+  alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Telemetry
 
@@ -61,9 +62,9 @@ defmodule Engram.Billing.Reconciliation do
     if Application.get_env(:engram, :billing_enabled, false) do
       do_run(days_back)
     else
-      Logger.info("paddle_reconcile_skipped",
-        category: :paddle_reconcile,
-        reason: :billing_disabled
+      Logger.info(
+        "paddle_reconcile_skipped",
+        Metadata.with_category(:info, :billing, reason: :billing_disabled)
       )
 
       %{
@@ -89,9 +90,9 @@ defmodule Engram.Billing.Reconciliation do
         # truncation so the Mix task printer doesn't show a clean-looking
         # result — silent-truncation is the exact failure mode this PR
         # exists to surface.
-        Logger.error("paddle_reconcile_partial_list",
-          category: :paddle_reconcile,
-          reason_label: reason
+        Logger.error(
+          "paddle_reconcile_partial_list",
+          Metadata.with_category(:error, :billing, reason_label: reason)
         )
 
         diff(paddle_subs, reason)
@@ -102,10 +103,12 @@ defmodule Engram.Billing.Reconciliation do
         # raw Req transport error, and :reason is NOT in RedactFilter's
         # sensitive-key set. Surface only a bounded error_kind + the HTTP status
         # (401 vs 429 vs 500 is the on-call triage signal).
-        Logger.error("paddle_reconcile_fetch_failed",
-          category: :paddle_reconcile,
-          error_kind: Telemetry.error_kind(reason),
-          status: paddle_error_status(reason)
+        Logger.error(
+          "paddle_reconcile_fetch_failed",
+          Metadata.with_category(:error, :billing,
+            error_kind: Telemetry.error_kind(reason),
+            status: paddle_error_status(reason)
+          )
         )
 
         # Distinguish a fetch failure from a clean run in the return
@@ -138,14 +141,16 @@ defmodule Engram.Billing.Reconciliation do
     log_summary(paddle_subs, local_subs, drift)
 
     Enum.each(drift, fn entry ->
-      Logger.error("paddle_reconciliation_drift",
-        category: :paddle_reconcile,
-        drift_kind: entry.kind,
-        paddle_subscription_id: entry.subscription_id,
-        # The affected customer. nil only for :missing_local (Paddle has a sub
-        # we have no local row for) — otherwise it saves a Paddle-dashboard
-        # reverse-lookup under incident pressure.
-        user_id: entry.user_id
+      Logger.error(
+        "paddle_reconciliation_drift",
+        Metadata.with_category(:error, :billing,
+          drift_kind: entry.kind,
+          paddle_subscription_id: entry.subscription_id,
+          # The affected customer. nil only for :missing_local (Paddle has a sub
+          # we have no local row for) — otherwise it saves a Paddle-dashboard
+          # reverse-lookup under incident pressure.
+          user_id: entry.user_id
+        )
       )
     end)
 
@@ -249,10 +254,12 @@ defmodule Engram.Billing.Reconciliation do
         # Couldn't parse — treat as no-drift to avoid spamming Sentry
         # on every reconciliation cycle when Paddle returns an
         # unexpected shape, but warn so a contract change is visible.
-        Logger.warning("paddle_reconcile_period_unparseable",
-          category: :paddle_reconcile,
-          paddle_subscription_id: paddle_sub["id"],
-          reason: inspect(other)
+        Logger.warning(
+          "paddle_reconcile_period_unparseable",
+          Metadata.with_category(:warning, :billing,
+            paddle_subscription_id: paddle_sub["id"],
+            reason: inspect(other)
+          )
         )
 
         false
@@ -262,7 +269,7 @@ defmodule Engram.Billing.Reconciliation do
   defp log_summary(paddle, local, drift) do
     Logger.info(
       "paddle_reconcile_summary paddle=#{length(paddle)} local=#{length(local)} drift=#{length(drift)}",
-      category: :paddle_reconcile
+      Metadata.with_category(:info, :billing, [])
     )
   end
 end

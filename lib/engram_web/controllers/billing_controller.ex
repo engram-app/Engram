@@ -339,7 +339,11 @@ defmodule EngramWeb.BillingController do
   defp not_found(conn, message), do: conn |> put_status(404) |> json(%{error: message})
 
   defp paddle_error(conn, reason) do
-    Logger.error("Paddle billing error", reason_label: inspect(reason))
+    Logger.error(
+      "Paddle billing error",
+      Engram.Logger.Metadata.with_category(:error, :billing, reason_label: inspect(reason))
+    )
+
     conn |> put_status(502) |> json(%{error: "payment provider error"})
   end
 end

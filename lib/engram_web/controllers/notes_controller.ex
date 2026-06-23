@@ -69,10 +69,13 @@ defmodule EngramWeb.NotesController do
           # could carry virtual decrypted note fields if a future regression
           # surfaces a %Note{} inside a reason tuple. Label keeps the metric
           # signal without the leak surface.
-          Logger.error("upsert_note returned unexpected error",
-            reason_label: classify_reason(reason),
-            user_id: user.id,
-            vault_id: vault.id
+          Logger.error(
+            "upsert_note returned unexpected error",
+            Engram.Logger.Metadata.with_category(:error, :sync,
+              reason_label: classify_reason(reason),
+              user_id: user.id,
+              vault_id: vault.id
+            )
           )
 
           conn |> put_status(500) |> json(%{error: "internal"})

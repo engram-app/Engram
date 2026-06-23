@@ -28,6 +28,7 @@ defmodule Engram.Logger.DecryptFailure do
   @spec log(String.t(), term(), keyword()) :: :ok
   def log(message, reason, metadata \\ [])
       when is_binary(message) and is_list(metadata) do
-    Logger.error(message, Keyword.put(metadata, :error_kind, Telemetry.error_kind(reason)))
+    kw = Keyword.put(metadata, :error_kind, Telemetry.error_kind(reason))
+    Logger.error(message, Engram.Logger.Metadata.with_category(:error, :crypto, kw))
   end
 end

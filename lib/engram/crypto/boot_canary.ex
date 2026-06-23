@@ -42,8 +42,9 @@ defmodule Engram.Crypto.BootCanary do
 
     case fetch_latest() do
       nil ->
-        Logger.warning("boot_canary: no canary row, provisioning fresh",
-          category: :boot_canary
+        Logger.warning(
+          "boot_canary: no canary row, provisioning fresh",
+          Engram.Logger.Metadata.with_category(:warning, :boot, [])
         )
 
         provision!(provider)

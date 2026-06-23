@@ -7,6 +7,8 @@ defmodule Engram.Paddle.Client.HTTP do
 
   @behaviour Engram.Paddle.Client
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   @sandbox_base "https://sandbox-api.paddle.com"
@@ -26,9 +28,12 @@ defmodule Engram.Paddle.Client.HTTP do
           {:ok, overview}
 
         {:ok, %Req.Response{status: status, body: body}} ->
-          Logger.warning("Paddle portal-session non-201",
-            status: status,
-            reason_label: inspect(body)
+          Logger.warning(
+            "Paddle portal-session non-201",
+            Metadata.with_category(:warning, :billing,
+              status: status,
+              reason_label: inspect(body)
+            )
           )
 
           {:error, {:paddle_error, status, body}}
@@ -134,9 +139,9 @@ defmodule Engram.Paddle.Client.HTTP do
   @max_pages 50
 
   defp list_pages(_url, _params, _headers, acc, _seen, page) when page > @max_pages do
-    Logger.error("Paddle subscriptions-list page cap exceeded",
-      category: :paddle,
-      reason_label: :max_pages_exceeded
+    Logger.error(
+      "Paddle subscriptions-list page cap exceeded",
+      Metadata.with_category(:error, :billing, reason_label: :max_pages_exceeded)
     )
 
     {:partial, Enum.reverse(acc) |> List.flatten(), :max_pages_exceeded}
@@ -157,9 +162,9 @@ defmodule Engram.Paddle.Client.HTTP do
               # Paddle returned a `next` URL we've already fetched — would
               # be an infinite loop. Stop and surface what we have, tagged
               # so the caller treats it as drift signal, not a clean read.
-              Logger.error("Paddle subscriptions-list pagination loop detected",
-                category: :paddle,
-                reason_label: :pagination_loop
+              Logger.error(
+                "Paddle subscriptions-list pagination loop detected",
+                Metadata.with_category(:error, :billing, reason_label: :pagination_loop)
               )
 
               {:partial, Enum.reverse([data | acc]) |> List.flatten(), :pagination_loop}
@@ -182,10 +187,12 @@ defmodule Engram.Paddle.Client.HTTP do
         {:error, {:paddle_error, status, body}}
 
       {:error, reason} ->
-        Logger.warning("Paddle subscriptions-list transport error",
-          category: :paddle,
-          reason: inspect(reason),
-          reason_label: :transport
+        Logger.warning(
+          "Paddle subscriptions-list transport error",
+          Metadata.with_category(:warning, :billing,
+            reason: inspect(reason),
+            reason_label: :transport
+          )
         )
 
         {:error, reason}
@@ -314,7 +321,10 @@ defmodule Engram.Paddle.Client.HTTP do
   end
 
   defp log_non_2xx(label, status, body) do
-    Logger.warning("Paddle #{label} non-2xx", status: status, reason_label: inspect(body))
+    Logger.warning(
+      "Paddle #{label} non-2xx",
+      Metadata.with_category(:warning, :billing, status: status, reason_label: inspect(body))
+    )
   end
 
   defp fetch_api_key do

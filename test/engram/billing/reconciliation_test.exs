@@ -5,6 +5,7 @@ defmodule Engram.Billing.ReconciliationTest do
   import Mox
 
   alias Engram.Billing.Reconciliation
+  alias Engram.Test.LogCapture
 
   setup :set_mox_from_context
   setup :verify_on_exit!
@@ -376,6 +377,29 @@ defmodule Engram.Billing.ReconciliationTest do
       end)
 
       assert %{drift: []} = Reconciliation.run(7)
+    end
+
+    test "summary milestone log carries category: :billing and loki_ship: true" do
+      # Test env defaults the logger to :warning; raise to :info so the
+      # paddle_reconcile_summary milestone reaches the capture handler.
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since -> {:ok, []} end)
+
+      {result, events} = LogCapture.with_events(fn -> Reconciliation.run(7) end)
+
+      assert %{drift: [], paddle_total: 0} = result
+
+      milestone =
+        Enum.find(events, fn event ->
+          event.level == :info and event.meta[:category] == :billing
+        end)
+
+      assert milestone, "expected an :info :billing milestone log event"
+      assert milestone.meta[:loki_ship] == true
     end
   end
 end

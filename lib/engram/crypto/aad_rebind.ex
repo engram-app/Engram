@@ -259,7 +259,10 @@ defmodule Engram.Crypto.AadRebind do
     if legacy_count > 0 do
       Logger.info(
         "aad rebind attachment skipped (intentional) user_id=#{user_id} legacy_count=#{legacy_count} note=converges on next upload",
-        category: :crypto_rebind
+        Engram.Logger.Metadata.with_category(:info, :crypto,
+          user_id: user_id,
+          phase: :aad_rebind_attachment_skipped
+        )
       )
     end
 
@@ -395,7 +398,7 @@ defmodule Engram.Crypto.AadRebind do
     # diagnosable, not just countable.
     Logger.error(
       "aad rebind failed user_id=#{user_id} reason_label=#{label}",
-      category: :crypto_rebind
+      Engram.Logger.Metadata.with_category(:error, :crypto, user_id: user_id, reason_label: label)
     )
 
     :telemetry.execute(

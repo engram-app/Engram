@@ -156,7 +156,10 @@ defmodule Engram.Crypto.KeyProvider.Local do
       Logger.error(
         "dek unwrap failed under both current and _PREVIOUS master keys: " <>
           "user_id=#{inspect(Map.get(ctx, :user_id))}",
-        category: :crypto_unwrap
+        Engram.Logger.Metadata.with_category(:error, :crypto,
+          user_id: Map.get(ctx, :user_id),
+          status: :failed
+        )
       )
     end
 

@@ -461,7 +461,10 @@ defmodule Engram.Accounts do
 
     require Logger
 
-    Logger.warning("refresh-token reuse detected; revoking family family_id=#{family_id}")
+    Logger.warning(
+      "refresh-token reuse detected; revoking family family_id=#{family_id}",
+      Engram.Logger.Metadata.with_category(:warning, :auth, [])
+    )
 
     # Mark every still-live member of the family as revoked using the
     # `@admin_revoked_at` sentinel (epoch 0). Stamping with `now` would put

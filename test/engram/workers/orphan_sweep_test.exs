@@ -3,6 +3,7 @@ defmodule Engram.Workers.OrphanSweepTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Storage
+  alias Engram.Test.LogCapture
   alias Engram.Workers.OrphanSweep
 
   setup do
@@ -113,5 +114,41 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert :ok = perform_job(OrphanSweep, %{})
 
     assert {:ok, "live"} = Storage.adapter().get("#{user.id}/1/keep.bin")
+  end
+
+  test "emits a Loki-shipping :oban summary line on completion", %{bypass: bypass} do
+    # Test env logger level is :warning; the summary is :info, so lower it
+    # for the duration of this test to let the capture handler see it.
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    user = insert(:user)
+    Storage.adapter().put("#{user.id}/1/keep.bin", "live")
+
+    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "result" => %{
+            "points" => [%{"id" => 1, "payload" => %{"user_id" => user.id}}],
+            "next_page_offset" => nil
+          }
+        })
+      )
+    end)
+
+    {result, events} = LogCapture.with_events(fn -> perform_job(OrphanSweep, %{}) end)
+    assert result == :ok
+
+    summary = Enum.find(events, &match?({:string, "orphan_sweep complete"}, &1.msg))
+
+    assert summary, "expected an 'orphan_sweep complete' summary log line"
+    assert summary.level == :info
+    assert summary.meta[:category] == :oban
+    assert summary.meta[:loki_ship] == true
+    assert summary.meta[:total_count] == 0
   end
 end

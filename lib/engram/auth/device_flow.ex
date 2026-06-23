@@ -244,8 +244,11 @@ defmodule Engram.Auth.DeviceFlow do
   # users), so only the compromised lineage is touched.
   defp invalidate_family(old_token) do
     Logger.warning(
-      "device refresh-token reuse detected; revoking family " <>
-        "family_id=#{old_token.family_id} user_id=#{old_token.user_id}"
+      "device refresh-token reuse detected; revoking family",
+      Engram.Logger.Metadata.with_category(:warning, :auth,
+        family_id: old_token.family_id,
+        user_id: old_token.user_id
+      )
     )
 
     from(rt in DeviceRefreshToken, where: rt.family_id == ^old_token.family_id)

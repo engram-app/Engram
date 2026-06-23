@@ -111,7 +111,8 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
     require Logger
 
     Logger.warning(
-      "EnforceConnectionCap: unknown oauth_clients.kind value #{inspect(other)} — passing through as unlimited"
+      "EnforceConnectionCap: unknown oauth_clients.kind — passing through as unlimited",
+      Engram.Logger.Metadata.with_category(:warning, :auth, kind: inspect(other))
     )
 
     :unlimited

@@ -9,6 +9,8 @@ defmodule Engram.Auth.Clerk.HttpApi do
 
   @behaviour Engram.Auth.Clerk.Api
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   @base_url "https://api.clerk.com/v1"
@@ -21,8 +23,9 @@ defmodule Engram.Auth.Clerk.HttpApi do
       blank when blank in [nil, ""] ->
         # A missing secret silently disables the §A multi-account block — the
         # duplicate user can't be revoked. This is a config defect, not a no-op.
-        Logger.error("Clerk delete_user skipped — CLERK_SECRET_KEY not configured",
-          clerk_user_id: clerk_user_id
+        Logger.error(
+          "Clerk delete_user skipped — CLERK_SECRET_KEY not configured",
+          Metadata.with_category(:error, :auth, clerk_user_id: clerk_user_id)
         )
 
         {:error, :missing_secret}
@@ -35,18 +38,24 @@ defmodule Engram.Auth.Clerk.HttpApi do
             :ok
 
           {:ok, {{_, status, _}, _, body}} ->
-            Logger.error("Clerk delete_user failed",
-              clerk_user_id: clerk_user_id,
-              status: status,
-              body_size: byte_size(to_string(body))
+            Logger.error(
+              "Clerk delete_user failed",
+              Metadata.with_category(:error, :auth,
+                clerk_user_id: clerk_user_id,
+                status: status,
+                body_size: byte_size(to_string(body))
+              )
             )
 
             {:error, {:http_error, status}}
 
           {:error, reason} ->
-            Logger.error("Clerk delete_user transport error",
-              clerk_user_id: clerk_user_id,
-              reason: inspect(reason)
+            Logger.error(
+              "Clerk delete_user transport error",
+              Metadata.with_category(:error, :auth,
+                clerk_user_id: clerk_user_id,
+                reason: inspect(reason)
+              )
             )
 
             {:error, reason}

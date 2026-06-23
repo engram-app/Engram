@@ -4,6 +4,7 @@ defmodule EngramWeb.WebhookController do
   alias Engram.Auth.Clerk.Webhook, as: ClerkWebhook
   alias Engram.Billing
   alias Engram.Email.Suppression
+  alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency, as: WebhookIdempotency
   alias Engram.Webhooks.Svix
   alias EngramWeb.Webhooks.PostHogForwarder
@@ -22,7 +23,7 @@ defmodule EngramWeb.WebhookController do
 
       case WebhookIdempotency.check(:clerk, id) do
         :duplicate ->
-          Logger.info("clerk_webhook_duplicate")
+          Logger.info("clerk_webhook_duplicate", Metadata.with_category(:info, :lifecycle, []))
           json(conn, %{status: "ok"})
 
         :proceed ->
@@ -45,17 +46,19 @@ defmodule EngramWeb.WebhookController do
       event_type = event["event_type"]
       event_id = event["event_id"]
 
+      # Ambient request context — event_type/event_id ride along on every
+      # subsequent log line. The :category is NOT set here: each call below
+      # stamps its own via with_category so the formatter sees a valid atom.
       Logger.metadata(
-        category: :paddle_webhook,
         event_type: event_type,
         event_id: event_id
       )
 
-      Logger.info("paddle_webhook_received")
+      Logger.info("paddle_webhook_received", Metadata.with_category(:info, :billing, []))
 
       case WebhookIdempotency.check(:paddle, event_id) do
         :duplicate ->
-          Logger.info("paddle_webhook_duplicate")
+          Logger.info("paddle_webhook_duplicate", Metadata.with_category(:info, :billing, []))
           json(conn, %{status: "ok"})
 
         :proceed ->
@@ -82,8 +85,9 @@ defmodule EngramWeb.WebhookController do
                 {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
 
               {:error, reason} = err ->
-                Logger.error("paddle_webhook_handler_error",
-                  reason: format_reason(reason)
+                Logger.error(
+                  "paddle_webhook_handler_error",
+                  Metadata.with_category(:error, :billing, reason: format_reason(reason))
                 )
 
                 {err, %{event_type: event_type, event_id: event_id, result: :error}}
@@ -100,9 +104,12 @@ defmodule EngramWeb.WebhookController do
               # resulting drift within 24h.
               stacktrace = __STACKTRACE__
 
-              Logger.error("paddle_webhook_handler_exception",
-                reason: Exception.message(error),
-                kind: error.__struct__
+              Logger.error(
+                "paddle_webhook_handler_exception",
+                Metadata.with_category(:error, :billing,
+                  reason: Exception.message(error),
+                  kind: error.__struct__
+                )
               )
 
               _ =
@@ -119,7 +126,7 @@ defmodule EngramWeb.WebhookController do
 
     case response do
       {:ok, _} ->
-        Logger.info("paddle_webhook_ok")
+        Logger.info("paddle_webhook_ok", Metadata.with_category(:info, :billing, []))
         # Mark processed only on success so a transient failure stays eligible
         # for Paddle's retry.
         _ = WebhookIdempotency.mark_processed(:paddle, event_id)
@@ -177,9 +184,13 @@ defmodule EngramWeb.WebhookController do
           # Resend doesn't retry a payload we can't persist.
           errors = Ecto.Changeset.traverse_errors(changeset, fn {m, _} -> m end)
 
-          Logger.error("Resend suppression insert failed: #{inspect(errors)}",
-            category: :email,
-            reason_label: reason
+          Logger.error(
+            "Resend suppression insert failed",
+            Metadata.with_category(:error, :lifecycle,
+              reason_label: reason,
+              # noqa: T3.0.6 — Logger metadata only; field names + validator messages, no PII
+              reason: inspect(errors)
+            )
           )
       end
     end)

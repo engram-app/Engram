@@ -98,7 +98,11 @@ defmodule Engram.OAuth.Client do
         add_error(changeset, :kind, "obsidian clients must use the device flow")
 
       other ->
-        Logger.info("DCR: unknown kind #{inspect(other)}; defaulting to mcp")
+        Logger.debug(
+          "DCR: unknown kind; defaulting to mcp",
+          Engram.Logger.Metadata.with_category(:debug, :auth, kind: inspect(other))
+        )
+
         put_change(changeset, :kind, "mcp")
     end
   end
