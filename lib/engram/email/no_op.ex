@@ -11,12 +11,14 @@ defmodule Engram.Email.NoOp do
 
   @impl true
   def send(to, subject, html, _opts \\ []) do
-    Logger.info("Email NoOp: dropping send (set RESEND_API_KEY to enable)",
-      category: :email,
-      body_size: byte_size(html),
-      reason_label: :no_provider_configured,
-      kind: subject,
-      method: to
+    Logger.debug(
+      "Email NoOp: dropping send (set RESEND_API_KEY to enable)",
+      Engram.Logger.Metadata.with_category(:debug, :lifecycle,
+        body_size: byte_size(html),
+        reason_label: :no_provider_configured,
+        kind: subject,
+        method: to
+      )
     )
 
     :ok

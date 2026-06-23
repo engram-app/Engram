@@ -60,13 +60,15 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
 
     Logger.warning(
       "Oban job discarded after max_attempts: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind}",
-      worker: worker,
-      queue: queue,
-      job_id: Map.get(job, :id),
-      attempt: Map.get(job, :attempt),
-      max_attempts: Map.get(job, :max_attempts),
-      error_kind: error_kind,
-      reason_label: :oban_discarded
+      Engram.Logger.Metadata.with_category(:warning, :oban,
+        worker: worker,
+        queue: queue,
+        job_id: Map.get(job, :id),
+        attempt: Map.get(job, :attempt),
+        max_attempts: Map.get(job, :max_attempts),
+        error_kind: error_kind,
+        reason_label: :oban_discarded
+      )
     )
 
     :telemetry.execute(
