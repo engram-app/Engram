@@ -3,17 +3,12 @@ defmodule Engram.ObanQueueConfigTest do
   # registered in `config :engram, Oban, queues: [...]`. A worker pointed
   # at an unregistered queue has no producer on any node, so its jobs sit
   # `available` forever and never execute (the orphaned-queue failure mode
-  # that stranded :indexing + :default in prod). Catches it at compile/CI
-  # time instead of via a Grafana backlog days later.
+  # that stranded :cleanup + :indexing + :default in prod). Catches it at
+  # compile/CI time instead of via a Grafana backlog days later.
   use ExUnit.Case, async: true
 
   test "every Oban worker's queue is registered in the Oban queues config" do
-    configured =
-      :engram
-      |> Application.fetch_env!(Oban)
-      |> Keyword.fetch!(:queues)
-      |> Keyword.keys()
-      |> MapSet.new()
+    configured = MapSet.new(configured_queues())
 
     {:ok, modules} = :application.get_key(:engram, :modules)
 
@@ -30,8 +25,26 @@ defmodule Engram.ObanQueueConfigTest do
              "Jobs in an unregistered queue have no producer and never execute.\n" <>
              "Add the queue to config/config.exs (or fix the worker's queue:).\n\n" <>
              Enum.map_join(offenders, "\n", fn {mod, q} ->
-               "  #{inspect(mod)} -> :#{q}"
+               "  #{inspect(mod)} -> #{inspect(q)}"
              end)
+  end
+
+  # The configured queue list. `testing: :manual` (config/test.exs) deep-merges
+  # into the base `config/config.exs` Oban config, so `:queues` is the real
+  # base list here. Guard against an env that stubs it to `false`/`nil` — that
+  # would mean NO worker can run, which is itself a misconfiguration, not a
+  # silently-empty allowlist that passes the test vacuously.
+  defp configured_queues do
+    case Application.fetch_env!(:engram, Oban)[:queues] do
+      queues when is_list(queues) and queues != [] ->
+        Keyword.keys(queues)
+
+      other ->
+        flunk(
+          "config :engram, Oban, queues: must be a non-empty keyword list, got: " <>
+            inspect(other)
+        )
+    end
   end
 
   defp oban_worker?(mod) do
@@ -40,9 +53,13 @@ defmodule Engram.ObanQueueConfigTest do
 
   # Pull the worker's actual queue from a built changeset so it reflects the
   # real `use Oban.Worker, queue:` value (no reliance on private internals).
+  # If a worker overrides `new/1` to require args and raises on `%{}`, surface
+  # that as its own offender instead of crashing the whole guard.
   defp worker_queue(mod) do
     mod.new(%{})
     |> Ecto.Changeset.get_field(:queue)
     |> String.to_existing_atom()
+  rescue
+    error -> {:could_not_build, Exception.message(error)}
   end
 end
