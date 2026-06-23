@@ -55,6 +55,13 @@ config :engram, :storage, Engram.Storage.S3
 config :engram, Oban,
   engine: Oban.Engines.Basic,
   repo: Engram.Repo,
+  # Staging poll cadence (default 1s). Fresh inserts dispatch instantly via the
+  # Postgres notifier (pg_notify), which also fans out across our unclustered
+  # prod nodes through the shared DB — so this poll only paces promotion of
+  # scheduled/retry jobs and acts as a missed-notify safety net. 5s trims ~80%
+  # of the source-less BEGIN/COMMIT/SELECT staging churn with no fresh-insert
+  # latency cost.
+  stage_interval: :timer.seconds(5),
   queues: [
     embed: 5,
     reindex: 1,
