@@ -11,6 +11,7 @@ import { configPromise, type EngramConfig } from './config'
 import { ConfigProvider } from './config-context'
 import { ThemeProvider } from './theme/theme-provider'
 import LoadingScreen from './layout/loading-screen'
+import ErrorFallback from './error-fallback'
 import './main.css'
 
 // Sentry — opt-in via VITE_SENTRY_DSN at build time. No-op (zero
@@ -80,33 +81,21 @@ if (posthogKey) {
 const ClerkAuthProvider = lazy(() => import('./auth/clerk-auth-provider'))
 const LocalAuthProvider = lazy(() => import('./auth/local-auth-provider'))
 
-function ErrorFallback() {
-  return (
-    <main className="grid min-h-screen place-items-center p-6 text-center">
-      <section>
-        <h1 className="text-xl font-semibold">Something went wrong.</h1>
-        <p className="mt-2 text-sm opacity-70">
-          The error has been reported. Try reloading; if it keeps happening,
-          contact support@engram.page.
-        </p>
-        <button
-          type="button"
-          className="mt-4 rounded border px-3 py-1 text-sm"
-          onClick={() => window.location.reload()}
-        >
-          Reload
-        </button>
-      </section>
-    </main>
-  )
-}
-
 // Bootstrap chain: `use(configPromise)` suspends until config resolves
 // (window injection → /config.json → defaults). Once resolved, build the
 // runtime router (route shape depends on auth provider + billingEnabled)
 // and install it so module-level consumers like clerk-auth-provider can
 // imperatively navigate via `getAppRouter()`.
 function AppShell({ config }: { config: EngramConfig }) {
+  // Dev-only crash trigger for eyeballing ErrorFallback. Throws HERE, above
+  // RouterProvider, on purpose: a throwing *route* would be caught by React
+  // Router's own error boundary, not the outer Sentry.ErrorBoundary we're
+  // styling. Visit `?boom` to see the real crash page. Stripped from prod
+  // builds by the import.meta.env.DEV gate.
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('boom')) {
+    throw new Error('Intentional crash (?boom) — testing ErrorFallback')
+  }
+
   const AuthProvider = config.authProvider === 'clerk' ? ClerkAuthProvider : LocalAuthProvider
   // Memoize so StrictMode's double-render + any future ConfigProvider
   // updates don't blow away the router instance + its history stack.
