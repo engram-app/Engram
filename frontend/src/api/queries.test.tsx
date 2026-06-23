@@ -1002,17 +1002,17 @@ describe('useCreateNote — optimistic placeholder', () => {
 })
 
 describe('useBatchMoveNotes', () => {
-  it('POSTs ids + target_folder_id with UUID idempotency header', async () => {
+  it('POSTs ids + target_folder path with UUID idempotency header', async () => {
     post.mockResolvedValue({ moved: 2 })
 
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     await act(async () => {
-      await result.current.mutateAsync({ ids: ['1', '2'], target_folder_id: '9' })
+      await result.current.mutateAsync({ ids: ['1', '2'], target_folder: 'dst' })
     })
 
     expect(post).toHaveBeenCalledWith(
       '/notes/batch-move',
-      { ids: ['1', '2'], target_folder_id: '9' },
+      { ids: ['1', '2'], target_folder: 'dst' },
       expect.objectContaining({
         headers: expect.objectContaining({
           'X-Idempotency-Key': expect.stringMatching(UUID_RE),
@@ -1030,7 +1030,7 @@ describe('useBatchMoveNotes', () => {
 
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     act(() => {
-      result.current.mutate({ ids: ['1', '2'], target_folder_id: '9' })
+      result.current.mutate({ ids: ['1', '2'], target_folder: 'dst' })
     })
 
     await waitFor(() => {
@@ -1048,7 +1048,7 @@ describe('useBatchMoveNotes', () => {
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     await act(async () => {
       try {
-        await result.current.mutateAsync({ ids: ['1', '2'], target_folder_id: '9' })
+        await result.current.mutateAsync({ ids: ['1', '2'], target_folder: 'dst' })
       } catch {
         // expected
       }
@@ -1073,7 +1073,7 @@ describe('useBatchMoveNotes', () => {
 
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     act(() => {
-      result.current.mutate({ ids: ['1', '2'], target_folder_id: '9' })
+      result.current.mutate({ ids: ['1', '2'], target_folder: 'dst' })
     })
 
     await waitFor(() => {
@@ -1099,7 +1099,7 @@ describe('useBatchMoveNotes', () => {
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     await act(async () => {
       try {
-        await result.current.mutateAsync({ ids: ['1', '2'], target_folder_id: '9' })
+        await result.current.mutateAsync({ ids: ['1', '2'], target_folder: 'dst' })
       } catch {
         // expected
       }
@@ -1124,7 +1124,7 @@ describe('useBatchMoveNotes', () => {
 
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     act(() => {
-      result.current.mutate({ ids: ['1'], target_folder_id: 'root' })
+      result.current.mutate({ ids: ['1'], target_folder: '' })
     })
 
     await waitFor(() => {
@@ -1154,7 +1154,7 @@ describe('useBatchMoveNotes', () => {
 
     const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
     act(() => {
-      result.current.mutate({ ids: ['1'], target_folder_id: '9' })
+      result.current.mutate({ ids: ['1'], target_folder: 'dst' })
     })
 
     await waitFor(() => {
@@ -1163,6 +1163,50 @@ describe('useBatchMoveNotes', () => {
       const dst = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '9'])
       expect(dst?.map((n) => n.id)).toContain('1')
     })
+
+    resolvePost({ moved: 1 })
+  })
+
+  it('moves notes into a DERIVED folder (no marker) keyed under its syn: id', async () => {
+    qc.setQueryData(['folders', '42'], {
+      // A derived folder comes back from the backend with a null id; the
+      // optimistic patch must key its note list under syn:<path>, the same id
+      // the loader uses, and bump its count by name (id is null in this cache).
+      folders: [
+        { id: '5', parent_id: null, name: 'src', count: 2 },
+        { id: null, parent_id: null, name: 'Derived', count: 0 },
+      ] as unknown as Folder[],
+    })
+    seedFolderNotesById('5', [{ id: '1' }, { id: '2' }])
+    qc.setQueryData(['folder-notes-by-id', '42', 'syn:Derived'], [])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder: 'Derived' })
+    })
+
+    await waitFor(() => {
+      const dst = qc.getQueryData<Array<{ id: string; folder: string }>>([
+        'folder-notes-by-id',
+        '42',
+        'syn:Derived',
+      ])
+      expect(dst?.map((n) => n.id)).toContain('1')
+      expect(dst?.find((n) => n.id === '1')?.folder).toBe('Derived')
+      const src = qc.getQueryData<Array<{ id: string }>>(['folder-notes-by-id', '42', '5'])
+      expect(src?.map((n) => n.id)).toEqual(['2'])
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+      expect(folders?.folders.find((f) => f.name === 'Derived')?.count).toBe(1)
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/notes/batch-move',
+      { ids: ['1'], target_folder: 'Derived' },
+      expect.anything(),
+    )
 
     resolvePost({ moved: 1 })
   })
@@ -1243,19 +1287,19 @@ describe('useBatchDeleteFolders', () => {
 })
 
 describe('useBatchMoveFolders', () => {
-  it('POSTs target_parent_id (NOT target_folder_id) with UUID idempotency header', async () => {
+  it('POSTs target_parent (NOT target_folder) with UUID idempotency header', async () => {
     post.mockResolvedValue({ moved: 1 })
 
     const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
     await act(async () => {
-      await result.current.mutateAsync({ ids: ['7'], target_parent_id: '9' })
+      await result.current.mutateAsync({ ids: ['7'], target_parent: 'dst' })
     })
 
     expect(post).toHaveBeenCalledWith(
       '/folders/batch-move',
-      // Regression: the folders endpoint uses `target_parent_id`, NOT
-      // `target_folder_id` (notes endpoint). Don't conflate them.
-      { ids: ['7'], target_parent_id: '9' },
+      // Regression: the folders endpoint uses `target_parent`, NOT
+      // `target_folder` (notes endpoint). Don't conflate them.
+      { ids: ['7'], target_parent: 'dst' },
       expect.objectContaining({
         headers: expect.objectContaining({
           'X-Idempotency-Key': expect.stringMatching(UUID_RE),
@@ -1278,7 +1322,7 @@ describe('useBatchMoveFolders', () => {
 
     const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
     act(() => {
-      result.current.mutate({ ids: ['7'], target_parent_id: '9' })
+      result.current.mutate({ ids: ['7'], target_parent: 'dst' })
     })
 
     await waitFor(() => {
@@ -1299,6 +1343,40 @@ describe('useBatchMoveFolders', () => {
     resolvePost({ moved: 2 })
   })
 
+  it('re-parents a folder under a DERIVED parent (syn: id)', async () => {
+    qc.setQueryData(['folders', '42'], {
+      // Derived parent: backend id is null. The moved folder's parent_id must
+      // flip to syn:<path> (the loader id), and its name prefix to the path.
+      folders: [
+        { id: '7', parent_id: null, name: 'src', count: 0 },
+        { id: null, parent_id: null, name: 'Derived', count: 0 },
+      ] as unknown as Folder[],
+    })
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['7'], target_parent: 'Derived' })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+      const moved = folders?.folders.find((f) => f.id === '7')
+      expect(moved?.name).toBe('Derived/src')
+      expect(moved?.parent_id).toBe('syn:Derived')
+    })
+
+    expect(post).toHaveBeenCalledWith(
+      '/folders/batch-move',
+      { ids: ['7'], target_parent: 'Derived' },
+      expect.anything(),
+    )
+
+    resolvePost({ moved: 1 })
+  })
+
   it('rolls back on error', async () => {
     qc.setQueryData(['folders', '42'], {
       folders: [
@@ -1311,7 +1389,7 @@ describe('useBatchMoveFolders', () => {
     const { result } = renderHook(() => useBatchMoveFolders(), { wrapper })
     await act(async () => {
       try {
-        await result.current.mutateAsync({ ids: ['7'], target_parent_id: '9' })
+        await result.current.mutateAsync({ ids: ['7'], target_parent: 'dst' })
       } catch {
         // expected
       }
