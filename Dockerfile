@@ -137,6 +137,7 @@ RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
     mix deps.get --only $MIX_ENV && \
     mix compile --force && \
     mix release && \
+    sh -c 'grep -q ECS_ENABLE_CLUSTER /app/_build/prod/rel/engram/releases/*/env.sh || { echo "FATAL: clustering gate (ECS_ENABLE_CLUSTER) missing from release env.sh — was rel/ copied before mix release? See engram-app/Engram#710" >&2; exit 1; }' && \
     cp -r /app/_build/prod/rel/engram /app/_release
 
 # ─── Runner ───────────────────────────────────────────────────────────────
