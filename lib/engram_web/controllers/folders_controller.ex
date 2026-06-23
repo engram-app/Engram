@@ -317,37 +317,31 @@ defmodule EngramWeb.FoldersController do
     ]
   )
 
+  # Re-parent under a folder PATH — works for a derived parent (no marker). The
+  # target path is sanitized downstream by rename_folder, so traversal is safe.
+  def batch_move(conn, %{"ids" => ids, "target_parent" => folder})
+      when is_list(ids) and is_binary(folder) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case parse_uuid_list(ids) do
+      {:ok, ids} ->
+        result = Notes.batch_move_folders(user, vault, ids, {:path, folder})
+        send_move_result(conn, user, vault, ids, result, %{target_parent: folder})
+
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid_ids"})
+    end
+  end
+
   def batch_move(conn, %{"ids" => ids, "target_parent_id" => tgt}) when is_list(ids) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
     with {:ok, ids} <- parse_uuid_list(ids),
          {:ok, tgt} <- parse_move_target(tgt) do
-      case Notes.batch_move_folders(user, vault, ids, tgt) do
-        {:ok, %{moved: n}} ->
-          body = %{moved: n}
-          Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
-
-          broadcast_batch(user, vault, %{
-            op: "move",
-            ids: ids,
-            target_parent_id: tgt
-          })
-
-          json(conn, body)
-
-        {:error, {:not_found, id}} ->
-          conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
-
-        {:error, {:conflict, id}} ->
-          conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
-
-        {:error, {:cycle, id}} ->
-          conn |> put_status(409) |> json(%{error: "cycle", item_id: id})
-
-        {:error, _reason} ->
-          conn |> put_status(500) |> json(%{error: "internal"})
-      end
+      result = Notes.batch_move_folders(user, vault, ids, tgt)
+      send_move_result(conn, user, vault, ids, result, %{target_parent_id: tgt})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
     end
@@ -356,7 +350,31 @@ defmodule EngramWeb.FoldersController do
   def batch_move(conn, _params) do
     conn
     |> put_status(400)
-    |> json(%{error: "missing required params: ids, target_parent_id"})
+    |> json(%{error: "missing required params: ids, and target_parent or target_parent_id"})
+  end
+
+  # Shared response for both move variants. `broadcast_extra` carries the new
+  # parent (target_parent path or target_parent_id) to peer sessions.
+  defp send_move_result(conn, user, vault, ids, result, broadcast_extra) do
+    case result do
+      {:ok, %{moved: n}} ->
+        body = %{moved: n}
+        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+        broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
+        json(conn, body)
+
+      {:error, {:not_found, id}} ->
+        conn |> put_status(404) |> json(%{error: "not_found", item_id: id})
+
+      {:error, {:conflict, id}} ->
+        conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+      {:error, {:cycle, id}} ->
+        conn |> put_status(409) |> json(%{error: "cycle", item_id: id})
+
+      {:error, _reason} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
+    end
   end
 
   # Low-cardinality error formatter for JSON responses; avoids inspect/1 leaking term shape.

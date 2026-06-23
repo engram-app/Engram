@@ -994,32 +994,25 @@ defmodule Engram.Notes do
   (after-commit hooks so broadcasts only fire post-commit) is tracked as a
   follow-up and will land before more batch ops are added.
   """
-  @spec batch_move_notes(map(), map(), [String.t()], String.t()) ::
+  @spec batch_move_notes(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
-  def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
+  # Move into a folder given by PATH. No marker is required — a "derived" folder
+  # exists purely as a path on its notes. `folder == ""` means the vault root.
+  def batch_move_notes(user, vault, ids, {:path, folder})
+      when is_list(ids) and is_binary(folder) do
     Repo.transaction(fn ->
       case Crypto.ensure_user_dek(user) do
-        {:ok, user} ->
-          ids
-          |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-            case move_note_into_folder(user, vault, id, "") do
-              {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-              {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
-              {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-            end
-          end)
-          |> case do
-            {:rollback, reason} -> Repo.rollback(reason)
-            acc -> acc
-          end
-
-        {:error, reason} ->
-          Repo.rollback(reason)
+        {:ok, user} -> reduce_move_notes(user, vault, ids, folder)
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  def batch_move_notes(user, vault, ids, "root") when is_list(ids) do
+    batch_move_notes(user, vault, ids, {:path, ""})
   end
 
   def batch_move_notes(user, vault, ids, target_folder_id)
@@ -1029,27 +1022,31 @@ defmodule Engram.Notes do
            {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
            {:ok, dek} <- Crypto.get_dek(user) do
         target_folder = hydrate_folder_marker(marker, dek).folder
-
-        ids
-        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-          case move_note_into_folder(user, vault, id, target_folder) do
-            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-            # move_note_into_folder wraps the conflict error as
-            # {:error, {:conflict, id}}; the bare :not_found from the inner
-            # get_note_by_id propagates through `with`.
-            {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
-            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-          end
-        end)
-        |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
-        end
+        reduce_move_notes(user, vault, ids, target_folder)
       else
         {:error, :not_found} -> Repo.rollback({:not_found, target_folder_id})
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  # Shared move loop (runs inside a transaction): move each id into
+  # `target_folder` (a path), rolling the whole batch back on the first failure.
+  # move_note_into_folder wraps a path collision as {:error, {:conflict, id}};
+  # the bare :not_found from the inner get_note_by_id is tagged with its id here.
+  defp reduce_move_notes(user, vault, ids, target_folder) do
+    ids
+    |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+      case move_note_into_folder(user, vault, id, target_folder) do
+        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+        {:error, {kind, id_err}} -> {:halt, {:rollback, {kind, id_err}}}
+        {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+      end
+    end)
+    |> case do
+      {:rollback, reason} -> Repo.rollback(reason)
+      acc -> acc
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -2583,33 +2580,27 @@ defmodule Engram.Notes do
   fires per-note broadcasts inside the transaction; rolled-back batches may
   leak events.
   """
-  @spec batch_move_folders(map(), map(), [String.t()], String.t()) ::
+  @spec batch_move_folders(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
-  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
+  # Move folders under a parent given by PATH. No marker is required at the
+  # target — a "derived" parent exists purely as a path. `folder == ""` is root.
+  def batch_move_folders(user, vault, marker_ids, {:path, folder})
+      when is_list(marker_ids) and is_binary(folder) do
     Repo.transaction(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, dek} <- Crypto.get_dek(user) do
-        marker_ids
-        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-          case move_folder_into(user, vault, id, "", dek) do
-            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
-            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
-            {:error, reason} -> {:halt, {:rollback, reason}}
-          end
-        end)
-        |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
-        end
+        reduce_move_folders(user, vault, marker_ids, folder, dek)
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
+    batch_move_folders(user, vault, marker_ids, {:path, ""})
   end
 
   def batch_move_folders(user, vault, marker_ids, target_folder_id)
@@ -2619,26 +2610,31 @@ defmodule Engram.Notes do
            {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
            {:ok, dek} <- Crypto.get_dek(user) do
         target_folder = hydrate_folder_marker(target_marker, dek).folder
-
-        marker_ids
-        |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
-          case move_folder_into(user, vault, id, target_folder, dek) do
-            {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-            {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-            {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
-            {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
-            {:error, reason} -> {:halt, {:rollback, reason}}
-          end
-        end)
-        |> case do
-          {:rollback, reason} -> Repo.rollback(reason)
-          acc -> acc
-        end
+        reduce_move_folders(user, vault, marker_ids, target_folder, dek)
       else
         {:error, :not_found} -> Repo.rollback({:not_found, target_folder_id})
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  # Shared move loop (runs inside a transaction): move each marker under
+  # `target_folder` (a path), rolling the whole batch back on the first failure.
+  defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
+    marker_ids
+    |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+      case move_folder_into(user, vault, id, target_folder, dek) do
+        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
+        {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
+        {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
+        {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
+        {:error, reason} -> {:halt, {:rollback, reason}}
+      end
+    end)
+    |> case do
+      {:rollback, reason} -> Repo.rollback(reason)
+      acc -> acc
+    end
   end
 
   # Resolve source marker → compute new folder under target → delegate to

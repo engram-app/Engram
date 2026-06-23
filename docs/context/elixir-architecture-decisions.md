@@ -31,7 +31,7 @@ Complete decision audit for the Engram Elixir/Phoenix architecture. Captures wha
 | **Clustering** | **dns_cluster** | Auto node discovery via DNS, enables distributed PubSub. _UPDATE: prod runs on AWS ECS Fargate, not Fly — discovery is via the platform's service DNS, not Fly `.internal`._ |
 | **PubSub** | **Phoenix.PubSub.PG2** | Native Erlang distribution, cross-region broadcast, no Redis needed |
 | **Caching** | **ETS** (Erlang Term Storage) | In-process, clustered via PubSub if needed, eliminates Redis dependency |
-| **Rate limiting** | **Hammer** | Token bucket, ETS or Redis backend, Plug integration |
+| **Rate limiting** | **Hammer** | Token bucket, ETS backend, Plug integration. _UPDATE (2026-06-21): the Redis backend was removed — clustered prod uses a distributed ETS + Phoenix.PubSub limiter, self-host plain ETS; the durable daily search cap moved to a Postgres token bucket (`usage_buckets`)._ |
 | **Auth: JWT** | **Joken** | Lightweight, Plug-native |
 | **Auth: API keys** | **SHA256 hash + ETS cache** | Same security model, fast in-process caching |
 | **S3 client** | **ExAws + ExAws.S3** | Battle-tested, S3-compatible. _UPDATE: attachments live in AWS S3 (not Fly Tigris)._ |
@@ -76,7 +76,7 @@ Complete decision audit for the Engram Elixir/Phoenix architecture. Captures wha
 | **Oban** | ~> 2.18 | PostgreSQL-backed job queue | Production |
 | **Joken** (+ joken_jwks) | ~> 2.6 | JWT sign/verify (Clerk JWKS) | Production |
 | **ExAws** + **ExAws.S3** + **ExAws.KMS** | ~> 2.5 / 2.4 | S3 client (AWS S3) + KMS | Production |
-| **Hammer** (+ hammer_backend_redis) | ~> 7.3 / 7.0 | Rate limiting (ETS default; Redis backend for clustered prod) | Production |
+| **Hammer** | ~> 7.3 | Rate limiting (ETS default; distributed ETS + Phoenix.PubSub for clustered prod — `hammer_backend_redis` removed 2026-06-21) | Production |
 | **Earmark** | ~> 1.4 | Markdown → AST parsing | Production |
 | **Req** | ~> 0.5 | HTTP client (Qdrant, Voyage AI) | Production |
 | _MCP server_ | (hand-rolled) | No external MCP dep — `lib/engram/mcp/` | — |
@@ -87,7 +87,7 @@ Complete decision audit for the Engram Elixir/Phoenix architecture. Captures wha
 | **Mox** | ~> 1.1 (test) | Behaviour-based mocks | Production |
 | **Bypass** | ~> 2.1 (test) | HTTP mock server | Production |
 
-_Note: **Redix** is NOT a direct dependency. The only Redis touchpoint is `hammer_backend_redis`, used solely as the shared rate-limit store in clustered SaaS prod; self-host stays Redis-free (ETS backend)._
+_Note: there is **no Redis/Redix dependency**. The `hammer_backend_redis` + ElastiCache path was removed 2026-06-21 — clustered SaaS prod uses a distributed ETS + Phoenix.PubSub rate limiter, self-host uses plain ETS, and the durable daily search cap is a Postgres token bucket._
 
 ## Development Environment
 

@@ -149,6 +149,51 @@ defmodule Engram.NotesBatchTest do
       {:ok, moved} = Notes.get_note_by_id(user, vault, n1.id)
       assert moved.path == "a.md"
     end
+
+    test "moves notes into a folder by PATH with no marker (derived target)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"})
+
+      # No create_folder_marker — "Derived/Sub" exists only as a path. Notes
+      # should still move into it (derived folders need no marker).
+      assert {:ok, %{moved: 2}} =
+               Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Derived/Sub"})
+
+      {:ok, n1_after} = Notes.get_note_by_id(user, vault, n1.id)
+      assert n1_after.path == "Derived/Sub/a.md"
+      assert n1_after.folder == "Derived/Sub"
+    end
+
+    test "path target \"\" moves a note to the vault root", %{user: user, vault: vault} do
+      {:ok, _m} = Notes.create_folder_marker(user, vault, "Archive")
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+
+      assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], {:path, ""})
+
+      {:ok, moved} = Notes.get_note_by_id(user, vault, n1.id)
+      assert moved.path == "a.md"
+    end
+
+    test "path move rolls back on a cross-vault id", %{
+      user: user,
+      vault: vault,
+      other_user: other_user,
+      other_vault: other_vault
+    } do
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, foreign} = Notes.upsert_note(other_user, other_vault, %{path: "f.md"})
+
+      assert {:error, {:not_found, id}} =
+               Notes.batch_move_notes(user, vault, [n1.id, foreign.id], {:path, "Derived"})
+
+      assert id == foreign.id
+      # Atomic: n1 stayed put.
+      {:ok, n1_after} = Notes.get_note_by_id(user, vault, n1.id)
+      assert n1_after.path == "a.md"
+    end
   end
 
   describe "batch_delete_folders/2" do
@@ -246,6 +291,20 @@ defmodule Engram.NotesBatchTest do
       assert "Parent/B" in names
       refute "A" in names
       refute "B" in names
+    end
+
+    test "moves a folder into a derived target by PATH (no marker)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+
+      # "Derived" has no marker — the folder still moves into it by path.
+      assert {:ok, %{moved: 1}} =
+               Notes.batch_move_folders(user, vault, [m1.id], {:path, "Derived"})
+
+      assert {:ok, %{path: "Derived/A/a.md"}} = Notes.get_note(user, vault, "Derived/A/a.md")
     end
 
     test "rolls back on conflict (target already has a same-named child)",
