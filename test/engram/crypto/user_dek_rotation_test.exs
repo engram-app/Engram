@@ -8,6 +8,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
   alias Engram.Repo
+  alias Engram.Test.LogCapture
   alias Engram.Vector.Qdrant
 
   # Module-level Bypass: stubs Qdrant scroll with empty results so all existing
@@ -1364,6 +1365,34 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(reloaded_note2, reloaded_user)
       assert decrypted.content == "sweep content"
+    end
+  end
+
+  describe "rotate_user/1 — logging taxonomy" do
+    setup do
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+      :ok
+    end
+
+    test "completion milestone logs category=:crypto with loki_ship=true", %{user: user} do
+      {result, events} =
+        LogCapture.with_events(fn ->
+          UserDekRotation.rotate_user(user.id)
+        end)
+
+      assert result == :ok
+
+      event =
+        Enum.find(events, fn e ->
+          e.meta[:phase] == :rotate_complete and e.level == :info
+        end)
+
+      assert event, "expected a :rotate_complete milestone event, got: #{inspect(events)}"
+      assert event.meta[:category] == :crypto
+      assert event.meta[:loki_ship] == true
+      assert event.meta[:user_id] == user.id
     end
   end
 end

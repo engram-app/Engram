@@ -282,7 +282,7 @@ defmodule Engram.Crypto.MasterRotation do
     # diagnosable, not just countable.
     Logger.error(
       "master rotation failed user_id=#{user_id} reason_label=#{label}",
-      category: :crypto_rotation
+      Engram.Logger.Metadata.with_category(:error, :crypto, user_id: user_id, reason_label: label)
     )
 
     :telemetry.execute(

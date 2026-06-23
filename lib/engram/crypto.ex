@@ -657,7 +657,8 @@ defmodule Engram.Crypto do
     )
 
     Logger.error(
-      "qdrant decrypt shape mismatch: vault_id=#{inspect(vault_id_key)} qdrant_id=#{inspect(qdrant_id)} reason=#{reason}"
+      "qdrant decrypt shape mismatch: vault_id=#{inspect(vault_id_key)} qdrant_id=#{inspect(qdrant_id)} reason=#{reason}",
+      Engram.Logger.Metadata.with_category(:error, :crypto, qdrant_id: qdrant_id)
     )
   end
 
@@ -726,7 +727,11 @@ defmodule Engram.Crypto do
         )
 
         Logger.error(
-          "qdrant decrypt: failed for qdrant_id=#{inspect(qdrant_id)} vault_id=#{inspect(vault_id)} reason=#{inspect(reason)}"
+          "qdrant decrypt: failed for qdrant_id=#{inspect(qdrant_id)} vault_id=#{inspect(vault_id)} reason=#{inspect(reason)}",
+          Engram.Logger.Metadata.with_category(:error, :crypto,
+            qdrant_id: qdrant_id,
+            reason: inspect(reason)
+          )
         )
 
         []
