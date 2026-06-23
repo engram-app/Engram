@@ -55,7 +55,12 @@ export function useSubscriptionActivatedEvents({
       })
     }
 
-    connect()
+    // Never let the fire-and-forget promise dangle: a rejecting getToken()
+    // would otherwise escape as an unhandled rejection. Swallow + log,
+    // mirroring the channel-join error path.
+    connect().catch((err) => {
+      console.error('user channel connect failed (subscription activation listener)', err)
+    })
 
     return () => {
       cancelled = true
