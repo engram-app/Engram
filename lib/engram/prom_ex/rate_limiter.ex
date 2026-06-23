@@ -47,4 +47,54 @@ defmodule Engram.PromEx.RateLimiter do
       ]
     )
   end
+
+  @impl true
+  def polling_metrics(opts) do
+    otp_app = Keyword.fetch!(opts, :otp_app)
+    metric_prefix = PromEx.metric_prefix(otp_app, :rate_limiter)
+    poll_rate = Keyword.get(opts, :rate_limiter_poll_rate, 5_000)
+
+    Polling.build(
+      :engram_rate_limiter_polling_metrics,
+      poll_rate,
+      {__MODULE__, :execute_cluster_metrics, []},
+      [
+        last_value(
+          metric_prefix ++ [:cluster, :peers],
+          event_name: [:engram, :rate_limiter, :cluster],
+          measurement: :peers,
+          description:
+            "Connected BEAM peer nodes. 0 = standalone/unclustered → rate-limit counts are per-node only."
+        ),
+        last_value(
+          metric_prefix ++ [:cluster, :distributed],
+          event_name: [:engram, :rate_limiter, :cluster],
+          measurement: :distributed,
+          description:
+            "1 when the cluster-shared :distributed_ets backend is active, else 0 (per-node :ets)."
+        )
+      ]
+    )
+  end
+
+  @doc """
+  Polled emitter for cluster status. Reports the BEAM peer count and whether the
+  cluster-shared backend is active, so the limiter telemetry is interpretable in
+  BOTH clustered and standalone deploys (self-host or unclustered prod):
+
+    * standalone → `peers: 0, distributed: 0`
+    * clustered  → `peers: >=1, distributed: 1`
+  """
+  @spec execute_cluster_metrics() :: :ok
+  def execute_cluster_metrics do
+    :telemetry.execute(
+      [:engram, :rate_limiter, :cluster],
+      %{peers: length(Node.list()), distributed: distributed_flag()},
+      %{}
+    )
+  end
+
+  defp distributed_flag do
+    if EngramWeb.RateLimiter.backend() == :distributed_ets, do: 1, else: 0
+  end
 end
