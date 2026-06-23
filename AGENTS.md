@@ -154,6 +154,8 @@ NEVER interpolate sensitive values into the message string. `RedactFilter` scrub
 
 **Querying Loki:** prod logs are structured JSON (`logger_json` Basic, `metadata: :all`); dev/test stay text. `logger_json` nests metadata under a `metadata` object, so in LogQL after `| json` the fields are `metadata_category`, `metadata_loki_ship`, `metadata_request_id`, etc.
 
+**Depth on demand:** operators can temporarily raise a single module to `:debug` at runtime via release rpc — `Engram.Logger.DebugToggle.enable(SomeModule)` to flip it on while chasing a live issue, `reset(SomeModule)` to flip it back (levels also reset on node restart).
+
 Design spec: `../engram-workspace/docs/superpowers/specs/2026-06-23-logging-taxonomy-redesign-design.md` (engram-workspace repo).
 
 ## Build Phases — Status
