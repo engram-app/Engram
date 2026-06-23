@@ -55,7 +55,16 @@ config :engram, :storage, Engram.Storage.S3
 config :engram, Oban,
   engine: Oban.Engines.Basic,
   repo: Engram.Repo,
-  queues: [embed: 5, reindex: 1, maintenance: 2, crypto_backfill: 1, export: 1],
+  queues: [
+    embed: 5,
+    reindex: 1,
+    maintenance: 2,
+    crypto_backfill: 1,
+    export: 1,
+    cleanup: 1,
+    indexing: 2,
+    default: 1
+  ],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
     Oban.Plugins.Lifeline,
