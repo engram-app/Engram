@@ -176,7 +176,7 @@ defmodule Engram.Embedders.Voyage do
         # during PubSub propagation / new-node warmup / netsplit. Accepted: the 60s
         # window dwarfs ms-scale propagation, and Voyage 429s are handled downstream.
         # Follow-up tracks tightening this if it bites (see issue).
-        case EngramWeb.RateLimiter.hit(key, 60_000, rpm) do
+        case EngramWeb.RateLimiter.hit(key, 60_000, rpm, :voyage_embed) do
           {:allow, _count} ->
             :ok
 

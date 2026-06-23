@@ -44,9 +44,19 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
     end
 
     # Remote increment → apply to the local ETS counter WITHOUT re-broadcasting.
+    # The `:applied` / `:dropped` telemetry is the cross-node sync signal: on a
+    # rolling deploy, `rate(...remote_inc_total{result="applied"}[1m])` ramping
+    # from a new task's boot shows it warming from peers (no state handoff exists).
     @impl true
     def handle_info({:inc, key, scale, increment}, state) do
       _ = Local.inc(key, scale, increment)
+
+      :telemetry.execute(
+        [:engram, :rate_limiter, :remote_inc],
+        %{count: 1},
+        %{result: :applied}
+      )
+
       {:noreply, state}
     rescue
       error ->
@@ -54,6 +64,12 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
 
         Logger.warning("rate limiter dropped a remote increment",
           error_kind: Engram.Telemetry.error_kind(error)
+        )
+
+        :telemetry.execute(
+          [:engram, :rate_limiter, :remote_inc],
+          %{count: 1},
+          %{result: :dropped}
         )
 
         {:noreply, state}

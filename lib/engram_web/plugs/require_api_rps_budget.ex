@@ -39,7 +39,7 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   end
 
   defp check_rate_limit(conn, user, limit) do
-    case EngramWeb.RateLimiter.hit("api_rps:#{user.id}", @period_ms, limit) do
+    case EngramWeb.RateLimiter.hit("api_rps:#{user.id}", @period_ms, limit, :api_rps) do
       {:allow, _count} -> conn
       {:deny, _retry_after_ms} -> deny(conn, limit)
     end
