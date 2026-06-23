@@ -476,6 +476,17 @@ defmodule Engram.Vaults do
               _ = Engram.Workers.CleanupVault.enqueue(deleted.id, deleted.user_id)
               _ = Engram.Workers.VaultDeletedEmail.enqueue(deleted.user_id, deleted.id)
               emit_vault_count(deleted.user_id, :deleted)
+
+              require Logger
+
+              Logger.info(
+                "vault deleted",
+                Engram.Logger.Metadata.with_category(:info, :lifecycle,
+                  user_id: deleted.user_id,
+                  vault_id: deleted.id
+                )
+              )
+
               result
 
             _ ->
@@ -787,7 +798,12 @@ defmodule Engram.Vaults do
         require Logger
 
         Logger.error(
-          "vault decrypt_failed user_id=#{user.id} vault_id=#{vault.id} reason=#{inspect(reason)}"
+          "vault decrypt_failed",
+          Engram.Logger.Metadata.with_category(:error, :crypto,
+            user_id: user.id,
+            vault_id: vault.id,
+            reason: inspect(reason)
+          )
         )
 
         vault
