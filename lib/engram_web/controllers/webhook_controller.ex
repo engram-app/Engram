@@ -185,8 +185,12 @@ defmodule EngramWeb.WebhookController do
           errors = Ecto.Changeset.traverse_errors(changeset, fn {m, _} -> m end)
 
           Logger.error(
-            "Resend suppression insert failed: #{inspect(errors)}",
-            Metadata.with_category(:error, :lifecycle, reason_label: reason)
+            "Resend suppression insert failed",
+            Metadata.with_category(:error, :lifecycle,
+              reason_label: reason,
+              # noqa: T3.0.6 — Logger metadata only; field names + validator messages, no PII
+              reason: inspect(errors)
+            )
           )
       end
     end)

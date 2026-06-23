@@ -316,6 +316,7 @@ defmodule EngramWeb.AttachmentsController do
           "Failed to list attachments",
           Engram.Logger.Metadata.with_category(:error, :sync,
             vault_id: vault.id,
+            # noqa: T3.0.6 — Logger metadata only; bounded ExAws error term
             reason: inspect(reason)
           )
         )
