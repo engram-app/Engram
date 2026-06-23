@@ -166,9 +166,12 @@ defmodule EngramWeb.McpController do
       # server-side; surface a low-cardinality label to the client.
       require Logger
 
-      Logger.error("mcp tool dispatch trapped",
-        kind: kind,
-        reason_label: classify_throw_reason(reason)
+      Logger.error(
+        "mcp tool dispatch trapped",
+        Engram.Logger.Metadata.with_category(:error, :http,
+          kind: kind,
+          reason_label: classify_throw_reason(reason)
+        )
       )
 
       message =

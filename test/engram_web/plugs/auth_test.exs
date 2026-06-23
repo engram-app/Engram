@@ -159,6 +159,20 @@ defmodule EngramWeb.Plugs.AuthTest do
              "expected an auth-rejected event with reason=no_auth, got: #{inspect(events)}"
     end
 
+    test "auth rejection ships to Loki with category :auth at :warning" do
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          build_conn() |> Auth.call([])
+        end)
+
+      auth_event = Enum.find(events, &match?({:string, "auth rejected"}, &1.msg))
+      assert auth_event, "expected an 'auth rejected' event"
+
+      assert auth_event.level == :warning
+      assert auth_event.meta[:category] == :auth
+      assert auth_event.meta[:loki_ship] == true
+    end
+
     test "scrubs request_path metadata via the global redact filter" do
       sentinel = "/api/notes/secret-folder/XYZZYZ-LOGTEST-confidential.md"
 

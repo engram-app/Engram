@@ -17,6 +17,7 @@ defmodule Engram.Auth.Clerk.Webhook do
   alias Engram.Accounts
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.SignupRejections
+  alias Engram.Logger.Metadata
   alias Engram.Repo
 
   require Logger
@@ -63,8 +64,10 @@ defmodule Engram.Auth.Clerk.Webhook do
 
             Logger.warning(
               "Clerk user.deleted blocked by last-admin guard; user stays soft-deleted",
-              user_id: user.id,
-              clerk_user_id: clerk_id
+              Metadata.with_category(:warning, :lifecycle,
+                user_id: user.id,
+                clerk_user_id: clerk_id
+              )
             )
 
             :ok
@@ -102,9 +105,12 @@ defmodule Engram.Auth.Clerk.Webhook do
   defp apply_user_created(clerk_id, email, normalized) do
     case Accounts.find_by_normalized_email(normalized) do
       {:ok, _existing} ->
-        Logger.warning("Clerk signup rejected — normalized email already exists",
-          clerk_user_id: clerk_id,
-          normalized_email_hash: hash(normalized)
+        Logger.warning(
+          "Clerk signup rejected — normalized email already exists",
+          Metadata.with_category(:warning, :auth,
+            clerk_user_id: clerk_id,
+            normalized_email_hash: hash(normalized)
+          )
         )
 
         # Stash the reason before the delete orphans the session, so the web app
@@ -138,9 +144,12 @@ defmodule Engram.Auth.Clerk.Webhook do
           %{normalized_email_hash: hash(normalized), reason: inspect(reason)}
         )
 
-        Logger.error("Clerk delete_user did not revoke duplicate signup — account still live",
-          clerk_user_id: clerk_id,
-          reason: inspect(reason)
+        Logger.error(
+          "Clerk delete_user did not revoke duplicate signup — account still live",
+          Metadata.with_category(:error, :auth,
+            clerk_user_id: clerk_id,
+            reason: inspect(reason)
+          )
         )
     end
   end
@@ -186,9 +195,12 @@ defmodule Engram.Auth.Clerk.Webhook do
             %{user_id: user.id, normalized_email_hash: hash(normalized)}
           )
 
-          Logger.warning("Clerk email sync skipped — normalized email collides with another user",
-            user_id: user.id,
-            normalized_email_hash: hash(normalized)
+          Logger.warning(
+            "Clerk email sync skipped — normalized email collides with another user",
+            Metadata.with_category(:warning, :lifecycle,
+              user_id: user.id,
+              normalized_email_hash: hash(normalized)
+            )
           )
 
           :ok

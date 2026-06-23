@@ -7,8 +7,9 @@ defmodule EngramWeb.Plugs.Auth do
   3. Legacy JWT: `Authorization: Bearer <jwt-without-kid>` — for backward compat (HS256)
 
   Sets `conn.assigns.current_user` on success, halts with 401 on failure.
-  Logs the failure reason at :info so 401s in production are diagnosable
-  (expired token vs bad signature vs missing user) without a redeploy.
+  Logs the failure reason at :warning (category `:auth`, ships to Loki) so
+  401s in production are diagnosable (expired token vs bad signature vs
+  missing user) without a redeploy.
   """
 
   import Plug.Conn
@@ -36,9 +37,12 @@ defmodule EngramWeb.Plugs.Auth do
         |> assign(:current_api_key, api_key)
 
       {:error, reason} ->
-        Logger.info("auth rejected",
-          reason: format_reason(reason),
-          request_path: conn.request_path
+        Logger.warning(
+          "auth rejected",
+          Engram.Logger.Metadata.with_category(:warning, :auth,
+            reason: format_reason(reason),
+            request_path: conn.request_path
+          )
         )
 
         # Alertable counter (the log is grep-only). Coarse bounded reason tag.
