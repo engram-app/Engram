@@ -19,6 +19,10 @@ defmodule Engram.PromEx.RateLimiterTest do
     assert Enum.all?(events, &match?(%Event{}, &1))
   end
 
+  test "is registered in the PromEx plugin list (else metrics never reach /metrics)" do
+    assert Plugin in Engram.PromEx.plugins()
+  end
+
   test "declares a counter on [:engram, :rate_limiter, :hit] tagged [:purpose, :result]" do
     target = [:engram, :rate_limiter, :hit]
 
