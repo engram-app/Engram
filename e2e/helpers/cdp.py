@@ -1065,6 +1065,31 @@ class CdpClient:
         await self.evaluate(f"{ENGINE_PATH}.queue.entries.clear()")
         logger.info("Queue cleared on CDP port %d", self.port)
 
+    async def reset_sync_state(self) -> None:
+        """Clear the offline queue AND sync issues for per-test isolation.
+
+        Quiet, best-effort sibling of clear_queue() used by the per-test
+        autouse fixture. The Obsidian instances are session-scoped but
+        settings.vaultId churns per test (each test re-registers its vault).
+        The offline queue keys entries by `{vaultId}:{path}` and flushQueue
+        dequeues by the CURRENT settings.vaultId, so an entry enqueued under
+        an earlier test's vaultId can never be dequeued and lingers forever
+        (`queue.size` counts entries across ALL vaultIds). Clearing both
+        stores between tests stops that cross-test leakage. See engram#635.
+        """
+        await self.evaluate(
+            f"""
+            (function() {{
+                const se = {ENGINE_PATH};
+                if (se && se.queue && se.queue.entries) se.queue.entries.clear();
+                if (se && se.issues && typeof se.issues.clearAll === 'function') {{
+                    se.issues.clearAll();
+                }}
+                return 'reset';
+            }})()
+            """
+        )
+
     async def persist_plugin_data(self) -> None:
         """Synchronously flush settings + queue + sync state to data.json.
 

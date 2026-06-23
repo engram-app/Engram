@@ -406,6 +406,42 @@ async def _track_apikey_wipe(request):
         )
 
 
+@pytest.fixture(autouse=True)
+async def _isolate_offline_queue(request):
+    """Reset each used instance's offline queue + issues BEFORE every test.
+
+    Obsidian instances are session-scoped (one process per worker for the
+    whole suite), but every test re-registers its vault, so settings.vaultId
+    churns across tests. The offline queue keys entries by `{vaultId}:{path}`
+    and flushQueue dequeues by the CURRENT settings.vaultId — so an entry
+    enqueued under a prior test's vaultId can never be dequeued and lingers
+    in the queue forever (`queue.size` counts entries across ALL vaultIds).
+
+    Any offline test that doesn't fully drain leaks those orphaned entries
+    into every later test; drain-to-zero tests (test_24/test_29) then fail
+    with "Queue not drained" against foreign-vaultId entries they never
+    created. engram#635 misdiagnosed this as an offline-flag load race and
+    only stabilized the flag timing, so the failure kept recurring.
+
+    Clearing per-test guarantees each test starts from an empty queue. Skips
+    tests that don't use a CDP instance (api_only, etc.). Best-effort: an
+    instance not yet booted on this worker must not fail the test, so a reset
+    error is logged at debug and swallowed (no real state to corrupt).
+    """
+    for name in ("cdp_a", "cdp_b", "cdp_c"):
+        if name not in request.fixturenames:
+            continue
+        try:
+            cdp = request.getfixturevalue(name)
+            await cdp.reset_sync_state()
+        except Exception as e:  # noqa: BLE001 — best-effort pre-test isolation
+            logging.getLogger(__name__).debug(
+                "offline-queue reset skipped for %s/%s: %s",
+                name, request.node.nodeid, e,
+            )
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 async def _assert_plugin_surfaces(cdp_a):
     """Hard-fail once if the plugin under test lacks required surfaces.
