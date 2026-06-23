@@ -25,6 +25,8 @@ defmodule Engram.Release do
   alias (`mix.exs`).
   """
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   @app :engram
@@ -139,7 +141,8 @@ defmodule Engram.Release do
     if legacy_integer_pk?(repo) do
       Logger.warning(
         "[reset_baseline] legacy integer-PK schema detected — dropping public " <>
-          "and replaying the uuid baseline (PG18/uuidv7 cutover)"
+          "and replaying the uuid baseline (PG18/uuidv7 cutover)",
+        Metadata.with_category(:warning, :boot, [])
       )
 
       repo.query!("DROP SCHEMA public CASCADE", [])
@@ -152,11 +155,15 @@ defmodule Engram.Release do
       do_prepare_database(repo)
       _ = Ecto.Migrator.run(repo, :up, all: true)
 
-      Logger.warning("[reset_baseline] schema rebuilt from structure.sql (uuid PKs)")
+      Logger.warning(
+        "[reset_baseline] schema rebuilt from structure.sql (uuid PKs)",
+        Metadata.with_category(:warning, :boot, [])
+      )
     else
       Logger.info(
         "[reset_baseline] schema is not in the legacy integer-PK state — no-op " <>
-          "(safe to leave ENGRAM_DB_RESET_BASELINE set)"
+          "(safe to leave ENGRAM_DB_RESET_BASELINE set)",
+        Metadata.with_category(:info, :boot, [])
       )
     end
 

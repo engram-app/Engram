@@ -71,10 +71,16 @@ defmodule Engram.Observability.PostHog do
         :ok
 
       {:ok, %{status: status, body: body}} ->
-        Logger.warning("posthog capture rejected: status=#{status} body=#{inspect(body)}")
+        Logger.warning(
+          "posthog capture rejected: status=#{status} body=#{inspect(body)}",
+          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+        )
 
       {:error, reason} ->
-        Logger.warning("posthog capture failed: #{inspect(reason)}")
+        Logger.warning(
+          "posthog capture failed: #{inspect(reason)}",
+          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+        )
     end
   end
 

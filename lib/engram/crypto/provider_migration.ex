@@ -234,7 +234,7 @@ defmodule Engram.Crypto.ProviderMigration do
 
     Logger.error(
       "provider migration failed user_id=#{user_id} target=#{target_provider} reason_label=#{label}",
-      category: :crypto_migration
+      Engram.Logger.Metadata.with_category(:error, :crypto, [])
     )
 
     :telemetry.execute(

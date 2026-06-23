@@ -68,7 +68,11 @@ defmodule Engram.SpaIntegrity do
   # only signal, and Fly/K8s restart-loops without an obvious cause.
   @spec fail!(String.t()) :: no_return()
   defp fail!(reason) do
-    Logger.error("SPA integrity check failed: #{reason}", category: :spa_integrity)
+    Logger.error(
+      "SPA integrity check failed: #{reason}",
+      Engram.Logger.Metadata.with_category(:error, :boot, [])
+    )
+
     raise "SPA integrity check failed: #{reason}"
   end
 end

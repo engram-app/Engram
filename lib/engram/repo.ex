@@ -119,9 +119,9 @@ defmodule Engram.Repo do
         true ->
           emit_tenant_event(:tenant_guard_violation, query)
 
-          Logger.error("tenant_guard_violation",
-            category: :repo,
-            table: table_of(query)
+          Logger.error(
+            "tenant_guard_violation",
+            Engram.Logger.Metadata.with_category(:error, :boot, table: table_of(query))
           )
 
           raise Engram.TenantError,
