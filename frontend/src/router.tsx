@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, createBrowserRouter } from 'react-router'
 import AuthGuard from './auth/auth-guard'
+import CatchAllRoute from './auth/catch-all-route'
 import SignInPage from './auth/sign-in'
 import SignUpPage from './auth/sign-up'
 import WaitlistPage from './auth/waitlist'
@@ -8,7 +9,6 @@ import { UpgradeDialogProvider } from './billing/upgrade-dialog-provider'
 import type { EngramConfig } from './config'
 import AppLayout from './layout/app-layout'
 import LoadingPane from './viewer/loading-pane'
-import NotFoundPage from './not-found'
 import SettingsLayout from './settings/settings-layout'
 import { ROUTES } from './routes'
 import OnboardingGate from './onboarding/onboarding-gate'
@@ -182,8 +182,11 @@ export function createAppRouter(config: EngramConfig): AppRouter {
       ],
     },
 
-    // Catch-all (public — typos shouldn't trigger Clerk redirect)
-    { path: '*', element: <NotFoundPage /> },
+    // Catch-all — auth-aware: signed-out visitors are bounced to sign-in
+    // (with return_to), signed-in users see the real 404. A typo for a
+    // logged-in user is just a typo; for a logged-out one there's nothing
+    // to do on a 404 but authenticate.
+    { path: '*', element: <CatchAllRoute /> },
       ],
     },
   ],
