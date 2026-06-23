@@ -111,6 +111,13 @@ RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
 COPY lib lib
 COPY priv priv
 COPY --from=frontend /priv/static/app priv/static/app
+# rel/ holds env.sh.eex, whose ECS_ENABLE_CLUSTER gate exports
+# RELEASE_DISTRIBUTION=name + RELEASE_NODE=engram@<ip> for BEAM clustering
+# (engram-app/Engram#710). Without this COPY, `mix release` below never sees
+# the template and emits the DEFAULT env.sh (short-name `sname` mode) — so the
+# clustering env var lands on a release that can't read it and nodes never
+# connect (peers=0). Must be COPY'd before `mix release`.
+COPY rel rel
 # Compile and release in one RUN, no _build cache mount. Splitting the
 # two steps with a shared _build cache produced stale beams in CI —
 # `mix compile --force` ran but `mix release` in the next RUN still
