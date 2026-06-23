@@ -13,7 +13,7 @@ defmodule Engram.Logger.DebugToggle do
   """
   require Logger
 
-  @spec enable(module()) :: :ok
+  @spec enable(module()) :: :ok | {:error, term()}
   def enable(module) when is_atom(module) do
     Logger.warning(
       "debug logging enabled at runtime",
