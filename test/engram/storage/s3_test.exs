@@ -2,6 +2,7 @@ defmodule Engram.Storage.S3Test do
   use ExUnit.Case, async: false
 
   alias Engram.Storage.S3
+  alias Engram.Test.LogCapture
 
   @bucket "test-bucket"
   @key "user123/photos/test.png"
@@ -145,5 +146,30 @@ defmodule Engram.Storage.S3Test do
 
       assert S3.exists?(@key) == false
     end
+
+    test "logs a shippable :sync error on non-404 failure", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->
+        Plug.Conn.resp(conn, 500, "")
+      end)
+
+      {result, events} = LogCapture.with_events(fn -> S3.exists?(@key) end)
+
+      assert result == false
+
+      event = Enum.find(events, fn e -> render_msg(e.msg) =~ "S3.exists? failed" end)
+
+      assert event, "expected an S3.exists? failure log event"
+      assert event.level == :error
+      assert event.meta[:category] == :sync
+      assert event.meta[:loki_ship] == true
+      # storage_key is a redacted metadata key (embeds user/vault ids), so the
+      # filter scrubs it before the sink — assert it's present-but-redacted
+      # rather than leaking the raw key.
+      assert event.meta[:storage_key] == "[REDACTED]"
+    end
   end
+
+  defp render_msg({:string, s}), do: IO.iodata_to_binary(s)
+  defp render_msg({:report, _}), do: ""
+  defp render_msg(other), do: to_string(other)
 end

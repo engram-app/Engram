@@ -311,7 +311,15 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, reason} ->
         require Logger
-        Logger.error("Failed to list attachments", vault_id: vault.id, reason: inspect(reason))
+
+        Logger.error(
+          "Failed to list attachments",
+          Engram.Logger.Metadata.with_category(:error, :sync,
+            vault_id: vault.id,
+            reason: inspect(reason)
+          )
+        )
+
         conn |> put_status(500) |> json(%{error: "failed to list attachments"})
     end
   end

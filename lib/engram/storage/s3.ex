@@ -169,7 +169,15 @@ defmodule Engram.Storage.S3 do
 
       {:error, reason} ->
         require Logger
-        Logger.error("S3.exists? failed", storage_key: key, reason: inspect(reason))
+
+        Logger.error(
+          "S3.exists? failed",
+          Engram.Logger.Metadata.with_category(:error, :sync,
+            storage_key: key,
+            reason: inspect(reason)
+          )
+        )
+
         false
     end
   end
