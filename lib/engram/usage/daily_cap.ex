@@ -64,7 +64,14 @@ defmodule Engram.Usage.DailyCap do
         {:deny, retry}
 
       {:error, reason} ->
-        Logger.warning("daily_cap fail-open", kind: kind, reason: inspect(reason))
+        Logger.warning(
+          "daily_cap fail-open",
+          Engram.Logger.Metadata.with_category(:warning, :billing,
+            kind: kind,
+            reason: inspect(reason)
+          )
+        )
+
         emit(kind, :fail_open)
         {:allow, 0.0}
     end

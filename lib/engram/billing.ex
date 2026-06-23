@@ -12,6 +12,7 @@ defmodule Engram.Billing do
   alias Engram.Billing.PlanCache
   alias Engram.Billing.Subscription
   alias Engram.Billing.UserLimitOverride
+  alias Engram.Logger.Metadata
   alias Engram.Paddle.Client
   alias Engram.Repo
 
@@ -750,8 +751,9 @@ defmodule Engram.Billing do
   end
 
   def tier_from_subscription(other) do
-    Logger.error("paddle subscription missing items[0].price.id",
-      payload_keys: Map.keys(other || %{})
+    Logger.error(
+      "paddle subscription missing items[0].price.id",
+      Metadata.with_category(:error, :billing, payload_keys: Map.keys(other || %{}))
     )
 
     {:error, :unknown_price_id}
@@ -787,10 +789,12 @@ defmodule Engram.Billing do
     seen = Process.get(:engram_unknown_price_ids_seen, MapSet.new())
 
     unless MapSet.member?(seen, price_id) do
-      Logger.error("paddle_unknown_price_id",
-        category: :paddle,
-        reason_label: :unknown_price_id,
-        paddle_price_id: price_id
+      Logger.error(
+        "paddle_unknown_price_id",
+        Metadata.with_category(:error, :billing,
+          reason_label: :unknown_price_id,
+          paddle_price_id: price_id
+        )
       )
 
       Process.put(:engram_unknown_price_ids_seen, MapSet.put(seen, price_id))

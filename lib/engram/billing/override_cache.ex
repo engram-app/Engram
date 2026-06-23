@@ -125,7 +125,10 @@ defmodule Engram.Billing.OverrideCache do
   defp listen_pg do
     case Process.whereis(Engram.PgNotifications) do
       nil ->
-        Logger.warning("OverrideCache: PG notifications process not running; TTL-only eviction")
+        Logger.warning(
+          "OverrideCache: PG notifications process not running; TTL-only eviction",
+          Engram.Logger.Metadata.with_category(:warning, :billing, [])
+        )
 
       _pid ->
         {:ok, _ref} = Postgrex.Notifications.listen(Engram.PgNotifications, @pg_channel)
@@ -135,7 +138,8 @@ defmodule Engram.Billing.OverrideCache do
     kind, reason ->
       Logger.warning(
         "OverrideCache: failed to LISTEN #{@pg_channel} (#{kind}: #{inspect(reason)}); " <>
-          "TTL-only eviction"
+          "TTL-only eviction",
+        Engram.Logger.Metadata.with_category(:warning, :billing, [])
       )
   end
 

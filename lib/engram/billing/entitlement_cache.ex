@@ -141,7 +141,8 @@ defmodule Engram.Billing.EntitlementCache do
     case Process.whereis(Engram.PgNotifications) do
       nil ->
         Logger.warning(
-          "EntitlementCache: PG notifications process not running; TTL-only eviction"
+          "EntitlementCache: PG notifications process not running; TTL-only eviction",
+          Engram.Logger.Metadata.with_category(:warning, :billing, [])
         )
 
       _pid ->
@@ -152,7 +153,8 @@ defmodule Engram.Billing.EntitlementCache do
     kind, reason ->
       Logger.warning(
         "EntitlementCache: failed to LISTEN #{@pg_channel} (#{kind}: #{inspect(reason)}); " <>
-          "TTL-only eviction"
+          "TTL-only eviction",
+        Engram.Logger.Metadata.with_category(:warning, :billing, [])
       )
   end
 
