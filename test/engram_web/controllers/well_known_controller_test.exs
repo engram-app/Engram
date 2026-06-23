@@ -7,6 +7,9 @@ defmodule EngramWeb.WellKnownControllerTest do
       body = json_response(conn, 200)
 
       assert is_binary(body["resource"])
+      # No host_rewrite config in plain test conn (selfhost shape) → MCP is only
+      # at the /api/mcp path, so that's the advertised resource. The bare-host
+      # form is mcp_host-only; see WellKnownHostTest.
       assert String.ends_with?(body["resource"], "/api/mcp")
       assert is_list(body["authorization_servers"])
       assert body["authorization_servers"] != []

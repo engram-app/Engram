@@ -19,11 +19,36 @@ defmodule EngramWeb.WellKnownController do
     base = base_url(conn)
 
     json(conn, %{
-      resource: base <> "/api/mcp",
+      # The advertised `resource` must be the URL at which THIS host actually
+      # serves MCP — RFC 9728 lets us advertise only one, and strict clients
+      # bind the token audience to it (and self-check it == the dialed URL).
+      #
+      #   * saas dedicated MCP host (`mcp.engram.page`): HostRewrite maps the
+      #     bare root `/` → `/api/mcp`, so the canonical resource is the BARE
+      #     host. Users paste `https://mcp.engram.page` (no path); advertising
+      #     the path here made strict clients (Claude Code CLI) abort on the
+      #     mismatch. See Engram#634.
+      #   * everything else (selfhost `engram.ax`, `app`/`api` hosts): no MCP
+      #     rewrite — bare `/` is the SPA and MCP lives only at `/api/mcp`, so
+      #     the resource MUST keep the path or self-host clients would mismatch.
+      #
+      # Token `aud` is the fixed string "engram" (see Engram.Token), independent
+      # of this URL, so either form breaks no server-side audience check.
+      resource: if(mcp_rewrite_host?(conn), do: base, else: base <> "/api/mcp"),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
       resource_documentation: base <> "/docs"
     })
+  end
+
+  # True only when the dialed host is the saas dedicated MCP host that
+  # HostRewrite serves at the bare root (`:host_rewrite` config sets `mcp_host`).
+  # Selfhost leaves `:host_rewrite` unset → always false → path form.
+  defp mcp_rewrite_host?(conn) do
+    case Application.get_env(:engram, :host_rewrite, []) do
+      opts when is_list(opts) -> opts[:mcp_host] != nil and conn.host == opts[:mcp_host]
+      _ -> false
+    end
   end
 
   def authorization_server(conn, _params) do
