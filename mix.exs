@@ -100,6 +100,7 @@ defmodule Engram.MixProject do
       {:hammer, "~> 7.3"},
 
       # Telemetry & logging
+      {:logger_json, "~> 7.0"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:prom_ex, "~> 1.11"},
