@@ -28,14 +28,23 @@ describe('ErrorFallback', () => {
     expect(container.querySelector('.grid-overlay')).toBeInTheDocument()
   })
 
-  it('shows the Sentry reference id when one is provided', () => {
-    render(<ErrorFallback error={new Error('boom')} eventId="abc123" />)
+  it('shows the Sentry reference id only when reporting is active', () => {
+    render(<ErrorFallback error={new Error('boom')} eventId="abc123" reported />)
     expect(screen.getByText(/abc123/)).toBeInTheDocument()
   })
 
-  it('omits the reference line when no eventId is present', () => {
-    render(<ErrorFallback error={new Error('boom')} />)
+  it('omits the reference line when reporting is off, even with an event id', () => {
+    render(<ErrorFallback error={new Error('boom')} eventId="abc123" reported={false} />)
     expect(screen.queryByText(/reference/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/abc123/)).not.toBeInTheDocument()
+  })
+
+  it('claims the error was reported only when reporting is active', () => {
+    const { rerender } = render(<ErrorFallback error={new Error('boom')} reported />)
+    expect(screen.getByText(/has been reported/i)).toBeInTheDocument()
+
+    rerender(<ErrorFallback error={new Error('boom')} reported={false} />)
+    expect(screen.queryByText(/has been reported/i)).not.toBeInTheDocument()
   })
 
   it('reveals the error message in dev builds', () => {

@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/react'
 import AuthBackdrop from './layout/auth-backdrop'
 import AuthPanel from './layout/auth-panel'
 import { Button } from '@/components/ui/button'
@@ -14,12 +15,23 @@ import { heading } from '@/lib/ui-classes'
 //
 // Sentry passes `{ error, componentStack, eventId, resetError }` to the
 // fallback; we surface `eventId` as a support reference and `error` (dev only).
+//
+// `reported` gates the "has been reported" claim + the reference id. Sentry
+// hands us an eventId even when no client is initialized (dev / self-host with
+// no VITE_SENTRY_DSN), but that id has no transport behind it — claiming the
+// crash was reported would be a lie. `getClient()` is truthy only when
+// Sentry.init actually ran, so we default to it and let tests inject the flag.
 type ErrorFallbackProps = {
   error: unknown
   eventId?: string
+  reported?: boolean
 }
 
-export default function ErrorFallback({ error, eventId }: ErrorFallbackProps) {
+export default function ErrorFallback({
+  error,
+  eventId,
+  reported = !!Sentry.getClient(),
+}: ErrorFallbackProps) {
   const message = error instanceof Error ? error.message : String(error)
 
   return (
@@ -39,7 +51,7 @@ export default function ErrorFallback({ error, eventId }: ErrorFallbackProps) {
           </p>
           <h1 className={heading}>Something went wrong</h1>
           <p className="max-w-md text-sm text-muted-foreground">
-            An unexpected error broke this page. It has been reported. Try
+            An unexpected error broke this page.{reported ? ' It has been reported.' : ''} Try
             reloading — if it keeps happening, contact{' '}
             <a className="underline" href="mailto:support@engram.page">
               support@engram.page
@@ -47,7 +59,7 @@ export default function ErrorFallback({ error, eventId }: ErrorFallbackProps) {
             .
           </p>
 
-          {eventId ? (
+          {reported && eventId ? (
             <p className="text-xs text-muted-foreground">
               Reference:{' '}
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{eventId}</code>
