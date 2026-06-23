@@ -240,6 +240,13 @@ defmodule EngramWeb.Telemetry do
         description:
           "DistributedETS cross-node PubSub increments, `:result` :applied | :dropped. The warm-window signal: `:applied` ramping from a new node's boot = warming from peers; `:dropped` > 0 = lost increments."
       ),
+      last_value("engram.rate_limiter.cluster.peers",
+        description:
+          "Connected BEAM peer nodes (0 = standalone/unclustered → limiter counts per-node only)."
+      ),
+      last_value("engram.rate_limiter.cluster.distributed",
+        description: "1 if the cluster-shared :distributed_ets backend is active, else 0."
+      ),
 
       # PR #244 — Paddle webhook reliability surfaces.
       #
