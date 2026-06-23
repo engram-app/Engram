@@ -4,6 +4,7 @@ defmodule Engram.Logger.DecryptFailureTest do
   import ExUnit.CaptureLog
 
   alias Engram.Logger.DecryptFailure
+  alias Engram.Test.LogCapture
 
   # A reason term that wraps a secret. Decrypt failures bubble up Req/Postgrex/
   # crypto error terms that can carry tokens, passwords, or bound params. The
@@ -59,6 +60,21 @@ defmodule Engram.Logger.DecryptFailureTest do
         end)
 
       assert log =~ "[error]"
+    end
+
+    test "stamps category: :crypto and loki_ship: true so the line routes to Loki" do
+      {_result, events} =
+        LogCapture.with_events(fn ->
+          DecryptFailure.log("decrypt_failed", :no_dek, user_id: "u-123")
+        end)
+
+      event = Enum.find(events, &(&1.level == :error))
+
+      assert event, "expected an :error-level decrypt-failure event"
+      assert event.meta.category == :crypto
+      assert event.meta.loki_ship == true
+      # The pre-existing bounded error_kind behavior is preserved.
+      assert event.meta.error_kind == :no_dek
     end
   end
 end

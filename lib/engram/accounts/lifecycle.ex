@@ -16,6 +16,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Auth.SessionInvalidator
   alias Engram.Billing.Subscription
   alias Engram.Crypto.HMAC
+  alias Engram.Logger.Metadata
   alias Engram.Mailer
   alias Engram.Repo
   alias Engram.Storage
@@ -59,6 +60,11 @@ defmodule Engram.Accounts.Lifecycle do
       [:engram, :account, :soft_deleted],
       %{count: 1},
       %{user_id_hmac: HMAC.hash_user_id(user.id), reason: reason}
+    )
+
+    Logger.info(
+      "account soft-deleted",
+      Metadata.with_category(:info, :lifecycle, user_id: user.id, reason: reason)
     )
 
     :ok
@@ -187,6 +193,11 @@ defmodule Engram.Accounts.Lifecycle do
           %{user_id_hmac: HMAC.hash_user_id(user.id), reason: reason, had_sub: had_sub}
         )
 
+        Logger.info(
+          "account hard-deleted",
+          Metadata.with_category(:info, :lifecycle, user_id: user.id, reason: reason)
+        )
+
         # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
         # outlive ours. Future Clerk webhooks find_by_external_id →
         # :user_not_found → :ok.
@@ -195,9 +206,12 @@ defmodule Engram.Accounts.Lifecycle do
         :ok
 
       {:error, txn_reason} ->
-        Logger.error("Hard-delete PG cascade failed — half-state recoverable on retry",
-          user_id: user.id,
-          reason: inspect(txn_reason)
+        Logger.error(
+          "Hard-delete PG cascade failed — half-state recoverable on retry",
+          Metadata.with_category(:error, :lifecycle,
+            user_id: user.id,
+            reason: inspect(txn_reason)
+          )
         )
 
         {:error, :pg_failed}
@@ -217,19 +231,25 @@ defmodule Engram.Accounts.Lifecycle do
         :ok
 
       {:error, reason} ->
-        Logger.error("Paddle cancel failed during hard-delete",
-          user_id: user.id,
-          paddle_subscription_id: sub_id,
-          reason: inspect(reason)
+        Logger.error(
+          "Paddle cancel failed during hard-delete",
+          Metadata.with_category(:error, :lifecycle,
+            user_id: user.id,
+            paddle_subscription_id: sub_id,
+            reason: inspect(reason)
+          )
         )
 
         :error
     end
   rescue
     e ->
-      Logger.error("Paddle cancel raised during hard-delete",
-        user_id: user.id,
-        exception: inspect(e)
+      Logger.error(
+        "Paddle cancel raised during hard-delete",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          exception: inspect(e)
+        )
       )
 
       :error
@@ -245,20 +265,26 @@ defmodule Engram.Accounts.Lifecycle do
       {:error, first_reason} ->
         case Storage.adapter().delete_prefix(prefix) do
           {:ok, _count} ->
-            Logger.warning("Storage prefix delete succeeded on retry during hard-delete",
-              user_id: user.id,
-              prefix: prefix,
-              first_reason: inspect(first_reason)
+            Logger.warning(
+              "Storage prefix delete succeeded on retry during hard-delete",
+              Metadata.with_category(:warning, :lifecycle,
+                user_id: user.id,
+                prefix: prefix,
+                first_reason: inspect(first_reason)
+              )
             )
 
             :ok
 
           {:error, retry_reason} ->
-            Logger.error("Storage prefix delete failed twice during hard-delete",
-              user_id: user.id,
-              prefix: prefix,
-              first_reason: inspect(first_reason),
-              retry_reason: inspect(retry_reason)
+            Logger.error(
+              "Storage prefix delete failed twice during hard-delete",
+              Metadata.with_category(:error, :lifecycle,
+                user_id: user.id,
+                prefix: prefix,
+                first_reason: inspect(first_reason),
+                retry_reason: inspect(retry_reason)
+              )
             )
 
             :error
@@ -266,10 +292,13 @@ defmodule Engram.Accounts.Lifecycle do
     end
   rescue
     e ->
-      Logger.error("Storage prefix delete raised during hard-delete",
-        user_id: user.id,
-        prefix: prefix,
-        exception: inspect(e)
+      Logger.error(
+        "Storage prefix delete raised during hard-delete",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          prefix: prefix,
+          exception: inspect(e)
+        )
       )
 
       :error
@@ -284,20 +313,26 @@ defmodule Engram.Accounts.Lifecycle do
         :ok
 
       {:error, reason} ->
-        Logger.error("Clerk delete_user failed during hard-delete",
-          user_id: user.id,
-          clerk_user_id: external_id,
-          reason: inspect(reason)
+        Logger.error(
+          "Clerk delete_user failed during hard-delete",
+          Metadata.with_category(:error, :lifecycle,
+            user_id: user.id,
+            clerk_user_id: external_id,
+            reason: inspect(reason)
+          )
         )
 
         :error
     end
   rescue
     e ->
-      Logger.error("Clerk delete_user raised during hard-delete",
-        user_id: user.id,
-        clerk_user_id: external_id,
-        exception: inspect(e)
+      Logger.error(
+        "Clerk delete_user raised during hard-delete",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          clerk_user_id: external_id,
+          exception: inspect(e)
+        )
       )
 
       :error
@@ -313,18 +348,24 @@ defmodule Engram.Accounts.Lifecycle do
         :ok
 
       {:error, reason} ->
-        Logger.error("Qdrant clear failed during soft-delete",
-          user_id: user.id,
-          reason: inspect(reason)
+        Logger.error(
+          "Qdrant clear failed during soft-delete",
+          Metadata.with_category(:error, :lifecycle,
+            user_id: user.id,
+            reason: inspect(reason)
+          )
         )
 
         :error
     end
   rescue
     e ->
-      Logger.error("Qdrant clear raised during soft-delete",
-        user_id: user.id,
-        exception: inspect(e)
+      Logger.error(
+        "Qdrant clear raised during soft-delete",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          exception: inspect(e)
+        )
       )
 
       :error

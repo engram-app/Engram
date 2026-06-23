@@ -10,6 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Enqueue, Helpers, Note, PathSanitizer}
   alias Engram.Observability.PostHog
   alias Engram.Repo
@@ -376,13 +377,15 @@ defmodule Engram.Notes do
         {:ok, {:conflict, existing}} ->
           # A stale-version write that we refused — silent on the client's happy
           # path, so log it server-side with the ids + versions for triage.
-          Logger.warning("note_version_conflict",
-            category: :notes,
-            user_id: user.id,
-            vault_id: vault.id,
-            note_id: existing.id,
-            client_version: client_version,
-            server_version: existing.version
+          Logger.warning(
+            "note_version_conflict",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: existing.id,
+              client_version: client_version,
+              server_version: existing.version
+            )
           )
 
           # Phase B.3: virtual path/folder/tags need to be populated from
@@ -490,11 +493,13 @@ defmodule Engram.Notes do
   # not invisible. Plaintext paths stay out — they embed note titles/folders.
   defp maybe_log_path_rewrite(user, vault, original, sanitized, note_id) do
     if sanitized != original do
-      Logger.warning("note_path_rewritten",
-        category: :notes,
-        user_id: user.id,
-        vault_id: vault.id,
-        note_id: note_id
+      Logger.warning(
+        "note_path_rewritten",
+        Metadata.with_category(:warning, :sync,
+          user_id: user.id,
+          vault_id: vault.id,
+          note_id: note_id
+        )
       )
     end
   end
@@ -506,11 +511,13 @@ defmodule Engram.Notes do
     failed = Enum.count(results, &(&1.status != :ok))
 
     if failed > 0 do
-      Logger.warning("note_batch_partial_reject",
-        category: :notes,
-        user_id: user.id,
-        failed_count: failed,
-        total_count: length(results)
+      Logger.warning(
+        "note_batch_partial_reject",
+        Metadata.with_category(:warning, :sync,
+          user_id: user.id,
+          failed_count: failed,
+          total_count: length(results)
+        )
       )
     end
   end
@@ -832,7 +839,11 @@ defmodule Engram.Notes do
 
       if inserted == 0 do
         require Logger
-        Logger.warning("rename_note tombstone dropped on conflict", vault_id: note.vault_id)
+
+        Logger.warning(
+          "rename_note tombstone dropped on conflict",
+          Metadata.with_category(:warning, :sync, vault_id: note.vault_id)
+        )
       end
 
       # Splice the freshly-encrypted ciphertext + dek_version=2

@@ -12,6 +12,7 @@ defmodule Engram.Workers.OriginAbuseSweep do
   use Oban.Worker, queue: :default, max_attempts: 3
 
   alias Engram.Abuse.OriginStats
+  alias Engram.Logger.Metadata
 
   require Logger
 
@@ -34,9 +35,11 @@ defmodule Engram.Workers.OriginAbuseSweep do
 
           Logger.warning(
             "OriginAbuseSweep — user exceeded Pro fair-use for #{@consecutive} consecutive days",
-            user_id: user_id,
-            cap: @cap,
-            reason_label: :pro_origin_exceeded
+            Metadata.with_category(:warning, :oban,
+              user_id: user_id,
+              cap: @cap,
+              reason_label: :pro_origin_exceeded
+            )
           )
         end
 

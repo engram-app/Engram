@@ -35,6 +35,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Vector.Qdrant
 
@@ -84,12 +85,13 @@ defmodule Engram.Crypto.UserDekRotation do
         e ->
           Logger.error(
             "T3.7 rotate_user crashed",
-            category: :crypto_rotation,
-            user_id: user_id,
-            new_dek_version: new_dek_version,
-            kind: :error,
-            exception_struct: e.__struct__,
-            message: Exception.message(e)
+            Metadata.with_category(:error, :crypto,
+              user_id: user_id,
+              new_dek_version: new_dek_version,
+              kind: :error,
+              exception_struct: e.__struct__,
+              message: Exception.message(e)
+            )
           )
 
           # Lock intentionally NOT released — operator must investigate
@@ -99,11 +101,12 @@ defmodule Engram.Crypto.UserDekRotation do
         kind, reason when kind in [:exit, :throw] ->
           Logger.error(
             "T3.7 rotate_user terminated",
-            category: :crypto_rotation,
-            user_id: user_id,
-            new_dek_version: new_dek_version,
-            kind: kind,
-            reason: inspect(reason)
+            Metadata.with_category(:error, :crypto,
+              user_id: user_id,
+              new_dek_version: new_dek_version,
+              kind: kind,
+              reason: inspect(reason)
+            )
           )
 
           :erlang.raise(kind, reason, __STACKTRACE__)
@@ -133,6 +136,15 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
+      Logger.info(
+        "T3.7 per-user DEK rotation complete",
+        Metadata.with_category(:info, :crypto,
+          user_id: user_id,
+          new_dek_version: new_dek_version,
+          phase: :rotate_complete
+        )
+      )
+
       :ok
     else
       {:error, _} = err -> err
@@ -172,11 +184,12 @@ defmodule Engram.Crypto.UserDekRotation do
                 {0, _} ->
                   Logger.error(
                     "T3.7 sweep_notes: row vanished during rotation",
-                    category: :crypto_rotation,
-                    user_id: user_id,
-                    table: :notes,
-                    row_id: note.id,
-                    phase: :sweep_notes
+                    Metadata.with_category(:error, :crypto,
+                      user_id: user_id,
+                      table: :notes,
+                      row_id: note.id,
+                      phase: :sweep_notes
+                    )
                   )
 
                   raise "T3.7 sweep_notes: row vanished mid-rotation table=notes row_id=#{note.id}"
@@ -226,11 +239,12 @@ defmodule Engram.Crypto.UserDekRotation do
                 {0, _} ->
                   Logger.error(
                     "T3.7 sweep_vaults: row vanished during rotation",
-                    category: :crypto_rotation,
-                    user_id: user_id,
-                    table: :vaults,
-                    row_id: vault.id,
-                    phase: :sweep_vaults
+                    Metadata.with_category(:error, :crypto,
+                      user_id: user_id,
+                      table: :vaults,
+                      row_id: vault.id,
+                      phase: :sweep_vaults
+                    )
                   )
 
                   raise "T3.7 sweep_vaults: row vanished mid-rotation table=vaults row_id=#{vault.id}"
@@ -287,13 +301,14 @@ defmodule Engram.Crypto.UserDekRotation do
               :error ->
                 Logger.error(
                   "T3.7 sweep_vaults: decrypt failed under both old and new DEK",
-                  category: :crypto_rotation,
-                  user_id: vault.user_id,
-                  table: :vaults,
-                  row_id: vault.id,
-                  column: column,
-                  phase: :sweep_vaults,
-                  status: :both_deks_failed
+                  Metadata.with_category(:error, :crypto,
+                    user_id: vault.user_id,
+                    table: :vaults,
+                    row_id: vault.id,
+                    column: column,
+                    phase: :sweep_vaults,
+                    status: :both_deks_failed
+                  )
                 )
 
                 :telemetry.execute(
@@ -406,10 +421,11 @@ defmodule Engram.Crypto.UserDekRotation do
         {0, _} ->
           Logger.error(
             "T3.7 mark_pending: row vanished during rotation",
-            category: :crypto_rotation,
-            table: :attachments,
-            row_id: att_id,
-            phase: :mark_pending
+            Metadata.with_category(:error, :crypto,
+              table: :attachments,
+              row_id: att_id,
+              phase: :mark_pending
+            )
           )
 
           Repo.rollback({:row_vanished, :attachments, att_id, :mark_pending})
@@ -433,10 +449,11 @@ defmodule Engram.Crypto.UserDekRotation do
         nil ->
           Logger.error(
             "T3.7 recrypt_blob: attachment row vanished",
-            category: :crypto_rotation,
-            table: :attachments,
-            row_id: att_id,
-            phase: :recrypt_blob
+            Metadata.with_category(:error, :crypto,
+              table: :attachments,
+              row_id: att_id,
+              phase: :recrypt_blob
+            )
           )
 
           raise "T3.7 sweep_attachments: attachment row vanished att_id=#{att_id}"
@@ -453,11 +470,12 @@ defmodule Engram.Crypto.UserDekRotation do
         {:error, reason} ->
           Logger.error(
             "T3.7 recrypt_blob: storage get failed",
-            category: :crypto_rotation,
-            table: :attachments,
-            row_id: att_id,
-            storage_key: attachment.storage_key,
-            reason_label: inspect(reason)
+            Metadata.with_category(:error, :crypto,
+              table: :attachments,
+              row_id: att_id,
+              storage_key: attachment.storage_key,
+              reason_label: inspect(reason)
+            )
           )
 
           raise "T3.7 sweep_attachments: storage get failed att_id=#{att_id} reason=#{inspect(reason)}"
@@ -488,13 +506,14 @@ defmodule Engram.Crypto.UserDekRotation do
           :error ->
             Logger.error(
               "T3.7 sweep_attachments: S3 blob decrypt failed under both old and new DEK",
-              category: :crypto_rotation,
-              user_id: attachment.user_id,
-              table: :attachments,
-              row_id: att_id,
-              column: :content,
-              phase: :sweep_attachments_blob,
-              status: :both_deks_failed
+              Metadata.with_category(:error, :crypto,
+                user_id: attachment.user_id,
+                table: :attachments,
+                row_id: att_id,
+                column: :content,
+                phase: :sweep_attachments_blob,
+                status: :both_deks_failed
+              )
             )
 
             :telemetry.execute(
@@ -552,10 +571,11 @@ defmodule Engram.Crypto.UserDekRotation do
         {0, _} ->
           Logger.error(
             "T3.7 finalize_attachment: row vanished during rotation",
-            category: :crypto_rotation,
-            table: :attachments,
-            row_id: attachment.id,
-            phase: :finalize_attachment
+            Metadata.with_category(:error, :crypto,
+              table: :attachments,
+              row_id: attachment.id,
+              phase: :finalize_attachment
+            )
           )
 
           Repo.rollback({:row_vanished, :attachments, attachment.id, :finalize_attachment})
@@ -605,13 +625,14 @@ defmodule Engram.Crypto.UserDekRotation do
               :error ->
                 Logger.error(
                   "T3.7 sweep_attachments: metadata decrypt failed under both old and new DEK",
-                  category: :crypto_rotation,
-                  user_id: att.user_id,
-                  table: :attachments,
-                  row_id: att.id,
-                  column: column,
-                  phase: :sweep_attachments_metadata,
-                  status: :both_deks_failed
+                  Metadata.with_category(:error, :crypto,
+                    user_id: att.user_id,
+                    table: :attachments,
+                    row_id: att.id,
+                    column: column,
+                    phase: :sweep_attachments_metadata,
+                    status: :both_deks_failed
+                  )
                 )
 
                 :telemetry.execute(
@@ -680,11 +701,12 @@ defmodule Engram.Crypto.UserDekRotation do
       {:error, reason} ->
         Logger.error(
           "T3.7 sweep_qdrant: scroll failed",
-          category: :crypto_rotation,
-          user_id: user_id,
-          phase: :sweep_qdrant,
-          status: :scroll_failed,
-          reason_label: inspect(reason)
+          Metadata.with_category(:error, :crypto,
+            user_id: user_id,
+            phase: :sweep_qdrant,
+            status: :scroll_failed,
+            reason_label: inspect(reason)
+          )
         )
 
         {:error, reason}
@@ -698,10 +720,11 @@ defmodule Engram.Crypto.UserDekRotation do
           (
             Logger.error(
               "T3.7 sweep_qdrant: point missing id",
-              category: :crypto_rotation,
-              user_id: user_id,
-              phase: :sweep_qdrant,
-              status: :missing_id
+              Metadata.with_category(:error, :crypto,
+                user_id: user_id,
+                phase: :sweep_qdrant,
+                status: :missing_id
+              )
             )
 
             :telemetry.execute(
@@ -727,12 +750,13 @@ defmodule Engram.Crypto.UserDekRotation do
             {:error, reason} ->
               Logger.error(
                 "T3.7 sweep_qdrant: set_payload failed",
-                category: :crypto_rotation,
-                user_id: user_id,
-                qdrant_id: qdrant_id,
-                phase: :sweep_qdrant,
-                status: :set_payload_failed,
-                reason_label: inspect(reason)
+                Metadata.with_category(:error, :crypto,
+                  user_id: user_id,
+                  qdrant_id: qdrant_id,
+                  phase: :sweep_qdrant,
+                  status: :set_payload_failed,
+                  reason_label: inspect(reason)
+                )
               )
 
               {:halt, {:error, {:qdrant_set_payload_failed, reason}}}
@@ -797,12 +821,13 @@ defmodule Engram.Crypto.UserDekRotation do
                 :error ->
                   Logger.error(
                     "T3.7 sweep_qdrant: decrypt failed under both old and new DEK",
-                    category: :crypto_rotation,
-                    table: :qdrant,
-                    qdrant_id: qdrant_id,
-                    field: field,
-                    phase: :sweep_qdrant,
-                    status: :both_deks_failed
+                    Metadata.with_category(:error, :crypto,
+                      table: :qdrant,
+                      qdrant_id: qdrant_id,
+                      field: field,
+                      phase: :sweep_qdrant,
+                      status: :both_deks_failed
+                    )
                   )
 
                   :telemetry.execute(
@@ -923,13 +948,14 @@ defmodule Engram.Crypto.UserDekRotation do
                 :error ->
                   Logger.error(
                     "T3.7 sweep_notes: decrypt failed under both old and new DEK",
-                    category: :crypto_rotation,
-                    user_id: note.user_id,
-                    table: :notes,
-                    row_id: note.id,
-                    column: column,
-                    phase: :sweep_notes,
-                    status: :both_deks_failed
+                    Metadata.with_category(:error, :crypto,
+                      user_id: note.user_id,
+                      table: :notes,
+                      row_id: note.id,
+                      column: column,
+                      phase: :sweep_notes,
+                      status: :both_deks_failed
+                    )
                   )
 
                   :telemetry.execute(
@@ -999,13 +1025,14 @@ defmodule Engram.Crypto.UserDekRotation do
             :error ->
               Logger.error(
                 "T3.7 sweep_notes: decrypt failed under both old and new DEK",
-                category: :crypto_rotation,
-                user_id: note.user_id,
-                table: :notes,
-                row_id: note.id,
-                column: :tags,
-                phase: :sweep_notes,
-                status: :both_deks_failed
+                Metadata.with_category(:error, :crypto,
+                  user_id: note.user_id,
+                  table: :notes,
+                  row_id: note.id,
+                  column: :tags,
+                  phase: :sweep_notes,
+                  status: :both_deks_failed
+                )
               )
 
               :telemetry.execute(
@@ -1070,11 +1097,12 @@ defmodule Engram.Crypto.UserDekRotation do
           {0, _} ->
             Logger.error(
               "T3.7 final_flip: user row vanished mid-rotation",
-              category: :crypto_rotation,
-              user_id: user.id,
-              table: :users,
-              row_id: user.id,
-              phase: :final_flip
+              Metadata.with_category(:error, :crypto,
+                user_id: user.id,
+                table: :users,
+                row_id: user.id,
+                phase: :final_flip
+              )
             )
 
             Repo.rollback({:user_vanished_mid_rotation, user.id})
@@ -1116,7 +1144,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
     Logger.error(
       "T3.7 rotate_user failed user_id=#{user_id} reason_label=#{label}",
-      category: :crypto_rotation
+      Metadata.with_category(:error, :crypto, user_id: user_id, reason_label: label)
     )
 
     :telemetry.execute(

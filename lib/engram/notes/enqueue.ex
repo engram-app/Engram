@@ -34,7 +34,7 @@ defmodule Engram.Notes.Enqueue do
       {:error, reason} = err ->
         Logger.error(
           "oban enqueue failed worker=#{worker_label} reason=#{format_reason(reason)}",
-          category: :notes_enqueue
+          Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
         )
 
         :telemetry.execute(

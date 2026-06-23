@@ -5,6 +5,7 @@ defmodule Engram.Crypto.BootCanaryTest do
 
   alias Engram.Crypto.{BootCanary, KeyProvider.Local}
   alias Engram.Repo
+  alias Engram.Test.LogCapture
 
   setup do
     # Each test starts from an empty canary table.
@@ -119,6 +120,22 @@ defmodule Engram.Crypto.BootCanaryTest do
       assert_raise RuntimeError, ~r/does not match the recorded\s+SHA256/s, fn ->
         BootCanary.verify!()
       end
+    end
+
+    test "fresh-provision warning is categorized :boot and ships to Loki" do
+      {result, events} = LogCapture.with_events(fn -> BootCanary.verify!() end)
+
+      assert result == :ok
+
+      event =
+        Enum.find(events, fn event ->
+          event.level == :warning and Map.get(event.meta, :category) == :boot and
+            event.msg |> elem(1) |> IO.iodata_to_binary() =~ "boot_canary: no canary row"
+        end)
+
+      assert event, "expected a :boot-categorized boot_canary warning"
+      assert event.meta.category == :boot
+      assert event.meta.loki_ship == true
     end
   end
 

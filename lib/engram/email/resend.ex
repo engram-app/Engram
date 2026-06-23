@@ -43,15 +43,22 @@ defmodule Engram.Email.Resend do
             :ok
 
           {:ok, %{status: status, body: body}} ->
-            Logger.error("Resend send failed",
-              status: status,
-              body_size: byte_size(inspect(body))
+            Logger.error(
+              "Resend send failed",
+              Engram.Logger.Metadata.with_category(:error, :lifecycle,
+                status: status,
+                body_size: byte_size(inspect(body))
+              )
             )
 
             {:error, {:http_error, status}}
 
           {:error, reason} ->
-            Logger.error("Resend transport error", reason: inspect(reason))
+            Logger.error(
+              "Resend transport error",
+              Engram.Logger.Metadata.with_category(:error, :lifecycle, reason: inspect(reason))
+            )
+
             {:error, reason}
         end
     end

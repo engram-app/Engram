@@ -63,6 +63,8 @@ defmodule Engram.Observability.Pyroscope do
 
   use GenServer
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   # 100Hz CPU sampling — matches the convention every Pyroscope agent
@@ -178,8 +180,9 @@ defmodule Engram.Observability.Pyroscope do
       counters: %{}
     }
 
-    Logger.info(
-      "pyroscope profiler started: app=#{state.app_name} sample_interval_ms=#{sample_interval} push_interval_ms=#{push_interval}"
+    Logger.debug(
+      "pyroscope profiler started: app=#{state.app_name} sample_interval_ms=#{sample_interval} push_interval_ms=#{push_interval}",
+      Metadata.with_category(:debug, :boot, [])
     )
 
     {:ok, schedule_both(state)}
@@ -304,10 +307,16 @@ defmodule Engram.Observability.Pyroscope do
         :ok
 
       {:ok, %{status: status, body: resp_body}} ->
-        Logger.warning("pyroscope ingest rejected: status=#{status} body=#{inspect(resp_body)}")
+        Logger.warning(
+          "pyroscope ingest rejected: status=#{status} body=#{inspect(resp_body)}",
+          Metadata.with_category(:warning, :boot, [])
+        )
 
       {:error, reason} ->
-        Logger.warning("pyroscope ingest failed: #{inspect(reason)}")
+        Logger.warning(
+          "pyroscope ingest failed: #{inspect(reason)}",
+          Metadata.with_category(:warning, :boot, [])
+        )
     end
   end
 

@@ -8,6 +8,8 @@ defmodule Engram.Rerankers.Jina do
 
   @behaviour Engram.Reranker
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   @vector_weight 0.4
@@ -40,21 +42,29 @@ defmodule Engram.Rerankers.Jina do
         {:ok, blended |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
 
       {:ok, %{status: status}} ->
-        Logger.warning("Jina reranker non-200, falling back to vector scores", status: status)
+        Logger.warning(
+          "Jina reranker non-200, falling back to vector scores",
+          Metadata.with_category(:warning, :search, status: status)
+        )
+
         {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
 
       {:error, reason} ->
-        Logger.warning("Jina reranker failed, falling back to vector scores",
-          reason: inspect(reason)
+        Logger.warning(
+          "Jina reranker failed, falling back to vector scores",
+          Metadata.with_category(:warning, :search, reason: inspect(reason))
         )
 
         {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}
     end
   rescue
     e ->
-      Logger.warning("Jina reranker exception, falling back to vector scores",
-        exception: inspect(e.__struct__),
-        message: Exception.message(e)
+      Logger.warning(
+        "Jina reranker exception, falling back to vector scores",
+        Metadata.with_category(:warning, :search,
+          exception: inspect(e.__struct__),
+          message: Exception.message(e)
+        )
       )
 
       {:ok, candidates |> Enum.sort_by(& &1.score, :desc) |> Enum.take(top_n)}

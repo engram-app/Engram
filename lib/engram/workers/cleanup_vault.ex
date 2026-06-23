@@ -17,6 +17,7 @@ defmodule Engram.Workers.CleanupVault do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
   alias Engram.UsageMeters
@@ -58,7 +59,11 @@ defmodule Engram.Workers.CleanupVault do
 
     cond do
       is_nil(vault) ->
-        Logger.info("CleanupVault: vault #{vault_id} not found — skipping")
+        Logger.debug(
+          "CleanupVault: vault not found — skipping",
+          Metadata.with_category(:debug, :oban, vault_id: vault_id)
+        )
+
         :ok
 
       # Defense in depth: the load bypasses RLS (skip_tenant_check), so the
@@ -66,23 +71,40 @@ defmodule Engram.Workers.CleanupVault do
       # forged or wires got crossed — never hard-delete another tenant's vault.
       to_string(vault.user_id) != to_string(user_id) ->
         Logger.error(
-          "CleanupVault: owner mismatch for vault #{vault_id} " <>
-            "(job user_id=#{user_id}, vault owner=#{vault.user_id}) — discarding"
+          "CleanupVault: owner mismatch — discarding",
+          Metadata.with_category(:error, :oban,
+            vault_id: vault_id,
+            user_id: user_id,
+            reason_label: :owner_mismatch
+          )
         )
 
         {:discard, :owner_mismatch}
 
       is_nil(vault.deleted_at) ->
-        Logger.info("CleanupVault: vault #{vault_id} was restored — skipping")
+        Logger.debug(
+          "CleanupVault: vault was restored — skipping",
+          Metadata.with_category(:debug, :oban, vault_id: vault_id)
+        )
+
         :ok
 
       not force and retention_age_secs(vault) < @retention_secs ->
         snooze = @retention_secs - retention_age_secs(vault)
-        Logger.info("CleanupVault: vault #{vault_id} not yet at retention — snoozing #{snooze}s")
+
+        Logger.debug(
+          "CleanupVault: vault not yet at retention — snoozing",
+          Metadata.with_category(:debug, :oban, vault_id: vault_id, duration_ms: snooze * 1000)
+        )
+
         {:snooze, snooze}
 
       true ->
-        Logger.info("CleanupVault: starting hard-delete for vault #{vault_id}")
+        Logger.info(
+          "CleanupVault: starting hard-delete",
+          Metadata.with_category(:info, :oban, vault_id: vault_id)
+        )
+
         run_cleanup(vault)
     end
   end
@@ -145,7 +167,12 @@ defmodule Engram.Workers.CleanupVault do
     # If this fails, we have orphan blobs but no ghost rows — safe to retry
     delete_storage_blobs(storage_keys)
 
-    Logger.info("CleanupVault: completed hard-delete for vault #{vault.id}")
+    # Actual user-facing lifecycle event: the vault and all its data are gone.
+    Logger.info(
+      "CleanupVault: vault permanently deleted",
+      Metadata.with_category(:info, :lifecycle, vault_id: vault.id, user_id: vault.user_id)
+    )
+
     :ok
   end
 
@@ -160,16 +187,26 @@ defmodule Engram.Workers.CleanupVault do
   defp delete_qdrant_points(vault) do
     case Engram.Vector.Qdrant.delete_by_vault(to_string(vault.user_id), to_string(vault.id)) do
       :ok ->
-        Logger.info("CleanupVault: deleted Qdrant points for vault #{vault.id}")
+        Logger.debug(
+          "CleanupVault: deleted Qdrant points",
+          Metadata.with_category(:debug, :oban, vault_id: vault.id)
+        )
 
       {:error, reason} ->
         Logger.warning(
-          "CleanupVault: Qdrant delete failed for vault #{vault.id}: #{inspect(reason)}"
+          "CleanupVault: Qdrant delete failed",
+          Metadata.with_category(:warning, :oban, vault_id: vault.id, reason: inspect(reason))
         )
     end
   rescue
     e ->
-      Logger.warning("CleanupVault: Qdrant delete raised for vault #{vault.id}: #{inspect(e)}")
+      Logger.warning(
+        "CleanupVault: Qdrant delete raised",
+        Metadata.with_category(:warning, :oban,
+          vault_id: vault.id,
+          reason: Exception.message(e)
+        )
+      )
   end
 
   defp delete_storage_blobs(keys) do
@@ -182,16 +219,16 @@ defmodule Engram.Workers.CleanupVault do
         :ok
 
       {:error, reason} ->
-        Logger.warning("CleanupVault: storage delete failed",
-          storage_key: key,
-          reason: inspect(reason)
+        Logger.warning(
+          "CleanupVault: storage delete failed",
+          Metadata.with_category(:warning, :oban, storage_key: key, reason: inspect(reason))
         )
     end
   rescue
     e ->
-      Logger.warning("CleanupVault: storage delete raised",
-        storage_key: key,
-        reason: Exception.message(e)
+      Logger.warning(
+        "CleanupVault: storage delete raised",
+        Metadata.with_category(:warning, :oban, storage_key: key, reason: Exception.message(e))
       )
   end
 end

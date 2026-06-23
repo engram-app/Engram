@@ -30,6 +30,7 @@ defmodule Engram.Workers.OrphanSweep do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
@@ -52,7 +53,11 @@ defmodule Engram.Workers.OrphanSweep do
     )
 
     Logger.info(
-      "orphan_sweep complete qdrant_users_swept=#{qdrant_deleted} s3_prefixes_swept=#{s3_deleted}"
+      "orphan_sweep complete",
+      Metadata.with_category(:info, :oban,
+        total_count: qdrant_deleted + s3_deleted,
+        result: %{qdrant_users_swept: qdrant_deleted, s3_prefixes_swept: s3_deleted}
+      )
     )
 
     :ok
@@ -74,12 +79,17 @@ defmodule Engram.Workers.OrphanSweep do
         Enum.reduce(orphans, 0, fn user_id, acc ->
           case Qdrant.delete_by_user(user_id) do
             :ok ->
-              Logger.warning("orphan_sweep deleted Qdrant points user_id=#{user_id}")
+              Logger.debug(
+                "orphan_sweep deleted Qdrant points",
+                Metadata.with_category(:debug, :oban, user_id: user_id)
+              )
+
               acc + 1
 
             other ->
               Logger.error(
-                "orphan_sweep Qdrant delete failed user_id=#{user_id} reason=#{inspect(other)}"
+                "orphan_sweep Qdrant delete failed",
+                Metadata.with_category(:error, :oban, user_id: user_id, reason: inspect(other))
               )
 
               acc
@@ -87,7 +97,11 @@ defmodule Engram.Workers.OrphanSweep do
         end)
 
       {:error, reason} ->
-        Logger.error("orphan_sweep Qdrant discovery failed reason=#{inspect(reason)}")
+        Logger.error(
+          "orphan_sweep Qdrant discovery failed",
+          Metadata.with_category(:error, :oban, reason: inspect(reason))
+        )
+
         0
     end
   end
@@ -131,12 +145,17 @@ defmodule Engram.Workers.OrphanSweep do
         Enum.reduce(orphans, 0, fn user_id, acc ->
           case Storage.adapter().delete_prefix("#{user_id}/") do
             {:ok, _count} ->
-              Logger.warning("orphan_sweep deleted S3 prefix user_id=#{user_id}")
+              Logger.debug(
+                "orphan_sweep deleted S3 prefix",
+                Metadata.with_category(:debug, :oban, user_id: user_id)
+              )
+
               acc + 1
 
             other ->
               Logger.error(
-                "orphan_sweep S3 delete failed user_id=#{user_id} reason=#{inspect(other)}"
+                "orphan_sweep S3 delete failed",
+                Metadata.with_category(:error, :oban, user_id: user_id, reason: inspect(other))
               )
 
               acc
@@ -144,7 +163,11 @@ defmodule Engram.Workers.OrphanSweep do
         end)
 
       {:error, reason} ->
-        Logger.error("orphan_sweep S3 discovery failed reason=#{inspect(reason)}")
+        Logger.error(
+          "orphan_sweep S3 discovery failed",
+          Metadata.with_category(:error, :oban, reason: inspect(reason))
+        )
+
         0
     end
   end

@@ -163,7 +163,11 @@ defmodule Engram.Mailer do
   # so callers can surface skips without sending.
   defp deliver(email, subject, html, opts) do
     if Suppression.suppressed?(email) do
-      Logger.info("Email skipped: address on suppression list", category: :email)
+      Logger.warning(
+        "Email skipped: address on suppression list",
+        Engram.Logger.Metadata.with_category(:warning, :lifecycle, reason_label: :suppressed)
+      )
+
       {:error, :suppressed}
     else
       provider().send(email, subject, html, opts)

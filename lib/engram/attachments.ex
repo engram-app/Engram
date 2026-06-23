@@ -14,6 +14,7 @@ defmodule Engram.Attachments do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Logger.Metadata
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Storage
@@ -215,9 +216,12 @@ defmodule Engram.Attachments do
             # Live row with missing blob = storage corruption, not a normal 404
             require Logger
 
-            Logger.error("Attachment blob missing for live row",
-              attachment_id: att.id,
-              storage_key: key
+            Logger.error(
+              "Attachment blob missing for live row",
+              Metadata.with_category(:error, :sync,
+                attachment_id: att.id,
+                storage_key: key
+              )
             )
 
             {:error, {:storage, :blob_missing}}
@@ -226,10 +230,13 @@ defmodule Engram.Attachments do
             require Logger
             reason_str = inspect(reason)
 
-            Logger.error("attachment storage GET failed: #{reason_str}",
-              attachment_id: att.id,
-              storage_key: key,
-              reason: reason_str
+            Logger.error(
+              "attachment storage GET failed: #{reason_str}",
+              Metadata.with_category(:error, :sync,
+                attachment_id: att.id,
+                storage_key: key,
+                reason: reason_str
+              )
             )
 
             {:error, {:storage, reason}}
@@ -294,7 +301,12 @@ defmodule Engram.Attachments do
 
             {:error, reason} ->
               require Logger
-              Logger.warning("delete_attachment: tenant lookup failed", reason: inspect(reason))
+
+              Logger.warning(
+                "delete_attachment: tenant lookup failed",
+                Metadata.with_category(:warning, :sync, reason: inspect(reason))
+              )
+
               false
           end
 
@@ -329,9 +341,12 @@ defmodule Engram.Attachments do
       {:error, reason} ->
         require Logger
 
-        Logger.warning("Failed to delete blob (row already soft-deleted)",
-          storage_key: storage_key,
-          reason: inspect(reason)
+        Logger.warning(
+          "Failed to delete blob (row already soft-deleted)",
+          Metadata.with_category(:warning, :sync,
+            storage_key: storage_key,
+            reason: inspect(reason)
+          )
         )
 
         :ok
@@ -780,9 +795,12 @@ defmodule Engram.Attachments do
 
         # Reason is inlined into the message (not only metadata) so it's visible
         # in dev too — config/dev.exs strips Logger metadata from the formatter.
-        Logger.error("attachment storage PUT failed: #{reason_str}",
-          storage_key: key,
-          reason: reason_str
+        Logger.error(
+          "attachment storage PUT failed: #{reason_str}",
+          Metadata.with_category(:error, :sync,
+            storage_key: key,
+            reason: reason_str
+          )
         )
 
         {:error, {:storage, reason}}
@@ -852,9 +870,12 @@ defmodule Engram.Attachments do
         {:error, reason} ->
           require Logger
 
-          Logger.error("Skipping undecryptable attachment",
-            attachment_id: att.id,
-            reason: inspect(reason)
+          Logger.error(
+            "Skipping undecryptable attachment",
+            Metadata.with_category(:error, :sync,
+              attachment_id: att.id,
+              reason: inspect(reason)
+            )
           )
 
           []

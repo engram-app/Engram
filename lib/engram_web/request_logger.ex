@@ -55,15 +55,17 @@ defmodule EngramWeb.RequestLogger do
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
     Logger.error(
       "request exception",
-      method: conn.method,
-      status: conn.status,
-      route: route(conn),
-      user_id: current_user_id(conn),
-      kind: metadata[:kind],
-      # Bounded: the reason can be a Postgrex/DBConnection error wrapping bound
-      # params or creds — only the struct/atom class escapes.
-      error_kind: Engram.Telemetry.error_kind(metadata[:reason]),
-      request_path: conn.request_path
+      Engram.Logger.Metadata.with_category(:error, :http,
+        method: conn.method,
+        status: conn.status,
+        route: route(conn),
+        user_id: current_user_id(conn),
+        kind: metadata[:kind],
+        # Bounded: the reason can be a Postgrex/DBConnection error wrapping bound
+        # params or creds — only the struct/atom class escapes.
+        error_kind: Engram.Telemetry.error_kind(metadata[:reason]),
+        request_path: conn.request_path
+      )
     )
   end
 
@@ -71,17 +73,20 @@ defmodule EngramWeb.RequestLogger do
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
+    level = level_for_status(conn.status)
 
     Logger.log(
-      level_for_status(conn.status),
+      level,
       "#{conn.method} #{conn.status} in #{duration_ms}ms",
-      method: conn.method,
-      status: conn.status,
-      route: route(conn),
-      request_path: conn.request_path,
-      request_query: conn.query_string,
-      user_id: current_user_id(conn),
-      mtls_clientcert_subject: mtls_clientcert_subject(conn)
+      Engram.Logger.Metadata.with_category(level, :http,
+        method: conn.method,
+        status: conn.status,
+        route: route(conn),
+        request_path: conn.request_path,
+        request_query: conn.query_string,
+        user_id: current_user_id(conn),
+        mtls_clientcert_subject: mtls_clientcert_subject(conn)
+      )
     )
   end
 

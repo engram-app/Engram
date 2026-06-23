@@ -27,7 +27,12 @@ defmodule EngramWeb.UserSocket do
         # Previously silent — during a Clerk break every SPA reconnect storms
         # this path with no log and no metric. Mirror the HTTP plug.
         label = Engram.Auth.emit_rejected(reason, :socket)
-        Logger.info("auth rejected", reason: label)
+
+        Logger.warning(
+          "auth rejected",
+          Engram.Logger.Metadata.with_category(:warning, :auth, reason: label)
+        )
+
         :error
     end
   end

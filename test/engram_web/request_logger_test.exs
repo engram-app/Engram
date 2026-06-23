@@ -327,6 +327,74 @@ defmodule EngramWeb.RequestLoggerTest do
     refute inspect(event.meta) =~ "XYZZYZ"
   end
 
+  test "successful request stamps category=:http and loki_ship=false" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 200,
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :index},
+      assigns: %{}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.level == :info
+    assert event.meta[:category] == :http
+    assert event.meta[:loki_ship] == false
+  end
+
+  test "5xx request stamps category=:http and loki_ship=true (error level ships to Loki)" do
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 500,
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :create},
+      assigns: %{}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.level == :error
+    assert event.meta[:category] == :http
+    assert event.meta[:loki_ship] == true
+  end
+
+  test "router_dispatch exception stamps category=:http and loki_ship=true" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/notes/x.md",
+      query_string: "",
+      status: 500,
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :show}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :router_dispatch, :exception],
+          %{duration: 0},
+          %{conn: conn, kind: :error, reason: %RuntimeError{message: "boom"}, stacktrace: []}
+        )
+      end)
+
+    event = Enum.find(events, fn e -> render_msg(e.msg) =~ "request exception" end)
+    assert event
+    assert event.meta[:category] == :http
+    assert event.meta[:loki_ship] == true
+  end
+
   defp find_request_event(events) do
     Enum.find(events, fn e ->
       msg = render_msg(e.msg)

@@ -8,6 +8,7 @@ defmodule Engram.Accounts.LifecycleTest do
   alias Engram.Auth.RefreshToken
   alias Engram.Repo
   alias Engram.Storage.InMemory
+  alias Engram.Test.LogCapture
 
   setup :verify_on_exit!
 
@@ -339,6 +340,28 @@ defmodule Engram.Accounts.LifecycleTest do
       assert :ok = Lifecycle.hard_delete(user, :inactivity)
 
       assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :inactivity}}
+    end
+
+    test "milestone log carries category: :lifecycle and loki_ship: true" do
+      # Test env defaults the logger to :warning; raise to :info so the
+      # milestone line reaches the capture handler. Restore on exit.
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
+
+      user = insert(:user, external_id: nil)
+
+      {result, events} = LogCapture.with_events(fn -> Lifecycle.hard_delete(user, :user) end)
+
+      assert result == :ok
+
+      milestone =
+        Enum.find(events, fn event ->
+          event.level == :info and event.meta[:category] == :lifecycle
+        end)
+
+      assert milestone, "expected an :info :lifecycle milestone log event"
+      assert milestone.meta[:loki_ship] == true
     end
   end
 end
