@@ -32,4 +32,36 @@ defmodule Engram.Usage.DailyCapTest do
 
     assert {:allow, _} = DailyCap.spend(u, "inapp_search", 10, 1.0)
   end
+
+  describe "telemetry" do
+    setup do
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "daily-cap-test-#{inspect(ref)}",
+        [:engram, :usage, :daily_cap],
+        fn _event, measurements, metadata, _ ->
+          send(parent, {:cap_event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("daily-cap-test-#{inspect(ref)}") end)
+      :ok
+    end
+
+    test "emits an allow decision when a token is spent" do
+      assert {:allow, _} = DailyCap.spend(uid(), "inapp_search", 10, 10 / 86_400)
+      assert_receive {:cap_event, %{count: 1}, %{kind: "inapp_search", decision: :allow}}
+    end
+
+    test "emits a deny decision when the bucket is empty" do
+      u = uid()
+      for _ <- 1..10, do: DailyCap.spend(u, "inapp_search", 10, 0.0)
+      # Drain the allow events from filling the bucket.
+      assert {:deny, _} = DailyCap.spend(u, "inapp_search", 10, 0.0)
+      assert_receive {:cap_event, %{count: 1}, %{kind: "inapp_search", decision: :deny}}
+    end
+  end
 end

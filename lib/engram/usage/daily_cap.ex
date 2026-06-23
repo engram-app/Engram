@@ -22,6 +22,8 @@ defmodule Engram.Usage.DailyCap do
   def spend(user_id, kind, capacity, refill_per_sec) do
     case Cache.empty_until(user_id, kind) do
       {:empty, retry_after_sec} ->
+        # Short-circuit deny: a known-empty bucket never touched the DB.
+        emit(kind, :deny)
         {:deny, retry_after_sec}
 
       :unknown ->
@@ -50,6 +52,7 @@ defmodule Engram.Usage.DailyCap do
 
     case Repo.query(@sql, [user_id_bin, kind, capacity * 1.0, refill_per_sec]) do
       {:ok, %{rows: [[tokens]]}} ->
+        emit(kind, :allow)
         {:allow, tokens}
 
       {:ok, %{rows: []}} ->
@@ -57,11 +60,25 @@ defmodule Engram.Usage.DailyCap do
         # regenerates, so subsequent requests skip the DB.
         retry = if refill_per_sec > 0, do: ceil(1 / refill_per_sec), else: 3600
         Cache.mark_empty(user_id, kind, retry)
+        emit(kind, :deny)
         {:deny, retry}
 
       {:error, reason} ->
         Logger.warning("daily_cap fail-open", kind: kind, reason: inspect(reason))
+        emit(kind, :fail_open)
         {:allow, 0.0}
     end
+  end
+
+  # Allow/deny/fail-open visibility for the daily cap. `kind` is a fixed
+  # bucket label (e.g. "inapp_search") — safe to tag (low cardinality);
+  # never user_id. Picked up by `Engram.PromEx.Usage`.
+  @spec emit(String.t(), :allow | :deny | :fail_open) :: :ok
+  defp emit(kind, decision) do
+    :telemetry.execute(
+      [:engram, :usage, :daily_cap],
+      %{count: 1},
+      %{kind: kind, decision: decision}
+    )
   end
 end
