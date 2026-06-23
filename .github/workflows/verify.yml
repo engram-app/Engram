@@ -1676,9 +1676,20 @@ jobs:
       - name: Detect migration touches
         id: detect
         run: |
-          git fetch -q --depth=1 origin main || true
+          # Fetch main FULLY (checkout is fetch-depth:0). The previous
+          # `--depth=1` left main shallow, so `origin/main...HEAD` couldn't
+          # resolve a merge-base and `git diff` fell back to the empty tree —
+          # making EVERY file (incl. all existing migrations) look added, so
+          # the label was demanded on non-migration PRs. Compute the base
+          # explicitly and fail loud if it can't, rather than guessing. (#718)
+          git fetch -q origin main
+          base=$(git merge-base FETCH_HEAD HEAD)
+          if [ -z "$base" ]; then
+            echo "::error::Could not compute merge-base with origin/main — cannot determine migration touches."
+            exit 1
+          fi
           changed=$(git diff --name-only --diff-filter=ACMR \
-            origin/main...HEAD -- 'priv/repo/migrations/*.exs' || true)
+            "$base" HEAD -- 'priv/repo/migrations/*.exs')
           if [ -z "$changed" ]; then
             echo "touches=false" >> "$GITHUB_OUTPUT"
             echo "No migration changes on this branch — phase label not required."
