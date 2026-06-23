@@ -52,7 +52,7 @@ export default function ErrorFallback({
           <h1 className={heading}>Something went wrong</h1>
           <p className="max-w-md text-sm text-muted-foreground">
             An unexpected error broke this page.{reported ? ' It has been reported.' : ''} Try
-            reloading — if it keeps happening, contact{' '}
+            reloading. If it keeps happening, contact{' '}
             <a className="underline" href="mailto:support@engram.page">
               support@engram.page
             </a>
