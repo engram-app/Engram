@@ -4,6 +4,7 @@ defmodule Engram.Rerankers.JinaTest do
   import ExUnit.CaptureLog
 
   alias Engram.Rerankers.Jina
+  alias Engram.Test.LogCapture
 
   setup do
     bypass = Bypass.open()
@@ -71,6 +72,30 @@ defmodule Engram.Rerankers.JinaTest do
         assert {:ok, [result]} = Jina.rerank("query", candidates, 1)
         assert result.text == "Only result"
       end)
+    end
+
+    test "non-200 logs a shippable category=:search warning", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/rerank", fn conn ->
+        Plug.Conn.send_resp(conn, 503, "Service Unavailable")
+      end)
+
+      candidates = [%{score: 0.8, text: "Only result"}]
+
+      {result, events} =
+        LogCapture.with_events(fn ->
+          Jina.rerank("query", candidates, 1)
+        end)
+
+      assert {:ok, [_]} = result
+
+      event =
+        Enum.find(events, fn e ->
+          e.level == :warning and e.meta[:category] == :search
+        end)
+
+      assert event, "expected a :search warning event, got: #{inspect(events)}"
+      assert event.meta[:loki_ship] == true
+      assert event.meta[:status] == 503
     end
 
     test "handles empty candidates", %{bypass: _bypass} do

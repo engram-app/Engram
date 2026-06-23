@@ -53,7 +53,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     _ =
       if note_ids != [] do
-        Logger.info("reconcile_embeddings: queueing #{length(note_ids)} stale notes")
+        Logger.debug(
+          "reconcile_embeddings: queueing stale notes",
+          Engram.Logger.Metadata.with_category(:debug, :search, total_count: length(note_ids))
+        )
+
         Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced/1))
       end
 

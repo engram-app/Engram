@@ -30,6 +30,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Logger.DecryptFailure
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
@@ -147,9 +148,12 @@ defmodule Engram.Workers.EmbedNote do
           %{user_id: user_id}
         )
 
-        Logger.warning("EmbedNote rejected — lifetime embed-token cap reached",
-          user_id: user_id,
-          reason_label: :embed_budget_exhausted
+        Logger.warning(
+          "EmbedNote rejected — lifetime embed-token cap reached",
+          Metadata.with_category(:warning, :search,
+            user_id: user_id,
+            reason_label: :embed_budget_exhausted
+          )
         )
 
         {:cancel, :embed_budget_exhausted}
@@ -230,13 +234,15 @@ defmodule Engram.Workers.EmbedNote do
                   %{error_kind: error_kind, status: status}
                 )
 
-                Logger.warning("embed_attempt_failed",
-                  category: :embed,
-                  user_id: note.user_id,
-                  vault_id: note.vault_id,
-                  note_id: note.id,
-                  error_kind: error_kind,
-                  status: status
+                Logger.warning(
+                  "embed_attempt_failed",
+                  Metadata.with_category(:warning, :search,
+                    user_id: note.user_id,
+                    vault_id: note.vault_id,
+                    note_id: note.id,
+                    error_kind: error_kind,
+                    status: status
+                  )
                 )
 
                 {:error, reason}
@@ -266,7 +272,10 @@ defmodule Engram.Workers.EmbedNote do
       |> Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
 
     if count == 0 do
-      Logger.info("embed_hash stamp skipped (concurrent edit): note_id=#{note.id}")
+      Logger.debug(
+        "embed_hash stamp skipped (concurrent edit)",
+        Metadata.with_category(:debug, :search, note_id: note.id)
+      )
     end
 
     :ok
