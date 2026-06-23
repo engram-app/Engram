@@ -1210,6 +1210,40 @@ describe('useBatchMoveNotes', () => {
 
     resolvePost({ moved: 1 })
   })
+
+  it('decrements a DERIVED source folder count when moving notes OUT of it', async () => {
+    // Source is a derived folder (null id in the raw cache, note list keyed
+    // under its syn:<path> loader id). The decrement must match it by name.
+    qc.setQueryData(['folders', '42'], {
+      folders: [
+        { id: null, parent_id: null, name: 'Derived', count: 2 },
+        { id: '9', parent_id: null, name: 'dst', count: 0 },
+      ] as unknown as Folder[],
+    })
+    seedFolderNotesById('syn:Derived', [{ id: '1' }, { id: '2' }])
+    qc.setQueryData(['folder-notes-by-id', '42', '9'], [])
+
+    let resolvePost!: (v: unknown) => void
+    post.mockReturnValue(new Promise((r) => (resolvePost = r)))
+
+    const { result } = renderHook(() => useBatchMoveNotes(), { wrapper })
+    act(() => {
+      result.current.mutate({ ids: ['1'], target_folder: 'dst' })
+    })
+
+    await waitFor(() => {
+      const folders = qc.getQueryData<{ folders: Folder[] }>(['folders', '42'])
+      expect(folders?.folders.find((f) => f.name === 'Derived')?.count).toBe(1)
+      const src = qc.getQueryData<Array<{ id: string }>>([
+        'folder-notes-by-id',
+        '42',
+        'syn:Derived',
+      ])
+      expect(src?.map((n) => n.id)).toEqual(['2'])
+    })
+
+    resolvePost({ moved: 1 })
+  })
 })
 
 describe('useBatchDeleteFolders', () => {

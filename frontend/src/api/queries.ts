@@ -1930,9 +1930,11 @@ export function useBatchMoveNotes() {
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
       const moved: NoteSummary[] = []
-      // How many notes left each source folder — used to decrement folder
-      // counts below so the tree's structure key changes and it rebuilds.
-      const removedPerFolder = new Map<string, number>()
+      // How many notes left each source folder, keyed by folder NAME — used to
+      // decrement folder counts below. Keyed by name (not id) because a derived
+      // folder's raw `['folders']` row has a null id, so id matching would miss
+      // it; the note lists, however, are keyed by the loader id (real or syn:).
+      const removedPerName = new Map<string, number>()
 
       // First pass: strip moved notes from every source list (capture the rows
       // so we can re-attach them to the target). Root and subfolders share one
@@ -1942,12 +1944,23 @@ export function useBatchMoveNotes() {
         if (!data) continue
         snapshots.push({ key: q.queryKey, data })
         const folderId = q.queryKey[2] as string | null | undefined
+        // Resolve this source list's folder PATH so the count decrement matches
+        // the raw folders cache by name (root sentinel → '', syn:<path> → path,
+        // real id → its cached name).
+        const srcName =
+          typeof folderId !== 'string'
+            ? null
+            : folderId === ROOT_FOLDER_ID
+              ? ''
+              : isSyntheticFolderId(folderId)
+                ? syntheticFolderPath(folderId)
+                : (foldersCache?.folders.find((ff) => ff.id === folderId)?.name ?? null)
         const keep: NoteSummary[] = []
         for (const n of data) {
           if (idSet.has(n.id) && folderId !== targetCacheId) {
             moved.push(n)
-            if (typeof folderId === 'string') {
-              removedPerFolder.set(folderId, (removedPerFolder.get(folderId) ?? 0) + 1)
+            if (srcName !== null) {
+              removedPerName.set(srcName, (removedPerName.get(srcName) ?? 0) + 1)
             }
           } else {
             keep.push(n)
@@ -2001,16 +2014,17 @@ export function useBatchMoveNotes() {
       // Snapshot for rollback. Skipped when nothing moved; for a root target
       // ('root' has no folder row) sources still decrement.
       let foldersSnapshot: { folders: Folder[] } | undefined
-      if (moved.length > 0 || removedPerFolder.size > 0) {
+      if (moved.length > 0 || removedPerName.size > 0) {
         const cache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
         if (cache) {
           foldersSnapshot = cache
           const patched = cache.folders.map((f) => {
             let count = f.count
-            const removed = removedPerFolder.get(f.id)
+            // Both source decrement and destination bump match by NAME: a
+            // derived folder has a null id in the raw cache, so id matching
+            // would miss it.
+            const removed = removedPerName.get(f.name)
             if (removed) count -= removed
-            // Match the destination by NAME: a derived target has a null id in
-            // the raw cache, so id comparison would miss it.
             if (target_folder !== '' && f.name === target_folder) count += moved.length
             return count === f.count ? f : { ...f, count }
           })
