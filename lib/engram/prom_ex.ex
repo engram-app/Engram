@@ -29,7 +29,8 @@ defmodule Engram.PromEx do
       Engram.PromEx.Mcp,
       Engram.PromEx.Crypto,
       Engram.PromEx.Reliability,
-      Engram.PromEx.Usage
+      Engram.PromEx.Usage,
+      Engram.PromEx.RateLimiter
     ]
   end
 

@@ -30,4 +30,50 @@ defmodule EngramWeb.RateLimiterTest do
     # assert that backend/0 returns the correct atom; the full round-trip is
     # covered by the DistributedETS unit tests in rate_limiter/distributed_ets_test.exs.
   end
+
+  describe "telemetry — [:engram, :rate_limiter, :hit]" do
+    # Steady-state allow/deny visibility restored in #687. Emitted at the façade
+    # so it covers BOTH backends; tagged with a bounded `purpose` atom (never the
+    # user_id / ip / request_path embedded in the bucket key).
+    defp attach_hit(ref) do
+      test_pid = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :rate_limiter, :hit],
+        fn _name, meas, meta, _ -> send(test_pid, {:hit, ref, meas, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+    end
+
+    test "a hit under the limit emits :allow tagged with the given purpose" do
+      ref = make_ref()
+      attach_hit(ref)
+      key = "preauth:#{System.unique_integer([:positive])}"
+
+      assert {:allow, 1} = RateLimiter.hit(key, 1000, 2, :preauth)
+      assert_receive {:hit, ^ref, %{count: 1}, %{purpose: :preauth, result: :allow}}, 1000
+    end
+
+    test "a hit over the limit emits :deny" do
+      ref = make_ref()
+      attach_hit(ref)
+      key = "rps:#{System.unique_integer([:positive])}"
+
+      assert {:allow, 1} = RateLimiter.hit(key, 1000, 1, :api_rps)
+      assert {:deny, _retry_ms} = RateLimiter.hit(key, 1000, 1, :api_rps)
+      assert_receive {:hit, ^ref, %{count: 1}, %{purpose: :api_rps, result: :deny}}, 1000
+    end
+
+    test "purpose defaults to :other when the arg is omitted (hit/3)" do
+      ref = make_ref()
+      attach_hit(ref)
+      key = "misc:#{System.unique_integer([:positive])}"
+
+      assert {:allow, 1} = RateLimiter.hit(key, 1000, 2)
+      assert_receive {:hit, ^ref, %{count: 1}, %{purpose: :other, result: :allow}}, 1000
+    end
+  end
 end

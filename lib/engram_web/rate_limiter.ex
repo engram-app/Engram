@@ -18,12 +18,32 @@ defmodule EngramWeb.RateLimiter do
 
   @type hit_result :: {:allow, non_neg_integer()} | {:deny, non_neg_integer()}
 
-  @spec hit(String.t(), pos_integer(), non_neg_integer()) :: hit_result()
-  def hit(key, scale_ms, limit) do
-    case backend() do
-      :distributed_ets -> EngramWeb.RateLimiter.DistributedETS.hit(key, scale_ms, limit)
-      _ets -> EngramWeb.RateLimiter.ETS.hit(key, scale_ms, limit)
-    end
+  @typedoc """
+  Bounded limiter-purpose label for telemetry. A closed enum so the
+  `engram_prom_ex_rate_limiter_hit_total` series can never carry the
+  user_id / ip / request_path embedded in a bucket key.
+  """
+  @type purpose :: :preauth | :http | :api_rps | :voyage_embed | :other
+
+  @doc """
+  Count a hit against `key` and emit `[:engram, :rate_limiter, :hit]` with the
+  bounded `purpose` label and the allow/deny `result` (covers both backends).
+  """
+  @spec hit(String.t(), pos_integer(), non_neg_integer(), purpose()) :: hit_result()
+  def hit(key, scale_ms, limit, purpose \\ :other) do
+    result =
+      case backend() do
+        :distributed_ets -> EngramWeb.RateLimiter.DistributedETS.hit(key, scale_ms, limit)
+        _ets -> EngramWeb.RateLimiter.ETS.hit(key, scale_ms, limit)
+      end
+
+    :telemetry.execute(
+      [:engram, :rate_limiter, :hit],
+      %{count: 1},
+      %{purpose: purpose, result: elem(result, 0)}
+    )
+
+    result
   end
 
   @spec backend() :: :ets | :distributed_ets

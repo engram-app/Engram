@@ -228,6 +228,19 @@ defmodule EngramWeb.Telemetry do
           "Jobs that exhausted max_attempts and were dropped by Oban. Layer 3 surface — non-zero is a triage signal."
       ),
 
+      # #687 — rate-limiter visibility (Redis-backed metrics dropped with #684).
+      # Mirrored on the scraped /metrics endpoint by Engram.PromEx.RateLimiter.
+      counter("engram.rate_limiter.hit.count",
+        tags: [:purpose, :result],
+        description:
+          "Rate-limiter allow/deny by bounded `:purpose` (:preauth | :http | :api_rps | :voyage_embed | :other). Never tags the bucket key (embeds user_id/ip/path)."
+      ),
+      counter("engram.rate_limiter.remote_inc.count",
+        tags: [:result],
+        description:
+          "DistributedETS cross-node PubSub increments, `:result` :applied | :dropped. The warm-window signal: `:applied` ramping from a new node's boot = warming from peers; `:dropped` > 0 = lost increments."
+      ),
+
       # PR #244 — Paddle webhook reliability surfaces.
       #
       # Emitted via :telemetry.span/3 in EngramWeb.WebhookController.paddle/2.

@@ -70,7 +70,7 @@ defmodule EngramWeb.Plugs.PreAuthRateLimit do
   defp enforce(conn, limit, period) do
     key = bucket_key(conn)
 
-    case EngramWeb.RateLimiter.hit(key, period, limit) do
+    case EngramWeb.RateLimiter.hit(key, period, limit, :preauth) do
       {:allow, count} ->
         remaining = max(limit - count, 0)
 

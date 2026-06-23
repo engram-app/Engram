@@ -23,7 +23,7 @@ defmodule EngramWeb.Plugs.RateLimit do
 
     key = rate_limit_key(conn)
 
-    case EngramWeb.RateLimiter.hit(key, period, effective_limit) do
+    case EngramWeb.RateLimiter.hit(key, period, effective_limit, :http) do
       {:allow, _count} ->
         conn
 
