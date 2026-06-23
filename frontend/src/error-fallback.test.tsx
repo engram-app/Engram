@@ -23,6 +23,11 @@ describe('ErrorFallback', () => {
     )
   })
 
+  it('renders the branded backdrop', () => {
+    const { container } = render(<ErrorFallback error={new Error('boom')} />)
+    expect(container.querySelector('.grid-overlay')).toBeInTheDocument()
+  })
+
   it('shows the Sentry reference id when one is provided', () => {
     render(<ErrorFallback error={new Error('boom')} eventId="abc123" />)
     expect(screen.getByText(/abc123/)).toBeInTheDocument()

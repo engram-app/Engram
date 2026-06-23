@@ -1,3 +1,4 @@
+import AuthBackdrop from './layout/auth-backdrop'
 import AuthPanel from './layout/auth-panel'
 import { Button } from '@/components/ui/button'
 import { heading } from '@/lib/ui-classes'
@@ -29,8 +30,10 @@ export default function ErrorFallback({ error, eventId }: ErrorFallbackProps) {
           Engram
         </span>
       </header>
-      <section className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <AuthPanel className="flex flex-col items-center gap-4 text-center">
+      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <AuthBackdrop />
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <AuthPanel className="flex flex-col items-center gap-4 text-center">
           <p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text text-7xl font-extrabold leading-none tracking-tight text-transparent sm:text-8xl">
             Oops
           </p>
@@ -71,7 +74,8 @@ export default function ErrorFallback({ error, eventId }: ErrorFallbackProps) {
               </pre>
             </details>
           ) : null}
-        </AuthPanel>
+          </AuthPanel>
+        </div>
       </section>
     </main>
   )
