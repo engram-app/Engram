@@ -84,6 +84,51 @@ defmodule Engram.Notes.HelpersTest do
       content = "---\ntitle: Just a title\n---\nBody"
       assert Helpers.extract_tags(content) == []
     end
+
+    test "extracts an inline #tag from the body" do
+      assert Helpers.extract_tags("Some body with a #fitness tag") == ["fitness"]
+    end
+
+    test "extracts a nested inline #area/sub tag" do
+      assert Helpers.extract_tags("Work note #area/subarea here") == ["area/subarea"]
+    end
+
+    test "merges frontmatter tags with inline tags, frontmatter first, deduped" do
+      content = "---\ntags: [health]\n---\nBody #fitness and again #health"
+      assert Helpers.extract_tags(content) == ["health", "fitness"]
+    end
+
+    test "skips #tags inside a fenced code block" do
+      content = "Intro #real\n\n```\nnot a #tag here\n```\n\nOutro"
+      assert Helpers.extract_tags(content) == ["real"]
+    end
+
+    test "skips #tags inside an inline code span" do
+      content = "Use `#notatag` in code but #realtag in prose"
+      assert Helpers.extract_tags(content) == ["realtag"]
+    end
+
+    test "skips the # fragment in a URL" do
+      content = "See https://example.com/docs#section for details"
+      assert Helpers.extract_tags(content) == []
+    end
+
+    test "does not treat a word-attached hash as a tag" do
+      assert Helpers.extract_tags("issue C#sharp note") == []
+    end
+
+    test "skips heading markers" do
+      content = "# Heading One\n## Heading Two\nBody #onlytag"
+      assert Helpers.extract_tags(content) == ["onlytag"]
+    end
+
+    test "rejects purely-numeric matches like #42" do
+      assert Helpers.extract_tags("Closes #42 and tags #bug") == ["bug"]
+    end
+
+    test "deduplicates repeated inline tags" do
+      assert Helpers.extract_tags("#dup once #dup twice") == ["dup"]
+    end
   end
 
   # ---------------------------------------------------------------------------

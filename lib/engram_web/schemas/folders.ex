@@ -129,9 +129,15 @@ defmodule EngramWeb.Schemas.BatchMoveFoldersRequest do
     type: :object,
     properties: %{
       ids: %Schema{type: :array, items: %Schema{type: :string, format: :uuid}},
-      target_parent_id: %Schema{type: :string, description: "Parent folder UUID or \"root\"."}
+      target_parent_id: %Schema{type: :string, description: "Parent folder UUID or \"root\"."},
+      target_parent: %Schema{
+        type: :string,
+        description:
+          "Destination parent folder path (alternative to target_parent_id; \"\" = top level). " <>
+            "Use this to re-parent under a derived folder that has no marker."
+      }
     },
-    required: [:ids, :target_parent_id],
+    required: [:ids],
     example: %{
       "ids" => [
         "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",

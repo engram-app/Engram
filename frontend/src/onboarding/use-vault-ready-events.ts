@@ -68,7 +68,13 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
       })
     }
 
-    connect()
+    // Fire-and-forget, but never let the promise dangle: a rejecting
+    // getToken() (auth not ready, network error) would otherwise surface
+    // as an unhandled rejection — which crashes the test runner and is
+    // noise in prod. Swallow + log, mirroring the channel-join error path.
+    connect().catch((err) => {
+      console.error('user channel connect failed', err)
+    })
 
     return () => {
       cancelled = true

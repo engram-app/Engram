@@ -22,6 +22,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "target_parent": {
+            "description": "Destination parent folder path (alternative to target_parent_id; \"\" = top level). Use this to re-parent under a derived folder that has no marker.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "target_parent_id": {
             "description": "Parent folder UUID or \"root\".",
             "type": "string",
@@ -30,8 +36,7 @@
           }
         },
         "required": [
-          "ids",
-          "target_parent_id"
+          "ids"
         ],
         "title": "BatchMoveFoldersRequest",
         "type": "object",
@@ -2617,6 +2622,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "target_folder": {
+            "description": "Destination folder path (alternative to target_folder_id; \"\" = vault root). Use this to move into a derived folder that has no marker.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "target_folder_id": {
             "description": "Folder UUID or \"root\".",
             "type": "string",
@@ -2625,8 +2636,7 @@
           }
         },
         "required": [
-          "ids",
-          "target_folder_id"
+          "ids"
         ],
         "title": "BatchMoveNotesRequest",
         "type": "object",

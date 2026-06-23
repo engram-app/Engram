@@ -125,29 +125,24 @@ export default function FolderTree() {
   const onMove = (sourceIds: string[], targetItemId: string) => {
     const target = parseItemId(targetItemId)
     if (target.kind !== 'folder' && target.kind !== 'root') return
-    // Synthetic folders (id prefix 'syn:') are UI-only scaffolding for
-    // attachment-only dirs — they have no backend record, so they can be
-    // neither a move destination nor a moved source.
-    if (target.kind === 'folder' && isSyntheticFolderId(target.id)) return
     const parsed = sourceIds.map(parseItemId)
     const noteIds = parsed.filter((p) => p.kind === 'note').map((p) => (p as { id: string }).id)
+    // A derived folder has no marker id, so it can't be a move SOURCE — only
+    // real-marker folders can be dragged. (It can still be a destination, below,
+    // since everything now moves by PATH.)
     const folderIds = parsed
       .filter((p) => p.kind === 'folder' && !isSyntheticFolderId((p as { id: string }).id))
       .map((p) => (p as { id: string }).id)
     const attachmentPaths = parsed
       .filter((p) => p.kind === 'attachment')
       .map((p) => (p as { path: string }).path)
-    // 'root' is the backend sentinel for the vault root; a folder target uses
-    // its marker id. Note→root has no optimistic patch (root notes live under a
-    // different cache key than the by-id folder lists), so a moved note briefly
-    // disappears until useBatchMoveNotes' onSuccess invalidation + the
-    // count-keyed rebuildTree reconcile it at root — an accepted trade-off.
-    const dest = target.kind === 'root' ? 'root' : target.id
-    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: dest })
-    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: dest })
+    // Destination PATH ('' = vault root). Resolved from the synthesized tree so
+    // a derived folder (syn: id) yields its path — moves into it work by path.
+    const destFolder =
+      target.kind === 'root' ? '' : (allFolders.find((f) => f.id === target.id)?.name ?? '')
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder: destFolder })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder })
     if (attachmentPaths.length) {
-      // Attachment batch-move takes a folder name string, not an id.
-      const destFolder = target.kind === 'root' ? '' : (folders?.find((f) => f.id === target.id)?.name ?? '')
       batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder })
     }
   }
@@ -389,17 +384,10 @@ export default function FolderTree() {
   function commitMove(targetFolderName: string) {
     if (dialog.kind !== 'move') return
     const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds)
-    // Notes and folders need a folder id; attachments take the folder name directly.
-    // When the selection contains notes or folders, we must resolve the target folder.
-    if (noteIds.length || folderIds.length) {
-      const target = folders?.find((f) => f.name === targetFolderName)
-      if (!target) {
-        setDialog({ kind: 'none' })
-        return
-      }
-      if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder_id: target.id })
-      if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent_id: target.id })
-    }
+    // Everything moves by PATH (targetFolderName is the folder path, '' = root),
+    // so a derived folder with no marker is a valid destination.
+    if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder: targetFolderName })
+    if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent: targetFolderName })
     if (attachmentPaths.length) {
       batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName })
     }
@@ -472,7 +460,9 @@ export default function FolderTree() {
       {dialog.kind === 'move' && (
         <MoveDialog
           nodes={dialog.nodes}
-          folders={folders.map((f) => ({ name: f.name }))}
+          // Every folder is a valid target now that moves go by path — including
+          // derived folders (notes inside, no marker).
+          folders={allFolders.map((f) => ({ name: f.name }))}
           onPick={commitMove}
           onCancel={() => setDialog({ kind: 'none' })}
         />
