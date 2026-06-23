@@ -95,5 +95,23 @@ defmodule EngramWeb.NotesControllerBatchTest do
       {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, n1.id)
       assert moved.path == "a.md"
     end
+
+    test "moves notes into a derived folder via target_folder path (no marker)", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/notes/batch-move", %{ids: [n1.id], target_folder: "Derived/Sub"})
+        |> json_response(200)
+
+      assert body == %{"moved" => 1}
+      {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, n1.id)
+      assert moved.path == "Derived/Sub/a.md"
+    end
   end
 end

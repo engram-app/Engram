@@ -1902,33 +1902,39 @@ export function useBatchMoveNotes() {
   return useMutation<
     { moved: number },
     ApiError,
-    { ids: string[]; target_folder_id: string },
+    { ids: string[]; target_folder: string },
     BatchNotesContext
   >({
-    mutationFn: ({ ids, target_folder_id }) =>
+    mutationFn: ({ ids, target_folder }) =>
       api.post<{ moved: number }>(
         '/notes/batch-move',
-        { ids, target_folder_id },
+        { ids, target_folder },
         idempotencyHeaders(),
       ),
-    onMutate: async ({ ids, target_folder_id }) => {
+    onMutate: async ({ ids, target_folder }) => {
       await qc.cancelQueries({ queryKey: ['folder-notes-by-id', vaultId] })
       await qc.cancelQueries({ queryKey: ['folders', vaultId] })
       const idSet = new Set(ids)
 
-      // Destination path: a real folder's name, or '' for the vault root
-      // (target_folder_id === ROOT_FOLDER_ID — no folders row).
+      // Destination is the folder PATH ('' = vault root). The by-id note cache
+      // keys under the folder's loader id — a real marker id, else the stable
+      // `syn:<path>` id a derived folder carries — so the optimistic add lands
+      // in the same list the tree reads.
       const foldersCache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
-      const targetFolderName =
-        target_folder_id === ROOT_FOLDER_ID
-          ? ''
-          : (foldersCache?.folders.find((f) => f.id === target_folder_id)?.name ?? null)
+      const targetFolderName = target_folder
+      const targetCacheId =
+        target_folder === ''
+          ? ROOT_FOLDER_ID
+          : (foldersCache?.folders.find((f) => f.name === target_folder)?.id ??
+            syntheticFolderId(target_folder))
 
       const snapshots: BatchNotesContext['noteListSnapshots'] = []
       const moved: NoteSummary[] = []
-      // How many notes left each source folder — used to decrement folder
-      // counts below so the tree's structure key changes and it rebuilds.
-      const removedPerFolder = new Map<string, number>()
+      // How many notes left each source folder, keyed by folder NAME — used to
+      // decrement folder counts below. Keyed by name (not id) because a derived
+      // folder's raw `['folders']` row has a null id, so id matching would miss
+      // it; the note lists, however, are keyed by the loader id (real or syn:).
+      const removedPerName = new Map<string, number>()
 
       // First pass: strip moved notes from every source list (capture the rows
       // so we can re-attach them to the target). Root and subfolders share one
@@ -1938,12 +1944,23 @@ export function useBatchMoveNotes() {
         if (!data) continue
         snapshots.push({ key: q.queryKey, data })
         const folderId = q.queryKey[2] as string | null | undefined
+        // Resolve this source list's folder PATH so the count decrement matches
+        // the raw folders cache by name (root sentinel → '', syn:<path> → path,
+        // real id → its cached name).
+        const srcName =
+          typeof folderId !== 'string'
+            ? null
+            : folderId === ROOT_FOLDER_ID
+              ? ''
+              : isSyntheticFolderId(folderId)
+                ? syntheticFolderPath(folderId)
+                : (foldersCache?.folders.find((ff) => ff.id === folderId)?.name ?? null)
         const keep: NoteSummary[] = []
         for (const n of data) {
-          if (idSet.has(n.id) && folderId !== target_folder_id) {
+          if (idSet.has(n.id) && folderId !== targetCacheId) {
             moved.push(n)
-            if (typeof folderId === 'string') {
-              removedPerFolder.set(folderId, (removedPerFolder.get(folderId) ?? 0) + 1)
+            if (srcName !== null) {
+              removedPerName.set(srcName, (removedPerName.get(srcName) ?? 0) + 1)
             }
           } else {
             keep.push(n)
@@ -1955,7 +1972,7 @@ export function useBatchMoveNotes() {
       // Second pass: append the moved rows to the destination list (if cached),
       // rewriting folder + path so each row looks at-home. The target keys
       // under its id — ROOT_FOLDER_ID for the vault root.
-      if (moved.length > 0 && targetFolderName !== null) {
+      if (moved.length > 0) {
         const dest = targetFolderName
         const patched = moved.map<NoteSummary>((n) => {
           const filename = n.path.includes('/')
@@ -1963,7 +1980,7 @@ export function useBatchMoveNotes() {
             : n.path
           return { ...n, folder: dest, path: dest ? `${dest}/${filename}` : filename }
         })
-        const targetKey = ['folder-notes-by-id', vaultId, target_folder_id] as const
+        const targetKey = ['folder-notes-by-id', vaultId, targetCacheId] as const
         const targetData = qc.getQueryData<NoteSummary[]>(targetKey)
         if (targetData) qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched])
       }
@@ -1971,7 +1988,7 @@ export function useBatchMoveNotes() {
       // Patch the individual `['note', vaultId, id]` caches so an open viewer
       // reflects the new folder. Path/folder shift; id stable. Applies to root
       // targets too (dest === '').
-      if (targetFolderName !== null) {
+      {
         const dest = targetFolderName
         for (const id of ids) {
           const note = qc.getQueryData<Note>(['note', vaultId, id])
@@ -1997,15 +2014,18 @@ export function useBatchMoveNotes() {
       // Snapshot for rollback. Skipped when nothing moved; for a root target
       // ('root' has no folder row) sources still decrement.
       let foldersSnapshot: { folders: Folder[] } | undefined
-      if (moved.length > 0 || removedPerFolder.size > 0) {
+      if (moved.length > 0 || removedPerName.size > 0) {
         const cache = qc.getQueryData<{ folders: Folder[] }>(['folders', vaultId])
         if (cache) {
           foldersSnapshot = cache
           const patched = cache.folders.map((f) => {
             let count = f.count
-            const removed = removedPerFolder.get(f.id)
+            // Both source decrement and destination bump match by NAME: a
+            // derived folder has a null id in the raw cache, so id matching
+            // would miss it.
+            const removed = removedPerName.get(f.name)
             if (removed) count -= removed
-            if (f.id === target_folder_id) count += moved.length
+            if (target_folder !== '' && f.name === target_folder) count += moved.length
             return count === f.count ? f : { ...f, count }
           })
           qc.setQueryData<{ folders: Folder[] }>(['folders', vaultId], { folders: patched })
@@ -2126,18 +2146,17 @@ export function useBatchMoveFolders() {
   return useMutation<
     { moved: number },
     ApiError,
-    { ids: string[]; target_parent_id: string },
+    { ids: string[]; target_parent: string },
     BatchFoldersContext
   >({
-    mutationFn: ({ ids, target_parent_id }) =>
+    mutationFn: ({ ids, target_parent }) =>
       api.post<{ moved: number }>(
         '/folders/batch-move',
-        // The folders endpoint uses `target_parent_id` — the notes
-        // endpoint uses `target_folder_id`. Don't conflate.
-        { ids, target_parent_id },
+        // Move by PATH (target_parent) so a derived parent with no marker works.
+        { ids, target_parent },
         idempotencyHeaders(),
       ),
-    onMutate: async ({ ids, target_parent_id }) => {
+    onMutate: async ({ ids, target_parent }) => {
       const foldersKey = ['folders', vaultId] as const
       await qc.cancelQueries({ queryKey: foldersKey })
 
@@ -2145,14 +2164,23 @@ export function useBatchMoveFolders() {
       const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] }
       if (!folders) return ctx
 
-      // Resolve the target's name once. Cycle defense: if the target
-      // sits under one of the moved roots, we skip the patch and let
-      // the server reject (the backend has the authoritative cycle
-      // check). Frontend silence beats lying optimistically.
-      const targetFolder = folders.folders.find((f) => f.id === target_parent_id)
-      const targetName = targetFolder?.name ?? ''
+      // Destination is the parent PATH ('' = top level). Children link to the
+      // target's loader id — a real marker id, else the stable `syn:<path>` id a
+      // derived parent carries (its raw-cache id is null).
+      const targetName = target_parent
+      const targetCacheId =
+        target_parent === ''
+          ? null
+          : (folders.folders.find((f) => f.name === target_parent)?.id ??
+            syntheticFolderId(target_parent))
       const descendants = collectFolderDescendants(folders.folders, ids)
-      if (descendants.has(target_parent_id)) return ctx
+      // Cycle defense by path: the target is one of the moved folders or sits
+      // under one. Skip the optimistic patch and let the server reject (it has
+      // the authoritative cycle check). Frontend silence beats lying.
+      const movedNames = folders.folders.filter((f) => ids.includes(f.id)).map((f) => f.name)
+      if (movedNames.some((n) => target_parent === n || target_parent.startsWith(`${n}/`))) {
+        return ctx
+      }
 
       // Rewrite each moved root: parent_id flips to the target,
       // name path prefix is rebuilt as `${targetName}/${basename}`.
@@ -2166,7 +2194,7 @@ export function useBatchMoveFolders() {
           const basename = slash < 0 ? f.name : f.name.slice(slash + 1)
           return {
             ...f,
-            parent_id: target_parent_id,
+            parent_id: targetCacheId,
             name: targetName ? `${targetName}/${basename}` : basename,
           }
         }
