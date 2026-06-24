@@ -150,14 +150,23 @@ defmodule Engram.Paddle.Client.HTTP do
   defp list_pages(url, params, headers, acc, seen, page) do
     case Req.get(url, params: params, headers: headers, receive_timeout: 15_000) do
       {:ok, %Req.Response{status: 200, body: %{"data" => data} = body}} when is_list(data) ->
-        case get_in(body, ["meta", "pagination", "next"]) do
-          nil ->
+        # `has_more` is Paddle's authoritative terminator: per the docs, the
+        # `next` URL is ALWAYS returned (even on the last page), so stopping
+        # on `next == nil` never triggers in production and walks the worker
+        # past the final page until the loop/cap guard trips. Stop here unless
+        # Paddle says there's another page. `next` nil/"" is kept as a belt-
+        # and-suspenders terminator for older/edge responses.
+        next_url = get_in(body, ["meta", "pagination", "next"])
+        has_more = get_in(body, ["meta", "pagination", "has_more"])
+
+        cond do
+          has_more != true ->
             {:ok, Enum.reverse([data | acc]) |> List.flatten()}
 
-          "" ->
+          not is_binary(next_url) or next_url == "" ->
             {:ok, Enum.reverse([data | acc]) |> List.flatten()}
 
-          next_url when is_binary(next_url) ->
+          true ->
             if MapSet.member?(seen, next_url) do
               # Paddle returned a `next` URL we've already fetched — would
               # be an infinite loop. Stop and surface what we have, tagged

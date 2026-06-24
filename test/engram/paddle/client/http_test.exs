@@ -36,6 +36,73 @@ defmodule Engram.Paddle.Client.HTTPTest do
       assert {:ok, [%{"id" => "sub_1"}]} = HTTP.list_subscriptions(@since)
     end
 
+    test "stops on has_more=false even when next URL is present", %{bypass: bypass} do
+      # Real Paddle ALWAYS returns a `next` URL, even on the last page —
+      # `has_more` is the authoritative terminator (per Paddle docs). The
+      # client must stop on has_more=false and NOT follow `next`, otherwise
+      # it walks past the last page until the loop/cap guard trips.
+      next_url = "http://localhost:#{bypass.port}/subscriptions?after=sub_1"
+      counter = :counters.new(1, [])
+
+      Bypass.expect(bypass, "GET", "/subscriptions", fn conn ->
+        :counters.add(counter, 1, 1)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "data" => [%{"id" => "sub_1"}],
+            "meta" => %{"pagination" => %{"next" => next_url, "has_more" => false}}
+          })
+        )
+      end)
+
+      assert {:ok, [%{"id" => "sub_1"}]} = HTTP.list_subscriptions(@since)
+      # Exactly one request — the next URL must not be followed.
+      assert :counters.get(counter, 1) == 1
+    end
+
+    test "follows next when has_more=true, stops on the has_more=false page",
+         %{bypass: bypass} do
+      # Multi-page walk driven by has_more, with `next` populated on every
+      # page (including the last) the way real Paddle behaves.
+      base = "http://localhost:#{bypass.port}"
+
+      Bypass.expect(bypass, "GET", "/subscriptions", fn conn ->
+        body =
+          case conn.query_string do
+            "after=sub_1" ->
+              %{
+                "data" => [%{"id" => "sub_2"}],
+                "meta" => %{
+                  "pagination" => %{
+                    "next" => "#{base}/subscriptions?after=sub_2",
+                    "has_more" => false
+                  }
+                }
+              }
+
+            _ ->
+              %{
+                "data" => [%{"id" => "sub_1"}],
+                "meta" => %{
+                  "pagination" => %{
+                    "next" => "#{base}/subscriptions?after=sub_1",
+                    "has_more" => true
+                  }
+                }
+              }
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      assert {:ok, [%{"id" => "sub_1"}, %{"id" => "sub_2"}]} = HTTP.list_subscriptions(@since)
+    end
+
     test "follows meta.pagination.next URL with empty params on follow-up", %{bypass: bypass} do
       next_url = "http://localhost:#{bypass.port}/subscriptions?after=sub_1"
 
@@ -48,7 +115,7 @@ defmodule Engram.Paddle.Client.HTTPTest do
             _ ->
               %{
                 "data" => [%{"id" => "sub_1"}],
-                "meta" => %{"pagination" => %{"next" => next_url}}
+                "meta" => %{"pagination" => %{"next" => next_url, "has_more" => true}}
               }
           end
 
@@ -86,7 +153,7 @@ defmodule Engram.Paddle.Client.HTTPTest do
       Bypass.expect(bypass, "GET", "/subscriptions", fn conn ->
         body = %{
           "data" => [%{"id" => "sub_loop_" <> (conn.query_string || "first")}],
-          "meta" => %{"pagination" => %{"next" => loop_url}}
+          "meta" => %{"pagination" => %{"next" => loop_url, "has_more" => true}}
         }
 
         conn
@@ -113,7 +180,9 @@ defmodule Engram.Paddle.Client.HTTPTest do
 
         body = %{
           "data" => [%{"id" => "sub_p#{n}"}],
-          "meta" => %{"pagination" => %{"next" => "#{base}/subscriptions?cursor=p#{n}"}}
+          "meta" => %{
+            "pagination" => %{"next" => "#{base}/subscriptions?cursor=p#{n}", "has_more" => true}
+          }
         }
 
         conn
