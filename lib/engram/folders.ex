@@ -92,20 +92,59 @@ defmodule Engram.Folders do
     end)
   end
 
+  # Perf (finding #9): scan the vault's attachments ONCE per batch op, then
+  # partition the decrypted paths across the N folders — instead of calling
+  # `Attachments.delete_folder`/`rename_folder` per folder, each of which ran its
+  # own full `list_attachments` scan (O(N × total_attachments) wasted DB work).
+  # The pre-filtered paths feed the leaner explicit-list attachment entry points
+  # (`batch_delete/3` for delete; `move_folder_pairs/3` for rename) so the whole
+  # batch still commits inside the coordinator's `atomic/1` transaction.
+
+  defp delete_attachments_for(_user, _vault, []), do: {:ok, 0}
+
   defp delete_attachments_for(user, vault, folders) do
-    Enum.reduce_while(folders, {:ok, 0}, fn folder, {:ok, total} ->
-      case Attachments.delete_folder(user, vault, folder) do
-        {:ok, n} -> {:cont, {:ok, total + n}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+      prefixes = Enum.map(folders, &folder_prefix/1)
+
+      paths =
+        metas
+        |> Enum.map(& &1.path)
+        |> Enum.filter(fn path -> Enum.any?(prefixes, &String.starts_with?(path, &1)) end)
+
+      {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
+      {:ok, n}
+    end
   end
 
+  defp rename_attachments_for(_user, _vault, []), do: {:ok, 0}
+
   defp rename_attachments_for(user, vault, pairs) do
-    Enum.reduce_while(pairs, {:ok, 0}, fn {old, new}, {:ok, total} ->
-      case Attachments.rename_folder(user, vault, old, new) do
-        {:ok, n} -> {:cont, {:ok, total + n}}
-        {:error, _} = err -> {:halt, err}
+    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+      move_pairs =
+        Enum.flat_map(metas, fn %{path: old_path} ->
+          case rename_target(old_path, pairs) do
+            {:ok, new_path} -> [{old_path, new_path}]
+            :no_match -> []
+          end
+        end)
+
+      Attachments.move_folder_pairs(user, vault, move_pairs)
+    end
+  end
+
+  defp folder_prefix(folder), do: String.trim_trailing(folder, "/") <> "/"
+
+  # Maps a decrypted attachment path to its new path under whichever {old, new}
+  # folder pair owns it (first match wins; folder renames don't overlap). Mirrors
+  # `Attachments.rename_folder/4`'s prefix-slice derivation, preserving nesting.
+  defp rename_target(path, pairs) do
+    Enum.find_value(pairs, :no_match, fn {old, new} ->
+      old = String.trim_trailing(old, "/")
+      new = String.trim_trailing(new, "/")
+      prefix = old <> "/"
+
+      if String.starts_with?(path, prefix) do
+        {:ok, new <> String.slice(path, String.length(old)..-1//1)}
       end
     end)
   end

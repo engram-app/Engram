@@ -580,18 +580,30 @@ defmodule Engram.Attachments do
             {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
           end)
 
-        do_rename_folder_pairs(user, vault, pairs)
+        move_folder_pairs(user, vault, pairs)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  # Folder rename keeps BARE atoms (Bug 1) to match Notes.rename_folder/4's
-  # contract — the coordinator + REST + MCP callers match bare {:error, :conflict}
-  # / {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500. So the
-  # shared `move_pairs/4` loop passes the raw reason through unchanged.
-  defp do_rename_folder_pairs(user, vault, pairs) do
+  @doc """
+  Atomically relocates a pre-built `[{old_path, new_path}]` list of attachment
+  moves under ONE transaction. The folder-rename entry point for callers that
+  have already scanned + filtered the vault (`rename_folder/4` for a single
+  folder; `Engram.Folders` for a multi-folder batch — so the coordinator scans
+  attachments ONCE and partitions across the N folder pairs rather than
+  re-scanning per folder).
+
+  Keeps BARE atoms (Bug 1) to match Notes.rename_folder/4's contract — the
+  coordinator + REST + MCP callers match bare {:error, :conflict} /
+  {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500. So the shared
+  `move_pairs/4` loop passes the raw reason through unchanged. Returns
+  `{:ok, count}` (0 = no pairs, idempotent).
+  """
+  @spec move_folder_pairs(map(), map(), [{String.t(), String.t()}]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def move_folder_pairs(user, vault, pairs) do
     move_pairs(user, vault, pairs, fn reason, _old_path -> reason end)
   end
 

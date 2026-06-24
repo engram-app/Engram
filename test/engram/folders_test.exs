@@ -58,6 +58,46 @@ defmodule Engram.FoldersTest do
     assert att_paths(user, vault) == ["Archive/Docs/a.png"]
   end
 
+  describe "single-scan partition across multiple folders (#9)" do
+    test "batch_delete/3 soft-deletes attachments under 2+ folders in one scan", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, m1} = Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, m2} = Notes.create_folder_marker(user, vault, "Notes")
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Docs/sub/b.png")
+      put_att(user, vault, "Notes/c.png")
+      put_att(user, vault, "Keep/d.png")
+
+      assert {:ok, %{attachments: 3}} = Folders.batch_delete(user, vault, [m1.id, m2.id])
+
+      # Only the attachment outside both deleted folders survives.
+      assert att_paths(user, vault) == ["Keep/d.png"]
+    end
+
+    test "batch_move/4 relocates attachments under 2+ folders in one scan", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, s1} = Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, s2} = Notes.create_folder_marker(user, vault, "Notes")
+      {:ok, _dst} = Notes.create_folder_marker(user, vault, "Archive")
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Notes/sub/b.png")
+      put_att(user, vault, "Keep/c.png")
+
+      assert {:ok, %{attachments: 2}} =
+               Folders.batch_move(user, vault, [s1.id, s2.id], {:path, "Archive"})
+
+      assert att_paths(user, vault) == [
+               "Archive/Docs/a.png",
+               "Archive/Notes/sub/b.png",
+               "Keep/c.png"
+             ]
+    end
+  end
+
   defp note_path(user, vault, id) do
     {:ok, note} = Notes.get_note_by_id(user, vault, id)
     note.path
