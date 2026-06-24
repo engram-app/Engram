@@ -317,7 +317,7 @@ defmodule Engram.Attachments do
         # trash are sent.
         _ =
           if deleted? do
-            EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
               "event_type" => "delete",
               "kind" => "attachment",
               "path" => path,
@@ -665,7 +665,7 @@ defmodule Engram.Attachments do
       "mtime" => att.mtime
     }
 
-    _ = EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", payload)
+    _ = Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
     :ok
   end
 

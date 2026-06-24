@@ -2849,10 +2849,13 @@ defmodule Engram.Notes do
     _ =
       case Keyword.get(opts, :broadcast_from) do
         pid when is_pid(pid) ->
+          # `broadcast_from` excludes the pushing socket; it is never used from
+          # the folder cascade (which has no socket to exclude), so it stays a
+          # direct Endpoint call and is not subject to deferral.
           EngramWeb.Endpoint.broadcast_from(pid, topic, "note_changed", payload)
 
         nil ->
-          EngramWeb.Endpoint.broadcast(topic, "note_changed", payload)
+          Engram.Sync.Broadcast.emit(topic, "note_changed", payload)
       end
 
     :ok
@@ -2861,7 +2864,7 @@ defmodule Engram.Notes do
   @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
     _ =
-      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+      Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", %{
         "event_type" => event_type,
         "path" => path,
         "vault_id" => vault_id

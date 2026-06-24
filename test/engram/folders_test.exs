@@ -170,6 +170,59 @@ defmodule Engram.FoldersTest do
     end
   end
 
+  describe "cascade broadcasts defer until the outer transaction commits (Fix #1)" do
+    test "rename/4 emits NO note_changed events when the attachment leg rolls back", %{
+      user: user,
+      vault: vault
+    } do
+      # Same rollback scenario as the atomicity test: notes leg moves cleanly but
+      # the attachment destination is occupied → outer transaction rolls back.
+      # Pre-fix, the notes-leg per-note delete/upsert broadcasts fired as the
+      # inner txn released (BEFORE the outer rollback) → phantom events.
+      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Archive/a.png")
+
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert {:error, :conflict} = Folders.rename(user, vault, "Docs", "Archive")
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "note_changed"}, 100
+    end
+
+    test "rename/4 DOES emit note_changed events when the cascade commits", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      put_att(user, vault, "Docs/a.png")
+
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert {:ok, %{notes: 1, attachments: 1}} = Folders.rename(user, vault, "Docs", "Archive")
+
+      # Deferred buffer flushed post-commit: the cascade's events arrive.
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "note_changed"}, 200
+    end
+
+    test "standalone move_attachment broadcasts immediately (single-item path unchanged)", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "a.png")
+
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+
+      assert {:ok, _} = Attachments.move_attachment(user, vault, "a.png", "moved.png")
+
+      # No deferral active → broadcast fires immediately, exactly as before.
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "note_changed"}, 200
+    end
+  end
+
   test "batch_delete/3 with empty ids returns zero counts", %{user: user, vault: vault} do
     assert {:ok, %{notes: 0, attachments: 0}} = Folders.batch_delete(user, vault, [])
   end

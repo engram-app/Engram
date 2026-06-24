@@ -21,15 +21,18 @@ defmodule Engram.Folders do
   tables back together, so a conflict can never leave notes moved with
   attachments stranded (Bug 3/6).
 
-  Residual: per-item broadcasts inside the attachment leg fire as their inner
-  transactions commit, BEFORE the outer rollback can fire — a later failure
-  can't retract earlier items' socket events. Clients self-heal on the next
-  pull (same trade-off as `Attachments.batch_move/4`).
+  Broadcasts are deferred to commit (Fix #1): `atomic/1` brackets the outer
+  transaction with `Engram.Sync.Broadcast.deferred/1`, so every per-item
+  `note_changed` event the legs emit (routed through `Sync.Broadcast.emit/3`)
+  is buffered and flushed ONLY after the outer transaction commits — and
+  discarded entirely on rollback. No more phantom delete/upsert events for a
+  cascade that a later conflict unwinds.
   """
 
   alias Engram.Attachments
   alias Engram.Notes
   alias Engram.Repo
+  alias Engram.Sync.Broadcast
 
   @type counts :: %{notes: non_neg_integer(), attachments: non_neg_integer()}
 
@@ -47,11 +50,23 @@ defmodule Engram.Folders do
   # legs run sequentially (not nested under one another), they don't clobber
   # each other's tenant key.
   defp atomic(fun) do
-    Repo.transaction(fn ->
-      case fun.() do
-        {:ok, result} -> result
-        {:error, reason} -> Repo.rollback(reason)
-      end
+    # Defer cascade broadcasts until AFTER the outer transaction resolves.
+    # Each leg's per-item broadcast routes through `Sync.Broadcast.emit/3`,
+    # which — because the buffer is active inside `deferred/1` — buffers rather
+    # than fires. `deferred/1` then flushes the buffer iff the transaction
+    # committed ({:ok, _}) or discards it on rollback ({:error, _}). The buffer
+    # brackets the transaction (OUTSIDE the txn) so emits happen INSIDE it via
+    # the legs → buffered → flushed post-commit / discarded post-rollback. This
+    # closes the phantom-event window where an inner leg's broadcast fired as
+    # its savepoint released, before a later attachment conflict rolled the data
+    # back, leaving clients with delete/upsert events that never persisted.
+    Broadcast.deferred(fn ->
+      Repo.transaction(fn ->
+        case fun.() do
+          {:ok, result} -> result
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
     end)
   end
 
