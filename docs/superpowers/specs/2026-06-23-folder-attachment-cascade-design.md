@@ -65,10 +65,20 @@ there, each mirroring an existing pattern:
 
 - `Attachments.delete_folder(user, vault, folder) :: {:ok, count}`
   - Same fetch + prefix-filter.
-  - One transaction under one seq: `update_all` set `deleted_at` + `seq` +
-    `updated_at` on matched rows. **No tombstone** — the row itself becomes the
-    delete signal (mirrors `do_delete_folders`, where the soft-deleted note
-    row IS the tombstone).
+  - Reuses `batch_delete/3` over the matched paths (DRY — one delete path, not a
+    bespoke `update_all`). Each soft-delete allocates its **own per-item seq** via
+    `Engram.Vaults.next_seq!/1`. **No tombstone** — the soft-deleted row itself
+    becomes the delete signal (mirrors `do_delete_folders`, where the
+    soft-deleted note row IS the tombstone).
+  - **Per-item seq is safe for deletes** (deliberately diverges from a literal
+    "one seq per op"): the #614 same-seq invariant (a cursor pull must not see a
+    moved row at seq S, advance past S, and miss its same-seq tombstone) only
+    applies to **rename**, which pairs a repointed row with a same-seq tombstone.
+    Delete has no tombstone, so there is no same-seq pair to keep together; each
+    soft-deleted row stands alone as its own change signal at its own seq.
+  - Cross-item + cross-table atomicity comes from the `Engram.Folders`
+    coordinator's `atomic/1` wrapper (a mid-loop failure rolls the whole op
+    back), so per-item seq does not weaken the all-or-nothing guarantee.
   - Broadcast `delete` per attachment, outside the txn.
 
 Idempotency: empty match set returns `{:ok, 0}`, mirroring `Notes.rename_folder`

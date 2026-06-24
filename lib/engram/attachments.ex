@@ -588,6 +588,16 @@ defmodule Engram.Attachments do
   whose path sits under `folder` (incl. nested). Reuses `batch_delete/3` so each
   delete broadcasts + runs best-effort blob cleanup. Returns `{:ok, count}` (0 =
   no attachments, idempotent).
+
+  Seq note (DRY-by-design, diverges from a literal "one transaction under one
+  seq"): `batch_delete/3` → `do_delete_attachment` allocates a fresh per-item
+  `seq` per path rather than a single batch-wide `seq`. Per-item seq is SAFE for
+  deletes — the soft-deleted row itself is the change signal, so the #614
+  same-seq cursor-skip concern (a moved row + its same-seq tombstone) simply does
+  not arise (delete has no tombstone). Cross-table + cross-item atomicity is
+  provided by the `Engram.Folders` coordinator's `atomic/1` wrapper, so a
+  mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
+  one delete path instead of a bespoke single-seq `update_all`.
   """
   @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def delete_folder(user, vault, folder) do

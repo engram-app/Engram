@@ -5,8 +5,15 @@ defmodule Engram.Folders do
   Folder rename/delete/move must touch the `notes` AND `attachments` tables.
   `Engram.Notes` cannot depend on `Engram.Attachments` (the latter already
   depends on the former), so this module is the single place that fans a folder
-  op out to both. Every folder-mutating surface (REST + MCP) routes through here
-  so no caller can forget the attachment leg.
+  op out to both. Every *content-mutating* folder surface — folder **rename**,
+  **batch-delete**, and **batch-move** (REST + MCP) — routes through here so no
+  caller can forget the attachment leg.
+
+  The marker-only single DELETE (`DELETE /api/folders/:path`) intentionally does
+  NOT route through here: it calls `Notes.delete_folder_marker/3`, which removes
+  just the folder marker and deletes no content — the notes AND attachments under
+  that path stay live. With nothing deleted, there is nothing to cascade, so a
+  coordinator hop would be a no-op.
 
   Consistency is atomic across BOTH tables: each op wraps the notes leg and the
   attachment leg in a single `Repo.transaction` (the legs' own
