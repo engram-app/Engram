@@ -352,15 +352,37 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   @doc """
-  Build an Oban job with 5-second debounce.
-  `replace: [:scheduled_at]` resets the timer on rapid edits (dedup by note_id).
+  Build a debounced EmbedNote job — embed only once the note has been quiet.
+
+  Trailing debounce: each edit re-inserts with `replace: [:scheduled_at]`, which
+  pushes the run time to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`), so
+  a burst of rapid saves collapses into a single Voyage call after the editing
+  settles.
+
+  Max-wait ceiling: a note edited continuously would otherwise never embed (the
+  timer keeps resetting). We clamp `scheduled_at` to `burst_start + max_wait`
+  (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where `burst_start` is the
+  surviving job's `inserted_at` (unchanged by `replace`). The unique `period` is
+  widened to span the whole window so dedup holds until the ceiling fires.
 
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
   HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
+
+  Pass `clamp: false` from bulk callers that enqueue via `Oban.insert_all`
+  (batch upsert, reconcile sweep). `insert_all` ignores `unique`/`replace`, so
+  the ceiling is meaningless there — `clamp: false` skips the per-note
+  `existing_burst_start` SELECT that would otherwise run once per note for
+  nothing (a 500-note reconcile tick = 500 wasted queries).
   """
   def new_debounced(note_id, opts \\ []) do
-    scheduled_at = DateTime.add(DateTime.utc_now(), 5, :second)
+    quiet_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
+
+    scheduled_at =
+      if Keyword.get(opts, :clamp, true),
+        do: clamp_to_ceiling(note_id, quiet_at),
+        else: quiet_at
+
     args = %{note_id: note_id}
 
     args =
@@ -371,7 +393,56 @@ defmodule Engram.Workers.EmbedNote do
     new(
       args,
       scheduled_at: scheduled_at,
-      replace: [:scheduled_at]
+      replace: [:scheduled_at],
+      # Override the worker default (60s) so dedup spans the full settle+ceiling
+      # window — otherwise a burst longer than the period spawns a second job and
+      # resets the ceiling.
+      unique: [
+        period: settle_max_wait_seconds() + settle_seconds(),
+        keys: [:note_id],
+        states: :incomplete
+      ]
     )
+  end
+
+  defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
+
+  defp settle_max_wait_seconds,
+    do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)
+
+  # Clamp the trailing-debounce target to burst_start + max_wait so a
+  # continuously-edited note still embeds. nil burst_start = no pending job =
+  # fresh burst, use the full settle window.
+  #
+  # Race note: existing_burst_start reads outside the advisory lock that Oban's
+  # insert_unique takes. A concurrent enqueue for the same note can make us miss
+  # an in-flight job and replace scheduled_at with an un-clamped quiet_at — but
+  # that only pushes the embed at most one settle interval past the ceiling
+  # (never earlier, never duplicate), and the next edit self-corrects. Bounded
+  # extra staleness, not a correctness bug — not worth locking the read path.
+  defp clamp_to_ceiling(note_id, quiet_at) do
+    case existing_burst_start(note_id) do
+      nil ->
+        quiet_at
+
+      burst_start ->
+        ceiling = DateTime.add(burst_start, settle_max_wait_seconds(), :second)
+        if DateTime.compare(quiet_at, ceiling) == :gt, do: ceiling, else: quiet_at
+    end
+  end
+
+  # inserted_at of the in-flight EmbedNote job for this note — the burst start,
+  # preserved across `replace: [:scheduled_at]` re-inserts. oban_jobs is not a
+  # tenant-scoped table, so no skip_tenant_check needed.
+  defp existing_burst_start(note_id) do
+    from(j in Oban.Job,
+      where: j.worker == "Engram.Workers.EmbedNote",
+      where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note_id)),
+      where: j.state in ["scheduled", "available", "executing", "retryable"],
+      order_by: [asc: j.inserted_at],
+      limit: 1,
+      select: j.inserted_at
+    )
+    |> Repo.one()
   end
 end

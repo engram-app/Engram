@@ -68,7 +68,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           Engram.Logger.Metadata.with_category(:debug, :search, total_count: length(note_ids))
         )
 
-        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced/1))
+        # clamp: false — insert_all ignores unique/replace, so the settle
+        # ceiling is moot; skip the per-note burst-start SELECT (one per stale
+        # note, up to @batch_size, every tick).
+        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced(&1, clamp: false)))
       end
 
     :ok
