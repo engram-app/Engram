@@ -581,6 +581,27 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Cascades a folder delete across attachments: soft-deletes every live attachment
+  whose path sits under `folder` (incl. nested). Reuses `batch_delete/3` so each
+  delete broadcasts + runs best-effort blob cleanup. Returns `{:ok, count}` (0 =
+  no attachments, idempotent).
+  """
+  @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def delete_folder(user, vault, folder) do
+    prefix = String.trim_trailing(folder, "/") <> "/"
+
+    case list_attachments(user, vault) do
+      {:ok, metas} ->
+        paths = metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix))
+        {:ok, %{deleted: n}} = batch_delete(user, vault, paths)
+        {:ok, n}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
   actually held a live row (absent/already-deleted paths don't count).
   """

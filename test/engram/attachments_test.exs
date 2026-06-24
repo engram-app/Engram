@@ -797,4 +797,20 @@ defmodule Engram.AttachmentsTest do
       assert "Docs/a.png" in live_paths(user, vault)
     end
   end
+
+  describe "delete_folder/3 (attachment cascade)" do
+    test "soft-deletes nested attachments under the folder", %{user: user, vault: vault} do
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      put_attachment(user, vault, "Docs/a.png")
+      put_attachment(user, vault, "Docs/sub/b.png")
+      put_attachment(user, vault, "Other/c.png")
+
+      assert {:ok, 2} = Attachments.delete_folder(user, vault, "Docs")
+      assert live_paths(user, vault) == ["Other/c.png"]
+    end
+
+    test "empty folder is an idempotent no-op", %{user: user, vault: vault} do
+      assert {:ok, 0} = Attachments.delete_folder(user, vault, "Nope")
+    end
+  end
 end
