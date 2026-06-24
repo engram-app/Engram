@@ -65,7 +65,11 @@ defmodule Engram.MCP.Tools do
       inputSchema: %{
         "type" => "object",
         "properties" => %{
-          "vault_id" => %{"type" => "integer", "description" => "Vault ID to set as active"}
+          "vault_id" => %{
+            "type" => "string",
+            "format" => "uuid",
+            "description" => "Vault ID (UUID) to set as active"
+          }
         }
       },
       handler: &Handlers.handle("set_vault", &1, &2, &3)

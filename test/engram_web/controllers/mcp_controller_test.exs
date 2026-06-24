@@ -182,6 +182,14 @@ defmodule EngramWeb.McpControllerTest do
 
       assert text =~ "Error:"
     end
+
+    test "with a malformed (non-UUID) vault_id returns a clean error, not a cast crash",
+         %{conn: conn} do
+      conn = call_tool(conn, "set_vault", %{"vault_id" => "not-a-uuid"})
+      text = tool_text(conn)
+
+      assert text =~ "Vault not found"
+    end
   end
 
   # =========================================================================
