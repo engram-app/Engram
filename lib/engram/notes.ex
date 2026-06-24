@@ -2561,7 +2561,7 @@ defmodule Engram.Notes do
 
           folders ->
             {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
-            %{deleted: n}
+            %{deleted: n, folders: folders}
         end
       else
         {:error, reason} -> Repo.rollback(reason)
