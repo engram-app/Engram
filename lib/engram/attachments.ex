@@ -568,8 +568,11 @@ defmodule Engram.Attachments do
       Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
         case move_attachment(user, vault, old_path, new_path) do
           {:ok, _} -> {:cont, count + 1}
-          {:error, :conflict} -> {:halt, {:rollback, {:conflict, new_path}}}
-          {:error, :not_found} -> {:halt, {:rollback, {:not_found, old_path}}}
+          # Bare atoms (Bug 1) to match Notes.rename_folder/4's contract — the
+          # coordinator + REST + MCP callers match bare {:error, :conflict} /
+          # {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500.
+          {:error, :conflict} -> {:halt, {:rollback, :conflict}}
+          {:error, :not_found} -> {:halt, {:rollback, :not_found}}
           {:error, reason} -> {:halt, {:rollback, reason}}
         end
       end)

@@ -790,7 +790,10 @@ defmodule Engram.AttachmentsTest do
       put_attachment(user, vault, "Docs/a.png")
       put_attachment(user, vault, "Archive/a.png")
 
-      assert {:error, {:conflict, "Archive/a.png"}} =
+      # BARE :conflict atom (Bug 1) — matches Notes.rename_folder/4 so the
+      # coordinator + REST + MCP callers (which match bare {:error, :conflict})
+      # don't CaseClauseError → 500 on a real attachment-destination collision.
+      assert {:error, :conflict} =
                Attachments.rename_folder(user, vault, "Docs", "Archive")
 
       # rolled back — source untouched
