@@ -310,6 +310,25 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert DateTime.compare(updated.embed_retry_after, DateTime.utc_now()) == :gt
     end
 
+    test "parks a nil-content_hash note on the final attempt (id-only match)",
+         %{bypass: bypass, note: note} do
+      # A nil content_hash must still park — otherwise the optimistic
+      # `content_hash = NULL` guard never matches and the loop persists.
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [content_hash: nil]], skip_tenant_check: true)
+
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
+
+      assert {:error, {500, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.embed_retry_after != nil
+    end
+
     test "does NOT stamp embed_retry_after on a non-final attempt", %{bypass: bypass, note: note} do
       stub_qdrant(bypass)
 

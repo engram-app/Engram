@@ -197,18 +197,26 @@ defmodule Engram.Workers.EmbedNote do
   # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
   # stops re-enqueuing (and re-billing) it every 15 minutes. Only fires on the
   # terminal Oban attempt and only for {:error, _} — snooze/cancel/discard are
-  # not embed failures. The content_hash guard mirrors stamp_embed_hash: if the
-  # note was edited mid-flight, don't park the now-different content. Emits a
-  # distinct [:engram, :embed, :poison] event so the give-up is alertable
-  # separately from per-attempt [:engram, :embed, :failed] noise.
+  # not embed failures. Like stamp_embed_hash, an optimistic content_hash guard
+  # avoids parking content that was edited mid-flight — but a nil content_hash
+  # must still park (WHERE content_hash = NULL never matches, which would leave
+  # the exact loop this guards against running), so fall back to an id-only match.
   defp maybe_mark_poison(note, {:error, reason}, %Oban.Job{attempt: attempt, max_attempts: max})
        when attempt >= max do
     cooldown = poison_cooldown_seconds()
     retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
 
+    park_query =
+      if is_nil(note.content_hash) do
+        from(n in Note, where: n.id == ^note.id)
+      else
+        from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash)
+      end
+
     {count, _} =
-      from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash)
-      |> Repo.update_all([set: [embed_retry_after: retry_after]], skip_tenant_check: true)
+      Repo.update_all(park_query, [set: [embed_retry_after: retry_after]],
+        skip_tenant_check: true
+      )
 
     error_kind = Engram.Telemetry.error_kind(reason)
     status = embed_error_status(reason)
