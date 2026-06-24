@@ -44,9 +44,10 @@ describe('CatchAllRoute', () => {
     expect(screen.queryByText(/sign-in/)).not.toBeInTheDocument()
   })
 
-  it('does not redirect or 404 while auth state is still loading', () => {
+  it('shows the loading screen (not a 404 flash or premature redirect) while auth state resolves', () => {
     authState.current = { isLoaded: false, isSignedIn: false }
     renderAt('/some/typo')
+    expect(screen.getByRole('status', { name: /loading/i })).toBeInTheDocument()
     expect(screen.queryByText('404')).not.toBeInTheDocument()
     expect(screen.queryByText(/sign-in/)).not.toBeInTheDocument()
   })
