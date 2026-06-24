@@ -2534,7 +2534,7 @@ defmodule Engram.Notes do
   a later id in the batch fails. After-commit hooks are tracked as a follow-up.
   """
   @spec batch_delete_folders(map(), map(), [integer()]) ::
-          {:ok, %{deleted: non_neg_integer()}}
+          {:ok, %{required(:deleted) => non_neg_integer(), optional(:folders) => [String.t()]}}
           | {:error, {:not_found, integer()} | term()}
   def batch_delete_folders(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
@@ -2592,7 +2592,11 @@ defmodule Engram.Notes do
   leak events.
   """
   @spec batch_move_folders(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
-          {:ok, %{moved: non_neg_integer()}}
+          {:ok,
+           %{
+             required(:moved) => non_neg_integer(),
+             optional(:pairs) => [{String.t(), String.t()}]
+           }}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 

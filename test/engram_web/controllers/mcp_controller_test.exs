@@ -73,12 +73,12 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 17 tools", %{conn: conn} do
+    test "tools/list returns 18 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 17
+      assert length(tools) == 18
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
@@ -90,6 +90,7 @@ defmodule EngramWeb.McpControllerTest do
       assert "patch_note" in names
       assert "update_section" in names
       assert "create_folder" in names
+      assert "move_attachment" in names
 
       # Each tool has required fields
       Enum.each(tools, fn t ->
@@ -547,7 +548,7 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       text = tool_text(conn)
-      assert text =~ "Folder renamed: Health -> Wellness (2 notes updated)"
+      assert text =~ "Folder renamed: Health -> Wellness (2 notes, 0 attachments updated)"
 
       conn = call_tool(build_authed(conn), "list_folder", %{"folder" => "Wellness"})
       result = tool_text(conn)
