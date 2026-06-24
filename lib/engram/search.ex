@@ -9,6 +9,7 @@ defmodule Engram.Search do
   """
 
   alias Engram.KeywordIndex
+  alias Engram.Notes.Helpers
   alias Engram.Search.MMR
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
@@ -75,6 +76,7 @@ defmodule Engram.Search do
       else
         do_search(user, vault, query, opts)
       end
+      |> scrub_result_utf8()
 
     emit_search_performed(user, result, started_at, cross_vault)
 
@@ -92,6 +94,39 @@ defmodule Engram.Search do
     )
 
     result
+  end
+
+  # Defensive: legacy notes may already hold invalid UTF-8 (stored before the
+  # upsert-time scrub). Returning it raises Jason at the JSON boundary (a 500 for
+  # MCP `search_notes` and the web `/api/search`), so guarantee valid UTF-8 in
+  # every string field before results leave Search.
+  @scrubbed_string_keys [:text, :title, :heading_path, :source_path]
+
+  defp scrub_result_utf8({:ok, results}) when is_list(results),
+    do: {:ok, Enum.map(results, &scrub_result_fields/1)}
+
+  defp scrub_result_utf8(other), do: other
+
+  defp scrub_result_fields(result) when is_map(result) do
+    result =
+      Enum.reduce(@scrubbed_string_keys, result, fn key, acc ->
+        case Map.get(acc, key) do
+          v when is_binary(v) -> Map.put(acc, key, Helpers.scrub_utf8(v))
+          _ -> acc
+        end
+      end)
+
+    case Map.get(result, :tags) do
+      tags when is_list(tags) ->
+        Map.put(
+          result,
+          :tags,
+          Enum.map(tags, &if(is_binary(&1), do: Helpers.scrub_utf8(&1), else: &1))
+        )
+
+      _ ->
+        result
+    end
   end
 
   defp search_status({:ok, _}), do: :ok

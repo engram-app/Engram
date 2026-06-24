@@ -190,6 +190,38 @@ defmodule Engram.CryptoTest do
       assert out.tags == ["x"]
     end
 
+    test "scrubs invalid UTF-8 in decrypted note fields so reads are JSON-safe (#727/#738)",
+         %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      note_id = Ecto.UUID.generate()
+
+      # Encryption is byte-preserving, so invalid UTF-8 survives at rest — the
+      # legacy-row corruption that crashed Jason on get_note / REST / Channel
+      # reads. `–` (U+2013) truncated to its lead byte.
+      bad = "PRs #71" <> <<0xE2>> <> "#85"
+
+      {:ok, encrypted} =
+        Crypto.encrypt_note_fields(%{content: bad, title: "T" <> <<0xE2>>}, user, note_id)
+
+      note = %Engram.Notes.Note{
+        id: note_id,
+        dek_version: Crypto.row_version_aad_bound(),
+        content_ciphertext: encrypted.content_ciphertext,
+        content_nonce: encrypted.content_nonce,
+        title_ciphertext: encrypted.title_ciphertext,
+        title_nonce: encrypted.title_nonce
+      }
+
+      {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
+
+      assert String.valid?(out.content)
+      assert String.valid?(out.title)
+      # The whole decrypted note must JSON-encode — this is what 500'd the REST
+      # read / Channel broadcast before the read-boundary scrub.
+      assert {:ok, _} = Jason.encode(%{content: out.content, title: out.title})
+      assert out.content =~ "PRs #71"
+    end
+
     test "newly-inserted note rows carry dek_version=1 (T3.4 / H5)", %{user: user} do
       # T3.4 / H5 — the per-row column was added with default 1. New rows
       # inserted via the factory satisfy that default. This test locks the

@@ -109,6 +109,20 @@ defmodule Engram.NotesTest do
       assert log =~ "failed_count=1"
       assert log =~ "total_count=2"
     end
+
+    test "#727: scrubs invalid UTF-8 on the batch write path", %{user: user, vault: vault} do
+      bad = "# Title\n\nPRs #71" <> <<0xE2>> <> "#85"
+
+      assert {:ok, %{results: [%{status: :ok}]}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "Batch/Bad.md", "content" => bad, "mtime" => 1_000.0}
+               ])
+
+      assert {:ok, note} = Notes.get_note(user, vault, "Batch/Bad.md")
+      assert String.valid?(note.content)
+      assert {:ok, _} = Jason.encode(%{content: note.content})
+      assert note.content =~ "PRs #71"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -130,6 +144,23 @@ defmodule Engram.NotesTest do
       assert note.content == "# Hello\nWorld"
       assert note.version == 1
       assert is_binary(note.content_hash)
+    end
+
+    test "#727: scrubs invalid UTF-8 in content before storing", %{user: user, vault: vault} do
+      # A `–` (U+2013) truncated to its lead byte — invalid UTF-8 that would
+      # otherwise persist through bytea ciphertext and crash Jason downstream.
+      bad = "# Title\n\nPRs #71" <> <<0xE2>> <> "#85"
+
+      assert {:ok, note} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "Test/BadBytes.md",
+                 "content" => bad,
+                 "mtime" => 1_000.0
+               })
+
+      assert String.valid?(note.content)
+      assert {:ok, _} = Jason.encode(%{content: note.content})
+      assert note.content =~ "PRs #71"
     end
 
     test "content_hash is HMAC-SHA256 (64-char hex), not legacy MD5",

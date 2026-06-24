@@ -284,7 +284,11 @@ defmodule Engram.Notes do
           | {:error, atom()}
   def upsert_note(user, vault, attrs, opts \\ []) do
     path = attrs["path"] || attrs[:path]
-    content = attrs["content"] || attrs[:content] || ""
+    # Scrub invalid UTF-8 before it is hashed/encrypted/stored: content is kept
+    # as `bytea` ciphertext (no Postgres UTF-8 guard), and stray bytes later
+    # crash Jason at every JSON boundary (search, sync Channel). Valid content
+    # is unchanged, so the content_hash is stable for the common case.
+    content = (attrs["content"] || attrs[:content] || "") |> Helpers.scrub_utf8()
     mtime = attrs["mtime"] || attrs[:mtime]
     client_version = attrs["version"] || attrs[:version]
     client_id = attrs["id"] || attrs[:id]
@@ -1150,7 +1154,10 @@ defmodule Engram.Notes do
     notes_params
     |> Enum.map(fn attrs ->
       path = attrs["path"] || attrs[:path]
-      content = attrs["content"] || attrs[:content] || ""
+      # Scrub invalid UTF-8 on the batch write path too (POST /api/notes/batch),
+      # not just upsert_note/4 — otherwise a batch push re-persists corruption and
+      # its digest broadcast crashes the same way (#727/#738).
+      content = (attrs["content"] || attrs[:content] || "") |> Helpers.scrub_utf8()
 
       if path in [nil, ""] do
         %{input_path: path || "", result: {:error, %{path: ["can't be blank"]}}}
@@ -2833,6 +2840,10 @@ defmodule Engram.Notes do
     # release after the plugin min-version floor covers the hash-only
     # handler (self-host backends and plugins update on independent
     # cadences — do NOT remove early).
+    # `note` here is always either freshly written (upsert/batch scrub its
+    # content) or loaded through Crypto.maybe_decrypt_note_fields (read-boundary
+    # scrub), so its text fields are already valid UTF-8 — no per-field scrub
+    # needed at this broadcast site (#738).
     payload = %{
       "event_type" => "upsert",
       "id" => note.id,
