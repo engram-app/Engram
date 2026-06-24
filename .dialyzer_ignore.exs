@@ -10,13 +10,6 @@
   {"lib/engram/crypto.ex", :contract_supertype, 85},
   {"lib/engram/crypto.ex", :contract_supertype, 94},
 
-  # Dialyzer's success typing for `Path.rootname/1` (and possibly Regex helpers
-  # called inside extract_title/2) reports a phantom `{integer(), integer()}`
-  # return type that no real call path produces — every internal helper is
-  # guarded with `is_binary/1`. Widening the spec to include the phantom would
-  # mislead callers; ignoring the missing_range warning here is safe.
-  {"lib/engram/notes/helpers.ex", :missing_range, 13},
-
   # `identify_from_blob/1` is intentionally specced as `term()` because callers
   # pass values straight from DB columns (which may be nil) or from arbitrary
   # external input — the function gracefully handles every shape via the

@@ -81,7 +81,7 @@ defmodule Engram.Notes.Helpers do
 
   defp extract_frontmatter(content) do
     case Regex.run(@frontmatter_re, content, capture: :all_but_first) do
-      [fm] -> fm
+      [fm] when is_binary(fm) -> fm
       _ -> nil
     end
   end
