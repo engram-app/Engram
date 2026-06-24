@@ -298,10 +298,20 @@ defmodule Engram.Workers.EmbedNote do
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
   HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
+
+  Pass `clamp: false` from bulk callers that enqueue via `Oban.insert_all`
+  (batch upsert, reconcile sweep). `insert_all` ignores `unique`/`replace`, so
+  the ceiling is meaningless there — `clamp: false` skips the per-note
+  `existing_burst_start` SELECT that would otherwise run once per note for
+  nothing (a 500-note reconcile tick = 500 wasted queries).
   """
   def new_debounced(note_id, opts \\ []) do
     quiet_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
-    scheduled_at = clamp_to_ceiling(note_id, quiet_at)
+
+    scheduled_at =
+      if Keyword.get(opts, :clamp, true),
+        do: clamp_to_ceiling(note_id, quiet_at),
+        else: quiet_at
 
     args = %{note_id: note_id}
 
@@ -333,6 +343,13 @@ defmodule Engram.Workers.EmbedNote do
   # Clamp the trailing-debounce target to burst_start + max_wait so a
   # continuously-edited note still embeds. nil burst_start = no pending job =
   # fresh burst, use the full settle window.
+  #
+  # Race note: existing_burst_start reads outside the advisory lock that Oban's
+  # insert_unique takes. A concurrent enqueue for the same note can make us miss
+  # an in-flight job and replace scheduled_at with an un-clamped quiet_at — but
+  # that only pushes the embed at most one settle interval past the ceiling
+  # (never earlier, never duplicate), and the next edit self-corrects. Bounded
+  # extra staleness, not a correctness bug — not worth locking the read path.
   defp clamp_to_ceiling(note_id, quiet_at) do
     case existing_burst_start(note_id) do
       nil ->
@@ -345,8 +362,8 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   # inserted_at of the in-flight EmbedNote job for this note — the burst start,
-  # preserved across `replace: [:scheduled_at]` re-inserts. skip_tenant_check:
-  # Oban.Job is not a tenant-scoped schema.
+  # preserved across `replace: [:scheduled_at]` re-inserts. oban_jobs is not a
+  # tenant-scoped table, so no skip_tenant_check needed.
   defp existing_burst_start(note_id) do
     from(j in Oban.Job,
       where: j.worker == "Engram.Workers.EmbedNote",
@@ -356,6 +373,6 @@ defmodule Engram.Workers.EmbedNote do
       limit: 1,
       select: j.inserted_at
     )
-    |> Repo.one(skip_tenant_check: true)
+    |> Repo.one()
   end
 end
