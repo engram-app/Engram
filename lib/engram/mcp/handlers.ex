@@ -409,9 +409,14 @@ defmodule Engram.MCP.Handlers do
     old_folder = args["old_folder"] || ""
     new_folder = args["new_folder"] || ""
 
-    case Notes.rename_folder(user, vault, old_folder, new_folder) do
-      {:ok, count} ->
-        {:ok, "Folder renamed: #{old_folder} -> #{new_folder} (#{count} notes updated)"}
+    case Engram.Folders.rename(user, vault, old_folder, new_folder) do
+      {:ok, %{notes: n, attachments: a}} ->
+        {:ok,
+         "Folder renamed: #{old_folder} -> #{new_folder} " <>
+           "(#{n} notes, #{a} attachments updated)"}
+
+      {:error, :conflict} ->
+        {:ok, "Folder rename conflict: #{new_folder} already exists"}
     end
   end
 
