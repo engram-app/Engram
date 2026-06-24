@@ -529,6 +529,58 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  Cascades a folder rename across attachments: every live attachment whose path
+  sits under `old_folder` moves to the mirrored path under `new_folder`,
+  preserving nested structure. Per-item reuse of `move_attachment/4` (each item's
+  repoint + old-path tombstone share one seq in one txn — the #614 discipline).
+  All-or-nothing: a conflict/error on any item rolls back every prior DB write in
+  the batch. Broadcasts already emitted self-heal on the next pull (same caveat as
+  `batch_move/4`). Returns `{:ok, count}` (0 = no attachments, idempotent).
+  """
+  @spec rename_folder(map(), map(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def rename_folder(user, vault, old_folder, new_folder) do
+    old_folder = String.trim_trailing(old_folder, "/")
+    new_folder = String.trim_trailing(new_folder, "/")
+    prefix = old_folder <> "/"
+    old_len = String.length(old_folder)
+
+    case list_attachments(user, vault) do
+      {:ok, metas} ->
+        pairs =
+          metas
+          |> Enum.filter(&String.starts_with?(&1.path, prefix))
+          |> Enum.map(fn %{path: old_path} ->
+            {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
+          end)
+
+        do_rename_folder_pairs(user, vault, pairs)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_rename_folder_pairs(_user, _vault, []), do: {:ok, 0}
+
+  defp do_rename_folder_pairs(user, vault, pairs) do
+    Repo.transaction(fn ->
+      Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
+        case move_attachment(user, vault, old_path, new_path) do
+          {:ok, _} -> {:cont, count + 1}
+          {:error, :conflict} -> {:halt, {:rollback, {:conflict, new_path}}}
+          {:error, :not_found} -> {:halt, {:rollback, {:not_found, old_path}}}
+          {:error, reason} -> {:halt, {:rollback, reason}}
+        end
+      end)
+      |> case do
+        {:rollback, reason} -> Repo.rollback(reason)
+        count -> count
+      end
+    end)
+  end
+
+  @doc """
   Soft-deletes each attachment by path. Idempotent. `:deleted` counts paths that
   actually held a live row (absent/already-deleted paths don't count).
   """
