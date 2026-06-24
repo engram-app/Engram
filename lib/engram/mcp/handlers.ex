@@ -417,6 +417,12 @@ defmodule Engram.MCP.Handlers do
 
       {:error, :conflict} ->
         {:ok, "Folder rename conflict: #{new_folder} already exists"}
+
+      # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
+      # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
+      # this clause it CaseClauseError'd → 500.
+      {:error, reason} ->
+        {:ok, "Could not rename folder #{old_folder} -> #{new_folder}: #{inspect(reason)}"}
     end
   end
 
@@ -434,6 +440,9 @@ defmodule Engram.MCP.Handlers do
       {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
       {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
       {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+      # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
+      # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
+      {:error, reason} -> {:ok, "Could not move attachment: #{inspect(reason)}"}
     end
   end
 

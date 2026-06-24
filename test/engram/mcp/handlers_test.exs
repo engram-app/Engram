@@ -60,5 +60,46 @@ defmodule Engram.MCP.HandlersTest do
     test "move_attachment registered as a tool" do
       assert {:ok, %{name: "move_attachment"}} = Engram.MCP.Tools.get("move_attachment")
     end
+
+    test "an unexpected crypto error returns a clean message, not a crash", %{
+      user: user,
+      vault: vault
+    } do
+      # Bug 2: move_attachment's crypto `with` head can return {:error, reason}
+      # (e.g. an unrecognised DEK blob) that the handler used to leave unmatched
+      # → CaseClauseError → 500. A corrupt encrypted_dek triggers
+      # {:error, :unrecognised_blob} out of Crypto.get_dek/1.
+      corrupt = user |> Ecto.Changeset.change(encrypted_dek: :crypto.strong_rand_bytes(32))
+      {:ok, corrupt_user} = Engram.Repo.update(corrupt, skip_tenant_check: true)
+
+      assert {:ok, msg} =
+               Handlers.handle("move_attachment", corrupt_user, vault, %{
+                 "old_path" => "a.png",
+                 "new_path" => "img/a.png"
+               })
+
+      assert msg =~ "Could not move attachment"
+    end
+  end
+
+  describe "rename_folder handler error path" do
+    # Bug 2: Folders.rename's spec is {:ok, counts()} | {:error, term()} — it can
+    # surface a non-:conflict {:error, reason} (the attachment leg's move can
+    # return an arbitrary crypto error). The handler used to match only
+    # {:ok,_}/:conflict, so any other error → CaseClauseError → 500. The
+    # catch-all clause must exist and produce a clean user-facing message.
+    test "the handler has a catch-all clause returning a clean message" do
+      src = File.read!("lib/engram/mcp/handlers.ex")
+
+      [_, rename_body | _] = String.split(src, ~r/def handle\("rename_folder"/)
+
+      handler = rename_body |> String.split(~r/\n  def handle\(/) |> hd()
+
+      assert handler =~ ~r/\{:error,\s*reason\}/,
+             "rename_folder handler must catch a generic {:error, reason} " <>
+               "(Bug 2) so a non-:conflict coordinator error doesn't 500"
+
+      assert handler =~ "Could not rename folder"
+    end
   end
 end
