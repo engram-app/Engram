@@ -295,6 +295,72 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  describe "new_debounced — settle debounce" do
+    setup do
+      prev_settle = Application.get_env(:engram, :embed_settle_seconds)
+      prev_max = Application.get_env(:engram, :embed_settle_max_wait_seconds)
+      Application.put_env(:engram, :embed_settle_seconds, 30)
+      Application.put_env(:engram, :embed_settle_max_wait_seconds, 300)
+
+      on_exit(fn ->
+        restore = fn key, val ->
+          if is_nil(val),
+            do: Application.delete_env(:engram, key),
+            else: Application.put_env(:engram, key, val)
+        end
+
+        restore.(:embed_settle_seconds, prev_settle)
+        restore.(:embed_settle_max_wait_seconds, prev_max)
+      end)
+
+      :ok
+    end
+
+    defp embed_job(note_id) do
+      from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note_id)))
+      |> Repo.one!()
+    end
+
+    test "schedules ~settle seconds out by default", %{note: note} do
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+
+      job = embed_job(note.id)
+      diff = DateTime.diff(job.scheduled_at, DateTime.utc_now(), :second)
+      assert diff in 25..35
+    end
+
+    test "a rapid re-insert keeps a single job and pushes the timer out", %{note: note} do
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+
+      jobs =
+        from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
+        |> Repo.all()
+
+      assert length(jobs) == 1
+      diff = DateTime.diff(hd(jobs).scheduled_at, DateTime.utc_now(), :second)
+      assert diff in 25..35
+    end
+
+    test "clamps scheduled_at to the max-wait ceiling for a continuously-edited note",
+         %{note: note} do
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+
+      # Backdate the burst start to 290s ago — 10s short of the 300s ceiling.
+      # The next edit must clamp to the ceiling (~now+10s), NOT the full 30s settle.
+      burst_start = DateTime.add(DateTime.utc_now(), -290, :second)
+
+      from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
+      |> Repo.update_all(set: [inserted_at: burst_start])
+
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+
+      job = embed_job(note.id)
+      diff = DateTime.diff(job.scheduled_at, DateTime.utc_now(), :second)
+      assert diff <= 15
+    end
+  end
+
   describe "job scheduling" do
     test "Notes.upsert_note enqueues EmbedNote job", %{user: user, vault: vault} do
       {:ok, note} =
