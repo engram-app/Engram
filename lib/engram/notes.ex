@@ -1406,7 +1406,11 @@ defmodule Engram.Notes do
     embed_jobs =
       ok_entries
       |> Enum.filter(fn %{hash: hash, result: {:ok, info}} -> info.prev_hash != hash end)
-      |> Enum.map(fn %{result: {:ok, info}} -> EmbedNote.new_debounced(info.id) end)
+      # clamp: false — Oban.insert_all ignores unique/replace, so the settle
+      # ceiling is moot here; skip the per-note burst-start SELECT.
+      |> Enum.map(fn %{result: {:ok, info}} ->
+        EmbedNote.new_debounced(info.id, clamp: false)
+      end)
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
 

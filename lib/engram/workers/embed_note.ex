@@ -39,7 +39,7 @@ defmodule Engram.Workers.EmbedNote do
   require Logger
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args} = job) do
     note_id = args["note_id"]
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
@@ -84,6 +84,7 @@ defmodule Engram.Workers.EmbedNote do
                         :ok
 
                       other ->
+                        _ = maybe_mark_poison(note, other, job)
                         other
                     end
 
@@ -184,6 +185,71 @@ defmodule Engram.Workers.EmbedNote do
     Application.get_env(:engram, :embed_429_snooze_seconds, 60)
   end
 
+  # Cooldown parked on a note that has exhausted its embed attempts. Env-driven
+  # via `EMBED_POISON_COOLDOWN_SECONDS` (wired in runtime.exs). Default 6h: a
+  # genuinely-broken note re-bills Voyage ~4×/day instead of ~96×/day, while a
+  # transient provider outage self-heals within hours (vs a hard give-up that
+  # would strand the whole vault until manual reset).
+  defp poison_cooldown_seconds do
+    Application.get_env(:engram, :embed_poison_cooldown_seconds, 21_600)
+  end
+
+  # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
+  # stops re-enqueuing (and re-billing) it every 15 minutes. Only fires on the
+  # terminal Oban attempt and only for {:error, _} — snooze/cancel/discard are
+  # not embed failures. Like stamp_embed_hash, an optimistic content_hash guard
+  # avoids parking content that was edited mid-flight — but a nil content_hash
+  # must still park (WHERE content_hash = NULL never matches, which would leave
+  # the exact loop this guards against running), so fall back to an id-only match.
+  defp maybe_mark_poison(note, {:error, reason}, %Oban.Job{attempt: attempt, max_attempts: max})
+       when attempt >= max do
+    cooldown = poison_cooldown_seconds()
+    retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
+
+    park_query =
+      if is_nil(note.content_hash) do
+        from(n in Note, where: n.id == ^note.id)
+      else
+        from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash)
+      end
+
+    {count, _} =
+      Repo.update_all(park_query, [set: [embed_retry_after: retry_after]],
+        skip_tenant_check: true
+      )
+
+    error_kind = Engram.Telemetry.error_kind(reason)
+    status = embed_error_status(reason)
+
+    :telemetry.execute(
+      [:engram, :embed, :poison],
+      %{count: 1, cooldown_seconds: cooldown},
+      %{
+        error_kind: error_kind,
+        status: status,
+        note_id: note.id,
+        user_id: note.user_id,
+        parked: count > 0
+      }
+    )
+
+    Logger.error(
+      "embed_poisoned",
+      Metadata.with_category(:error, :search,
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        note_id: note.id,
+        error_kind: error_kind,
+        status: status,
+        cooldown_seconds: cooldown
+      )
+    )
+
+    :ok
+  end
+
+  defp maybe_mark_poison(_note, _result, _job), do: :ok
+
   defp run_embed(note, old_path_hmac_b64) do
     user = Accounts.get_user!(note.user_id)
 
@@ -262,6 +328,8 @@ defmodule Engram.Workers.EmbedNote do
   # Optimistic lock: only set embed_hash if content_hash hasn't changed since
   # we started embedding. If it changed (concurrent edit), this is a no-op —
   # the reconciliation cron or the next debounced job will pick up the new version.
+  # Also clears any embed_retry_after poison cooldown — a successful embed means
+  # the note is no longer broken.
   defp stamp_embed_hash(%Note{content_hash: nil}), do: :ok
 
   defp stamp_embed_hash(note) do
@@ -269,7 +337,9 @@ defmodule Engram.Workers.EmbedNote do
       from(n in Note,
         where: n.id == ^note.id and n.content_hash == ^note.content_hash
       )
-      |> Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
+      |> Repo.update_all([set: [embed_hash: note.content_hash, embed_retry_after: nil]],
+        skip_tenant_check: true
+      )
 
     if count == 0 do
       Logger.debug(
@@ -282,15 +352,37 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   @doc """
-  Build an Oban job with 5-second debounce.
-  `replace: [:scheduled_at]` resets the timer on rapid edits (dedup by note_id).
+  Build a debounced EmbedNote job — embed only once the note has been quiet.
+
+  Trailing debounce: each edit re-inserts with `replace: [:scheduled_at]`, which
+  pushes the run time to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`), so
+  a burst of rapid saves collapses into a single Voyage call after the editing
+  settles.
+
+  Max-wait ceiling: a note edited continuously would otherwise never embed (the
+  timer keeps resetting). We clamp `scheduled_at` to `burst_start + max_wait`
+  (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where `burst_start` is the
+  surviving job's `inserted_at` (unchanged by `replace`). The unique `period` is
+  widened to span the whole window so dedup holds until the ceiling fires.
 
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
   HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
+
+  Pass `clamp: false` from bulk callers that enqueue via `Oban.insert_all`
+  (batch upsert, reconcile sweep). `insert_all` ignores `unique`/`replace`, so
+  the ceiling is meaningless there — `clamp: false` skips the per-note
+  `existing_burst_start` SELECT that would otherwise run once per note for
+  nothing (a 500-note reconcile tick = 500 wasted queries).
   """
   def new_debounced(note_id, opts \\ []) do
-    scheduled_at = DateTime.add(DateTime.utc_now(), 5, :second)
+    quiet_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
+
+    scheduled_at =
+      if Keyword.get(opts, :clamp, true),
+        do: clamp_to_ceiling(note_id, quiet_at),
+        else: quiet_at
+
     args = %{note_id: note_id}
 
     args =
@@ -301,7 +393,56 @@ defmodule Engram.Workers.EmbedNote do
     new(
       args,
       scheduled_at: scheduled_at,
-      replace: [:scheduled_at]
+      replace: [:scheduled_at],
+      # Override the worker default (60s) so dedup spans the full settle+ceiling
+      # window — otherwise a burst longer than the period spawns a second job and
+      # resets the ceiling.
+      unique: [
+        period: settle_max_wait_seconds() + settle_seconds(),
+        keys: [:note_id],
+        states: :incomplete
+      ]
     )
+  end
+
+  defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
+
+  defp settle_max_wait_seconds,
+    do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)
+
+  # Clamp the trailing-debounce target to burst_start + max_wait so a
+  # continuously-edited note still embeds. nil burst_start = no pending job =
+  # fresh burst, use the full settle window.
+  #
+  # Race note: existing_burst_start reads outside the advisory lock that Oban's
+  # insert_unique takes. A concurrent enqueue for the same note can make us miss
+  # an in-flight job and replace scheduled_at with an un-clamped quiet_at — but
+  # that only pushes the embed at most one settle interval past the ceiling
+  # (never earlier, never duplicate), and the next edit self-corrects. Bounded
+  # extra staleness, not a correctness bug — not worth locking the read path.
+  defp clamp_to_ceiling(note_id, quiet_at) do
+    case existing_burst_start(note_id) do
+      nil ->
+        quiet_at
+
+      burst_start ->
+        ceiling = DateTime.add(burst_start, settle_max_wait_seconds(), :second)
+        if DateTime.compare(quiet_at, ceiling) == :gt, do: ceiling, else: quiet_at
+    end
+  end
+
+  # inserted_at of the in-flight EmbedNote job for this note — the burst start,
+  # preserved across `replace: [:scheduled_at]` re-inserts. oban_jobs is not a
+  # tenant-scoped table, so no skip_tenant_check needed.
+  defp existing_burst_start(note_id) do
+    from(j in Oban.Job,
+      where: j.worker == "Engram.Workers.EmbedNote",
+      where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note_id)),
+      where: j.state in ["scheduled", "available", "executing", "retryable"],
+      order_by: [asc: j.inserted_at],
+      limit: 1,
+      select: j.inserted_at
+    )
+    |> Repo.one()
   end
 end

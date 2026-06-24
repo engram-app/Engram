@@ -9,6 +9,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   - embed_hash IS NULL (never embedded)
   - embed_hash != content_hash (content changed since last embed)
   - not soft-deleted
+  - embed_retry_after IS NULL or elapsed (not inside a poison cooldown — see
+    EmbedNote: a note that exhausts its attempts is parked for a cooldown window
+    so it can't re-bill Voyage every tick)
 
   Uses the partial index idx_notes_embed_pending for fast lookups.
   Batches to avoid flooding the embed queue.
@@ -40,12 +43,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # O(total vaults) queries at scale for a worker that only needs ids.
     # Per-vault fairness isn't needed: EmbedNote is uniq-deduped, and the
     # oldest-first order drains any backlog across ticks.
+    now = DateTime.utc_now()
+
     note_ids =
       Note
       |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
       |> where([n], n.kind == "note")
       |> where([n], is_nil(n.deleted_at))
       |> where([n], is_nil(n.embed_hash) or n.embed_hash != n.content_hash)
+      # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
+      # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
+      # permanently-failing note re-bills Voyage at most once per window, not
+      # every tick. NULL = no cooldown = eligible now.
+      |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
       |> order_by([n], asc: n.updated_at)
       |> limit(@batch_size)
       |> select([n], n.id)
@@ -58,7 +68,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           Engram.Logger.Metadata.with_category(:debug, :search, total_count: length(note_ids))
         )
 
-        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced/1))
+        # clamp: false — insert_all ignores unique/replace, so the settle
+        # ceiling is moot; skip the per-note burst-start SELECT (one per stale
+        # note, up to @batch_size, every tick).
+        Oban.insert_all(Enum.map(note_ids, &EmbedNote.new_debounced(&1, clamp: false)))
       end
 
     :ok
