@@ -150,17 +150,41 @@ defmodule Engram.Folders do
   defp folder_prefix(folder), do: String.trim_trailing(folder, "/") <> "/"
 
   # Maps a decrypted attachment path to its new path under whichever {old, new}
-  # folder pair owns it (first match wins; folder renames don't overlap). Mirrors
-  # `Attachments.rename_folder/4`'s prefix-slice derivation, preserving nesting.
+  # folder pair owns it. When a batch selects BOTH a parent and a nested child
+  # (e.g. `Docs` and `Docs/Sub`), an attachment under the child matches both
+  # `old` prefixes. We resolve by LONGEST-PREFIX (most-specific) match (Fix #2):
+  # the item belongs to its DEEPEST selected folder, so `Docs/Sub/a.png` follows
+  # the `Docs/Sub → …` mapping — deterministically, regardless of pair order
+  # (first-match-wins was ambiguous). Mirrors `Attachments.rename_folder/4`'s
+  # prefix-slice derivation, preserving nesting.
+  #
+  # Scoped to the ATTACHMENT leg: aligning the NOTES leg's own
+  # overlapping-selection behavior is a separate pre-existing concern.
+  #
+  # Public under `@doc false` purely as a test seam — going through `batch_move/4`
+  # is order-dependent (the notes leg can rewrite the pair set mid-cascade), so a
+  # determinism unit test needs to drive the resolver with a fixed pair set.
+  @doc false
+  @spec resolve_attachment_target(String.t(), [{String.t(), String.t()}]) ::
+          {:ok, String.t()} | :no_match
+  def resolve_attachment_target(path, pairs), do: rename_target(path, pairs)
+
   defp rename_target(path, pairs) do
-    Enum.find_value(pairs, :no_match, fn {old, new} ->
+    pairs
+    |> Enum.flat_map(fn {old, new} ->
       old = String.trim_trailing(old, "/")
       new = String.trim_trailing(new, "/")
       prefix = old <> "/"
 
       if String.starts_with?(path, prefix) do
-        {:ok, new <> String.slice(path, String.length(old)..-1//1)}
+        [{String.length(old), new <> String.slice(path, String.length(old)..-1//1)}]
+      else
+        []
       end
     end)
+    |> case do
+      [] -> :no_match
+      matches -> {:ok, matches |> Enum.max_by(&elem(&1, 0)) |> elem(1)}
+    end
   end
 end

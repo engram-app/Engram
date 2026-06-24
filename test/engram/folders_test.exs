@@ -98,6 +98,55 @@ defmodule Engram.FoldersTest do
     end
   end
 
+  describe "nested-folder batch-move resolves attachments by longest-prefix (Fix #2)" do
+    # Scope: this proves the ATTACHMENT resolution (`rename_target`) is
+    # deterministic — given a pair set where an attachment matches BOTH a parent
+    # and a nested-child prefix, the most-specific (longest) prefix wins,
+    # regardless of pair ORDER. Full parent+child consistency with the NOTES
+    # leg's own sequential overlapping-selection cascade (which can rewrite the
+    # pair set mid-move) is a separate pre-existing concern, out of scope here.
+
+    test "an attachment under a nested child follows the most-specific mapping", %{
+      user: user,
+      vault: vault
+    } do
+      # Use distinct targets so the notes leg does NOT rewrite one pair into the
+      # other (no shared destination prefix) — the attachment partition then
+      # sees two genuinely overlapping source prefixes (Docs and Docs/Sub) and
+      # must pick the deepest (Docs/Sub → Nested).
+      {:ok, parent} = Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, child} = Notes.create_folder_marker(user, vault, "Docs/Sub")
+      {:ok, _t1} = Notes.create_folder_marker(user, vault, "ParentDest")
+      {:ok, _t2} = Notes.create_folder_marker(user, vault, "ChildDest")
+      put_att(user, vault, "Docs/Sub/a.png")
+
+      # Move child → ChildDest, parent → ParentDest, in ONE batch.
+      assert {:ok, %{attachments: 1}} =
+               Folders.batch_move(user, vault, [child.id, parent.id], {:path, "ChildDest"})
+
+      # The child marker moved to ChildDest/Sub; the attachment under Docs/Sub
+      # must follow the most-specific Docs/Sub mapping → ChildDest/Sub/a.png,
+      # NOT ParentDest/... or a parent-derived path.
+      assert att_paths(user, vault) == ["ChildDest/Sub/a.png"]
+    end
+
+    test "the resolver picks the longest matching prefix regardless of pair order" do
+      # Directly exercise the resolution over a controlled overlapping pair set
+      # in BOTH orders, proving determinism independent of the notes leg.
+      path = "Docs/Sub/a.png"
+      parent = {"Docs", "Archive/Docs"}
+      child = {"Docs/Sub", "Archive/Sub"}
+
+      assert Folders.resolve_attachment_target(path, [parent, child]) ==
+               {:ok, "Archive/Sub/a.png"}
+
+      assert Folders.resolve_attachment_target(path, [child, parent]) ==
+               {:ok, "Archive/Sub/a.png"}
+
+      assert Folders.resolve_attachment_target("Other/x.png", [parent, child]) == :no_match
+    end
+  end
+
   defp note_path(user, vault, id) do
     {:ok, note} = Notes.get_note_by_id(user, vault, id)
     note.path
