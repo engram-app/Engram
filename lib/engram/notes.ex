@@ -2633,18 +2633,27 @@ defmodule Engram.Notes do
   # `target_folder` (a path), rolling the whole batch back on the first failure.
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
     marker_ids
-    |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+    |> Enum.reduce_while(%{moved: 0, pairs: []}, fn id, acc ->
       case move_folder_into(user, vault, id, target_folder, dek) do
-        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-        {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-        {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
-        {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
-        {:error, reason} -> {:halt, {:rollback, reason}}
+        {:ok, {old_folder, new_folder}} ->
+          {:cont, %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}}
+
+        {:error, :not_found} ->
+          {:halt, {:rollback, {:not_found, id}}}
+
+        {:error, :conflict} ->
+          {:halt, {:rollback, {:conflict, id}}}
+
+        {:error, :cycle} ->
+          {:halt, {:rollback, {:cycle, id}}}
+
+        {:error, reason} ->
+          {:halt, {:rollback, reason}}
       end
     end)
     |> case do
       {:rollback, reason} -> Repo.rollback(reason)
-      acc -> acc
+      %{pairs: pairs} = acc -> %{acc | pairs: Enum.reverse(pairs)}
     end
   end
 
@@ -2675,7 +2684,7 @@ defmodule Engram.Notes do
             end
 
           case rename_folder(user, vault, source_folder, new_folder) do
-            {:ok, _count} -> {:ok, new_folder}
+            {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, reason} -> {:error, reason}
           end
