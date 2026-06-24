@@ -509,24 +509,50 @@ defmodule Engram.Attachments do
 
   def batch_move(user, vault, paths, target_folder)
       when is_list(paths) and is_binary(target_folder) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(paths, %{moved: 0}, fn old_path, acc ->
+    pairs =
+      Enum.map(paths, fn old_path ->
         base = Path.basename(old_path)
         new_path = if target_folder == "", do: base, else: Path.join(target_folder, base)
+        {old_path, new_path}
+      end)
 
+    # This surface tags conflict/not_found with the offending path so the REST
+    # controller can name it in the 409/404 body (`{:conflict, path}`).
+    case move_pairs(user, vault, pairs, &tag_move_error/2) do
+      {:ok, count} -> {:ok, %{moved: count}}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Shared move-loop for every "relocate these [{old, new}] pairs atomically"
+  # caller (`batch_move/4` + the folder-rename cascade). One `Repo.transaction`
+  # wraps `reduce_while` over `move_attachment/4` (which carries the #614 per-item
+  # repoint+tombstone-share-one-seq discipline); any item error halts and rolls
+  # the WHOLE batch back. `on_error.(reason, old_path)` shapes the rollback value
+  # so each surface keeps its own contract (bare `:conflict` for folder rename,
+  # `{:conflict, path}` for `batch_move`). Returns `{:ok, count}` | `{:error, _}`.
+  defp move_pairs(_user, _vault, [], _on_error), do: {:ok, 0}
+
+  defp move_pairs(user, vault, pairs, on_error) do
+    Repo.transaction(fn ->
+      Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
         case move_attachment(user, vault, old_path, new_path) do
-          {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-          {:error, :conflict} -> {:halt, {:rollback, {:conflict, old_path}}}
-          {:error, :not_found} -> {:halt, {:rollback, {:not_found, old_path}}}
-          {:error, reason} -> {:halt, {:rollback, reason}}
+          {:ok, _} -> {:cont, count + 1}
+          {:error, reason} -> {:halt, {:rollback, on_error.(reason, old_path)}}
         end
       end)
       |> case do
         {:rollback, reason} -> Repo.rollback(reason)
-        acc -> acc
+        count -> count
       end
     end)
   end
+
+  # `batch_move/4`'s error shape: tag the offending path onto conflict/not_found,
+  # pass any other reason through unchanged.
+  defp tag_move_error(:conflict, old_path), do: {:conflict, old_path}
+  defp tag_move_error(:not_found, old_path), do: {:not_found, old_path}
+  defp tag_move_error(reason, _old_path), do: reason
 
   @doc """
   Cascades a folder rename across attachments: every live attachment whose path
@@ -561,26 +587,12 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp do_rename_folder_pairs(_user, _vault, []), do: {:ok, 0}
-
+  # Folder rename keeps BARE atoms (Bug 1) to match Notes.rename_folder/4's
+  # contract — the coordinator + REST + MCP callers match bare {:error, :conflict}
+  # / {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500. So the
+  # shared `move_pairs/4` loop passes the raw reason through unchanged.
   defp do_rename_folder_pairs(user, vault, pairs) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
-        case move_attachment(user, vault, old_path, new_path) do
-          {:ok, _} -> {:cont, count + 1}
-          # Bare atoms (Bug 1) to match Notes.rename_folder/4's contract — the
-          # coordinator + REST + MCP callers match bare {:error, :conflict} /
-          # {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500.
-          {:error, :conflict} -> {:halt, {:rollback, :conflict}}
-          {:error, :not_found} -> {:halt, {:rollback, :not_found}}
-          {:error, reason} -> {:halt, {:rollback, reason}}
-        end
-      end)
-      |> case do
-        {:rollback, reason} -> Repo.rollback(reason)
-        count -> count
-      end
-    end)
+    move_pairs(user, vault, pairs, fn reason, _old_path -> reason end)
   end
 
   @doc """
