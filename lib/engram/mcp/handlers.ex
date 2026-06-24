@@ -426,6 +426,17 @@ defmodule Engram.MCP.Handlers do
     {:ok, "Note deleted: #{path}"}
   end
 
+  def handle("move_attachment", user, vault, args) do
+    old_path = args["old_path"] || ""
+    new_path = args["new_path"] || ""
+
+    case Engram.Attachments.move_attachment(user, vault, old_path, new_path) do
+      {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
+      {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
+      {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+    end
+  end
+
   def handle(name, _user, _vault, _args) do
     {:error, "Unknown tool: #{name}"}
   end

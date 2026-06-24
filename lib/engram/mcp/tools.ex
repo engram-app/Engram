@@ -32,7 +32,8 @@ defmodule Engram.MCP.Tools do
       update_section_def(),
       rename_note_def(),
       rename_folder_def(),
-      delete_note_def()
+      delete_note_def(),
+      move_attachment_def()
     ]
   end
 
@@ -386,6 +387,25 @@ defmodule Engram.MCP.Tools do
         "required" => ["path"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
+    }
+  end
+
+  defp move_attachment_def do
+    %{
+      name: "move_attachment",
+      description:
+        "Move or rename a single attachment (image, PDF, or other binary file) to " <>
+          "a new path. Syncs to all connected Obsidian devices. The file's content " <>
+          "is unchanged; only its path moves.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_path" => %{"type" => "string", "description" => "Current path of the attachment"},
+          "new_path" => %{"type" => "string", "description" => "New path for the attachment"}
+        },
+        "required" => ["old_path", "new_path"]
+      },
+      handler: &Handlers.handle("move_attachment", &1, &2, &3)
     }
   end
 end

@@ -36,4 +36,29 @@ defmodule Engram.MCP.HandlersTest do
       assert Enum.map(metas, & &1.path) == ["Archive/a.png"]
     end
   end
+
+  describe "move_attachment handler" do
+    test "moves a single attachment", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "a.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, msg} =
+               Handlers.handle("move_attachment", user, vault, %{
+                 "old_path" => "a.png",
+                 "new_path" => "img/a.png"
+               })
+
+      assert msg =~ "img/a.png"
+
+      {:ok, metas} = Attachments.list_attachments(user, vault)
+      assert Enum.map(metas, & &1.path) == ["img/a.png"]
+    end
+
+    test "move_attachment registered as a tool" do
+      assert {:ok, %{name: "move_attachment"}} = Engram.MCP.Tools.get("move_attachment")
+    end
+  end
 end
