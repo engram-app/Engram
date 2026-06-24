@@ -17,7 +17,8 @@ defmodule EngramWeb.FoldersControllerBatchTest do
 
       # batch_delete_folders returns the SUM of cascade counts (marker + descendants).
       # See Engram.Notes.batch_delete_folders/3 docstring: 1 marker + 1 child note = 2.
-      assert body == %{"deleted" => 2}
+      # deleted_attachments: 0 because no attachments were in the folder.
+      assert body == %{"deleted" => 2, "deleted_attachments" => 0}
       # delete_folder/3 cascades — child note also gone.
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
 
@@ -64,7 +65,8 @@ defmodule EngramWeb.FoldersControllerBatchTest do
         |> post(~p"/api/folders/batch-move", %{ids: [src.id], target_parent_id: dst.id})
         |> json_response(200)
 
-      assert body == %{"moved" => 1}
+      # moved_attachments: 0 because no attachments were in the folder.
+      assert body == %{"moved" => 1, "moved_attachments" => 0}
       {:ok, after_move} = Engram.Notes.get_note_by_id(user, vault, child.id)
       assert after_move.path == "Archive/Projects/a.md"
     end
@@ -103,7 +105,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
         |> post(~p"/api/folders/batch-move", %{ids: [child.id], target_parent_id: "root"})
         |> json_response(200)
 
-      assert body == %{"moved" => 1}
+      assert body == %{"moved" => 1, "moved_attachments" => 0}
       {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, note.id)
       assert moved.path == "b/x.md"
     end

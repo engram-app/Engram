@@ -2,6 +2,7 @@ defmodule EngramWeb.FoldersController do
   use EngramWeb, :controller
   use OpenApiSpex.ControllerSpecs
 
+  alias Engram.Folders
   alias Engram.Notes
   alias EngramWeb.Schemas
 
@@ -223,12 +224,18 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Notes.rename_folder(user, vault, old_path, new_path) do
-      {:ok, 0} ->
+    case Folders.rename(user, vault, old_path, new_path) do
+      {:ok, %{notes: 0, attachments: 0}} ->
         conn |> put_status(404) |> json(%{error: "folder not found"})
 
-      {:ok, count} ->
-        json(conn, %{renamed: true, old_path: old_path, new_path: new_path, count: count})
+      {:ok, %{notes: count, attachments: att_count}} ->
+        json(conn, %{
+          renamed: true,
+          old_path: old_path,
+          new_path: new_path,
+          count: count,
+          attachments: att_count
+        })
 
       {:error, :conflict} ->
         conn |> put_status(409) |> json(%{error: "conflict"})
@@ -276,9 +283,9 @@ defmodule EngramWeb.FoldersController do
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
       {:ok, ids} ->
-        case Notes.batch_delete_folders(user, vault, ids) do
-          {:ok, %{deleted: n}} ->
-            body = %{deleted: n}
+        case Folders.batch_delete(user, vault, ids) do
+          {:ok, %{notes: n, attachments: a}} ->
+            body = %{deleted: n, deleted_attachments: a}
             Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
             broadcast_batch(user, vault, %{op: "delete", ids: ids})
             json(conn, body)
@@ -326,7 +333,7 @@ defmodule EngramWeb.FoldersController do
 
     case parse_uuid_list(ids) do
       {:ok, ids} ->
-        result = Notes.batch_move_folders(user, vault, ids, {:path, folder})
+        result = Folders.batch_move(user, vault, ids, {:path, folder})
         send_move_result(conn, user, vault, ids, result, %{target_parent: folder})
 
       :error ->
@@ -340,7 +347,7 @@ defmodule EngramWeb.FoldersController do
 
     with {:ok, ids} <- parse_uuid_list(ids),
          {:ok, tgt} <- parse_move_target(tgt) do
-      result = Notes.batch_move_folders(user, vault, ids, tgt)
+      result = Folders.batch_move(user, vault, ids, tgt)
       send_move_result(conn, user, vault, ids, result, %{target_parent_id: tgt})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid_ids"})
@@ -357,8 +364,8 @@ defmodule EngramWeb.FoldersController do
   # parent (target_parent path or target_parent_id) to peer sessions.
   defp send_move_result(conn, user, vault, ids, result, broadcast_extra) do
     case result do
-      {:ok, %{moved: n}} ->
-        body = %{moved: n}
+      {:ok, %{notes: n, attachments: a}} ->
+        body = %{moved: n, moved_attachments: a}
         Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
         broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
         json(conn, body)
