@@ -43,7 +43,7 @@ defmodule Engram.FoldersTest do
     {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
     put_att(user, vault, "Docs/a.png")
 
-    assert {:ok, %{attachments: 1}} = Folders.batch_delete(user, vault, [marker.id])
+    assert {:ok, %{notes: _, attachments: 1}} = Folders.batch_delete(user, vault, [marker.id])
     assert att_paths(user, vault) == []
   end
 
@@ -52,7 +52,7 @@ defmodule Engram.FoldersTest do
     {:ok, _dst} = Notes.create_folder_marker(user, vault, "Archive")
     put_att(user, vault, "Docs/a.png")
 
-    assert {:ok, %{attachments: 1}} =
+    assert {:ok, %{notes: _, attachments: 1}} =
              Folders.batch_move(user, vault, [src.id], {:path, "Archive"})
 
     assert att_paths(user, vault) == ["Archive/Docs/a.png"]
