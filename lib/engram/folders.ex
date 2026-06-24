@@ -27,6 +27,8 @@ defmodule Engram.Folders do
   end
 
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
+  def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
+
   def batch_delete(user, vault, marker_ids) do
     with {:ok, %{deleted: notes, folders: folders}} <-
            Notes.batch_delete_folders(user, vault, marker_ids),
@@ -37,6 +39,8 @@ defmodule Engram.Folders do
 
   @spec batch_move(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
           {:ok, counts()} | {:error, term()}
+  def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}
+
   def batch_move(user, vault, marker_ids, target) do
     with {:ok, %{moved: notes, pairs: pairs}} <-
            Notes.batch_move_folders(user, vault, marker_ids, target),

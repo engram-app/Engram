@@ -57,4 +57,13 @@ defmodule Engram.FoldersTest do
 
     assert att_paths(user, vault) == ["Archive/Docs/a.png"]
   end
+
+  test "batch_delete/3 with empty ids returns zero counts", %{user: user, vault: vault} do
+    assert {:ok, %{notes: 0, attachments: 0}} = Folders.batch_delete(user, vault, [])
+  end
+
+  test "batch_move/4 with empty ids returns zero counts", %{user: user, vault: vault} do
+    assert {:ok, %{notes: 0, attachments: 0}} =
+             Folders.batch_move(user, vault, [], {:path, "Archive"})
+  end
 end

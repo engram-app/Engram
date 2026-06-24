@@ -32,6 +32,16 @@ defmodule EngramWeb.FoldersControllerBatchTest do
       assert replay == body
     end
 
+    test "empty ids list returns 200 with zero counts", %{conn: conn} do
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/folders/batch-delete", %{ids: []})
+        |> json_response(200)
+
+      assert body == %{"deleted" => 0, "deleted_attachments" => 0}
+    end
+
     test "missing idempotency key → 400", %{conn: conn, user: user, vault: vault} do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "X")
       conn |> post(~p"/api/folders/batch-delete", %{ids: [marker.id]}) |> json_response(400)
