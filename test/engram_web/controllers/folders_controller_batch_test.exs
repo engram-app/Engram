@@ -17,7 +17,8 @@ defmodule EngramWeb.FoldersControllerBatchTest do
 
       # batch_delete_folders returns the SUM of cascade counts (marker + descendants).
       # See Engram.Notes.batch_delete_folders/3 docstring: 1 marker + 1 child note = 2.
-      assert body == %{"deleted" => 2}
+      # deleted_attachments: 0 because no attachments were in the folder.
+      assert body == %{"deleted" => 2, "deleted_attachments" => 0}
       # delete_folder/3 cascades — child note also gone.
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
 
@@ -29,6 +30,16 @@ defmodule EngramWeb.FoldersControllerBatchTest do
         |> json_response(200)
 
       assert replay == body
+    end
+
+    test "empty ids list returns 200 with zero counts", %{conn: conn} do
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/folders/batch-delete", %{ids: []})
+        |> json_response(200)
+
+      assert body == %{"deleted" => 0, "deleted_attachments" => 0}
     end
 
     test "missing idempotency key → 400", %{conn: conn, user: user, vault: vault} do
@@ -64,7 +75,8 @@ defmodule EngramWeb.FoldersControllerBatchTest do
         |> post(~p"/api/folders/batch-move", %{ids: [src.id], target_parent_id: dst.id})
         |> json_response(200)
 
-      assert body == %{"moved" => 1}
+      # moved_attachments: 0 because no attachments were in the folder.
+      assert body == %{"moved" => 1, "moved_attachments" => 0}
       {:ok, after_move} = Engram.Notes.get_note_by_id(user, vault, child.id)
       assert after_move.path == "Archive/Projects/a.md"
     end
@@ -88,6 +100,37 @@ defmodule EngramWeb.FoldersControllerBatchTest do
       assert body["item_id"] == parent.id
     end
 
+    test "409 when an attachment destination collides, no path in item_id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      # Bug 5: the attachment-leg conflict now returns bare {:error, :conflict}
+      # (Bug 1). The controller must render a clean 409 WITHOUT stuffing a file
+      # PATH into item_id (clients expect item_id to be a folder UUID).
+      {:ok, src} = Engram.Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, dst} = Engram.Notes.create_folder_marker(user, vault, "Archive")
+
+      for p <- ["Docs/a.png", "Archive/Docs/a.png"] do
+        {:ok, _} =
+          Engram.Attachments.upsert_attachment(user, vault, %{
+            "path" => p,
+            "content_base64" => Base.encode64("x")
+          })
+      end
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/folders/batch-move", %{ids: [src.id], target_parent_id: dst.id})
+        |> json_response(409)
+
+      assert body["error"] == "conflict"
+      # item_id, if present, must NOT be a file path (must be nil or a UUID).
+      refute body["item_id"] == "Archive/Docs/a.png"
+      assert is_nil(body["item_id"]) or match?({:ok, _}, Ecto.UUID.cast(body["item_id"]))
+    end
+
     test "moves a nested folder to the vault root via target_parent_id \"root\"", %{
       conn: conn,
       user: user,
@@ -103,7 +146,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
         |> post(~p"/api/folders/batch-move", %{ids: [child.id], target_parent_id: "root"})
         |> json_response(200)
 
-      assert body == %{"moved" => 1}
+      assert body == %{"moved" => 1, "moved_attachments" => 0}
       {:ok, moved} = Engram.Notes.get_note_by_id(user, vault, note.id)
       assert moved.path == "b/x.md"
     end

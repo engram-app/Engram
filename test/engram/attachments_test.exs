@@ -25,6 +25,23 @@ defmodule Engram.AttachmentsTest do
     %{user: user, vault: vault}
   end
 
+  defp put_attachment(user, vault, path) do
+    Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+
+    {:ok, att} =
+      Attachments.upsert_attachment(user, vault, %{
+        "path" => path,
+        "content_base64" => Base.encode64("x")
+      })
+
+    att
+  end
+
+  defp live_paths(user, vault) do
+    {:ok, metas} = Attachments.list_attachments(user, vault)
+    metas |> Enum.map(& &1.path) |> Enum.sort()
+  end
+
   describe "concurrent upsert race (T3-audit H1)" do
     # T3-audit H1 — pre-fix, two concurrent upserts to the same path could
     # race: each reads "no existing row," allocates a fresh att_id, encrypts
@@ -748,6 +765,55 @@ defmodule Engram.AttachmentsTest do
       :ok = Attachments.delete_attachment(user, vault, "never-existed.png")
 
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
+    end
+  end
+
+  describe "rename_folder/4 (attachment cascade)" do
+    test "moves nested attachments under the folder, preserving structure", %{
+      user: user,
+      vault: vault
+    } do
+      put_attachment(user, vault, "Docs/a.png")
+      put_attachment(user, vault, "Docs/sub/b.png")
+      put_attachment(user, vault, "Other/c.png")
+
+      assert {:ok, 2} = Attachments.rename_folder(user, vault, "Docs", "Archive")
+
+      assert live_paths(user, vault) == ["Archive/a.png", "Archive/sub/b.png", "Other/c.png"]
+    end
+
+    test "empty folder is an idempotent no-op", %{user: user, vault: vault} do
+      assert {:ok, 0} = Attachments.rename_folder(user, vault, "Nope", "Archive")
+    end
+
+    test "conflict when a target path is already occupied", %{user: user, vault: vault} do
+      put_attachment(user, vault, "Docs/a.png")
+      put_attachment(user, vault, "Archive/a.png")
+
+      # BARE :conflict atom (Bug 1) — matches Notes.rename_folder/4 so the
+      # coordinator + REST + MCP callers (which match bare {:error, :conflict})
+      # don't CaseClauseError → 500 on a real attachment-destination collision.
+      assert {:error, :conflict} =
+               Attachments.rename_folder(user, vault, "Docs", "Archive")
+
+      # rolled back — source untouched
+      assert "Docs/a.png" in live_paths(user, vault)
+    end
+  end
+
+  describe "delete_folder/3 (attachment cascade)" do
+    test "soft-deletes nested attachments under the folder", %{user: user, vault: vault} do
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      put_attachment(user, vault, "Docs/a.png")
+      put_attachment(user, vault, "Docs/sub/b.png")
+      put_attachment(user, vault, "Other/c.png")
+
+      assert {:ok, 2} = Attachments.delete_folder(user, vault, "Docs")
+      assert live_paths(user, vault) == ["Other/c.png"]
+    end
+
+    test "empty folder is an idempotent no-op", %{user: user, vault: vault} do
+      assert {:ok, 0} = Attachments.delete_folder(user, vault, "Nope")
     end
   end
 end

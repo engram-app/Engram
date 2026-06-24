@@ -409,9 +409,20 @@ defmodule Engram.MCP.Handlers do
     old_folder = args["old_folder"] || ""
     new_folder = args["new_folder"] || ""
 
-    case Notes.rename_folder(user, vault, old_folder, new_folder) do
-      {:ok, count} ->
-        {:ok, "Folder renamed: #{old_folder} -> #{new_folder} (#{count} notes updated)"}
+    case Engram.Folders.rename(user, vault, old_folder, new_folder) do
+      {:ok, %{notes: n, attachments: a}} ->
+        {:ok,
+         "Folder renamed: #{old_folder} -> #{new_folder} " <>
+           "(#{n} notes, #{a} attachments updated)"}
+
+      {:error, :conflict} ->
+        {:ok, "Folder rename conflict: #{new_folder} already exists"}
+
+      # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
+      # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
+      # this clause it CaseClauseError'd → 500.
+      {:error, reason} ->
+        {:ok, "Could not rename folder #{old_folder} -> #{new_folder}: #{inspect(reason)}"}
     end
   end
 
@@ -419,6 +430,20 @@ defmodule Engram.MCP.Handlers do
     path = args["path"] || ""
     Notes.delete_note(user, vault, path)
     {:ok, "Note deleted: #{path}"}
+  end
+
+  def handle("move_attachment", user, vault, args) do
+    old_path = args["old_path"] || ""
+    new_path = args["new_path"] || ""
+
+    case Engram.Attachments.move_attachment(user, vault, old_path, new_path) do
+      {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
+      {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
+      {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+      # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
+      # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
+      {:error, reason} -> {:ok, "Could not move attachment: #{inspect(reason)}"}
+    end
   end
 
   def handle(name, _user, _vault, _args) do

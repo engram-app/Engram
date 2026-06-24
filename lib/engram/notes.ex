@@ -2534,7 +2534,7 @@ defmodule Engram.Notes do
   a later id in the batch fails. After-commit hooks are tracked as a follow-up.
   """
   @spec batch_delete_folders(map(), map(), [integer()]) ::
-          {:ok, %{deleted: non_neg_integer()}}
+          {:ok, %{required(:deleted) => non_neg_integer(), optional(:folders) => [String.t()]}}
           | {:error, {:not_found, integer()} | term()}
   def batch_delete_folders(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
@@ -2561,7 +2561,7 @@ defmodule Engram.Notes do
 
           folders ->
             {:ok, %{deleted: n}} = do_delete_folders(user, vault, folders)
-            %{deleted: n}
+            %{deleted: n, folders: folders}
         end
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -2592,7 +2592,11 @@ defmodule Engram.Notes do
   leak events.
   """
   @spec batch_move_folders(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
-          {:ok, %{moved: non_neg_integer()}}
+          {:ok,
+           %{
+             required(:moved) => non_neg_integer(),
+             optional(:pairs) => [{String.t(), String.t()}]
+           }}
           | {:error, {:not_found | :conflict | :cycle, String.t()} | term()}
   def batch_move_folders(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
 
@@ -2633,18 +2637,27 @@ defmodule Engram.Notes do
   # `target_folder` (a path), rolling the whole batch back on the first failure.
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
     marker_ids
-    |> Enum.reduce_while(%{moved: 0}, fn id, acc ->
+    |> Enum.reduce_while(%{moved: 0, pairs: []}, fn id, acc ->
       case move_folder_into(user, vault, id, target_folder, dek) do
-        {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-        {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-        {:error, :conflict} -> {:halt, {:rollback, {:conflict, id}}}
-        {:error, :cycle} -> {:halt, {:rollback, {:cycle, id}}}
-        {:error, reason} -> {:halt, {:rollback, reason}}
+        {:ok, {old_folder, new_folder}} ->
+          {:cont, %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}}
+
+        {:error, :not_found} ->
+          {:halt, {:rollback, {:not_found, id}}}
+
+        {:error, :conflict} ->
+          {:halt, {:rollback, {:conflict, id}}}
+
+        {:error, :cycle} ->
+          {:halt, {:rollback, {:cycle, id}}}
+
+        {:error, reason} ->
+          {:halt, {:rollback, reason}}
       end
     end)
     |> case do
       {:rollback, reason} -> Repo.rollback(reason)
-      acc -> acc
+      %{pairs: pairs} = acc -> %{acc | pairs: Enum.reverse(pairs)}
     end
   end
 
@@ -2675,7 +2688,7 @@ defmodule Engram.Notes do
             end
 
           case rename_folder(user, vault, source_folder, new_folder) do
-            {:ok, _count} -> {:ok, new_folder}
+            {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, reason} -> {:error, reason}
           end
@@ -2840,10 +2853,13 @@ defmodule Engram.Notes do
     _ =
       case Keyword.get(opts, :broadcast_from) do
         pid when is_pid(pid) ->
+          # `broadcast_from` excludes the pushing socket; it is never used from
+          # the folder cascade (which has no socket to exclude), so it stays a
+          # direct Endpoint call and is not subject to deferral.
           EngramWeb.Endpoint.broadcast_from(pid, topic, "note_changed", payload)
 
         nil ->
-          EngramWeb.Endpoint.broadcast(topic, "note_changed", payload)
+          Engram.Sync.Broadcast.emit(topic, "note_changed", payload)
       end
 
     :ok
@@ -2852,7 +2868,7 @@ defmodule Engram.Notes do
   @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
     _ =
-      EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", %{
+      Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", %{
         "event_type" => event_type,
         "path" => path,
         "vault_id" => vault_id

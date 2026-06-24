@@ -317,7 +317,7 @@ defmodule Engram.Attachments do
         # trash are sent.
         _ =
           if deleted? do
-            EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
               "event_type" => "delete",
               "kind" => "attachment",
               "path" => path,
@@ -509,23 +509,133 @@ defmodule Engram.Attachments do
 
   def batch_move(user, vault, paths, target_folder)
       when is_list(paths) and is_binary(target_folder) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(paths, %{moved: 0}, fn old_path, acc ->
+    pairs =
+      Enum.map(paths, fn old_path ->
         base = Path.basename(old_path)
         new_path = if target_folder == "", do: base, else: Path.join(target_folder, base)
+        {old_path, new_path}
+      end)
 
+    # This surface tags conflict/not_found with the offending path so the REST
+    # controller can name it in the 409/404 body (`{:conflict, path}`).
+    case move_pairs(user, vault, pairs, &tag_move_error/2) do
+      {:ok, count} -> {:ok, %{moved: count}}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Shared move-loop for every "relocate these [{old, new}] pairs atomically"
+  # caller (`batch_move/4` + the folder-rename cascade). One `Repo.transaction`
+  # wraps `reduce_while` over `move_attachment/4` (which carries the #614 per-item
+  # repoint+tombstone-share-one-seq discipline); any item error halts and rolls
+  # the WHOLE batch back. `on_error.(reason, old_path)` shapes the rollback value
+  # so each surface keeps its own contract (bare `:conflict` for folder rename,
+  # `{:conflict, path}` for `batch_move`). Returns `{:ok, count}` | `{:error, _}`.
+  defp move_pairs(_user, _vault, [], _on_error), do: {:ok, 0}
+
+  defp move_pairs(user, vault, pairs, on_error) do
+    Repo.transaction(fn ->
+      Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
         case move_attachment(user, vault, old_path, new_path) do
-          {:ok, _} -> {:cont, Map.update!(acc, :moved, &(&1 + 1))}
-          {:error, :conflict} -> {:halt, {:rollback, {:conflict, old_path}}}
-          {:error, :not_found} -> {:halt, {:rollback, {:not_found, old_path}}}
-          {:error, reason} -> {:halt, {:rollback, reason}}
+          {:ok, _} -> {:cont, count + 1}
+          {:error, reason} -> {:halt, {:rollback, on_error.(reason, old_path)}}
         end
       end)
       |> case do
         {:rollback, reason} -> Repo.rollback(reason)
-        acc -> acc
+        count -> count
       end
     end)
+  end
+
+  # `batch_move/4`'s error shape: tag the offending path onto conflict/not_found,
+  # pass any other reason through unchanged.
+  defp tag_move_error(:conflict, old_path), do: {:conflict, old_path}
+  defp tag_move_error(:not_found, old_path), do: {:not_found, old_path}
+  defp tag_move_error(reason, _old_path), do: reason
+
+  @doc """
+  Cascades a folder rename across attachments: every live attachment whose path
+  sits under `old_folder` moves to the mirrored path under `new_folder`,
+  preserving nested structure. Per-item reuse of `move_attachment/4` (each item's
+  repoint + old-path tombstone share one seq in one txn — the #614 discipline).
+  All-or-nothing: a conflict/error on any item rolls back every prior DB write in
+  the batch. Broadcasts already emitted self-heal on the next pull (same caveat as
+  `batch_move/4`). Returns `{:ok, count}` (0 = no attachments, idempotent).
+  """
+  @spec rename_folder(map(), map(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def rename_folder(user, vault, old_folder, new_folder) do
+    old_folder = String.trim_trailing(old_folder, "/")
+    new_folder = String.trim_trailing(new_folder, "/")
+    prefix = old_folder <> "/"
+    old_len = String.length(old_folder)
+
+    case list_attachments(user, vault) do
+      {:ok, metas} ->
+        pairs =
+          metas
+          |> Enum.filter(&String.starts_with?(&1.path, prefix))
+          |> Enum.map(fn %{path: old_path} ->
+            {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
+          end)
+
+        move_folder_pairs(user, vault, pairs)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Atomically relocates a pre-built `[{old_path, new_path}]` list of attachment
+  moves under ONE transaction. The folder-rename entry point for callers that
+  have already scanned + filtered the vault (`rename_folder/4` for a single
+  folder; `Engram.Folders` for a multi-folder batch — so the coordinator scans
+  attachments ONCE and partitions across the N folder pairs rather than
+  re-scanning per folder).
+
+  Keeps BARE atoms (Bug 1) to match Notes.rename_folder/4's contract — the
+  coordinator + REST + MCP callers match bare {:error, :conflict} /
+  {:error, :not_found}; a tagged tuple here CaseClauseError'd → 500. So the shared
+  `move_pairs/4` loop passes the raw reason through unchanged. Returns
+  `{:ok, count}` (0 = no pairs, idempotent).
+  """
+  @spec move_folder_pairs(map(), map(), [{String.t(), String.t()}]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def move_folder_pairs(user, vault, pairs) do
+    move_pairs(user, vault, pairs, fn reason, _old_path -> reason end)
+  end
+
+  @doc """
+  Cascades a folder delete across attachments: soft-deletes every live attachment
+  whose path sits under `folder` (incl. nested). Reuses `batch_delete/3` so each
+  delete broadcasts + runs best-effort blob cleanup. Returns `{:ok, count}` (0 =
+  no attachments, idempotent).
+
+  Seq note (DRY-by-design, diverges from a literal "one transaction under one
+  seq"): `batch_delete/3` → `do_delete_attachment` allocates a fresh per-item
+  `seq` per path rather than a single batch-wide `seq`. Per-item seq is SAFE for
+  deletes — the soft-deleted row itself is the change signal, so the #614
+  same-seq cursor-skip concern (a moved row + its same-seq tombstone) simply does
+  not arise (delete has no tombstone). Cross-table + cross-item atomicity is
+  provided by the `Engram.Folders` coordinator's `atomic/1` wrapper, so a
+  mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
+  one delete path instead of a bespoke single-seq `update_all`.
+  """
+  @spec delete_folder(map(), map(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def delete_folder(user, vault, folder) do
+    prefix = String.trim_trailing(folder, "/") <> "/"
+
+    case list_attachments(user, vault) do
+      {:ok, metas} ->
+        paths = metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix))
+        {:ok, %{deleted: n}} = batch_delete(user, vault, paths)
+        {:ok, n}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -555,7 +665,7 @@ defmodule Engram.Attachments do
       "mtime" => att.mtime
     }
 
-    _ = EngramWeb.Endpoint.broadcast("sync:#{user_id}:#{vault_id}", "note_changed", payload)
+    _ = Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
     :ok
   end
 

@@ -3,6 +3,23 @@ defmodule EngramWeb.FoldersControllerTest do
 
   setup :authed_api_conn
 
+  describe "POST /api/folders/rename" do
+    test "rename cascades to attachments", %{conn: conn, user: user, vault: vault} do
+      {:ok, _att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "Docs/a.txt",
+          "content_base64" => Base.encode64("hello")
+        })
+
+      conn
+      |> post(~p"/api/folders/rename", %{"old_path" => "Docs", "new_path" => "Archive"})
+      |> json_response(200)
+
+      {:ok, metas} = Engram.Attachments.list_attachments(user, vault)
+      assert Enum.map(metas, & &1.path) == ["Archive/a.txt"]
+    end
+  end
+
   describe "GET /api/folders" do
     test "response includes id and parent_id per folder marker", %{
       conn: conn,

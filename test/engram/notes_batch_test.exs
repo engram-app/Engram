@@ -242,6 +242,18 @@ defmodule Engram.NotesBatchTest do
       assert {:ok, %{deleted: 0}} = Notes.batch_delete_folders(user, vault, [])
     end
 
+    test "batch_delete_folders reports the resolved folder paths it touched", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
+
+      assert {:ok, %{deleted: _, folders: folders}} =
+               Notes.batch_delete_folders(user, vault, [marker.id])
+
+      assert folders == ["Docs"]
+    end
+
     test "scans the vault once for the whole batch, not once per marker", %{
       user: user,
       vault: vault
@@ -374,6 +386,16 @@ defmodule Engram.NotesBatchTest do
 
       {:ok, moved} = Notes.get_note_by_id(user, vault, note.id)
       assert moved.path == "B/x.md"
+    end
+
+    test "batch_move_folders reports {old, new} folder pairs", %{user: user, vault: vault} do
+      {:ok, src} = Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, _dst} = Notes.create_folder_marker(user, vault, "Archive")
+
+      assert {:ok, %{moved: 1, pairs: pairs}} =
+               Notes.batch_move_folders(user, vault, [src.id], {:path, "Archive"})
+
+      assert pairs == [{"Docs", "Archive/Docs"}]
     end
   end
 
