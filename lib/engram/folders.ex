@@ -8,9 +8,16 @@ defmodule Engram.Folders do
   op out to both. Every folder-mutating surface (REST + MCP) routes through here
   so no caller can forget the attachment leg.
 
-  Consistency is per-table (not one unified transaction): the note leg commits
-  atomically, then the attachment leg cascades. A client may briefly observe the
-  note move ahead of the attachment move; sync converges on the next pull.
+  Consistency is atomic across BOTH tables: each op wraps the notes leg and the
+  attachment leg in a single `Repo.transaction` (the legs' own
+  `Repo.with_tenant` transactions nest as savepoints). Any leg error rolls both
+  tables back together, so a conflict can never leave notes moved with
+  attachments stranded (Bug 3/6).
+
+  Residual: per-item broadcasts inside the attachment leg fire as their inner
+  transactions commit, BEFORE the outer rollback can fire — a later failure
+  can't retract earlier items' socket events. Clients self-heal on the next
+  pull (same trade-off as `Attachments.batch_move/4`).
   """
 
   alias Engram.Attachments
