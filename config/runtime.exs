@@ -133,6 +133,13 @@ if config_env() != :test do
     config :engram, :embed_settle_max_wait_seconds, String.to_integer(secs)
   end
 
+  # Cooldown (seconds) parked on a note that exhausts its embed attempts, before
+  # ReconcileEmbeddings retries it. Caps re-billing on permanently-failing notes.
+  # Default 6h (21_600). Lower it to retry broken notes sooner at higher cost.
+  if secs = System.get_env("EMBED_POISON_COOLDOWN_SECONDS") do
+    config :engram, :embed_poison_cooldown_seconds, String.to_integer(secs)
+  end
+
   # Client-side Voyage rate limit. Unset = no throttle (self-host default).
   # Set to your Voyage paid-tier RPM (e.g. 2000) to fail fast with a synthetic
   # 429 before burning real API calls. EmbedNote snoozes on the synthetic 429

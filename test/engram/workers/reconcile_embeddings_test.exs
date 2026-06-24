@@ -131,6 +131,34 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
+
+    test "skips poisoned notes still inside their embed cooldown" do
+      user = insert(:user)
+
+      note =
+        insert(:note,
+          user: user,
+          embed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second)
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    test "queues poisoned notes whose embed cooldown has elapsed" do
+      user = insert(:user)
+
+      note =
+        insert(:note,
+          user: user,
+          embed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), -3600, :second)
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
   end
 
   defp collect_queries(acc \\ []) do
