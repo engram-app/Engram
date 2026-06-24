@@ -301,16 +301,45 @@ defmodule Engram.Crypto do
   @spec maybe_decrypt_note_fields(Engram.Notes.Note.t(), User.t()) ::
           {:ok, Engram.Notes.Note.t()} | {:error, term()}
   def maybe_decrypt_note_fields(%Engram.Notes.Note{} = note, %User{} = user) do
-    if needs_note_decrypt?(note) do
-      with {:ok, dek} <- get_dek(user),
-           {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
-        decrypt_phase_b_tags(note, dek)
+    result =
+      if needs_note_decrypt?(note) do
+        with {:ok, dek} <- get_dek(user),
+             {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
+             {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
+          decrypt_phase_b_tags(note, dek)
+        end
+      else
+        {:ok, note}
       end
-    else
-      {:ok, note}
+
+    # Single read-boundary scrub for note bodies: content is encrypted as bytea
+    # (no Postgres UTF-8 guard), so a legacy row can hold invalid bytes that crash
+    # Jason at every JSON boundary that reads a note — get_note, the REST note /
+    # changes endpoints, and the sync Channel broadcast (#727/#738). Scrubbing the
+    # decrypted text fields once here covers all of them. Valid input is returned
+    # byte-identical (String.valid? fast path), so content_hash and round-trips
+    # are unaffected.
+    case result do
+      {:ok, decrypted} -> {:ok, scrub_note_text_fields(decrypted)}
+      other -> other
     end
   end
+
+  defp scrub_note_text_fields(%Engram.Notes.Note{} = note) do
+    %{
+      note
+      | content: scrub_field(note.content),
+        title: scrub_field(note.title),
+        folder: scrub_field(note.folder),
+        tags: scrub_tags(note.tags)
+    }
+  end
+
+  defp scrub_field(value) when is_binary(value), do: Engram.Notes.Helpers.scrub_utf8(value)
+  defp scrub_field(value), do: value
+
+  defp scrub_tags(tags) when is_list(tags), do: Enum.map(tags, &scrub_field/1)
+  defp scrub_tags(tags), do: tags
 
   defp needs_note_decrypt?(%Engram.Notes.Note{} = note) do
     # T3.0.4 — gate on the three independent ciphertext "groups." Sub-helpers

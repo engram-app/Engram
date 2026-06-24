@@ -8,6 +8,30 @@ defmodule Engram.Notes.Helpers do
   @heading_re ~r/^#\s+(.+)$/m
 
   @doc """
+  Replaces invalid UTF-8 byte sequences with the Unicode replacement
+  character (U+FFFD `�`), returning a guaranteed-valid UTF-8 string.
+
+  Note content is encrypted and stored as `bytea`, which bypasses Postgres's
+  UTF-8 validation — so a client can persist invalid bytes (e.g. a multibyte
+  char truncated to its lead byte). Those bytes later crash `Jason.encode`
+  anywhere content reaches a JSON boundary (search responses, sync Channel
+  broadcasts) with a 500. Scrubbing keeps the read/write paths total. Valid
+  input is returned byte-identical (no allocation churn for the common case).
+  """
+  @spec scrub_utf8(String.t()) :: String.t()
+  def scrub_utf8(str) when is_binary(str) do
+    if String.valid?(str), do: str, else: do_scrub_utf8(str, <<>>)
+  end
+
+  defp do_scrub_utf8(<<>>, acc), do: acc
+
+  defp do_scrub_utf8(<<cp::utf8, rest::binary>>, acc),
+    do: do_scrub_utf8(rest, <<acc::binary, cp::utf8>>)
+
+  defp do_scrub_utf8(<<_bad, rest::binary>>, acc),
+    do: do_scrub_utf8(rest, <<acc::binary, "�">>)
+
+  @doc """
   Extracts the note title from content (frontmatter > h1 heading > filename).
   """
   @spec extract_title(String.t(), String.t()) :: String.t() | nil
@@ -57,7 +81,7 @@ defmodule Engram.Notes.Helpers do
 
   defp extract_frontmatter(content) do
     case Regex.run(@frontmatter_re, content, capture: :all_but_first) do
-      [fm] -> fm
+      [fm] when is_binary(fm) -> fm
       _ -> nil
     end
   end

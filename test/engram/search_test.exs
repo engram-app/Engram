@@ -68,6 +68,60 @@ defmodule Engram.SearchTest do
       assert hd(results).text == "Ferritin levels."
     end
 
+    test "#727: invalid UTF-8 in a stored chunk is scrubbed so the result is JSON-safe",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # A multibyte char (`–` = <<0xE2,0x80,0x93>>) truncated to its lead byte —
+      # the prod corruption that crashed Jason.encode with a 500. Encryption is
+      # byte-preserving, so the invalid byte survives decrypt.
+      bad_text = "PRs #71" <> <<0xE2>> <> "#85 ferritin"
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: bad_text, title: "Iron" <> <<0xE2>>, heading_path: "Iron Panel"},
+          user,
+          "engram_notes",
+          "uuid-1"
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => "uuid-1",
+            "score" => 0.9,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "source_path" => "Health/Iron.md",
+              "tags" => ["health"],
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      assert {:ok, [result]} = Search.search(user, vault, "iron panel")
+      assert String.valid?(result.text)
+      assert String.valid?(result.title)
+      # The whole result must encode — this is what 500'd before the fix.
+      assert {:ok, _json} = Jason.encode(result)
+      assert result.text =~ "PRs #71"
+    end
+
     test "#590: rehydrates source_path/tags from PG when payload omits them",
          %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder

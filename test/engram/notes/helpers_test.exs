@@ -3,6 +3,32 @@ defmodule Engram.Notes.HelpersTest do
 
   alias Engram.Notes.Helpers
 
+  describe "scrub_utf8/1" do
+    test "leaves valid UTF-8 byte-identical" do
+      s = "héllo — world 日本語"
+      assert Helpers.scrub_utf8(s) == s
+      assert String.valid?(Helpers.scrub_utf8(s))
+    end
+
+    test "replaces a dangling multibyte lead byte with the replacement char" do
+      # `–` is U+2013 = <<0xE2, 0x80, 0x93>>; keep only the lead byte (the prod bug).
+      bad = "PRs #71" <> <<0xE2>> <> "#85"
+      out = Helpers.scrub_utf8(bad)
+
+      assert String.valid?(out)
+      assert out == "PRs #71�#85"
+    end
+
+    test "scrubbed output is always JSON-encodable" do
+      bad = <<"## Result 1 (score: 0.577)\n", 0xE2, "tail">>
+      assert {:ok, _} = Jason.encode(Helpers.scrub_utf8(bad))
+    end
+
+    test "empty string passes through" do
+      assert Helpers.scrub_utf8("") == ""
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # extract_title/2
   # ---------------------------------------------------------------------------
