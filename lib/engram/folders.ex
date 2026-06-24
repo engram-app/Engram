@@ -15,26 +15,53 @@ defmodule Engram.Folders do
 
   alias Engram.Attachments
   alias Engram.Notes
+  alias Engram.Repo
 
   @type counts :: %{notes: non_neg_integer(), attachments: non_neg_integer()}
 
+  # Bug 3 / Bug 6 — atomicity across both tables.
+  #
+  # Each leg (`Notes.*`, `Attachments.*`) runs its own `Repo.with_tenant`
+  # transaction internally. We wrap BOTH legs in a single outer
+  # `Repo.transaction` so the inner leg transactions nest as savepoints, and on
+  # ANY leg error we `Repo.rollback/1`, unwinding BOTH tables together. Without
+  # this, a clean notes leg followed by an attachment-leg conflict left notes
+  # moved while attachments stayed put (a permanent split / half-delete).
+  #
+  # The outer transaction deliberately sets NO tenant context — each leg's own
+  # `with_tenant` sets and tears down `app.current_tenant` per call. Because the
+  # legs run sequentially (not nested under one another), they don't clobber
+  # each other's tenant key.
+  defp atomic(fun) do
+    Repo.transaction(fn ->
+      case fun.() do
+        {:ok, result} -> result
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
   @spec rename(map(), map(), String.t(), String.t()) :: {:ok, counts()} | {:error, term()}
   def rename(user, vault, old_folder, new_folder) do
-    with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
-         {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
-      {:ok, %{notes: notes, attachments: atts}}
-    end
+    atomic(fn ->
+      with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
+           {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
+        {:ok, %{notes: notes, attachments: atts}}
+      end
+    end)
   end
 
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
   def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
 
   def batch_delete(user, vault, marker_ids) do
-    with {:ok, %{deleted: notes, folders: folders}} <-
-           Notes.batch_delete_folders(user, vault, marker_ids),
-         {:ok, atts} <- delete_attachments_for(user, vault, folders) do
-      {:ok, %{notes: notes, attachments: atts}}
-    end
+    atomic(fn ->
+      with {:ok, %{deleted: notes, folders: folders}} <-
+             Notes.batch_delete_folders(user, vault, marker_ids),
+           {:ok, atts} <- delete_attachments_for(user, vault, folders) do
+        {:ok, %{notes: notes, attachments: atts}}
+      end
+    end)
   end
 
   @spec batch_move(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
@@ -42,11 +69,13 @@ defmodule Engram.Folders do
   def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}
 
   def batch_move(user, vault, marker_ids, target) do
-    with {:ok, %{moved: notes, pairs: pairs}} <-
-           Notes.batch_move_folders(user, vault, marker_ids, target),
-         {:ok, atts} <- rename_attachments_for(user, vault, pairs) do
-      {:ok, %{notes: notes, attachments: atts}}
-    end
+    atomic(fn ->
+      with {:ok, %{moved: notes, pairs: pairs}} <-
+             Notes.batch_move_folders(user, vault, marker_ids, target),
+           {:ok, atts} <- rename_attachments_for(user, vault, pairs) do
+        {:ok, %{notes: notes, attachments: atts}}
+      end
+    end)
   end
 
   defp delete_attachments_for(user, vault, folders) do

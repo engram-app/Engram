@@ -100,6 +100,37 @@ defmodule EngramWeb.FoldersControllerBatchTest do
       assert body["item_id"] == parent.id
     end
 
+    test "409 when an attachment destination collides, no path in item_id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      # Bug 5: the attachment-leg conflict now returns bare {:error, :conflict}
+      # (Bug 1). The controller must render a clean 409 WITHOUT stuffing a file
+      # PATH into item_id (clients expect item_id to be a folder UUID).
+      {:ok, src} = Engram.Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, dst} = Engram.Notes.create_folder_marker(user, vault, "Archive")
+
+      for p <- ["Docs/a.png", "Archive/Docs/a.png"] do
+        {:ok, _} =
+          Engram.Attachments.upsert_attachment(user, vault, %{
+            "path" => p,
+            "content_base64" => Base.encode64("x")
+          })
+      end
+
+      body =
+        conn
+        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+        |> post(~p"/api/folders/batch-move", %{ids: [src.id], target_parent_id: dst.id})
+        |> json_response(409)
+
+      assert body["error"] == "conflict"
+      # item_id, if present, must NOT be a file path (must be nil or a UUID).
+      refute body["item_id"] == "Archive/Docs/a.png"
+      assert is_nil(body["item_id"]) or match?({:ok, _}, Ecto.UUID.cast(body["item_id"]))
+    end
+
     test "moves a nested folder to the vault root via target_parent_id \"root\"", %{
       conn: conn,
       user: user,

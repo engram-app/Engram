@@ -58,6 +58,78 @@ defmodule Engram.FoldersTest do
     assert att_paths(user, vault) == ["Archive/Docs/a.png"]
   end
 
+  defp note_path(user, vault, id) do
+    {:ok, note} = Notes.get_note_by_id(user, vault, id)
+    note.path
+  end
+
+  describe "atomicity across the notes + attachments legs" do
+    test "rename/4 rolls BOTH legs back when the attachment leg conflicts", %{
+      user: user,
+      vault: vault
+    } do
+      # Notes leg moves cleanly (Docs/n.md -> Archive/n.md), but the attachment
+      # leg conflicts: Archive/a.png is already occupied. Pre-Bug-3 the notes
+      # commit stuck while attachments didn't → permanent split state. The fix
+      # makes the coordinator atomic: a conflict rolls the note move back too.
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Archive/a.png")
+
+      assert {:error, :conflict} = Folders.rename(user, vault, "Docs", "Archive")
+
+      # The note must NOT have moved — both tables roll back together.
+      assert note_path(user, vault, note.id) == "Docs/n.md"
+      # Source attachment untouched too.
+      assert "Docs/a.png" in att_paths(user, vault)
+    end
+
+    test "batch_move/4 rolls BOTH legs back when the attachment leg conflicts", %{
+      user: user,
+      vault: vault
+    } do
+      # Notes leg moves the marker cleanly, attachment leg conflicts on a
+      # pre-occupied destination. Atomic coordinator must roll the note move back.
+      {:ok, src} = Notes.create_folder_marker(user, vault, "Docs")
+      {:ok, _dst} = Notes.create_folder_marker(user, vault, "Archive")
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      put_att(user, vault, "Docs/a.png")
+      # Pre-occupy the attachment move destination (Archive/Docs/a.png).
+      put_att(user, vault, "Archive/Docs/a.png")
+
+      assert {:error, :conflict} =
+               Folders.batch_move(user, vault, [src.id], {:path, "Archive"})
+
+      # Note move rolled back.
+      assert note_path(user, vault, note.id) == "Docs/n.md"
+    end
+
+    test "batch_delete/3 wraps both legs in one transaction (atomic across tables)" do
+      # Bug 6: batch_delete deleted notes (committed) then attachments; an
+      # attachment-leg failure left notes gone, skipped idempotency+broadcast, and
+      # a retry 404'd (masked data loss). Runtime injection isn't feasible (the
+      # attachment soft-delete leg doesn't error on the happy path), so assert the
+      # structural guarantee: the coordinator function body runs inside a single
+      # Repo.transaction wrapping BOTH legs with a Repo.rollback on any error.
+      src = File.read!("lib/engram/folders.ex")
+
+      [_, body | _] = String.split(src, "def batch_delete(user, vault, marker_ids) do")
+      body = body |> String.split(~r/\n  (def|defp) /) |> hd()
+
+      assert body =~ "atomic(",
+             "batch_delete must run both legs through the atomic/1 wrapper (Bug 6)"
+
+      [_, atomic_body | _] = String.split(src, "defp atomic(fun) do")
+      atomic_body = atomic_body |> String.split(~r/\n  (def|defp) /) |> hd()
+
+      assert atomic_body =~ "Repo.transaction",
+             "atomic/1 must wrap both legs in one Repo.transaction"
+
+      assert atomic_body =~ "Repo.rollback",
+             "atomic/1 must Repo.rollback on a leg error so notes don't half-delete"
+    end
+  end
+
   test "batch_delete/3 with empty ids returns zero counts", %{user: user, vault: vault} do
     assert {:ok, %{notes: 0, attachments: 0}} = Folders.batch_delete(user, vault, [])
   end

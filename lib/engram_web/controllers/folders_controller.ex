@@ -239,6 +239,9 @@ defmodule EngramWeb.FoldersController do
 
       {:error, :conflict} ->
         conn |> put_status(409) |> json(%{error: "conflict"})
+
+      {:error, _reason} ->
+        conn |> put_status(500) |> json(%{error: "internal"})
     end
   end
 
@@ -295,6 +298,14 @@ defmodule EngramWeb.FoldersController do
 
           {:error, {:conflict, id}} ->
             conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
+
+          # Attachment-leg errors (Bug 1) surface as bare atoms; the offender is
+          # a file path, not a folder UUID, so omit item_id.
+          {:error, :conflict} ->
+            conn |> put_status(409) |> json(%{error: "conflict"})
+
+          {:error, :not_found} ->
+            conn |> put_status(404) |> json(%{error: "not_found"})
 
           {:error, _reason} ->
             conn |> put_status(500) |> json(%{error: "internal"})
@@ -378,6 +389,15 @@ defmodule EngramWeb.FoldersController do
 
       {:error, {:cycle, id}} ->
         conn |> put_status(409) |> json(%{error: "cycle", item_id: id})
+
+      # Attachment-leg conflicts (Bug 1 + Bug 5) surface as BARE atoms — the
+      # offender is a file path, not a folder UUID, so we omit item_id rather
+      # than mislabel a path as a folder id.
+      {:error, :conflict} ->
+        conn |> put_status(409) |> json(%{error: "conflict"})
+
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: "not_found"})
 
       {:error, _reason} ->
         conn |> put_status(500) |> json(%{error: "internal"})
