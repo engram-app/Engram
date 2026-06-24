@@ -6,7 +6,10 @@ defmodule Engram.Repo.Migrations.AddEmbedRetryAfterToNotesExpand do
   # hasn't elapsed, capping re-bill on permanently-failing notes.
   def change do
     alter table(:notes) do
-      add :embed_retry_after, :utc_datetime_usec
+      # :timestamptz (not :utc_datetime_usec, which renders bare `timestamp`)
+      # to satisfy Squawk's prefer-timestamp-tz rule. The schema field stays
+      # :utc_datetime_usec — Ecto reads timestamptz as a UTC DateTime.
+      add :embed_retry_after, :timestamptz
     end
   end
 end
