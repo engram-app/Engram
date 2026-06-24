@@ -39,7 +39,7 @@ defmodule Engram.Workers.EmbedNote do
   require Logger
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args} = job) do
     note_id = args["note_id"]
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
@@ -84,6 +84,7 @@ defmodule Engram.Workers.EmbedNote do
                         :ok
 
                       other ->
+                        _ = maybe_mark_poison(note, other, job)
                         other
                     end
 
@@ -184,6 +185,71 @@ defmodule Engram.Workers.EmbedNote do
     Application.get_env(:engram, :embed_429_snooze_seconds, 60)
   end
 
+  # Cooldown parked on a note that has exhausted its embed attempts. Env-driven
+  # via `EMBED_POISON_COOLDOWN_SECONDS` (wired in runtime.exs). Default 6h: a
+  # genuinely-broken note re-bills Voyage ~4×/day instead of ~96×/day, while a
+  # transient provider outage self-heals within hours (vs a hard give-up that
+  # would strand the whole vault until manual reset).
+  defp poison_cooldown_seconds do
+    Application.get_env(:engram, :embed_poison_cooldown_seconds, 21_600)
+  end
+
+  # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
+  # stops re-enqueuing (and re-billing) it every 15 minutes. Only fires on the
+  # terminal Oban attempt and only for {:error, _} — snooze/cancel/discard are
+  # not embed failures. Like stamp_embed_hash, an optimistic content_hash guard
+  # avoids parking content that was edited mid-flight — but a nil content_hash
+  # must still park (WHERE content_hash = NULL never matches, which would leave
+  # the exact loop this guards against running), so fall back to an id-only match.
+  defp maybe_mark_poison(note, {:error, reason}, %Oban.Job{attempt: attempt, max_attempts: max})
+       when attempt >= max do
+    cooldown = poison_cooldown_seconds()
+    retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
+
+    park_query =
+      if is_nil(note.content_hash) do
+        from(n in Note, where: n.id == ^note.id)
+      else
+        from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash)
+      end
+
+    {count, _} =
+      Repo.update_all(park_query, [set: [embed_retry_after: retry_after]],
+        skip_tenant_check: true
+      )
+
+    error_kind = Engram.Telemetry.error_kind(reason)
+    status = embed_error_status(reason)
+
+    :telemetry.execute(
+      [:engram, :embed, :poison],
+      %{count: 1, cooldown_seconds: cooldown},
+      %{
+        error_kind: error_kind,
+        status: status,
+        note_id: note.id,
+        user_id: note.user_id,
+        parked: count > 0
+      }
+    )
+
+    Logger.error(
+      "embed_poisoned",
+      Metadata.with_category(:error, :search,
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        note_id: note.id,
+        error_kind: error_kind,
+        status: status,
+        cooldown_seconds: cooldown
+      )
+    )
+
+    :ok
+  end
+
+  defp maybe_mark_poison(_note, _result, _job), do: :ok
+
   defp run_embed(note, old_path_hmac_b64) do
     user = Accounts.get_user!(note.user_id)
 
@@ -262,6 +328,8 @@ defmodule Engram.Workers.EmbedNote do
   # Optimistic lock: only set embed_hash if content_hash hasn't changed since
   # we started embedding. If it changed (concurrent edit), this is a no-op —
   # the reconciliation cron or the next debounced job will pick up the new version.
+  # Also clears any embed_retry_after poison cooldown — a successful embed means
+  # the note is no longer broken.
   defp stamp_embed_hash(%Note{content_hash: nil}), do: :ok
 
   defp stamp_embed_hash(note) do
@@ -269,7 +337,9 @@ defmodule Engram.Workers.EmbedNote do
       from(n in Note,
         where: n.id == ^note.id and n.content_hash == ^note.content_hash
       )
-      |> Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
+      |> Repo.update_all([set: [embed_hash: note.content_hash, embed_retry_after: nil]],
+        skip_tenant_check: true
+      )
 
     if count == 0 do
       Logger.debug(

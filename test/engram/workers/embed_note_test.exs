@@ -295,6 +295,105 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  describe "perform/1 — poison-loop guard" do
+    test "stamps embed_retry_after on the final failed attempt", %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
+
+      assert {:error, {500, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.embed_retry_after != nil
+      assert DateTime.compare(updated.embed_retry_after, DateTime.utc_now()) == :gt
+    end
+
+    test "parks a nil-content_hash note on the final attempt (id-only match)",
+         %{bypass: bypass, note: note} do
+      # A nil content_hash must still park — otherwise the optimistic
+      # `content_hash = NULL` guard never matches and the loop persists.
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [content_hash: nil]], skip_tenant_check: true)
+
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
+
+      assert {:error, {500, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.embed_retry_after != nil
+    end
+
+    test "does NOT stamp embed_retry_after on a non-final attempt", %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
+
+      assert {:error, {500, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 1, max_attempts: 5)
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert is_nil(updated.embed_retry_after)
+    end
+
+    test "emits [:engram, :embed, :poison] telemetry on the final failed attempt",
+         %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {503, %{"detail" => "boom"}}} end)
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :embed, :poison],
+        fn _e, measurements, metadata, _ ->
+          send(test_pid, {:poison, measurements, metadata})
+        end,
+        nil
+      )
+
+      try do
+        assert {:error, {503, _}} =
+                 perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      assert_received {:poison, %{count: 1}, %{status: 503, note_id: note_id}}
+      assert note_id == note.id
+    end
+
+    test "clears embed_retry_after on a successful embed", %{bypass: bypass, note: note} do
+      # Simulate a previously-poisoned note still carrying a cooldown stamp.
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [set: [embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second)]],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert is_nil(updated.embed_retry_after)
+    end
+  end
+
   describe "job scheduling" do
     test "Notes.upsert_note enqueues EmbedNote job", %{user: user, vault: vault} do
       {:ok, note} =
