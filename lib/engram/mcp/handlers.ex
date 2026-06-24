@@ -203,17 +203,7 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.get_note(user, vault, source_path) do
       {:ok, note} ->
-        lines = ["# #{note.title}"]
-
-        lines =
-          if note.tags && note.tags != [],
-            do: lines ++ ["**Tags:** #{Enum.join(note.tags, ", ")}"],
-            else: lines
-
-        lines = lines ++ ["**Path:** #{note.path}"]
-        lines = lines ++ ["**Folder:** #{note.folder || ""}\n"]
-        lines = lines ++ [note.content]
-        {:ok, Enum.join(lines, "\n")}
+        {:ok, format_get_note(note)}
 
       {:error, :not_found} ->
         {:ok, "Note not found: #{source_path}"}
@@ -534,4 +524,55 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp now, do: :os.system_time(:second) |> Kernel./(1) |> Float.round(1)
+
+  @doc """
+  Render a note for the `get_note` MCP response.
+
+  The note body is returned verbatim (read-modify-write callers depend on it).
+  Title/Tags are only injected as a convenience header when the body does not
+  already carry them — a note's own frontmatter or leading `# H1` is the
+  canonical source, so we don't repeat it (#731). Path/Folder are filesystem
+  metadata that never live in the body, so they are always included.
+  """
+  def format_get_note(note) do
+    content = note.content || ""
+    fm = frontmatter_block(content)
+
+    # Suppress an injected field only when the body actually carries it: a
+    # frontmatter `title:`/`tags:` key, or (for the title) a body `# H1`.
+    body_has_title = fm_has_key?(fm, "title") or body_has_h1?(content)
+    inject_tags? = note.tags && note.tags != [] && not fm_has_key?(fm, "tags")
+
+    title_lines = if body_has_title, do: [], else: ["# #{note.title}"]
+    tag_lines = if inject_tags?, do: ["**Tags:** #{Enum.join(note.tags, ", ")}"], else: []
+
+    (title_lines ++
+       tag_lines ++
+       ["**Path:** #{note.path}", "**Folder:** #{note.folder || ""}", "", content])
+    |> Enum.join("\n")
+  end
+
+  # The YAML frontmatter block (content between the leading `---` fences), or nil.
+  # Tolerates a leading BOM and CRLF line endings.
+  defp frontmatter_block(content) do
+    case Regex.run(~r/\A\x{FEFF}?---\r?\n(.*?)\r?\n---/su, content, capture: :all_but_first) do
+      [fm] -> fm
+      _ -> nil
+    end
+  end
+
+  defp fm_has_key?(nil, _key), do: false
+  defp fm_has_key?(fm, key), do: Regex.match?(~r/^\s*#{key}\s*:/mi, fm)
+
+  # A level-1 ATX heading at the top of the body (after any frontmatter). `##`+
+  # are subheadings, not the title.
+  defp body_has_h1?(content) do
+    content
+    |> strip_frontmatter()
+    |> String.trim_leading()
+    |> then(&Regex.match?(~r/\A#(?!#)\s+/, &1))
+  end
+
+  defp strip_frontmatter(content),
+    do: Regex.replace(~r/\A\x{FEFF}?---\r?\n.*?\r?\n---/su, content, "")
 end

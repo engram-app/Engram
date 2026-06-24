@@ -67,6 +67,46 @@ defmodule Engram.Notes.HelpersTest do
       assert Helpers.extract_tags(content) == ["health", "fitness"]
     end
 
+    test "block-style (multi-line) list tags" do
+      content = "---\ntags:\n  - project\n  - work\n---\nBody"
+      assert Helpers.extract_tags(content) == ["project", "work"]
+    end
+
+    test "block-style list tags with a leading blank line and inline tag" do
+      content = "---\ntags:\n  - alpha\n  - beta\n---\nBody with #gamma"
+      assert Helpers.extract_tags(content) == ["alpha", "beta", "gamma"]
+    end
+
+    test "single-item block list" do
+      content = "---\ntags:\n  - solo\n---\nBody"
+      assert Helpers.extract_tags(content) == ["solo"]
+    end
+
+    test "block list stops at the next frontmatter key" do
+      content = "---\ntags:\n  - alpha\n  - beta\nauthor: me\n---\nBody"
+      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+    end
+
+    test "block list preceded by other frontmatter keys" do
+      content = "---\ntitle: T\ntags:\n  - alpha\n  - beta\naliases:\n  - x\n---\nBody"
+      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+    end
+
+    test "quoted block-list items are unquoted" do
+      content = "---\ntags:\n  - \"alpha\"\n  - 'beta'\n---\nBody"
+      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+    end
+
+    test "quoted inline-list items are unquoted" do
+      content = "---\ntags: [\"alpha\", 'beta']\n---\nBody"
+      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+    end
+
+    test "CRLF frontmatter with a block list" do
+      content = "---\r\ntags:\r\n  - alpha\r\n  - beta\r\n---\r\nBody"
+      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+    end
+
     test "no frontmatter returns empty list" do
       assert Helpers.extract_tags("# No Tags\nBody") == []
     end

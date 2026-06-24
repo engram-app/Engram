@@ -182,6 +182,14 @@ defmodule EngramWeb.McpControllerTest do
 
       assert text =~ "Error:"
     end
+
+    test "with a malformed (non-UUID) vault_id returns a clean error, not a cast crash",
+         %{conn: conn} do
+      conn = call_tool(conn, "set_vault", %{"vault_id" => "not-a-uuid"})
+      text = tool_text(conn)
+
+      assert text =~ "Vault not found"
+    end
   end
 
   # =========================================================================
@@ -279,6 +287,15 @@ defmodule EngramWeb.McpControllerTest do
       text = tool_text(conn)
 
       assert text == "Note not found: Missing/Note.md"
+    end
+
+    test "does not re-inject title/tags already in the decrypted body (#731)", %{conn: conn} do
+      # Seeded note has frontmatter `tags: [...]` + a `# Supplements` H1.
+      conn = call_tool(conn, "get_note", %{"source_path" => "Health/Supplements.md"})
+      text = tool_text(conn)
+
+      refute text =~ "**Tags:**", "tags live in frontmatter; must not be re-injected"
+      assert Enum.count(String.split(text, "\n"), &(&1 == "# Supplements")) == 1
     end
   end
 

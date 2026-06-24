@@ -358,6 +358,15 @@ defmodule Engram.Vaults do
   or {:error, :not_found}.
   """
   def get_vault(user, vault_id) do
+    # A lookup must never raise on bad input: a malformed UUID would otherwise
+    # trigger an Ecto cast error at query time (callers pass raw client values).
+    case Ecto.UUID.cast(vault_id) do
+      {:ok, vault_id} -> fetch_vault(user, vault_id)
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp fetch_vault(user, vault_id) do
     user = fresh_user(user)
 
     result =
