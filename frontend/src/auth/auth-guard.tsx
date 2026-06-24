@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useLocation } from 'react-router'
-import { ROUTES } from '../routes'
 import LoadingScreen from '../layout/loading-screen'
+import { signInRedirectTarget } from './sign-in-redirect'
 import { useAuthAdapter } from './use-auth-adapter'
 
 export default function AuthGuard() {
@@ -12,12 +12,7 @@ export default function AuthGuard() {
   }
 
   if (!isSignedIn) {
-    const returnTo = location.pathname + location.search + location.hash
-    const target =
-      returnTo && returnTo !== ROUTES.HOME
-        ? `${ROUTES.SIGN_IN}?return_to=${encodeURIComponent(returnTo)}`
-        : ROUTES.SIGN_IN
-    return <Navigate to={target} replace />
+    return <Navigate to={signInRedirectTarget(location)} replace />
   }
 
   return <Outlet />
