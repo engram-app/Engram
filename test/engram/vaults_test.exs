@@ -429,6 +429,12 @@ defmodule Engram.VaultsTest do
       assert {:error, :not_found} = Vaults.get_vault(user, Ecto.UUID.generate())
     end
 
+    test "returns {:error, :not_found} for a malformed (non-UUID) id without raising", %{
+      user: user
+    } do
+      assert {:error, :not_found} = Vaults.get_vault(user, "not-a-uuid")
+    end
+
     test "returns {:error, :not_found} for another user's vault", %{
       user: user,
       other_user: other_user

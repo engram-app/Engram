@@ -4,7 +4,7 @@ defmodule Engram.Notes.Helpers do
   No DB access — safe to call anywhere.
   """
 
-  @frontmatter_re ~r/\A---\n(.*?)\n---/s
+  @frontmatter_re ~r/\A---\r?\n(.*?)\r?\n---/s
   @heading_re ~r/^#\s+(.+)$/m
 
   @doc """
@@ -124,9 +124,55 @@ defmodule Engram.Notes.Helpers do
   end
 
   defp parse_frontmatter_tags(fm) do
-    case Regex.run(~r/^tags:\s*(.+)$/m, fm, capture: :all_but_first) do
-      [raw] -> {:ok, parse_tag_value(String.trim(raw))}
-      _ -> :error
+    cond do
+      # Block-style list: `tags:` alone on its line, items as `  - item` below.
+      block = parse_block_list_tags(fm) ->
+        {:ok, block}
+
+      # Inline value on the same line: `tags: [a, b]` or `tags: a, b`.
+      # `[ \t]*` (no newline) + `\S` keeps the match on the `tags:` line so it
+      # never spills onto a following `- item` line.
+      match = Regex.run(~r/^tags:[ \t]*(\S.*)$/m, fm, capture: :all_but_first) ->
+        [raw] = match
+        {:ok, parse_tag_value(String.trim(raw))}
+
+      true ->
+        :error
+    end
+  end
+
+  # YAML block list under a bare `tags:` line. Returns nil when not block-style
+  # so the caller falls through to inline parsing.
+  defp parse_block_list_tags(fm) do
+    case Regex.run(~r/^tags:[ \t]*\r?\n(.*)/ms, fm, capture: :all_but_first) do
+      [rest] ->
+        items =
+          rest
+          |> String.split("\n")
+          |> Enum.take_while(&Regex.match?(~r/^\s*-\s+/, &1))
+          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> unquote_tag()))
+          |> Enum.reject(&(&1 == ""))
+
+        if items == [], do: nil, else: items
+
+      _ ->
+        nil
+    end
+  end
+
+  # Strip surrounding matching quotes from a YAML scalar (and trim whitespace).
+  defp unquote_tag(raw) do
+    s = String.trim(raw)
+
+    cond do
+      String.length(s) >= 2 and String.starts_with?(s, "\"") and String.ends_with?(s, "\"") ->
+        String.slice(s, 1, String.length(s) - 2)
+
+      String.length(s) >= 2 and String.starts_with?(s, "'") and String.ends_with?(s, "'") ->
+        String.slice(s, 1, String.length(s) - 2)
+
+      true ->
+        s
     end
   end
 
@@ -137,7 +183,7 @@ defmodule Engram.Notes.Helpers do
     rest
     |> String.trim_trailing("]")
     |> String.split(",")
-    |> Enum.map(&String.trim/1)
+    |> Enum.map(&unquote_tag/1)
     |> Enum.reject(&(&1 == ""))
   end
 
@@ -145,7 +191,7 @@ defmodule Engram.Notes.Helpers do
     # Comma-separated string: tag1, tag2
     raw
     |> String.split(",")
-    |> Enum.map(&String.trim/1)
+    |> Enum.map(&unquote_tag/1)
     |> Enum.reject(&(&1 == ""))
   end
 end
