@@ -50,13 +50,20 @@ defmodule Engram.Notes.CrdtDoc do
       {:ok, room_pid} = result ->
         # Start the debounced checkpoint timer linked to this room. The timer
         # exits when the room exits (Process.link inside CrdtCheckpointTimer.init).
-        {:ok, _timer} =
+        {:ok, timer_pid} =
           CrdtCheckpointTimer.start_link(
             room_pid: room_pid,
             user_id: user_id,
             vault_id: vault_id,
             note_id: note_id
           )
+
+        # Store the timer pid in the room's process dictionary so that
+        # CrdtPersistence.update_v1 (which runs inside the room GenServer)
+        # can call notify_activity/1 without a separate registry lookup.
+        Yex.Sync.SharedDoc.update_doc(room_pid, fn _doc ->
+          Process.put(:crdt_timer_pid, timer_pid)
+        end)
 
         result
 

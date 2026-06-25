@@ -17,7 +17,7 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtCheckpointTimer, CrdtUpdateLog, Note}
 
   require Logger
 
@@ -77,6 +77,14 @@ defmodule Engram.Notes.CrdtPersistence do
           "crdt_update_log encrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
+    end
+
+    # Signal the checkpoint timer so it can debounce a snapshot flush.
+    # update_v1 is called inside the room GenServer process; the timer pid
+    # was stored there by CrdtDoc.start_link via Process.put(:crdt_timer_pid).
+    case Process.get(:crdt_timer_pid) do
+      pid when is_pid(pid) -> CrdtCheckpointTimer.notify_activity(pid)
+      _ -> :ok
     end
 
     state
