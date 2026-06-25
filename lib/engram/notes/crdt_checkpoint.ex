@@ -90,9 +90,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {:ok, prev}
         end)
 
-      if prev_hash != content_hash do
-        _ = Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
-      end
+      _ =
+        if prev_hash != content_hash do
+          Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
+        end
 
       :ok
     else

@@ -17,5 +17,14 @@
   # binary-shape union from the leading three pattern matches, but the spec
   # has to remain `term()` so future callers don't fail type-check at the
   # boundary. Same pattern as the AAD helpers above.
-  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71}
+  {"lib/engram/crypto/key_provider.ex", :contract_supertype, 71},
+
+  # `use JokenJwks.DefaultStrategyTemplate` injects `init/1` via macro expansion.
+  # The injected callback's success typing (derived from the GenServer macro chain)
+  # doesn't match the module-level no_return inference that dialyzer makes for
+  # the module's `init/1` wrapper. This is a library-level type mismatch in
+  # JokenJwks that we cannot fix without patching the upstream dependency.
+  # Adding y_ex to mix.lock (CRDT PR) causes PLT rebuild which first exposes
+  # this pre-existing JokenJwks type issue.
+  {"lib/engram/auth/clerk_strategy.ex", :no_return, 10}
 ]

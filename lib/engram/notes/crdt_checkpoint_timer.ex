@@ -95,7 +95,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     first_dirty_at = state.first_dirty_at || now
 
     # Cancel any existing settle timer and re-arm it.
-    if state.settle_timer, do: _ = Process.cancel_timer(state.settle_timer)
+    _ = if state.settle_timer, do: Process.cancel_timer(state.settle_timer)
 
     remaining_until_ceiling = state.ceiling_ms - (now - first_dirty_at)
 

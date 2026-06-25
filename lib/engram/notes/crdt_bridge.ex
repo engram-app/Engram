@@ -34,10 +34,16 @@ defmodule Engram.Notes.CrdtBridge do
     # client_id 0 in Options is taken literally by the NIF (no auto-assign).
     # Each doc must have a unique ID so CRDT conflict-resolution can distinguish
     # concurrent edits when two divergent docs are merged via apply_update.
-    # `:rand.uniform/1` returns pos_integer(); subtract 1 to get non_neg_integer()
-    # so the value fits the Options struct's `client_id: integer()` type spec.
-    client_id = :rand.uniform(0xFFFF_FFFF) - 1
-    Yex.Doc.with_options(%Yex.Doc.Options{client_id: client_id, offset_kind: :utf16})
+    client_id = :rand.uniform(0xFFFF_FFFF)
+
+    Yex.Doc.with_options(%Yex.Doc.Options{
+      client_id: client_id,
+      offset_kind: :utf16,
+      # The Rust NIF success typing infers collection_id: binary() (not nil).
+      # Pass "" so the struct literal matches the NIF's inferred argument type
+      # and dialyzer doesn't cascade no_return through doc_from_state/flatten.
+      collection_id: ""
+    })
   end
 
   @doc "A fresh Y.Doc, with `state` (a v1 update binary) applied when present."
