@@ -19,7 +19,13 @@ defmodule Engram.DrainerTest do
   end
 
   test "drain/1 is no-op-safe when there are no peers" do
-    opts = [pause_oban: fn -> :ok end, peers: fn -> [] end, disconnect: fn _ -> :ok end, grace_ms: 0]
+    opts = [
+      pause_oban: fn -> :ok end,
+      peers: fn -> [] end,
+      disconnect: fn _ -> :ok end,
+      grace_ms: 0
+    ]
+
     assert :ok = Engram.Drainer.drain(opts)
   end
 end

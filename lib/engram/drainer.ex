@@ -23,7 +23,11 @@ defmodule Engram.Drainer do
     disconnect = Keyword.get(opts, :disconnect, &Node.disconnect/1)
     grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)
 
-    Logger.info("drain: starting graceful shutdown", Metadata.with_category(:info, :lifecycle, []))
+    Logger.info(
+      "drain: starting graceful shutdown",
+      Metadata.with_category(:info, :lifecycle, [])
+    )
+
     pause_oban.()
     if grace_ms > 0, do: Process.sleep(grace_ms)
 
