@@ -240,6 +240,24 @@ defmodule Engram.Notes.HelpersTest do
     test "deduplicates repeated inline tags" do
       assert Helpers.extract_tags("#dup once #dup twice") == ["dup"]
     end
+
+    test "never byte-slices a multibyte char after a #tag (#741 root cause)" do
+      # `–` (en-dash U+2013 = <<0xE2,0x80,0x93>>) immediately after `#628`. The
+      # byte-mode regex used to capture `628` + the en-dash's lead byte (0xE2),
+      # emitting an invalid-UTF-8 tag from VALID content — the exact source of
+      # the corrupt tags found at rest in prod.
+      content = "note x #628" <> <<0xE2, 0x80, 0x93>> <> " y"
+      assert String.valid?(content)
+
+      tags = Helpers.extract_tags(content)
+      assert Enum.all?(tags, &String.valid?/1)
+      # 628 is purely numeric and the en-dash is not a tag char → no tag at all.
+      assert tags == []
+    end
+
+    test "keeps a real multibyte inline tag intact" do
+      assert Helpers.extract_tags("a #café and #über b") == ["café", "über"]
+    end
   end
 
   # ---------------------------------------------------------------------------

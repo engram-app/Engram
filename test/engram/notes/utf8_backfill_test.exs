@@ -95,6 +95,39 @@ defmodule Engram.Notes.Utf8BackfillTest do
     refute_received {:scrub, %{boundary: :write}}
   end
 
+  test "fix cleans corrupt tags now that extract_tags no longer byte-slices (#741 prod scenario)",
+       %{user: user, vault: vault} do
+    # Content whose (now-fixed) extract_tags re-derives to clean tags; we inject
+    # the legacy byte-sliced tag (`628`+0xE2) directly into the tags column to
+    # mimic the 5 prod rows. Before the regex fix, re-deriving reproduced the
+    # corruption and the backfill could never reach corrupt:0.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "Test/EnDash.md",
+        "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
+        "mtime" => 1.0
+      })
+
+    {:ok, dek} = Crypto.get_dek(user)
+
+    {tags_ct, tags_nonce} =
+      Crypto.Envelope.encrypt(
+        :erlang.term_to_binary([<<54, 50, 56, 226>>]),
+        dek,
+        Crypto.aad_for_row(:notes, :tags, note.id)
+      )
+
+    {:ok, {1, _}} =
+      Repo.with_tenant(user.id, fn ->
+        from(n in Note, where: n.id == ^note.id)
+        |> Repo.update_all(set: [tags_ciphertext: tags_ct, tags_nonce: tags_nonce])
+      end)
+
+    assert %{corrupt: 1} = Utf8Backfill.scan()
+    assert %{fixed: 1} = Utf8Backfill.scan(fix: true)
+    assert %{corrupt: 0} = Utf8Backfill.scan()
+  end
+
   test "leaves valid rows untouched (no false positives)", %{user: user, vault: vault} do
     {:ok, _} =
       Notes.upsert_note(user, vault, %{
