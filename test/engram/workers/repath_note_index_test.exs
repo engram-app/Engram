@@ -110,6 +110,17 @@ defmodule Engram.Workers.RepathNoteIndexTest do
              })
   end
 
+  test "discards when note is soft-deleted", %{note: note} do
+    from(n in Note, where: n.id == ^note.id)
+    |> Repo.update_all([set: [deleted_at: DateTime.utc_now()]], skip_tenant_check: true)
+
+    assert {:discard, _} =
+             perform_job(RepathNoteIndex, %{
+               note_id: note.id,
+               old_path_hmac: Base.encode64(<<7>>)
+             })
+  end
+
   test "returns error so Oban retries when Qdrant count fails", %{bypass: bypass, note: note} do
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
       Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
@@ -117,5 +128,45 @@ defmodule Engram.Workers.RepathNoteIndexTest do
 
     assert {:error, _} =
              perform_job(RepathNoteIndex, %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)})
+  end
+
+  test "non-final attempt with Qdrant 503 returns error (Oban retries, no EmbedNote)", %{
+    bypass: bypass,
+    note: note
+  } do
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+      Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
+    end)
+
+    assert {:error, _} =
+             perform_job(
+               RepathNoteIndex,
+               %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)},
+               attempt: 1,
+               max_attempts: 5
+             )
+
+    refute_enqueued(worker: EmbedNote)
+  end
+
+  test "final attempt with Qdrant 503 falls back to EmbedNote and returns :ok", %{
+    bypass: bypass,
+    note: note
+  } do
+    old_path_hmac = Base.encode64(<<7>>)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+      Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
+    end)
+
+    assert :ok =
+             perform_job(
+               RepathNoteIndex,
+               %{note_id: note.id, old_path_hmac: old_path_hmac},
+               attempt: 5,
+               max_attempts: 5
+             )
+
+    assert_enqueued(worker: EmbedNote, args: %{note_id: note.id, old_path_hmac: old_path_hmac})
   end
 end

@@ -9,8 +9,14 @@ defmodule Engram.Workers.RepathNoteIndex do
 
     * count > 0                                -> PATCH new hmacs onto the points
     * count == 0 and content_hash != embed_hash -> enqueue EmbedNote (embed fresh)
-    * count == 0 and content_hash == embed_hash -> warn: embedded note lost its
-      points (real inconsistency; reconciler #264 owns repair)
+    * count == 0 and content_hash == embed_hash -> warn: benign on rapid multi-rename
+      (A→B→C) or when a content-edit EmbedNote wins the race; not an error
+
+  On repeated Qdrant failure (count or PATCH), Oban retries up to max_attempts.
+  On the final attempt, instead of discarding with stranded points, the worker
+  falls back to `EmbedNote` with `old_path_hmac` — which deletes old-path points
+  and re-embeds under the new path — so no points ever strand permanently. The
+  fallback emits `[:engram, :indexing, :repath, :fallback]` telemetry.
 
   Shares the `:embed` queue with EmbedNote; repath jobs are cheap (no Voyage)
   so they don't meaningfully starve embeds.
@@ -41,7 +47,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args} = job) do
     note_id = args["note_id"]
     old_path_hmac = args["old_path_hmac"]
 
@@ -67,15 +73,15 @@ defmodule Engram.Workers.RepathNoteIndex do
 
                 :ok
 
-              other ->
-                other
+              {:error, _} = err ->
+                maybe_fallback(job, note, old_path_hmac, err)
             end
 
           {:ok, 0} ->
             handle_no_points(note)
 
           {:error, _} = err ->
-            err
+            maybe_fallback(job, note, old_path_hmac, err)
         end
     end
   end
@@ -102,4 +108,31 @@ defmodule Engram.Workers.RepathNoteIndex do
 
     :ok
   end
+
+  # On the final attempt, fall back to EmbedNote (with old_path_hmac so it
+  # deletes old-path points AND re-embeds under the new path). This ensures no
+  # points ever strand under a stale path_hmac after all retries are exhausted.
+  defp maybe_fallback(%Oban.Job{attempt: a, max_attempts: m} = _job, note, old_path_hmac, _err)
+       when a >= m do
+    _ =
+      Enqueue.enqueue(
+        EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac),
+        "embed_note"
+      )
+
+    Logger.warning(
+      "repath exhausted #{m} attempts for note #{note.id}; falling back to EmbedNote",
+      Metadata.with_category(:warning, :search, note_id: note.id)
+    )
+
+    :telemetry.execute(
+      [:engram, :indexing, :repath, :fallback],
+      %{count: 1},
+      %{note_id: note.id}
+    )
+
+    :ok
+  end
+
+  defp maybe_fallback(_job, _note, _old_path_hmac, err), do: err
 end
