@@ -63,7 +63,8 @@ defmodule Engram.Notes.Utf8Backfill do
       {:ok, user} ->
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
-            Repo.all(from(n in Note, where: n.user_id == ^user.id))
+            # kind == "note" only: folder markers carry no content to scrub.
+            Repo.all(from(n in Note, where: n.user_id == ^user.id and n.kind == "note"))
           end)
 
         Enum.reduce(notes, acc, fn note, acc -> scan_note(user, note, fix?, acc) end)
