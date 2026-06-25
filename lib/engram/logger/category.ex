@@ -8,9 +8,19 @@ defmodule Engram.Logger.Category do
   `info` for the high-value categories below. `debug` never ships to Loki.
   """
 
-  @type t :: :http | :sync | :search | :auth | :billing | :crypto | :lifecycle | :oban | :boot
+  @type t ::
+          :http
+          | :sync
+          | :search
+          | :auth
+          | :billing
+          | :crypto
+          | :lifecycle
+          | :oban
+          | :boot
+          | :data
 
-  @categories [:http, :sync, :search, :auth, :billing, :crypto, :lifecycle, :oban, :boot]
+  @categories [:http, :sync, :search, :auth, :billing, :crypto, :lifecycle, :oban, :boot, :data]
 
   # info lines from these categories are state changes worth keeping in Loki.
   @info_to_loki [:billing, :crypto, :lifecycle, :oban, :boot]

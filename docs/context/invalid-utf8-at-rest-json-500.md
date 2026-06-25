@@ -3,7 +3,7 @@
 _Last verified: 2026-06-24_
 
 ## Status
-Fixed (PR #740, issues #727/#738). Egress is now scrubbed at boundaries; existing corrupt rows still need a one-time backfill (#739, non-crash-critical).
+Fixed (PR #740, issues #727/#738). Egress is now scrubbed at boundaries. **Observability + backfill follow-up** adds a boundary-tagged scrub metric, a write-boundary warning, and the #739 backfill task (see "Observability & Backfill" below).
 
 ## What This Is
 Note content is encrypted (AES-GCM) and stored as Postgres `bytea` ciphertext. `bytea` storage **bypasses Postgres's UTF-8 validation**, so invalid UTF-8 in note content/title/tags persists at rest undetected and then crashes `Jason.encode` at every JSON egress that reads note bytes.
@@ -44,10 +44,23 @@ Shared helper: `Engram.Notes.Helpers.scrub_utf8/1`.
 - `lib/engram/crypto.ex` — `maybe_decrypt_note_fields/2` (READ boundary; `decrypt_notes_batch` fans out through it)
 - `lib/engram/notes.ex` — `upsert_note` + `normalize_batch_entries` (WRITE boundaries)
 - `lib/engram/search.ex` — `scrub_result_utf8` (SEARCH boundary; Qdrant-payload decrypt path)
-- `lib/engram/notes/helpers.ex` — `scrub_utf8/1` (shared helper)
+- `lib/engram/notes/helpers.ex` — `scrub_utf8/1` (pure) + `scrub_utf8/2` (boundary-instrumented)
+
+## Observability & Backfill (follow-up to #740)
+The original #740 fix was **silent** — `scrub_utf8` replaced bad bytes with no signal, trading a noisy 500 for invisible (lossy) data mutation. The follow-up makes recurrence detectable and cleans up legacy rows.
+
+- **Boundary-tagged metric** — `scrub_utf8/2` takes a `boundary` (`:write | :read | :search | :backfill`) and, on the scrub slow path, emits `[:engram, :notes, :utf8_scrub]` (`%{count: 1}`, `%{boundary:}`). Surfaced to Prometheus as `engram_prom_ex_notes_utf8_scrub_total{boundary}` via `Engram.PromEx.Notes`. **Only `boundary="write"` is alert-worthy** = new corruption entering at rest (a buggy client). `read`/`search` reflect legacy rows being read; `backfill` is the #739 repair sweep cleaning them — all three drain to zero after the backfill. **The repair sweep is tagged `:backfill`, NOT `:write`, specifically so it doesn't trip the write alert.** NB the counter measures scrub *operations* (`:read` ticks once per corrupt field per read), not corrupt notes — for a true note count use `Utf8Backfill.scan/1`.
+- **Write-boundary warning** — the `:write` boundary also logs a `:data`-category warning (`reason="invalid_utf8_scrubbed"`); read/search stay counter-only to avoid log spam on every legacy read. (`:data` is a new log category in `Engram.Logger.Category`.)
+- **Backfill** — `mix engram.utf8_audit` (read-only count) / `--fix` (re-saves each corrupt note through the write path → scrub + re-encrypt + re-embed). Logic in `Engram.Notes.Utf8Backfill.scan/1`; detection uses `Crypto.decrypt_note_fields_unscrubbed/2` (raw decrypt, so the read-scrub doesn't mask corruption). Operator-invoked only; never runs on deploy. Release: `bin/engram rpc 'Engram.Notes.Utf8Backfill.scan(fix: false) |> IO.inspect()'`.
+- **Alert** — a Grafana alert on `increase(engram_prom_ex_notes_utf8_scrub_total{boundary="write"}[10m]) > 0` lives in engram-infra (separate repo; only fires once the metric exists in prod, i.e. after this ships via a `release-v*` tag).
+
+## File:Line Anchors (extras)
+- `lib/engram/notes/utf8_backfill.ex` — `Engram.Notes.Utf8Backfill` (#739 scan/fix)
+- `lib/engram/prom_ex/notes.ex` — `Engram.PromEx.Notes` (scrub counter → /metrics)
+- `lib/mix/tasks/engram.utf8_audit.ex` — operator CLI
 
 ## References
 - PR #740 (fix)
 - Issue #727 (fixed) — search 500
-- Issue #738 (channel `note_changed`, transitively fixed)
-- Issue #739 (backfill of existing corrupt rows — non-crash-critical once egress scrubs)
+- Issue #738 (channel `note_changed`, fixed; now has a direct broadcast-payload regression test)
+- Issue #739 (backfill — shipped as `mix engram.utf8_audit --fix`)

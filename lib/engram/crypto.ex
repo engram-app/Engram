@@ -301,16 +301,7 @@ defmodule Engram.Crypto do
   @spec maybe_decrypt_note_fields(Engram.Notes.Note.t(), User.t()) ::
           {:ok, Engram.Notes.Note.t()} | {:error, term()}
   def maybe_decrypt_note_fields(%Engram.Notes.Note{} = note, %User{} = user) do
-    result =
-      if needs_note_decrypt?(note) do
-        with {:ok, dek} <- get_dek(user),
-             {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
-             {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
-          decrypt_phase_b_tags(note, dek)
-        end
-      else
-        {:ok, note}
-      end
+    result = decrypt_note_fields_unscrubbed(note, user)
 
     # Single read-boundary scrub for note bodies: content is encrypted as bytea
     # (no Postgres UTF-8 guard), so a legacy row can hold invalid bytes that crash
@@ -325,6 +316,28 @@ defmodule Engram.Crypto do
     end
   end
 
+  @doc """
+  Decrypts a note's encrypted fields WITHOUT the read-boundary UTF-8 scrub.
+
+  Internal — only the #739 backfill (`Engram.Notes.Utf8Backfill`) uses this, to
+  detect rows whose plaintext is invalid UTF-8 at rest (the scrub in
+  `maybe_decrypt_note_fields/2` would mask the corruption). Every other reader
+  MUST use `maybe_decrypt_note_fields/2` so egress stays JSON-safe.
+  """
+  @spec decrypt_note_fields_unscrubbed(Engram.Notes.Note.t(), User.t()) ::
+          {:ok, Engram.Notes.Note.t()} | {:error, term()}
+  def decrypt_note_fields_unscrubbed(%Engram.Notes.Note{} = note, %User{} = user) do
+    if needs_note_decrypt?(note) do
+      with {:ok, dek} <- get_dek(user),
+           {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
+           {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
+        decrypt_phase_b_tags(note, dek)
+      end
+    else
+      {:ok, note}
+    end
+  end
+
   defp scrub_note_text_fields(%Engram.Notes.Note{} = note) do
     %{
       note
@@ -335,7 +348,9 @@ defmodule Engram.Crypto do
     }
   end
 
-  defp scrub_field(value) when is_binary(value), do: Engram.Notes.Helpers.scrub_utf8(value)
+  defp scrub_field(value) when is_binary(value),
+    do: Engram.Notes.Helpers.scrub_utf8(value, :read)
+
   defp scrub_field(value), do: value
 
   defp scrub_tags(tags) when is_list(tags), do: Enum.map(tags, &scrub_field/1)

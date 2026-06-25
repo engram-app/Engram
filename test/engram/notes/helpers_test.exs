@@ -29,6 +29,51 @@ defmodule Engram.Notes.HelpersTest do
     end
   end
 
+  describe "scrub_utf8/2 instrumentation" do
+    import ExUnit.CaptureLog
+
+    setup do
+      handler = "scrub-telemetry-#{inspect(make_ref())}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :notes, :utf8_scrub],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:scrub_telemetry, measurements, metadata})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "scrubs identically to /1 while accepting a boundary" do
+      bad = "PRs #71" <> <<0xE2>> <> "#85"
+      assert Helpers.scrub_utf8(bad, :read) == "PRs #71�#85"
+    end
+
+    test "emits a counter telemetry event tagged with the boundary on invalid input" do
+      assert Helpers.scrub_utf8("ok" <> <<0xE2>>, :read) == "ok�"
+      assert_receive {:scrub_telemetry, %{count: 1}, %{boundary: :read}}
+    end
+
+    test "does not emit telemetry for valid input (fast path)" do
+      assert Helpers.scrub_utf8("clean", :write) == "clean"
+      refute_receive {:scrub_telemetry, _, _}
+    end
+
+    test "logs a warning on the write boundary (new corruption is actionable)" do
+      log = capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :write) end)
+      assert log =~ "invalid UTF-8"
+    end
+
+    test "stays silent on read/search boundaries (counter-only, avoids log spam)" do
+      assert capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :read) end) == ""
+      assert capture_log(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :search) end) == ""
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # extract_title/2
   # ---------------------------------------------------------------------------
