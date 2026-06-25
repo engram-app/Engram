@@ -283,6 +283,33 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "count_by_note/4" do
+    test "returns the exact point count for the filter", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["exact"] == true
+        must = decoded["filter"]["must"]
+        assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"count": 3}}))
+      end)
+
+      assert {:ok, 3} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+    end
+
+    test "returns {:error, _} on non-200", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
+      end)
+
+      assert {:error, {503, _}} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+    end
+  end
+
   describe "search/3" do
     test "returns search results", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->

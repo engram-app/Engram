@@ -343,6 +343,33 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Exact count of points matching `{user_id, vault_id, path_hmac}`. Used by the
+  repath worker (#746) to confirm points exist before/after a payload PATCH and
+  to detect an embedded note whose points went missing.
+  """
+  def count_by_note(col \\ nil, user_id, vault_id, path_hmac) do
+    col = col || collection()
+
+    filter = %{
+      must: [
+        %{key: "user_id", match: %{value: user_id}},
+        %{key: "vault_id", match: %{value: vault_id}},
+        %{key: "path_hmac", match: %{value: path_hmac}}
+      ]
+    }
+
+    opts = [json: %{filter: filter, exact: true}] ++ req_opts()
+
+    instrument(:count, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/count", opts) do
+        {:ok, %{status: 200, body: %{"result" => %{"count" => count}}}} -> {:ok, count}
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   Delete every point owned by `user_id` across all of their vaults. Used by
   the §C inactivity soft-delete path — single Qdrant call regardless of
   vault count.
