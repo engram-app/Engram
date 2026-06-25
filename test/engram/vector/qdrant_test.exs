@@ -283,6 +283,33 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "count_by_note/4" do
+    test "returns the exact point count for the filter", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["exact"] == true
+        must = decoded["filter"]["must"]
+        assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"count": 3}}))
+      end)
+
+      assert {:ok, 3} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+    end
+
+    test "returns {:error, _} on non-200", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
+      end)
+
+      assert {:error, {503, _}} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+    end
+  end
+
   describe "search/3" do
     test "returns search results", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
@@ -765,6 +792,71 @@ defmodule Engram.Vector.QdrantTest do
       assert {:ok, [result]} = Qdrant.search("test_col", vector, user_id: "1", limit: 5)
       # nil values are stripped by Enum.reject in do_search, so :vector absent
       refute Map.has_key?(result, :vector)
+    end
+  end
+
+  describe "set_payload_by_filter/5" do
+    test "PATCHes payload on points matching the user/vault/path_hmac filter", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["payload"] == %{"path_hmac" => "newp==", "folder_hmac" => "newf=="}
+
+        must = decoded["filter"]["must"]
+        assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
+        assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
+        assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
+        # No explicit point-id list — this is a filter-scoped patch.
+        refute Map.has_key?(decoded, "points")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert :ok =
+               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "oldp==", %{
+                 "path_hmac" => "newp==",
+                 "folder_hmac" => "newf=="
+               })
+    end
+
+    test "returns {:error, {status, body}} on non-200", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, ~s({"status":"error"}))
+      end)
+
+      assert {:error, {500, _}} =
+               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "oldp==", %{
+                 "path_hmac" => "x"
+               })
+    end
+
+    # Tenant-isolation guard (#746): even if two users' folded path_hmacs
+    # collide, the filter is scoped by the caller's user_id + vault_id, so a
+    # PATCH for user 7 can never touch user 8's points. The typed required
+    # args make a path_hmac-only filter impossible to express.
+    test "scopes the PATCH to the caller's user_id/vault_id (no cross-tenant)", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        must = Jason.decode!(body)["filter"]["must"]
+
+        assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
+        assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
+        # Crucially NOT user 8 — the colliding tenant.
+        refute %{"key" => "user_id", "match" => %{"value" => "8"}} in must
+
+        Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+      end)
+
+      # Same colliding path_hmac "collide==" as a hypothetical user 8 — still scoped to 7/9.
+      assert :ok =
+               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "collide==", %{
+                 "path_hmac" => "x"
+               })
     end
   end
 

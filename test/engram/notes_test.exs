@@ -1,5 +1,6 @@
 defmodule Engram.NotesTest do
   use Engram.DataCase, async: true
+  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
 
@@ -1761,6 +1762,50 @@ defmodule Engram.NotesTest do
         event: "note_changed",
         payload: %{"event_type" => "delete", "path" => "Watched/a.md"}
       }
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # #746 — rename must repath Qdrant points, not re-embed through Voyage
+  # ---------------------------------------------------------------------------
+
+  describe "rename does not re-embed (#746)" do
+    test "single-note rename enqueues RepathNoteIndex, not EmbedNote, and keeps embed_hash",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+
+      import Ecto.Query
+
+      from(n in Engram.Notes.Note, where: n.id == ^note.id)
+      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
+
+      assert {:ok, _} = Engram.Notes.rename_note(user, vault, "A/Note.md", "B/Note.md")
+
+      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+
+      reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+      assert reloaded.embed_hash == note.content_hash
+    end
+
+    test "folder rename enqueues RepathNoteIndex for each note, not EmbedNote",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "Old/Note.md", content: "# x\n\nbody"})
+
+      import Ecto.Query
+
+      from(n in Engram.Notes.Note, where: n.id == ^note.id)
+      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
+
+      assert {:ok, _} = Engram.Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+
+      reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+      assert reloaded.embed_hash == note.content_hash
     end
   end
 end
