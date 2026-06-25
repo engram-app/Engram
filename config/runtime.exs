@@ -750,8 +750,17 @@ if config_env() == :prod do
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
 
-if max = System.get_env("RECONNECT_JITTER_MAX_MS") do
-  config :engram, :reconnect_jitter_max_ms, String.to_integer(max)
+if raw = System.get_env("RECONNECT_JITTER_MAX_MS") do
+  case Integer.parse(raw) do
+    {ms, ""} when ms >= 0 ->
+      config :engram, :reconnect_jitter_max_ms, ms
+
+    _ ->
+      IO.warn(
+        "RECONNECT_JITTER_MAX_MS=#{inspect(raw)} is not a non-negative integer; " <>
+          "keeping the configured :reconnect_jitter_max_ms default"
+      )
+  end
 end
 
 # Bearer token guarding the PromEx /metrics scrape endpoint. The Grafana
