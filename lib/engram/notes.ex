@@ -444,8 +444,20 @@ defmodule Engram.Notes do
             _ -> mint_id()
           end
 
-        with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
-          phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
+        with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
+             merged_attrs = %{
+               base_attrs
+               | content: crdt.merged_text,
+                 title: Helpers.extract_title(crdt.merged_text, sanitized_path),
+                 tags: crdt.tags,
+                 content_hash: crdt.content_hash
+             },
+             {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+          phase_b =
+            inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
+            |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+            |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
           changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
           seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
@@ -526,6 +538,13 @@ defmodule Engram.Notes do
     end
   end
 
+  # v1 CRDT: merge_plaintext in do_update_note IS the conflict resolution —
+  # a stale client_version no longer 409s; the diverging write is merged
+  # convergently into crdt_state. The `_client_version` arg is retained in
+  # the signature (upsert_note still passes it) but is no longer acted on.
+  # The {:conflict, existing} branch in upsert_note is now reachable ONLY
+  # from insert_new_note's concurrent-create race (a genuine unique-index
+  # loser), not from version-mismatch on existing rows.
   defp update_existing_note(
          existing,
          base_attrs,
@@ -533,30 +552,83 @@ defmodule Engram.Notes do
          sanitized_path,
          folder,
          tags,
-         client_version
+         _client_version
        ) do
-    if client_version != nil and client_version != existing.version do
-      {:conflict, existing}
-    else
-      do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+    do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+  end
+
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags) do
+    with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
+      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
+
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: merged_title,
+          tags: crdt.tags,
+          content_hash: crdt.content_hash
+      }
+
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
+        phase_b =
+          inject_phase_b_fields(
+            encrypted,
+            user,
+            existing.id,
+            sanitized_path,
+            folder,
+            crdt.tags
+          )
+          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        seq = Engram.Vaults.next_seq!(existing.vault_id)
+
+        existing
+        |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+        |> Ecto.Changeset.put_change(:seq, seq)
+        |> Repo.update()
+        |> case do
+          {:ok, updated} -> {:ok, {existing.content_hash, updated}}
+          {:error, changeset} -> {:error, changeset}
+        end
+      end
     end
   end
 
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, tags) do
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
-      phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
+  # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
+  # Loads the row's encrypted crdt_state (nil → fresh doc), diffs the incoming
+  # plaintext onto the Y.Text (never full-replace), re-encodes + re-encrypts.
+  # Returns the merged text so callers compute content_hash + tags from the
+  # MERGED result — the public-API contract is "server merges, never clobbers."
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
+    prior_state =
+      case existing do
+        %Note{} = note ->
+          case Crypto.decrypt_crdt_state(note, user) do
+            {:ok, state} -> state
+            {:error, _} = err -> throw({:crdt_decrypt, err})
+          end
 
-      seq = Engram.Vaults.next_seq!(existing.vault_id)
-
-      existing
-      |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
-      |> Ecto.Changeset.put_change(:seq, seq)
-      |> Repo.update()
-      |> case do
-        {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-        {:error, changeset} -> {:error, changeset}
+        nil ->
+          nil
       end
+
+    with {:ok, %{state: new_state, text: merged_text}} <-
+           Engram.Notes.CrdtBridge.merge_plaintext(prior_state, incoming_content),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      {:ok,
+       %{
+         crdt_state_ciphertext: ct,
+         crdt_state_nonce: nonce,
+         merged_text: merged_text,
+         content_hash: Crypto.hmac_content_hash(key, merged_text),
+         tags: Helpers.extract_tags(merged_text)
+       }}
     end
+  catch
+    {:crdt_decrypt, err} -> err
   end
 
   @doc """
