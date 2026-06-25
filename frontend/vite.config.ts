@@ -127,6 +127,16 @@ export default defineConfig({
       release: { name: process.env.VITE_GIT_SHA },
       // When Sentry IS uploading, have it delete the maps it just uploaded.
       sourcemaps: { filesToDeleteAfterUpload: ['**/*.map'] },
+      // A Sentry API blip must NOT fail the production image build (it broke a
+      // deploy on 2026-06-24). errorHandler downgrades upload/release failures
+      // to a warning so the build — and the deploy — proceeds. The app ships
+      // fine without sourcemaps; only Sentry stack-trace readability degrades.
+      errorHandler: (err) => {
+        console.warn(
+          '[sentry-vite-plugin] non-fatal: sourcemap/release step failed, continuing build:',
+          err?.message ?? err,
+        )
+      },
     }),
     // Backstop for builds where Sentry is disabled (no auth token).
     stripSourceMaps(buildOutDir),
