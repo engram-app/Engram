@@ -812,11 +812,14 @@ defmodule Engram.Notes do
 
     case result do
       {:ok, {:ok, note}} ->
-        # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
+        # #746 — rename only changes the path; repath the existing Qdrant
+        # points instead of re-embedding through Voyage. T3.2: base64 hmac, never plaintext.
         _ =
           Enqueue.enqueue(
-            EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac_b64!(user, old_path)),
-            "embed_note"
+            Engram.Workers.RepathNoteIndex.new_debounced(note.id,
+              old_path_hmac: old_path_hmac_b64!(user, old_path)
+            ),
+            "repath_note_index"
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_path)
@@ -868,7 +871,6 @@ defmodule Engram.Notes do
       |> Repo.update_all(
         set:
           [
-            embed_hash: nil,
             updated_at: now,
             seq: seq
           ] ++ full_kw
@@ -2434,7 +2436,6 @@ defmodule Engram.Notes do
                 |> Repo.update_all(
                   set:
                     [
-                      embed_hash: nil,
                       updated_at: now,
                       seq: seq
                     ] ++ full_kw
@@ -2491,10 +2492,10 @@ defmodule Engram.Notes do
       Enum.each(real_note_updates, fn {note, old_note_path, new_path, _folder, _title} ->
         _ =
           Enqueue.enqueue(
-            Engram.Workers.EmbedNote.new_debounced(note.id,
+            Engram.Workers.RepathNoteIndex.new_debounced(note.id,
               old_path_hmac: old_path_hmac_b64!(user, old_note_path)
             ),
-            "embed_note"
+            "repath_note_index"
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_note_path)

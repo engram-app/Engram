@@ -147,6 +147,39 @@ defmodule Engram.Indexing do
   end
 
   @doc """
+  Re-path a note's Qdrant points after a rename (#746): overwrite the
+  `path_hmac`/`folder_hmac` payload keys on the points still filed under
+  `old_path_hmac` with the note row's CURRENT (post-rename) hmacs. Vectors,
+  sparse vectors, and encrypted payload fields are untouched — no Voyage call.
+  """
+  def repath_points(note, old_path_hmac) do
+    Qdrant.set_payload_by_filter(
+      collection(),
+      to_string(note.user_id),
+      to_string(note.vault_id),
+      old_path_hmac,
+      %{
+        "path_hmac" => encode_hmac(note.path_hmac),
+        "folder_hmac" => encode_hmac(note.folder_hmac)
+      }
+    )
+  end
+
+  @doc """
+  Exact count of a note's Qdrant points under `path_hmac` (#746). Used by the
+  repath worker to branch between PATCH, re-embed self-heal, and the
+  embedded-but-missing inconsistency warning.
+  """
+  def count_points_by_path_hmac(note, path_hmac) do
+    Qdrant.count_by_note(
+      collection(),
+      to_string(note.user_id),
+      to_string(note.vault_id),
+      path_hmac
+    )
+  end
+
+  @doc """
   Remove all indexed data for a note (Qdrant points first, then Postgres
   chunks). T3.2 — Qdrant filter keys off `path_hmac` (base64), not plaintext
   `source_path`. The note row's `path_hmac` is the source of truth.
