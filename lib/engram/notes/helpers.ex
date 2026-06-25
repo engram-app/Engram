@@ -93,7 +93,15 @@ defmodule Engram.Notes.Helpers do
   # start-of-string or whitespace (so `word#x` and `https://h/#frag` are NOT
   # tags) and must start with a word char (so `# heading` — a space after the
   # hash — is NOT a tag). `{}` delimiter avoids escaping the `/`.
-  @inline_tag_re ~r{(?:^|\s)#([\w][\w/-]*)}
+  #
+  # The `u` (unicode) flag is load-bearing: without it Erlang's `re` runs in
+  # byte mode, where its char tables treat a multibyte char's lead byte (e.g.
+  # `0xE2` of an en-dash `–`) as a word char but the continuation bytes as not —
+  # so `#628–` captured `628` + a lone `0xE2`, an INVALID-UTF-8 tag emitted from
+  # perfectly valid content. That's the root cause of the corrupt tags found at
+  # rest in prod (#741). `u` makes the scan codepoint-aware, so `–` is one
+  # non-word codepoint and the capture stops cleanly at `628`.
+  @inline_tag_re ~r{(?:^|\s)#([\w][\w/-]*)}u
 
   @doc """
   Extracts tags from a note: YAML frontmatter tags merged with inline

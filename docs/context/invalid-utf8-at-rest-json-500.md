@@ -18,6 +18,11 @@ Note content is encrypted (AES-GCM) and stored as Postgres `bytea` ciphertext. `
 1. JSON-decoded **input** is always valid UTF-8, so corruption enters via a client write where the raw bytes are already invalid.
 2. The bytes survive encryption **byte-for-byte** (AES-GCM is byte-transparent), and `bytea` storage does no validation — so they persist at rest.
 3. On read, decryption yields the same invalid bytes, which crash `Jason.encode` at **four** JSON boundaries:
+
+### Second source: `extract_tags` byte-sliced multibyte chars (PR #745, found via the prod backfill)
+There is a SECOND way invalid UTF-8 reached `bytea` — **from perfectly valid content**, not a corrupt client write. The inline-tag regex `@inline_tag_re ~r{(?:^|\s)#([\w][\w/-]*)}` was compiled **without the `u` flag**, so Erlang's `re` ran in byte mode where its char tables treat a multibyte char's lead byte (e.g. `0xE2` of an en-dash `–`) as `\w` but the continuation bytes as not. Content like `#628–` therefore captured `628`+`0xE2` — an invalid-UTF-8 **tag** — which then got encrypted into `tags_ciphertext` and persisted. Because the *content* was valid, the write-time content scrub never caught it, and the #739 backfill (which repairs by re-saving content through `upsert`, re-deriving tags) **reproduced the same byte-slice** and could never reach `corrupt: 0`. Fix = add `u` to the regex (codepoint-aware scan). Once fixed, re-deriving yields clean tags, so the **existing** backfill cleans the legacy rows. Found by running `utf8_audit --fix` on prod: `corrupt: 5` persisted across runs; all 5 were `#NNN–`-style tags.
+
+The four `Jason.encode` crash boundaries (the original #727/#740 symptom):
    - MCP search response
    - Web `/api/search`
    - REST `GET /api/notes/:path` and `/changes`

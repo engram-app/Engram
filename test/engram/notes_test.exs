@@ -186,6 +186,26 @@ defmodule Engram.NotesTest do
       assert_receive {:scrub, %{count: 1}, %{boundary: :write}}
     end
 
+    test "#741: a multibyte char after a numeric #tag never stores invalid-UTF-8 tags at rest",
+         %{user: user, vault: vault} do
+      # Valid content `x #628– y` (en-dash) used to make extract_tags emit a
+      # byte-sliced `628`+0xE2 tag that persisted as invalid UTF-8 — the prod
+      # source of corrupt tags. Assert the STORED tags are valid at rest.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/EnDashTag.md",
+          "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
+          "mtime" => 1.0
+        })
+
+      {:ok, raw} =
+        Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.get!(Engram.Notes.Note, note.id) end)
+
+      {:ok, dec} = Engram.Crypto.decrypt_note_fields_unscrubbed(raw, user)
+
+      assert Enum.all?(dec.tags, &String.valid?/1)
+    end
+
     test "#738: note_changed broadcast payload is JSON-safe when content holds invalid UTF-8",
          %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
