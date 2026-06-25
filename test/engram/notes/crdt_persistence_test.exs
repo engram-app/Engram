@@ -2,6 +2,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
@@ -247,6 +248,41 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     {:ok, check_doc} = CrdtBridge.doc_from_state(snapshot)
     final_text = CrdtBridge.text_of(check_doc)
     assert String.contains?(final_text, "prefix")
+  end
+
+  # ── replay_tail: corrupt/undecryptable rows are skipped with a warning ────
+
+  test "bind/3 skips undecryptable tail-log row and emits a warning", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    # Insert a tail-log row with garbage ciphertext so decrypt will fail
+    Repo.with_tenant(user.id, fn ->
+      %CrdtUpdateLog{}
+      |> CrdtUpdateLog.changeset(%{
+        note_id: note.id,
+        user_id: user.id,
+        vault_id: note.vault_id,
+        # Random garbage — not valid AES-GCM ciphertext under the user's DEK
+        update_ciphertext: :crypto.strong_rand_bytes(64),
+        update_nonce: :crypto.strong_rand_bytes(12)
+      })
+      |> Repo.insert!()
+    end)
+
+    doc = CrdtBridge.new_doc()
+
+    log =
+      capture_log(fn ->
+        _state = CrdtPersistence.bind(st, note.id, doc)
+      end)
+
+    # The call must not crash and must emit a structured warning
+    assert log =~ "crdt replay_tail decrypt failed"
+    assert log =~ "note_id=#{note.id}"
+
+    # The doc is still usable — the snapshot ("base") was loaded successfully
+    assert is_binary(CrdtBridge.text_of(doc))
   end
 
   # ── bind/3 replays tail-log after snapshot ────────────────────────────────

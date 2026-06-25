@@ -137,8 +137,23 @@ defmodule Engram.Notes.CrdtPersistence do
       }
 
       case Crypto.decrypt_crdt_state(shaped, user) do
-        {:ok, upd} when is_binary(upd) -> Yex.apply_update(doc, upd)
-        _ -> :ok
+        {:ok, upd} when is_binary(upd) ->
+          Yex.apply_update(doc, upd)
+
+        {:error, reason} ->
+          Logger.warning(
+            "crdt replay_tail decrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
+            Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+          )
+
+        unexpected ->
+          Logger.warning(
+            "crdt replay_tail unexpected decrypt result note_id=#{note_id} result=#{inspect(unexpected)}",
+            Metadata.with_category(:warning, :sync,
+              note_id: note_id,
+              reason: "unexpected_shape"
+            )
+          )
       end
     end)
   end
