@@ -365,3 +365,5 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 project: engram
 goal: income
 value: financial-freedom
+worklog_vault: Engram
+worklog_path: 90 Work Log/todd
