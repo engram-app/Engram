@@ -2978,6 +2978,15 @@ defmodule Engram.Notes do
     Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
   end
 
+  @doc false
+  # Public delegate so `CrdtCheckpoint` can reuse the single source of truth
+  # for HMAC + envelope computation without duplicating the phase-B logic.
+  # The `defp` counterpart cannot be called across module boundaries; this
+  # thin wrapper exposes it without promoting it to an official public API.
+  def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags) do
+    inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
+  end
+
   # Returns a keyword list of Phase B field updates suitable for splicing into
   # `Repo.update_all(set: [...])` or `Repo.insert_all` rows. Single source of
   # truth for HMAC + envelope computation across upsert and rename paths.

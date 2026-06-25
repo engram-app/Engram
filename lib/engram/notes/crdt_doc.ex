@@ -12,12 +12,20 @@ defmodule Engram.Notes.CrdtDoc do
   matching Yjs JS clients. Persistence is supplied via the `:persistence`
   launch param; the stub (`Engram.Notes.CrdtPersistence`) is replaced by the
   real Postgres impl in Task 7.
+
+  A `CrdtCheckpointTimer` is started alongside each room and linked to it,
+  so the timer exits when the room exits. The timer receives `:activity`
+  messages via `CrdtCheckpointTimer.notify_activity/1` from the persistence
+  layer's `update_v1` callback (Task 9) and debounces snapshots to at most
+  once every 5 s idle / 60 s ceiling.
   """
 
+  alias Engram.Notes.CrdtCheckpointTimer
+
   @doc """
-  Start a room for `note_id`. Opts must carry `:user_id` and `:vault_id`
-  (threaded to the persistence module so Task 7 can load/save the encrypted
-  blob under the right DEK + tenant). Registered under `{:global, _}`.
+  Start a room for `note_id` and its companion checkpoint timer. Opts must
+  carry `:user_id` and `:vault_id` (threaded to the persistence module and
+  the timer). The room is registered under `{:global, _}`.
   """
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -26,19 +34,35 @@ defmodule Engram.Notes.CrdtDoc do
     vault_id = Keyword.fetch!(opts, :vault_id)
     name = Engram.Notes.CrdtRegistry.global_name(note_id)
 
-    Yex.Sync.SharedDoc.start_link(
-      [
-        doc_name: note_id,
-        # Must match `CrdtBridge.new_doc/0` — UTF-16 offsets are wire-compatible
-        # with Yjs JS clients; the y_ex default (:bytes) is NOT.
-        doc_option: %Yex.Doc.Options{offset_kind: :utf16},
-        persistence:
-          {Engram.Notes.CrdtPersistence,
-           %{user_id: user_id, vault_id: vault_id, note_id: note_id}},
-        auto_exit: true
-      ],
-      name: name
-    )
+    case Yex.Sync.SharedDoc.start_link(
+           [
+             doc_name: note_id,
+             # Must match `CrdtBridge.new_doc/0` — UTF-16 offsets are wire-compatible
+             # with Yjs JS clients; the y_ex default (:bytes) is NOT.
+             doc_option: %Yex.Doc.Options{offset_kind: :utf16},
+             persistence:
+               {Engram.Notes.CrdtPersistence,
+                %{user_id: user_id, vault_id: vault_id, note_id: note_id}},
+             auto_exit: true
+           ],
+           name: name
+         ) do
+      {:ok, room_pid} = result ->
+        # Start the debounced checkpoint timer linked to this room. The timer
+        # exits when the room exits (Process.link inside CrdtCheckpointTimer.init).
+        {:ok, _timer} =
+          CrdtCheckpointTimer.start_link(
+            room_pid: room_pid,
+            user_id: user_id,
+            vault_id: vault_id,
+            note_id: note_id
+          )
+
+        result
+
+      error ->
+        error
+    end
   end
 
   @doc false
