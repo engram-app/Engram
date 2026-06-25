@@ -361,6 +361,12 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 | `docs/context/invalid-utf8-at-rest-json-500.md` | **Invalid UTF-8 at rest → Jason 500** — note content is AES-GCM ciphertext in `bytea`, which bypasses PG's UTF-8 validation, so corrupt bytes (e.g. truncated `E2 80 93`) persist and crash `Jason.encode` at every JSON egress (MCP/web search, REST note/changes, `note_changed` Channel). Fix scrubs to U+FFFD at 3 boundaries (write `upsert_note`/`normalize_batch_entries`, read `Crypto.maybe_decrypt_note_fields/2`, search) with a `String.valid?` fast path; helper `Notes.Helpers.scrub_utf8/1` (pure) + `/2` (boundary-instrumented). Observability + backfill follow-up: `scrub_utf8/2` emits `engram_prom_ex_notes_utf8_scrub_total{boundary}` (alert on `boundary="write"` only) + a `:write`-only `:data`-category WARN; `mix engram.utf8_audit [--fix]` (`Notes.Utf8Backfill`) counts/repairs legacy corrupt rows. PR #740 (fix) + #741 (observability/backfill); #727/#738/#739 |
 | `../engram-workspace/docs/context/pricing-strategy.md` | Cross-workspace SaaS pricing model (lives in workspace repo) |
 
+## Superpowers spec docs → Engram vault (overrides the skill default)
+
+When `superpowers:brainstorming` produces a design/spec doc, save it to the **Engram vault** at `50 Engineering/_Superpowers Specs/YYYY-MM-DD-<topic>-design.md` via the engram MCP (`set_vault` → Engram `4c2057f9-a6cb-4e5e-9b4e-7ac50fb77c35`, `create_note`/`write_note`, then `set_vault()` to reset) — **not** to `docs/superpowers/specs/`. Specs are durable design rationale, so they live in the vault (searchable, dogfoods engram). This user instruction takes precedence over the skill's local-save step.
+
+**Plans stay repo-local.** `superpowers:writing-plans` output is an ephemeral implementation checklist — keep it in `docs/superpowers/plans/` as the skill specifies; do not route plans to the vault.
+
 ## Life OS
 project: engram
 goal: income
