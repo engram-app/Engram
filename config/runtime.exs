@@ -647,8 +647,6 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       thousand_island_options: [shutdown_timeout: 30_000]
     ],
-    # Give the endpoint supervisor time to drain in-flight requests before halt.
-    shutdown: 30_000,
     secret_key_base: secret_key_base
 
   # CORS and WebSocket origin — only lock down when PHX_HOST is explicitly set.
