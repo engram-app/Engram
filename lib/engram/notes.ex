@@ -379,15 +379,18 @@ defmodule Engram.Notes do
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
-          # A stale-version write that we refused — silent on the client's happy
-          # path, so log it server-side with the ids + versions for triage.
+          # Concurrent-insert race: two clients both saw nil on the lookup and
+          # both tried to INSERT the same new path. The loser's ON CONFLICT DO
+          # NOTHING no-ops the insert; we re-fetch and find the winner's row
+          # instead of our own id. Log server-side so the race is detectable in
+          # triage, then return the existing note so the caller (channel / REST
+          # controller) can hand back a 409 that the client reconciles.
           Logger.warning(
-            "note_version_conflict",
+            "note_concurrent_insert_race",
             Metadata.with_category(:warning, :sync,
               user_id: user.id,
               vault_id: vault.id,
               note_id: existing.id,
-              client_version: client_version,
               server_version: existing.version
             )
           )

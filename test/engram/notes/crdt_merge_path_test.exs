@@ -92,12 +92,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
   test "merge write bumps seq", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1"})
+    {:ok, _n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1"})
     seq1 = Vaults.current_seq(user.id, vault.id)
     {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v2"})
     seq2 = Vaults.current_seq(user.id, vault.id)
     assert seq2 > seq1
-    assert n1.id != nil
   end
 
   test "decrypt round-trip: crdt_state written with row_version_aad_bound decrypts correctly",

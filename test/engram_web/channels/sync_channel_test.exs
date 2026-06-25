@@ -165,7 +165,7 @@ defmodule EngramWeb.SyncChannelTest do
       assert note["version"] == 1
     end
 
-    test "replies with version_conflict instead of crashing when client version is stale", %{
+    test "stale-version push MERGES (CRDT convergence) instead of returning version_conflict", %{
       socket: socket
     } do
       ref =
@@ -178,9 +178,10 @@ defmodule EngramWeb.SyncChannelTest do
       assert_reply ref, :ok, %{"note" => note}
       assert note["version"] == 1
 
-      # Push again with a stale client version. upsert_note returns the 3-tuple
-      # {:error, :version_conflict, server_note}; the channel must translate it
-      # into an error reply carrying the server's copy — not raise CaseClauseError.
+      # Push again with a stale client version. With the CRDT merge path, the
+      # channel must MERGE and return {:ok, note} — not {:error, version_conflict}.
+      # The stale-version gate was removed in Task 5; upsert_note now calls
+      # CrdtBridge.merge_plaintext regardless of the client-supplied version.
       ref2 =
         push(socket, "push_note", %{
           "path" => "Test/Conflict.md",
@@ -189,9 +190,10 @@ defmodule EngramWeb.SyncChannelTest do
           "version" => 99
         })
 
-      assert_reply ref2, :error, %{reason: "version_conflict", server_note: server_note}
-      assert server_note["path"] == "Test/Conflict.md"
-      assert server_note["version"] == 1
+      assert_reply ref2, :ok, %{"note" => merged_note}
+      assert merged_note["path"] == "Test/Conflict.md"
+      # Version must have been bumped (merge write always increments).
+      assert merged_note["version"] > note["version"]
     end
 
     test "broadcasts note_changed to other subscribers", %{
