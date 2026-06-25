@@ -11,6 +11,7 @@ Note content is encrypted (AES-GCM) and stored as Postgres `bytea` ciphertext. `
 ## Symptom
 - `search_notes` (MCP) returned HTTP **500** — looked like a "concurrency" issue but is actually **content-dependent**, not concurrency.
 - Crashed `Phoenix.PubSub.Adapter` on `note_changed` Channel broadcasts.
+- `get_note` (MCP) appeared to **silently truncate** a note to "header + intro" (#726) — same root cause: the bad byte broke the JSON egress, so only bytes *before* it reached the client. Not a separate bug; fixed by the same read-boundary scrub. Regression test: `test/engram/mcp/handlers_get_note_utf8_test.exs`.
 - Prod Loki signature: `** (Jason.EncodeError) invalid byte 0xE2 in <<...>>` where the bytes decode to the search response markdown / note content.
 - Example corruption: a multibyte char like `–` (U+2013 = `E2 80 93`) truncated to a lone `0xE2` lead byte.
 
@@ -67,5 +68,6 @@ The original #740 fix was **silent** — `scrub_utf8` replaced bad bytes with no
 ## References
 - PR #740 (fix)
 - Issue #727 (fixed) — search 500
+- Issue #726 (same root cause) — `get_note` "header + intro" truncation; locked by `handlers_get_note_utf8_test.exs`
 - Issue #738 (channel `note_changed`, fixed; now has a direct broadcast-payload regression test)
 - Issue #739 (backfill — shipped as `mix engram.utf8_audit --fix`)
