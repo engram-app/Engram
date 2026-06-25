@@ -25,9 +25,10 @@ defmodule Engram.Notes.Utf8Backfill do
       spend + a Qdrant write), broadcasts a `note_changed` to live sync clients
       (they see a phantom edit), and bumps the note `version`. On a large
       corpus this is a burst — run the read-only count first and size it.
-    * **Memory.** `scan/1` materializes every active user and all of each
-      user's notes (decrypted) in memory; there is no streaming/chunking. Fine
-      at current scale; revisit with `Repo.stream` if the corpus grows.
+    * **Memory.** Notes are streamed per tenant in batches (server-side
+      cursor), so heap stays bounded regardless of corpus size. The user list
+      itself (`Accounts.list_users/0`) is still loaded whole — fine for the
+      foreseeable user count.
     * **Scope.** Only `content`/`title`/`folder`/`tags` corruption is detected,
       and the path is intentionally NOT scrubbed (scrubbing it would change the
       note's HMAC identity). A row corrupt only in its path is neither detected
@@ -75,16 +76,24 @@ defmodule Engram.Notes.Utf8Backfill do
     |> Enum.reduce(@empty, fn user, acc -> scan_user(user, fix?, acc) end)
   end
 
+  # Notes are streamed in batches (server-side cursor) rather than loaded all at
+  # once, so a user with a large corpus can't blow the heap. The cursor runs on
+  # a transaction snapshot, so the per-note `--fix` writes (same transaction)
+  # don't perturb it or get re-scanned.
+  @stream_batch 200
+
   defp scan_user(user, fix?, acc) do
     case Crypto.ensure_user_dek(user) do
       {:ok, user} ->
-        {:ok, notes} =
+        {:ok, acc} =
           Repo.with_tenant(user.id, fn ->
             # kind == "note" only: folder markers carry no content to scrub.
-            Repo.all(from(n in Note, where: n.user_id == ^user.id and n.kind == "note"))
+            from(n in Note, where: n.user_id == ^user.id and n.kind == "note")
+            |> Repo.stream(max_rows: @stream_batch)
+            |> Enum.reduce(acc, fn note, acc -> scan_note(user, note, fix?, acc) end)
           end)
 
-        Enum.reduce(notes, acc, fn note, acc -> scan_note(user, note, fix?, acc) end)
+        acc
 
       {:error, _} ->
         acc
