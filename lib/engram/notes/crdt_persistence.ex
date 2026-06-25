@@ -29,19 +29,20 @@ defmodule Engram.Notes.CrdtPersistence do
   def bind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
     user = Accounts.get_user!(user_id)
 
-    Repo.with_tenant(user_id, fn ->
-      case Repo.get(Note, note_id) do
-        %Note{} = note ->
-          with {:ok, snapshot} when is_binary(snapshot) <- Crypto.decrypt_crdt_state(note, user) do
-            :ok = Yex.apply_update(doc, snapshot)
-          end
+    _ =
+      Repo.with_tenant(user_id, fn ->
+        case Repo.get(Note, note_id) do
+          %Note{} = note ->
+            with {:ok, snapshot} when is_binary(snapshot) <- Crypto.decrypt_crdt_state(note, user) do
+              :ok = Yex.apply_update(doc, snapshot)
+            end
 
-          replay_tail(doc, user, note_id)
+            replay_tail(doc, user, note_id)
 
-        nil ->
-          :ok
-      end
-    end)
+          nil ->
+            :ok
+        end
+      end)
 
     # Cache the resolved user in the threaded state for update_v1/4 and unbind/3.
     Map.put(state, :user, user)
@@ -105,7 +106,7 @@ defmodule Engram.Notes.CrdtPersistence do
           {:ok, {ct, nonce}} ->
             Repo.with_tenant(user_id, fn ->
               Repo.update_all(
-                from(n in Note, where: n.id == ^note_id),
+                from(n in Note, where: n.id == ^note_id and n.kind == "note"),
                 set: [
                   crdt_state_ciphertext: ct,
                   crdt_state_nonce: nonce,

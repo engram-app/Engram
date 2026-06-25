@@ -27,7 +27,7 @@ defmodule Engram.Notes.CrdtDoc do
   carry `:user_id` and `:vault_id` (threaded to the persistence module and
   the timer). The room is registered under `{:global, _}`.
   """
-  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()} | :ignore
   def start_link(opts) do
     note_id = Keyword.fetch!(opts, :note_id)
     user_id = Keyword.fetch!(opts, :user_id)

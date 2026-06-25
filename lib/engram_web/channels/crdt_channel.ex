@@ -120,14 +120,6 @@ defmodule EngramWeb.CrdtChannel do
             )
 
             :error
-
-          {:error, reason} ->
-            Logger.warning(
-              "crdt_channel: doc_id=#{inspect(doc_id)} lookup error reason=#{inspect(reason)}",
-              Engram.Logger.Metadata.with_category(:warning, :sync)
-            )
-
-            :error
         end
 
       _ ->
