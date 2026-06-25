@@ -644,7 +644,8 @@ if config_env() == :prod do
   config :engram, EngramWeb.Endpoint,
     http: [
       # Enable IPv6 and bind on all interfaces.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      ip: {0, 0, 0, 0, 0, 0, 0, 0},
+      thousand_island_options: [shutdown_timeout: 30_000]
     ],
     secret_key_base: secret_key_base
 

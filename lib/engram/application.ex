@@ -222,6 +222,16 @@ defmodule Engram.Application do
     end
   end
 
+  @impl true
+  def prep_stop(state) do
+    # Only drain the cluster when actually clustered (SaaS prod).
+    if Application.get_env(:engram, :dns_cluster_query) do
+      Engram.Drainer.drain()
+    end
+
+    state
+  end
+
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.
   @impl true

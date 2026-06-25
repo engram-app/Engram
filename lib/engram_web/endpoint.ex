@@ -10,7 +10,8 @@ defmodule EngramWeb.Endpoint do
     websocket: [
       check_origin: {__MODULE__, :check_origin, []}
     ],
-    longpoll: false
+    longpoll: false,
+    drainer: [batch_size: 1_000, batch_interval: 2_000, shutdown: 25_000]
 
   # Origin-allowlist probe — no auth, no channels. Reuses the same
   # check_origin MFA as the main socket so the smoke validates the
