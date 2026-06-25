@@ -59,19 +59,20 @@ defmodule Engram.Workers.RepathNoteIndexTest do
     test_pid = self()
 
     :telemetry.attach(
-      "repath-ok-#{inspect(ref)}",
-      [:engram, :indexing, :repath, :ok],
-      fn _event, measurements, _meta, _ -> send(test_pid, {ref, measurements}) end,
+      "repath-stop-#{inspect(ref)}",
+      [:engram, :indexing, :repath, :stop],
+      fn _event, measurements, meta, _ -> send(test_pid, {ref, measurements, meta}) end,
       nil
     )
 
-    on_exit(fn -> :telemetry.detach("repath-ok-#{inspect(ref)}") end)
+    on_exit(fn -> :telemetry.detach("repath-stop-#{inspect(ref)}") end)
 
     # No Mox expectation on Engram.MockEmbedder — if it embeds, the test fails.
     assert :ok =
              perform_job(RepathNoteIndex, %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)})
 
-    assert_received {^ref, %{count: 2}}
+    # Single event tagged by outcome; measurement carries the patched point count.
+    assert_received {^ref, %{count: 2}, %{outcome: :ok}}
   end
 
   test "enqueues EmbedNote when zero points and content not yet embedded", %{

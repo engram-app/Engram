@@ -15,8 +15,11 @@ defmodule Engram.Workers.RepathNoteIndex do
   On repeated Qdrant failure (count or PATCH), Oban retries up to max_attempts.
   On the final attempt, instead of discarding with stranded points, the worker
   falls back to `EmbedNote` with `old_path_hmac` — which deletes old-path points
-  and re-embeds under the new path — so no points ever strand permanently. The
-  fallback emits `[:engram, :indexing, :repath, :fallback]` telemetry.
+  and re-embeds under the new path — so no points ever strand permanently.
+
+  Every branch emits one `[:engram, :indexing, :repath, :stop]` telemetry event
+  with `%{count}` and a bounded `%{outcome: :ok | :missing_points | :fallback}`
+  tag, mapped to Prometheus by `Engram.PromEx.Indexing` (#753).
 
   Shares the `:embed` queue with EmbedNote; repath jobs are cheap (no Voyage)
   so they don't meaningfully starve embeds.
@@ -65,12 +68,8 @@ defmodule Engram.Workers.RepathNoteIndex do
             case Indexing.repath_points(note, old_path_hmac) do
               :ok ->
                 # #746 — Grafana proof that rename took the cheap path (0 Voyage).
-                :telemetry.execute(
-                  [:engram, :indexing, :repath, :ok],
-                  %{count: count},
-                  %{note_id: note.id}
-                )
-
+                # `count` is the number of points patched.
+                emit_repath(:ok, count)
                 :ok
 
               {:error, _} = err ->
@@ -100,12 +99,7 @@ defmodule Engram.Workers.RepathNoteIndex do
       Metadata.with_category(:warning, :search, note_id: note.id)
     )
 
-    :telemetry.execute(
-      [:engram, :indexing, :repath, :missing_points],
-      %{count: 1},
-      %{note_id: note.id}
-    )
-
+    emit_repath(:missing_points, 1)
     :ok
   end
 
@@ -125,14 +119,21 @@ defmodule Engram.Workers.RepathNoteIndex do
       Metadata.with_category(:warning, :search, note_id: note.id)
     )
 
-    :telemetry.execute(
-      [:engram, :indexing, :repath, :fallback],
-      %{count: 1},
-      %{note_id: note.id}
-    )
-
+    emit_repath(:fallback, 1)
     :ok
   end
 
   defp maybe_fallback(_job, _note, _old_path_hmac, err), do: err
+
+  # Single repath telemetry event tagged by a bounded `:outcome` so PromEx maps
+  # one counter + one points-sum (see `Engram.PromEx.Indexing`). Cardinality
+  # contract: `:outcome` only — never note_id/user_id/vault_id. `count` is the
+  # number of points patched on `:ok`, and 1 (an event tick) otherwise.
+  defp emit_repath(outcome, count) do
+    :telemetry.execute(
+      [:engram, :indexing, :repath, :stop],
+      %{count: count},
+      %{outcome: outcome}
+    )
+  end
 end
