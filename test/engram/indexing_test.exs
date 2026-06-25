@@ -580,6 +580,62 @@ defmodule Engram.IndexingTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # repath_points/2 + count_points_by_path_hmac/2 (#746)
+  # ---------------------------------------------------------------------------
+
+  describe "repath_points/2 + count_points_by_path_hmac/2 (#746)" do
+    setup do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      %{bypass: bypass}
+    end
+
+    test "repath_points PATCHes current path/folder hmac onto old-path points", %{bypass: bypass} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      note = %Engram.Notes.Note{
+        id: Ecto.UUID.generate(),
+        user_id: user.id,
+        vault_id: vault.id,
+        path_hmac: <<1, 2, 3>>,
+        folder_hmac: <<4, 5, 6>>
+      }
+
+      old_b64 = Base.encode64(<<9, 9, 9>>)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert decoded["payload"]["path_hmac"] == Base.encode64(<<1, 2, 3>>)
+        assert decoded["payload"]["folder_hmac"] == Base.encode64(<<4, 5, 6>>)
+
+        assert %{"key" => "path_hmac", "match" => %{"value" => ^old_b64}} =
+                 Enum.find(decoded["filter"]["must"], &(&1["key"] == "path_hmac"))
+
+        Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+      end)
+
+      assert :ok = Engram.Indexing.repath_points(note, old_b64)
+    end
+
+    test "count_points_by_path_hmac returns the count", %{bypass: bypass} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      note = %Engram.Notes.Note{id: Ecto.UUID.generate(), user_id: user.id, vault_id: vault.id}
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"count": 2}}))
+      end)
+
+      assert {:ok, 2} = Engram.Indexing.count_points_by_path_hmac(note, Base.encode64(<<9>>))
+    end
+  end
+
   # Markdown with `n` distinct heading sections — each becomes at least one
   # chunk under the heading-aware chunker.
   defp big_sectioned_content(n) do
