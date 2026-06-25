@@ -36,7 +36,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
     user = Accounts.get_user!(user_id)
     text = CrdtBridge.text_of(doc)
 
-    with {:ok, state} <- encode(doc),
+    with {:ok, raw_state} <- encode(doc),
+         {_flat_doc, state} <- maybe_flatten(doc, raw_state, note_id),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       content_hash = Crypto.hmac_content_hash(key, text)
@@ -109,6 +110,25 @@ defmodule Engram.Notes.CrdtCheckpoint do
     case Yex.encode_state_as_update(doc) do
       {:ok, s} -> {:ok, s}
       {:error, reason} -> {:error, {:encode_failed, reason}}
+    end
+  end
+
+  # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
+  # the live doc with a fresh single-client reset (text preserved). Returns a
+  # {doc, state} tuple in both branches so the caller's `with` chain is uniform.
+  defp maybe_flatten(%Yex.Doc{} = doc, state, note_id) do
+    if CrdtBridge.should_flatten?(state, doc) do
+      Logger.info(
+        "crdt flatten note_id=#{note_id} state_bytes=#{byte_size(state)} clients=#{CrdtBridge.client_count(doc)}",
+        Engram.Logger.Metadata.with_category(:info, :sync, note_id: note_id)
+      )
+
+      case CrdtBridge.flatten(doc) do
+        {:ok, %{doc: flat_doc, state: flat_state}} -> {flat_doc, flat_state}
+        {:error, _} -> {doc, state}
+      end
+    else
+      {doc, state}
     end
   end
 

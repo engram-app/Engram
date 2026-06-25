@@ -13,7 +13,11 @@ defmodule Engram.Notes.CrdtBridge do
   (spec §12a contract 4). NEVER use the `y_ex` default (`:bytes`).
   """
 
+  import Bitwise
+
   @text_name "content"
+  @flatten_bytes 500_000
+  @flatten_clients 1_000
 
   @doc "The shared Y.Text key holding note body content."
   @spec text_name() :: String.t()
@@ -115,6 +119,47 @@ defmodule Engram.Notes.CrdtBridge do
     end
   end
 
+  @doc """
+  Distinct client IDs present in the doc's state vector.
+
+  The y-js v1 state vector is LEB128-encoded: a leading varint gives the
+  number of entries, followed by alternating `{client_id}{clock}` varints.
+  We decode only the leading count — O(1) and allocation-free.
+  """
+  @spec client_count(Yex.Doc.t()) :: non_neg_integer()
+  def client_count(%Yex.Doc{} = doc) do
+    {count, _rest} = read_varint(Yex.encode_state_vector!(doc))
+    count
+  end
+
+  @doc """
+  True only when BOTH the encoded-state byte ceiling AND the client-ID
+  ceiling are crossed. A large note with few authors must NOT flatten;
+  a small note with many stale client-IDs must NOT flatten. AND is required.
+  """
+  @spec should_flatten?(binary(), Yex.Doc.t()) :: boolean()
+  def should_flatten?(state, %Yex.Doc{} = doc) when is_binary(state) do
+    byte_size(state) >= @flatten_bytes and client_count(doc) >= @flatten_clients
+  end
+
+  @doc """
+  Text-preserving CRDT reset. Extracts the current content, seeds a fresh
+  single-client doc, and re-encodes — collapsing all accumulated client-ID
+  entries in the state vector to one. Lineage is intentionally broken; this
+  is a deliberate reset, not a merge.
+  """
+  @spec flatten(Yex.Doc.t()) :: {:ok, %{doc: Yex.Doc.t(), state: binary()}} | {:error, term()}
+  def flatten(%Yex.Doc{} = doc) do
+    text = text_of(doc)
+    fresh = new_doc()
+    Yex.Text.insert(Yex.Doc.get_text(fresh, @text_name), 0, text)
+
+    case Yex.encode_state_as_update(fresh) do
+      {:ok, state} -> {:ok, %{doc: fresh, state: state}}
+      {:error, reason} -> {:error, {:encode_failed, reason}}
+    end
+  end
+
   defp common_prefix_len([h | t1], [h | t2], acc), do: common_prefix_len(t1, t2, acc + 1)
   defp common_prefix_len(_, _, acc), do: acc
 
@@ -124,5 +169,14 @@ defmodule Engram.Notes.CrdtBridge do
       <<code::utf8>> = cp
       acc + if code >= 0x10000, do: 2, else: 1
     end)
+  end
+
+  # Minimal LEB128 unsigned varint reader (lib0 v1 codec used by y-js).
+  # A single-byte varint has its MSB clear; multi-byte continues until MSB clear.
+  defp read_varint(<<byte, rest::binary>>) when (byte &&& 0x80) == 0, do: {byte, rest}
+
+  defp read_varint(<<byte, rest::binary>>) do
+    {next, tail} = read_varint(rest)
+    {(byte &&& 0x7F) ||| next <<< 7, tail}
   end
 end
