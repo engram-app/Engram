@@ -18,12 +18,29 @@ defmodule Engram.Notes.Utf8Backfill do
 
   Operator-invoked only (see `mix engram.utf8_audit`); never runs on deploy.
   In a release, `Mix` is absent — call `scan/1` directly via `rpc`.
+
+  ## Blast radius & limitations (run `scan/1` first, then decide on `--fix`)
+    * **Per-repaired-note side effects.** Each `--fix` rewrite goes through
+      `upsert_note`, so it enqueues an `EmbedNote` Oban job (Voyage embedding
+      spend + a Qdrant write), broadcasts a `note_changed` to live sync clients
+      (they see a phantom edit), and bumps the note `version`. On a large
+      corpus this is a burst — run the read-only count first and size it.
+    * **Memory.** `scan/1` materializes every active user and all of each
+      user's notes (decrypted) in memory; there is no streaming/chunking. Fine
+      at current scale; revisit with `Repo.stream` if the corpus grows.
+    * **Scope.** Only `content`/`title`/`folder`/`tags` corruption is detected,
+      and the path is intentionally NOT scrubbed (scrubbing it would change the
+      note's HMAC identity). A row corrupt only in its path is neither detected
+      nor repaired, so the `corrupt` tally can stay non-zero across runs.
+    * **Repairs are tagged `boundary="backfill"`**, never `:write`, so the
+      sweep does not trip the `boundary="write"` "new corruption" alert.
   """
 
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts
   alias Engram.Crypto
+  alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.Helpers
   alias Engram.Notes.Note
@@ -89,8 +106,9 @@ defmodule Engram.Notes.Utf8Backfill do
       {:error, reason} ->
         # A decrypt failure is a different incident class (key drift/tamper),
         # not UTF-8 corruption — surface it but keep scanning.
-        Logger.warning("utf8_backfill: skipped undecryptable note #{note.id}: #{inspect(reason)}",
-          category: :data
+        Logger.warning(
+          "utf8_backfill: skipped undecryptable note #{note.id}: #{inspect(reason)}",
+          Metadata.with_category(:warning, :data, reason: "undecryptable_note")
         )
 
         acc
@@ -108,23 +126,31 @@ defmodule Engram.Notes.Utf8Backfill do
   defp invalid_tags?(tags) when is_list(tags), do: Enum.any?(tags, &invalid?/1)
   defp invalid_tags?(_), do: false
 
-  # Re-save through the normal write path. We do NOT scrub the path: scrubbing
-  # it would change the note's identity (path → a different HMAC) and create a
-  # new row instead of updating this one. Corruption lives in the content
-  # (title/folder/tags are re-derived from the scrubbed content by upsert).
+  # Re-save through the normal write path. Two deliberate choices:
+  #
+  #   * Pre-scrub the content here on the `:backfill` boundary (NOT `:write`),
+  #     then hand already-valid content to upsert_note. upsert_note re-scrubs on
+  #     `:write`, but valid input fast-paths with no emission — so the repair
+  #     never ticks `boundary="write"` and never trips the "new corruption from
+  #     a buggy client" alert that fires on that series.
+  #   * We do NOT scrub the path: that would change the note's identity (path →
+  #     a different HMAC) and create a new row instead of updating this one.
+  #     Corruption lives in the content; title/folder/tags are re-derived from
+  #     the scrubbed content by upsert.
   defp fix_note(user, %Note{} = decrypted, acc) do
     with {:ok, vault} <- Vaults.get_vault(user, decrypted.vault_id),
          {:ok, _note} <-
            Notes.upsert_note(user, vault, %{
              "path" => decrypted.path,
-             "content" => Helpers.scrub_utf8(decrypted.content || "", :write),
+             "content" => Helpers.scrub_utf8(decrypted.content || "", :backfill),
              "mtime" => decrypted.mtime
            }) do
       bump(acc, :fixed)
     else
       other ->
-        Logger.warning("utf8_backfill: failed to rewrite note #{decrypted.id}: #{inspect(other)}",
-          category: :data
+        Logger.warning(
+          "utf8_backfill: failed to rewrite note #{decrypted.id}: #{inspect(other)}",
+          Metadata.with_category(:warning, :data, reason: "rewrite_failed")
         )
 
         acc

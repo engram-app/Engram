@@ -72,6 +72,29 @@ defmodule Engram.Notes.Utf8BackfillTest do
     assert String.valid?(raw_content(user, note.id))
   end
 
+  test "fix repairs on the :backfill boundary, never :write (won't trip the write alert)",
+       %{user: user, vault: vault} do
+    corrupt_note!(user, vault, "Test/Corrupt.md")
+
+    handler = "backfill-boundary-#{inspect(make_ref())}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :notes, :utf8_scrub],
+      fn _e, _meas, meta, pid -> send(pid, {:scrub, meta}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert %{fixed: 1} = Utf8Backfill.scan(fix: true)
+
+    assert_receive {:scrub, %{boundary: :backfill}}
+    # The repair must NOT look like new client corruption, or the backfill trips
+    # the boundary="write" Grafana alert it is meant to drain.
+    refute_received {:scrub, %{boundary: :write}}
+  end
+
   test "leaves valid rows untouched (no false positives)", %{user: user, vault: vault} do
     {:ok, _} =
       Notes.upsert_note(user, vault, %{

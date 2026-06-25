@@ -5,12 +5,18 @@ defmodule Engram.PromEx.Notes do
   Subscribes to:
 
     * `[:engram, :notes, :utf8_scrub]` — `%{count: 1}`, metadata
-      `%{boundary: :write | :read | :search}`. Emitted on the scrub slow path
-      (invalid UTF-8 found at a JSON-materializing boundary, see
+      `%{boundary: :write | :read | :search | :backfill}`. Emitted on the scrub
+      slow path (invalid UTF-8 found at a JSON-materializing boundary, see
       `Engram.Notes.Helpers.scrub_utf8/2`). A rising `boundary="write"` rate
-      means new corruption is entering at rest — a buggy client — and is
-      actionable; `read`/`search` reflect legacy corrupt rows being read and
-      drain to zero once the #739 backfill runs.
+      means new corruption is entering at rest — a buggy client — and is the
+      ONLY alert-worthy series; `read`/`search` reflect legacy corrupt rows
+      being read, and `backfill` is the #739 repair sweep cleaning them. All
+      three drain to zero once the backfill completes.
+
+      NB: the counter measures scrub *operations*, not corrupt notes — `:read`
+      ticks once per corrupt FIELD (content/title/folder/each tag) per read,
+      so its magnitude over-counts notes. For a true corrupt-note count use
+      `Engram.Notes.Utf8Backfill.scan/1`.
 
   Metrics:
 
