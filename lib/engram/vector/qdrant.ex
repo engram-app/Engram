@@ -243,6 +243,36 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
+  @doc """
+  Patch (overwrite-or-add) payload keys on EVERY point matching the
+  `{user_id, vault_id, path_hmac}` filter — vectors untouched. The cost-free
+  way to re-path a note's points after a rename without re-running the
+  embedder (#746). Triple-scope is mandatory: filtering on `path_hmac` alone
+  could cross tenants if two users' folded HMACs collide.
+  """
+  def set_payload_by_filter(col \\ nil, user_id, vault_id, path_hmac, payload)
+      when is_map(payload) do
+    col = col || collection()
+
+    filter = %{
+      must: [
+        %{key: "user_id", match: %{value: user_id}},
+        %{key: "vault_id", match: %{value: vault_id}},
+        %{key: "path_hmac", match: %{value: path_hmac}}
+      ]
+    }
+
+    opts = [json: %{filter: filter, payload: payload}] ++ req_opts()
+
+    instrument(:set_payload, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
   # #590: note-metadata fields that leaked as plaintext into payloads written
   # before the fix. Canonical list — the mix task and prod rpc both go through
   # delete_leaked_plaintext_keys/1 so this never drifts.
