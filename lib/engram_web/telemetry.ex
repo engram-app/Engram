@@ -186,6 +186,13 @@ defmodule EngramWeb.Telemetry do
         description:
           "Search candidate decrypt failures — non-zero rate is an alarm signal (key drift, tampering)"
       ),
+      # Data-integrity: invalid-UTF-8 scrubs by boundary. boundary=:write means
+      # new corruption is entering at rest (actionable); :read/:search drain
+      # once the #739 backfill runs. Scraped to Grafana via Engram.PromEx.Notes.
+      counter("engram.notes.utf8_scrub.count",
+        tags: [:boundary],
+        description: "Invalid-UTF-8 scrubs by boundary (:write | :read | :search)"
+      ),
       counter("engram.search.payload_shape_mismatch.count",
         description: "Qdrant payload shape mismatches — drift between writer and reader"
       ),

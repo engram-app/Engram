@@ -163,6 +163,53 @@ defmodule Engram.NotesTest do
       assert note.content =~ "PRs #71"
     end
 
+    test "#739: emits a write-boundary scrub telemetry event on invalid UTF-8",
+         %{user: user, vault: vault} do
+      handler = "notes-write-scrub-#{inspect(make_ref())}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :notes, :utf8_scrub],
+        fn _e, meas, meta, pid -> send(pid, {:scrub, meas, meta}) end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "Test/BadBytes2.md",
+                 "content" => "# T\n\nx" <> <<0xE2>> <> "y",
+                 "mtime" => 1_000.0
+               })
+
+      assert_receive {:scrub, %{count: 1}, %{boundary: :write}}
+    end
+
+    test "#738: note_changed broadcast payload is JSON-safe when content holds invalid UTF-8",
+         %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      bad = "# Title\n\nbroadcast" <> <<0xE2>> <> "payload"
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Broadcast.md",
+          "content" => bad,
+          "mtime" => 1.0
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
+
+      # The whole payload is what crashed Phoenix.PubSub/Jason on #738 before the
+      # boundary scrubs. Assert the egress payload — not just the stored row — is
+      # JSON-encodable and every string field is valid UTF-8.
+      assert {:ok, _} = Jason.encode(payload)
+      assert String.valid?(payload["content"])
+      assert String.valid?(payload["title"])
+      assert payload["content"] =~ "broadcast"
+    end
+
     test "content_hash is HMAC-SHA256 (64-char hex), not legacy MD5",
          %{user: user, vault: vault} do
       content = "# Hash Format Probe\nbody"

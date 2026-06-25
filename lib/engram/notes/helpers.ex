@@ -1,8 +1,12 @@
 defmodule Engram.Notes.Helpers do
   @moduledoc """
   Pure functions for extracting metadata from note content and paths.
-  No DB access — safe to call anywhere.
+  No DB access — safe to call anywhere. The lone side effect is the
+  boundary-instrumented `scrub_utf8/2`, which emits telemetry (and, on the
+  write boundary, a log line) when it actually scrubs invalid UTF-8.
   """
+
+  require Logger
 
   @frontmatter_re ~r/\A---\r?\n(.*?)\r?\n---/s
   @heading_re ~r/^#\s+(.+)$/m
@@ -21,6 +25,44 @@ defmodule Engram.Notes.Helpers do
   @spec scrub_utf8(String.t()) :: String.t()
   def scrub_utf8(str) when is_binary(str) do
     if String.valid?(str), do: str, else: do_scrub_utf8(str, <<>>)
+  end
+
+  @scrub_boundaries [:write, :read, :search]
+
+  @doc """
+  Boundary-instrumented `scrub_utf8/1`. On the scrub slow path (invalid bytes
+  found) it emits a `[:engram, :notes, :utf8_scrub]` counter tagged with
+  `boundary` (`:write | :read | :search`), and on the `:write` boundary it
+  *also* logs a `:data`-category warning.
+
+  The split is deliberate: a scrub on the **write** boundary means a client
+  just persisted invalid UTF-8 — new corruption entering at rest, which is
+  actionable (find the buggy client). Scrubs on the **read**/**search**
+  boundaries are expected on legacy rows until the backfill (#739) runs, so
+  they stay counter-only to avoid flooding the logs on every read.
+
+  Valid input takes the fast path with no telemetry and no allocation.
+  """
+  @spec scrub_utf8(String.t(), :write | :read | :search) :: String.t()
+  def scrub_utf8(str, boundary) when is_binary(str) and boundary in @scrub_boundaries do
+    if String.valid?(str) do
+      str
+    else
+      :telemetry.execute([:engram, :notes, :utf8_scrub], %{count: 1}, %{boundary: boundary})
+      if boundary == :write, do: log_write_scrub()
+      do_scrub_utf8(str, <<>>)
+    end
+  end
+
+  defp log_write_scrub do
+    Logger.warning(
+      "invalid UTF-8 scrubbed at write boundary — a client persisted bytes " <>
+        "that are not valid UTF-8 (replaced with U+FFFD)",
+      Engram.Logger.Metadata.with_category(:warning, :data,
+        boundary: :write,
+        reason: "invalid_utf8_scrubbed"
+      )
+    )
   end
 
   defp do_scrub_utf8(<<>>, acc), do: acc

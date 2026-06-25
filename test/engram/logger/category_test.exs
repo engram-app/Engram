@@ -12,13 +12,19 @@ defmodule Engram.Logger.CategoryTest do
              :crypto,
              :lifecycle,
              :oban,
-             :boot
+             :boot,
+             :data
            ]
   end
 
   test "valid?/1 accepts known categories and rejects others" do
     assert Category.valid?(:billing)
+    assert Category.valid?(:data)
     refute Category.valid?(:nonsense)
+  end
+
+  test "data warnings ship to Loki (data-integrity is always kept)" do
+    assert Category.loki_ship?(:warning, :data)
   end
 
   test "warning and error always ship to Loki regardless of category" do

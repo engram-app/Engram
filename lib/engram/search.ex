@@ -111,7 +111,7 @@ defmodule Engram.Search do
     result =
       Enum.reduce(@scrubbed_string_keys, result, fn key, acc ->
         case Map.get(acc, key) do
-          v when is_binary(v) -> Map.put(acc, key, Helpers.scrub_utf8(v))
+          v when is_binary(v) -> Map.put(acc, key, Helpers.scrub_utf8(v, :search))
           _ -> acc
         end
       end)
@@ -121,7 +121,7 @@ defmodule Engram.Search do
         Map.put(
           result,
           :tags,
-          Enum.map(tags, &if(is_binary(&1), do: Helpers.scrub_utf8(&1), else: &1))
+          Enum.map(tags, &if(is_binary(&1), do: Helpers.scrub_utf8(&1, :search), else: &1))
         )
 
       _ ->
