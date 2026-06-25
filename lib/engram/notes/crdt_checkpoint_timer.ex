@@ -114,9 +114,10 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {:noreply, %{state | first_dirty_at: nil, settle_timer: nil}}
   end
 
-  # Room exited — we're linked, so this only reaches us if the exit is normal
-  # or if we trap exits (we don't). The GenServer will propagate the exit
-  # signal normally; this clause handles a graceful room :normal exit.
+  # Room exited — we trap exits (Process.flag(:trap_exit, true) is set in init/1),
+  # so the linked room's exit is converted to a {:EXIT, pid, reason} message
+  # rather than an immediate process death. This lets us perform a clean stop
+  # for both normal and abnormal room exits without leaving an orphaned timer.
   @impl true
   def handle_info({:EXIT, _room_pid, _reason}, state) do
     {:stop, :normal, state}

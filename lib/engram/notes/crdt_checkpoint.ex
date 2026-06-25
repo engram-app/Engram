@@ -44,6 +44,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       {:ok, prev_hash} =
         Repo.with_tenant(user_id, fn ->
+          # Capture a watermark BEFORE encoding, so any update-log rows
+          # that arrive after this point are not deleted by prune_tail/2.
+          # The doc already reflects all rows up to (and including) the
+          # watermark, so the snapshot is correct for exactly those rows.
+          # Prune only rows at/below the watermark; later-arriving updates
+          # survive for the next checkpoint/replay.
+          watermark = tail_watermark(note_id)
+
           # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
           # Repo.get! leaves them nil. Materialize through the decrypt path so
           # they are populated BEFORE we re-derive title + re-HMAC path/folder.
@@ -77,7 +85,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
           |> Repo.update!()
 
-          prune_tail(note_id)
+          prune_tail(note_id, watermark)
           {:ok, prev}
         end)
 
@@ -104,12 +112,30 @@ defmodule Engram.Notes.CrdtCheckpoint do
     end
   end
 
-  # Delete all tail-log rows for the note. The snapshot now encodes the full
-  # merged state, so every prior update row is consumed. Runs inside the same
-  # `Repo.with_tenant` transaction as the notes UPDATE for atomicity.
-  defp prune_tail(note_id) do
+  # Returns max(inserted_at) for all crdt_update_log rows for note_id at this
+  # moment, or nil when the log is empty. Uses inserted_at (timestamptz, usec
+  # precision) because Postgres does not support max() on UUID columns.
+  # The existing index on (note_id, inserted_at) makes this a fast index scan.
+  # Called at the START of the checkpoint so the watermark marks the exact
+  # boundary the snapshot covers.
+  defp tail_watermark(note_id) do
     CrdtUpdateLog
     |> where([l], l.note_id == ^note_id)
+    |> select([l], max(l.inserted_at))
+    |> Repo.one()
+  end
+
+  # Prune only the tail-log rows captured by this snapshot's watermark.
+  # Rows inserted after the watermark survive for the next checkpoint/replay —
+  # they are NOT yet folded into the snapshot and must not be discarded.
+  # When watermark is nil (log was empty), there is nothing to delete.
+  # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE
+  # for atomicity.
+  defp prune_tail(_note_id, nil), do: :ok
+
+  defp prune_tail(note_id, watermark) do
+    CrdtUpdateLog
+    |> where([l], l.note_id == ^note_id and l.inserted_at <= ^watermark)
     |> Repo.delete_all()
   end
 end

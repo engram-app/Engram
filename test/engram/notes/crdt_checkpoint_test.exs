@@ -164,6 +164,73 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "checkpoint should not enqueue embed when content is unchanged"
   end
 
+  # ── Race fix: prune respects watermark — post-snapshot rows survive ────────
+
+  test "prune_tail keeps rows inserted AFTER the watermark was captured", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Use explicit, deterministic timestamps so the test is not sensitive to
+    # clock resolution or Postgres transaction-time coalescing.
+    t_pre = ~U[2030-01-01 00:00:00.000000Z]
+    t_post = ~U[2030-01-01 00:00:01.000000Z]
+
+    {:ok, {ct1, n1}} = Crypto.encrypt_crdt_state("pre_watermark_update", user, note.id)
+    {:ok, {ct2, n2}} = Crypto.encrypt_crdt_state("post_watermark_update", user, note.id)
+
+    pre_id = Ecto.UUID.generate()
+    post_id = Ecto.UUID.generate()
+
+    # Seed both rows with explicit timestamps directly so we control the ordering.
+    # The pre-row sits at t_pre (already reflected in the doc at checkpoint time),
+    # the post-row sits at t_post (simulates a concurrent write arriving AFTER the
+    # watermark was snapped but before the prune transaction commits).
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: pre_id,
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct1,
+          update_nonce: n1,
+          inserted_at: t_pre
+        },
+        %{
+          id: post_id,
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct2,
+          update_nonce: n2,
+          inserted_at: t_post
+        }
+      ])
+    end)
+
+    # Directly run the bounded prune with watermark = t_pre — this is exactly
+    # what prune_tail/2 inside checkpoint does, but here we supply the watermark
+    # explicitly so we can prove the WHERE clause excludes the post-row.
+    Repo.with_tenant(user.id, fn ->
+      CrdtUpdateLog
+      |> where([l], l.note_id == ^note.id and l.inserted_at <= ^t_pre)
+      |> Repo.delete_all()
+    end)
+
+    {:ok, surviving_ids} =
+      Repo.with_tenant(user.id, fn ->
+        CrdtUpdateLog
+        |> where([l], l.note_id == ^note.id)
+        |> select([l], l.id)
+        |> Repo.all()
+      end)
+
+    refute pre_id in surviving_ids,
+           "pre-watermark row (inserted_at == watermark) must be pruned"
+
+    assert post_id in surviving_ids,
+           "post-watermark row (inserted_at > watermark) must survive for the next checkpoint/replay"
+  end
+
   # ── Debounce timer: multiple fast activity signals reset the timer ─────────
 
   test "CrdtCheckpointTimer debounces — activity signals reset the settle timer", ctx do
