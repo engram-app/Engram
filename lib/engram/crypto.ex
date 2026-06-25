@@ -257,6 +257,45 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Encrypts a Yjs CRDT state binary under the user's DEK, AAD-bound to the
+  note row (`aad_for_row(:notes, :crdt_state, note_id)`). Returns the
+  `{ciphertext, nonce}` pair the caller stamps into `crdt_state_ciphertext`
+  / `crdt_state_nonce`. Posture C — same envelope as every other note column.
+  """
+  @spec encrypt_crdt_state(binary(), User.t(), String.t()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def encrypt_crdt_state(state, %User{} = user, note_id)
+      when is_binary(state) and is_binary(note_id) do
+    with {:ok, user} <- ensure_user_dek(user),
+         {:ok, dek} <- get_dek(user) do
+      aad = aad_for_row(:notes, :crdt_state, note_id)
+      {ct, nonce} = Envelope.encrypt(state, dek, aad)
+      {:ok, {ct, nonce}}
+    end
+  end
+
+  @doc """
+  Decrypts a note's `crdt_state_ciphertext` into the raw Yjs v1 state binary.
+  Returns `{:ok, nil}` when the column is unpopulated (lazy-seed case).
+  Legacy `dek_version < 2` rows decrypt with empty AAD; AAD-bound rows
+  reconstruct the bind string from the row id (mirrors `decrypt_aad/3`).
+  """
+  @spec decrypt_crdt_state(Engram.Notes.Note.t(), User.t()) ::
+          {:ok, binary() | nil} | {:error, term()}
+  def decrypt_crdt_state(%Engram.Notes.Note{crdt_state_ciphertext: nil}, _user), do: {:ok, nil}
+
+  def decrypt_crdt_state(%Engram.Notes.Note{} = note, %User{} = user) do
+    aad = decrypt_aad(note, :notes, :crdt_state)
+
+    with {:ok, dek} <- get_dek(user) do
+      case Envelope.decrypt(note.crdt_state_ciphertext, note.crdt_state_nonce, dek, aad) do
+        {:ok, state} -> {:ok, state}
+        :error -> {:error, :decrypt_failed}
+      end
+    end
+  end
+
+  @doc """
   Encrypts `content` + `title` from `attrs` and replaces them with
   `_ciphertext` + `_nonce` keys. Phase B.4: encryption is mandatory — there
   is no `vault.encrypted` flag and no passthrough path.
