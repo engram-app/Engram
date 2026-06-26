@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
 # Post-checkout hook: when a fresh worktree is created via `git worktree add`,
-# hardlink `deps/`, `_build/`, and `frontend/node_modules/` from the canonical
-# checkout so the first `mix compile` / lint / pre-push doesn't take ~5 minutes
-# rebuilding everything from scratch.
+# hardlink `deps/` and `frontend/node_modules/` from the canonical checkout so
+# the first lint / pre-push / bun step doesn't re-fetch everything (node_modules
+# alone is ~1GB).
 #
-# Hardlinks are inode-shared — instant copy, zero disk overhead. Mix's
-# incremental compiler sees identical mtimes and skips work for unchanged
-# files; only files the new branch actually edited recompile. When a build
-# tool writes (mix, bun), it creates a NEW file rather than mutating in-place,
-# so the hardlink chain detaches naturally — no cross-worktree corruption risk.
+# Hardlinks are inode-shared — instant, zero disk overhead. This is safe ONLY
+# for fetched *sources* (deps, node_modules): build tools don't rewrite those in
+# place, so no worktree can corrupt another's copy.
+#
+# `_build/` is deliberately NOT seeded. It holds compiled, env- and
+# dependency-specific artifacts, and mix rewrites some of them (notably
+# `lib/<app>/ebin/<app>.app`) IN PLACE. Hardlinking shared that inode, so a
+# sibling worktree with different deps (e.g. one carrying `y_ex`) silently
+# poisoned every other worktree's `<app>.app`, and a half-built canonical
+# propagated missing yecc `.beam`s (expo/jose) — recurring, hard-to-diagnose
+# "module not available" boot failures. Copying instead of hardlinking is no
+# safer here: a sibling created with the old hook keeps rewriting the canonical
+# through its existing hardlinks, so any seed from the canonical can be
+# re-poisoned. The robust fix is to build `_build` fresh per worktree — `deps/`
+# is hardlinked, so the first `mix compile` compiles from local source (~3-4 min
+# once) and never inherits another worktree's state.
 #
 # Why a hook (and not a wrapper script): `git worktree add` fires post-checkout
 # directly. The hook runs BEFORE any human or AI agent touches the new tree,
@@ -49,5 +60,4 @@ link_if_missing() {
 }
 
 link_if_missing deps
-link_if_missing _build
 link_if_missing frontend/node_modules
