@@ -658,6 +658,27 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Returns the note at `path`, creating an empty one if it doesn't exist yet.
+
+  Used by the CRDT channel's self-bootstrap: a brand-new note arrives as a CRDT
+  update before any REST row exists, so the row must be created on first
+  reference (the incoming update populates the body, materialized on checkpoint).
+  Without this a note could never be created over the CRDT path (chicken-and-egg).
+  """
+  @spec get_or_bootstrap_note(map(), map(), String.t()) ::
+          {:ok, Note.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :version_conflict, Note.t()}
+          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
+          | {:error, atom()}
+  def get_or_bootstrap_note(user, vault, path) do
+    case get_note(user, vault, path) do
+      {:ok, note} -> {:ok, note}
+      {:error, :not_found} -> upsert_note(user, vault, %{"path" => path, "content" => ""})
+    end
+  end
+
+  @doc """
   Gets a note by its primary key id, scoped to the given user + vault.
 
   Returns `{:ok, note}` when found and owned by the caller, `{:error, :not_found}`

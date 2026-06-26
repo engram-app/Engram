@@ -461,6 +461,33 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
+  # get_or_bootstrap_note/3
+  # ---------------------------------------------------------------------------
+
+  describe "get_or_bootstrap_note/3" do
+    test "creates an empty note when the path does not exist yet", %{user: user, vault: vault} do
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Bootstrap/New.md")
+
+      assert {:ok, note} = Notes.get_or_bootstrap_note(user, vault, "Bootstrap/New.md")
+      assert note.path == "Bootstrap/New.md"
+      assert note.content == ""
+
+      # It is now persisted and retrievable.
+      assert {:ok, again} = Notes.get_note(user, vault, "Bootstrap/New.md")
+      assert again.id == note.id
+    end
+
+    test "returns the existing note without recreating it", %{user: user, vault: vault} do
+      {:ok, existing} =
+        Notes.upsert_note(user, vault, %{"path" => "Bootstrap/Existing.md", "content" => "# hi"})
+
+      assert {:ok, note} = Notes.get_or_bootstrap_note(user, vault, "Bootstrap/Existing.md")
+      assert note.id == existing.id
+      assert note.content == "# hi"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # get_note_by_id/3
   # ---------------------------------------------------------------------------
 
