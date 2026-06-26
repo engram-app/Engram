@@ -666,7 +666,11 @@ defmodule Engram.Notes do
   Without this a note could never be created over the CRDT path (chicken-and-egg).
   """
   @spec get_or_bootstrap_note(map(), map(), String.t()) ::
-          {:ok, Note.t()} | {:error, term()}
+          {:ok, Note.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :version_conflict, Note.t()}
+          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
+          | {:error, atom()}
   def get_or_bootstrap_note(user, vault, path) do
     case get_note(user, vault, path) do
       {:ok, note} -> {:ok, note}
