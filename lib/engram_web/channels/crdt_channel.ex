@@ -13,6 +13,7 @@ defmodule EngramWeb.CrdtChannel do
 
   use Phoenix.Channel
 
+  alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtRegistry
   alias Yex.Sync.SharedDoc
@@ -60,7 +61,15 @@ defmodule EngramWeb.CrdtChannel do
       SharedDoc.send_yjs_message(room, frame)
       {:noreply, socket}
     else
-      _ -> {:noreply, socket}
+      err ->
+        # Surface drops rather than swallowing them silently — a dropped frame
+        # (bad base64 or unresolvable doc_id) means a lost edit.
+        Logger.warning(
+          "crdt_channel: dropped crdt_msg doc_id=#{inspect(doc_id)} → #{inspect(err)}",
+          Metadata.with_category(:warning, :sync)
+        )
+
+        {:noreply, socket}
     end
   end
 
@@ -109,14 +118,17 @@ defmodule EngramWeb.CrdtChannel do
   defp resolve_note_id(user, vault, doc_id) do
     case String.split(doc_id, "/", parts: 2) do
       [_vault_prefix, path] when path != "" ->
-        case Notes.get_note(user, vault, path) do
+        # Self-bootstrap a brand-new note that arrives over CRDT before any REST
+        # row exists (Notes.get_or_bootstrap_note); otherwise the update is
+        # dropped and the note could never be created over the CRDT path.
+        case Notes.get_or_bootstrap_note(user, vault, path) do
           {:ok, note} ->
             {:ok, note.id}
 
-          {:error, :not_found} ->
-            Logger.debug(
-              "crdt_channel: unknown doc_id=#{inspect(doc_id)} — note not found, ignoring",
-              Engram.Logger.Metadata.with_category(:debug, :sync)
+          other ->
+            Logger.warning(
+              "crdt_channel: could not resolve/bootstrap doc_id=#{inspect(doc_id)} → #{inspect(other)}",
+              Metadata.with_category(:warning, :sync)
             )
 
             :error
