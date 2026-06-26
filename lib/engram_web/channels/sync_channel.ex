@@ -56,11 +56,15 @@ defmodule EngramWeb.SyncChannel do
       :ok ->
         socket = assign(socket, :vault, vault)
         send(self(), {:after_join, params})
-        {:ok, socket}
+        {:ok, %{reconnect_jitter_max_ms: reconnect_jitter_max_ms()}, socket}
 
       :forbidden ->
         {:error, %{reason: "api_key_vault_forbidden"}}
     end
+  end
+
+  defp reconnect_jitter_max_ms do
+    Application.get_env(:engram, :reconnect_jitter_max_ms, 5_000)
   end
 
   @impl true

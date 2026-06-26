@@ -187,6 +187,13 @@ config :sentry,
   context_lines: 5,
   before_send: {Engram.Sentry.Scrubber, :scrub}
 
+# Full-jitter window (ms) advertised to clients in the sync-channel join reply.
+# On reconnect after a drop (e.g. a graceful node drain), clients wait
+# random(0, this) before reconnecting so a drained fleet doesn't stampede the
+# freshly-booted node. Client-side default + clamp guard a missing/bad value.
+# Runtime-overridable via RECONNECT_JITTER_MAX_MS (see runtime.exs).
+config :engram, :reconnect_jitter_max_ms, 5_000
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
