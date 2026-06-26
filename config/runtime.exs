@@ -426,8 +426,8 @@ config :engram,
        auth_provider == :clerk and System.get_env("PADDLE_API_KEY") != nil
 
 # CRDT (Yjs) sync opt-in. Ships dormant (config.exs default false); flipped on
-# for diagnostic/staging/prod rollout via CRDT_ENABLED=true. Test env sets no env
-# var, so unit tests keep the default-off legacy conflict semantics.
+# for staging/prod rollout via CRDT_ENABLED=true. Test env sets no env var, so
+# unit tests keep the default-off legacy conflict semantics.
 if System.get_env("CRDT_ENABLED") == "true" do
   config :engram, :crdt_enabled, true
 end

@@ -117,19 +117,13 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtBridge.text_of(client) == "base"
     end
 
-    test "unknown doc_id is silently ignored — no push, no crash",
-         %{socket: socket, vault: vault} do
-      client = CrdtBridge.new_doc()
-      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
-      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
-
-      push(socket, "crdt_msg", %{
-        "doc_id" => "#{vault.id}/does-not-exist.md",
-        "b64" => Base.encode64(frame)
-      })
-
-      refute_push "crdt_msg", _payload, 500
-    end
+    # NOTE: the self-bootstrap of an unknown doc_id (a brand-new note arriving
+    # over CRDT before any REST row exists) is covered room-free at the Notes
+    # layer — see Notes.get_or_bootstrap_note/3 in notes_test.exs. Exercising it
+    # through the channel here would spin a :global CRDT room whose terminate-time
+    # snapshot flush crashes once the sandbox owner exits, cascading the Repo
+    # down for the rest of the suite. The full channel→room path is covered by
+    # the e2e suite instead.
 
     test "malformed base64 is silently ignored — no crash",
          %{socket: socket, doc_id: doc_id} do
