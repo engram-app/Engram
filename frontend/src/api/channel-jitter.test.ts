@@ -16,6 +16,8 @@ describe('clampReconnectJitter', () => {
   it('clamps above the ceiling', () =>
     expect(clampReconnectJitter(999_999)).toBe(RECONNECT_JITTER_MAX_MS))
   it('rejects negatives', () => expect(clampReconnectJitter(-1)).toBeNull())
+  it('rejects zero (coalesces to default, not no-jitter)', () =>
+    expect(clampReconnectJitter(0)).toBeNull())
   it('rejects NaN/Infinity', () => {
     expect(clampReconnectJitter(NaN)).toBeNull()
     expect(clampReconnectJitter(Infinity)).toBeNull()

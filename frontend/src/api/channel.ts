@@ -14,7 +14,7 @@ const PHX_RECONNECT_STEPS = [10, 50, 100, 150, 200, 250, 500, 1000, 2000]
 let serverJitterMs: number | null = null
 
 export function clampReconnectJitter(raw: unknown): number | null {
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return null
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null
   return Math.min(raw, RECONNECT_JITTER_MAX_MS)
 }
 
@@ -29,7 +29,8 @@ export function computeReconnectMs(
 
 /** Cache the server-advertised jitter window from the sync join reply.
  *  Clamped + validated so a malformed/hostile payload can't make the client
- *  hang or hammer. */
+ *  hang or hammer. Non-positive windows (including 0) are rejected, forcing
+ *  the client to fall back to the default floor rather than disabling jitter. */
 export function captureServerJitter(resp: unknown): void {
   const raw = (resp as { reconnect_jitter_max_ms?: unknown })?.reconnect_jitter_max_ms
   const clamped = clampReconnectJitter(raw)
