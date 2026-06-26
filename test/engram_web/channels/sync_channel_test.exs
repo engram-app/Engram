@@ -46,6 +46,12 @@ defmodule EngramWeb.SyncChannelTest do
   end
 
   describe "join/3" do
+    test "join reply advertises the reconnect jitter window", %{user: user, vault: vault} do
+      socket = user_socket(user)
+      assert {:ok, reply, _socket} = join_sync(socket, user, vault)
+      assert reply.reconnect_jitter_max_ms == 5_000
+    end
+
     test "accepts join for own user_id and vault", %{user: user, vault: vault} do
       socket = user_socket(user)
       assert {:ok, _, _} = join_sync(socket, user, vault)

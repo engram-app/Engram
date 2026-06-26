@@ -39,7 +39,12 @@ defmodule Engram.Notes.HelpersTest do
         handler,
         [:engram, :notes, :utf8_scrub],
         fn _event, measurements, metadata, pid ->
-          send(pid, {:scrub_telemetry, measurements, metadata})
+          # Handlers run synchronously in the process that called
+          # `:telemetry.execute`, so `self()` here is the emitter. Forward only
+          # events emitted by THIS test's own process — otherwise a concurrent
+          # async test that scrubs invalid UTF-8 trips this global handler and
+          # leaks into our mailbox, flaking `refute_receive` (#754).
+          if self() == pid, do: send(pid, {:scrub_telemetry, measurements, metadata})
         end,
         self()
       )
@@ -61,6 +66,22 @@ defmodule Engram.Notes.HelpersTest do
     test "does not emit telemetry for valid input (fast path)" do
       assert Helpers.scrub_utf8("clean", :write) == "clean"
       refute_receive {:scrub_telemetry, _, _}
+    end
+
+    test "ignores scrub events emitted by other processes (no cross-test leak, #754)" do
+      # Reproduces the flake deterministically: a DIFFERENT process scrubs
+      # invalid input while our handler is attached. :telemetry handlers run
+      # synchronously in the caller of `:telemetry.execute`, so before the fix
+      # this test's *global* handler fired in the foreign process and leaked a
+      # `{:scrub_telemetry, ...}` into our mailbox — exactly how a concurrent
+      # async test tripped the `refute_receive` above under load. The handler
+      # must only forward events from its own test's process.
+      task = Task.async(fn -> Helpers.scrub_utf8("x" <> <<0xE2>>, :read) end)
+      assert Task.await(task) == "x�"
+
+      # The scrub above (in the task process) already ran; if the handler had
+      # leaked it, the message would be in our mailbox now.
+      refute_received {:scrub_telemetry, _, _}
     end
 
     test "logs a warning on the write boundary (new corruption is actionable)" do

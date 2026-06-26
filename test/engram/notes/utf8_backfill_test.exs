@@ -81,7 +81,10 @@ defmodule Engram.Notes.Utf8BackfillTest do
     :telemetry.attach(
       handler,
       [:engram, :notes, :utf8_scrub],
-      fn _e, _meas, meta, pid -> send(pid, {:scrub, meta}) end,
+      # Forward only events from this test's own process — a concurrent async
+      # test scrubbing on the :write boundary would otherwise leak into the
+      # `refute_received` below (#754; handlers run in the emitter's process).
+      fn _e, _meas, meta, pid -> if self() == pid, do: send(pid, {:scrub, meta}) end,
       self()
     )
 
