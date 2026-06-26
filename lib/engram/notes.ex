@@ -541,13 +541,15 @@ defmodule Engram.Notes do
     end
   end
 
-  # v1 CRDT: merge_plaintext in do_update_note IS the conflict resolution —
-  # a stale client_version no longer 409s; the diverging write is merged
-  # convergently into crdt_state. The `_client_version` arg is retained in
-  # the signature (upsert_note still passes it) but is no longer acted on.
-  # The {:conflict, existing} branch in upsert_note is now reachable ONLY
-  # from insert_new_note's concurrent-create race (a genuine unique-index
-  # loser), not from version-mismatch on existing rows.
+  # Conflict resolution is gated on the :crdt_enabled flag (default false in v1):
+  #
+  #   * CRDT enabled  — merge_plaintext in do_update_note IS the resolution; a
+  #     stale client_version does NOT 409, the diverging write is merged
+  #     convergently into crdt_state.
+  #   * CRDT disabled — the legacy path is authoritative: a stale client_version
+  #     yields {:conflict, existing} (→ 409) which the client reconciles via its
+  #     3-way merge / conflict-copy flow. The plugin's conflict detection keys
+  #     off this 409, so it must remain until CRDT is the live sync path.
   defp update_existing_note(
          existing,
          base_attrs,
@@ -555,10 +557,19 @@ defmodule Engram.Notes do
          sanitized_path,
          folder,
          tags,
-         _client_version
+         client_version
        ) do
-    do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+    if not crdt_enabled?() and client_version != nil and client_version != existing.version do
+      {:conflict, existing}
+    else
+      do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+    end
   end
+
+  # Opt-in gate for CRDT (Yjs) sync, mirroring the plugin's `enableCrdt` setting.
+  # Default false for v1: CRDT ships dormant until the path is functional
+  # end-to-end, so the server keeps legacy 409-on-stale-version semantics.
+  defp crdt_enabled?, do: Application.get_env(:engram, :crdt_enabled, false)
 
   defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags) do
     with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do

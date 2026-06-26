@@ -65,17 +65,16 @@ defmodule EngramWeb.NotesControllerTest do
   # ---------------------------------------------------------------------------
 
   describe "POST /notes version conflict" do
-    test "stale-version write MERGES via CRDT and returns 200 (not 409)", %{conn: conn} do
+    test "returns 409 when client version doesn't match server version", %{conn: conn} do
+      # v1 ships :crdt_enabled = false, so the legacy conflict path is live:
+      # a stale client_version yields 409, not a server-side CRDT merge.
       # Create note (version 1)
       post(conn, "/api/notes", %{path: "Test/Conflict.md", content: "# v1", mtime: 1_000.0})
 
-      # Server applies an update, bumping to version 2.
+      # Update note (version 2)
       post(conn, "/api/notes", %{path: "Test/Conflict.md", content: "# v2", mtime: 2_000.0})
 
-      # Client still thinks it's at version 1 and pushes diverging content.
-      # With the CRDT merge path (Task 5), the stale-version gate is gone —
-      # upsert_note merges via CrdtBridge.merge_plaintext and returns {:ok, note}.
-      # The controller returns 200 with the merged note, not 409.
+      # Client still thinks it's version 1 — should get 409
       conn2 =
         post(conn, "/api/notes", %{
           path: "Test/Conflict.md",
@@ -84,10 +83,12 @@ defmodule EngramWeb.NotesControllerTest do
           version: 1
         })
 
-      assert %{"note" => merged_note} = json_response(conn2, 200)
-      assert merged_note["path"] == "Test/Conflict.md"
-      # Version must have been bumped (merge write increments version).
-      assert merged_note["version"] > 2
+      assert %{"conflict" => true, "server_note" => server_note} =
+               json_response(conn2, 409)
+
+      assert server_note["path"] == "Test/Conflict.md"
+      assert server_note["version"] == 2
+      assert server_note["content"] == "# v2"
     end
 
     test "succeeds when client version matches server version", %{conn: conn} do

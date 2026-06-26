@@ -1,10 +1,15 @@
 defmodule Engram.Notes.CrdtMergePathTest do
-  use Engram.DataCase, async: true
+  # async: false — these tests flip the global :crdt_enabled app env to exercise
+  # the server-side CRDT merge path, so they must not run concurrently with the
+  # default-off (legacy 409) tests in other modules.
+  use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtBridge, Note}
 
   setup do
+    Application.put_env(:engram, :crdt_enabled, true)
+    on_exit(fn -> Application.put_env(:engram, :crdt_enabled, false) end)
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
