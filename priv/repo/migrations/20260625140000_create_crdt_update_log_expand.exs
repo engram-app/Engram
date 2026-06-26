@@ -19,6 +19,10 @@ defmodule Engram.Repo.Migrations.CreateCrdtUpdateLogExpand do
     end
 
     create index(:crdt_update_log, [:note_id, :inserted_at])
+    # Cover the user_id / vault_id FKs (on_delete: :delete_all → cascade scans;
+    # user_id is also matched by the tenant_isolation RLS predicate on every row).
+    create index(:crdt_update_log, [:user_id])
+    create index(:crdt_update_log, [:vault_id])
 
     execute(
       "ALTER TABLE crdt_update_log ENABLE ROW LEVEL SECURITY",
