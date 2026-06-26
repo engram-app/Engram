@@ -8,7 +8,7 @@
 
 MCP-native · semantic + keyword search · real-time sync · self-hostable · source-available · Elixir/Phoenix
 
-[![Verify](https://github.com/engram-app/Engram/actions/workflows/verify.yml/badge.svg)](https://github.com/engram-app/Engram/actions/workflows/verify.yml)
+[![MCP](https://img.shields.io/badge/MCP-native-8A2BE2)](https://modelcontextprotocol.io)
 [![Last commit](https://img.shields.io/github/last-commit/engram-app/Engram)](https://github.com/engram-app/Engram/commits/main)
 [![Stars](https://img.shields.io/github/stars/engram-app/Engram?style=flat)](https://github.com/engram-app/Engram/stargazers)
 [![License](https://img.shields.io/badge/license-PolyForm_SB_1.0-blue)](LICENSE)
