@@ -52,6 +52,13 @@ defmodule Engram.Notes.Note do
     field :folder_hmac, :binary
     field :tags_hmac, {:array, :binary}, default: []
 
+    # CRDT (Yjs) document state for posture-C file-level sync. The full v1
+    # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the
+    # per-user DEK with AAD `aad_for_row(:notes, :crdt_state, id)`. NULL until
+    # a note's first CRDT-aware write seeds it from an empty Y.Doc.
+    field :crdt_state_ciphertext, :binary
+    field :crdt_state_nonce, :binary
+
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
     has_many :chunks, Engram.Notes.Chunk
@@ -72,7 +79,9 @@ defmodule Engram.Notes.Note do
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
-    :tags_hmac
+    :tags_hmac,
+    :crdt_state_ciphertext,
+    :crdt_state_nonce
   ]
 
   def changeset(note, attrs) do

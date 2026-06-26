@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.541",
+      version: "0.5.542",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -85,6 +85,11 @@ defmodule Engram.MixProject do
 
       # Markdown parsing
       {:earmark, "~> 1.4"},
+
+      # Yjs CRDT engine (Rust `yrs` via Rustler NIF). Stock Hex release with
+      # precompiled binaries — NO fork, NO DirtyCpu (Gate 0 spike proved
+      # bounded docs stay under the 1ms NIF budget). v1 wire format only.
+      {:y_ex, "~> 0.10.5"},
 
       # Email template rendering (MJML → responsive HTML, via mrml Rust NIF)
       {:mjml, "~> 6.0"},

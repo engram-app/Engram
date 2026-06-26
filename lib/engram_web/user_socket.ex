@@ -4,6 +4,7 @@ defmodule EngramWeb.UserSocket do
   require Logger
 
   channel "sync:*", EngramWeb.SyncChannel
+  channel "crdt:*", EngramWeb.CrdtChannel
   channel "user:*", EngramWeb.UserChannel
 
   @impl true

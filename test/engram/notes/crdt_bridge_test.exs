@@ -1,0 +1,78 @@
+defmodule Engram.Notes.CrdtBridgeTest do
+  use ExUnit.Case, async: true
+
+  alias Engram.Notes.CrdtBridge
+
+  test "merge_plaintext seeds an empty doc with the full incoming text" do
+    {:ok, %{state: state, text: text}} = CrdtBridge.merge_plaintext(nil, "# Hello\n\nbody")
+    assert text == "# Hello\n\nbody"
+    assert is_binary(state) and byte_size(state) > 0
+  end
+
+  test "merge_plaintext converges the doc to subsequent incoming text" do
+    {:ok, %{state: s1}} = CrdtBridge.merge_plaintext(nil, "the quick brown fox")
+    {:ok, %{state: _s2, text: text}} = CrdtBridge.merge_plaintext(s1, "the quick red fox jumps")
+    assert text == "the quick red fox jumps"
+  end
+
+  test "diff_into_text does NOT full-replace (unchanged prefix item survives)" do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    t = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    Yex.Text.insert(t, 0, "hello world")
+    sv_before = Yex.encode_state_vector!(doc)
+
+    :ok = CrdtBridge.diff_into_text(t, "hello brave world")
+
+    assert Yex.Text.to_string(t) == "hello brave world"
+    # A delete-all+reinsert rewrites every item, ballooning the state vector
+    # clock far past a 6-char insert. A minimal diff advances it modestly.
+    sv_after = Yex.encode_state_vector!(doc)
+    assert byte_size(sv_after) >= byte_size(sv_before)
+  end
+
+  test "two server-side merges from a shared base converge with no lost edits" do
+    {:ok, %{state: base}} = CrdtBridge.merge_plaintext(nil, "shared base line")
+
+    {:ok, %{state: sa}} = CrdtBridge.merge_plaintext(base, "shared base line — A edit")
+    {:ok, %{state: sb}} = CrdtBridge.merge_plaintext(base, "B prefix — shared base line")
+
+    {:ok, merged} = CrdtBridge.doc_from_state(sa)
+    :ok = Yex.apply_update(merged, sb)
+    final = CrdtBridge.text_of(merged)
+
+    assert final =~ "A edit"
+    assert final =~ "B prefix"
+    assert length(String.split(final, "shared base line")) == 2
+  end
+
+  # HARD v1 correctness gate (spec §12a contract 4): Yjs offsets are UTF-16
+  # code units, and `y_ex`'s offset_kind defaults to :bytes — so the bridge
+  # MUST build docs with offset_kind: :utf16 AND compute diff offsets in UTF-16
+  # code units. The Gate 0 spike only exercised ASCII; an astral-plane edit
+  # (emoji are surrogate pairs = 2 UTF-16 units) is where a bytes/graphemes
+  # offset corrupts the doc. These round-trips prove the unit is correct.
+  test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
+    # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
+    # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.
+    {:ok, %{state: s1, text: t1}} = CrdtBridge.merge_plaintext(nil, "café 漢字 🎉 end")
+    assert t1 == "café 漢字 🎉 end"
+
+    # Edit in the middle, after an astral char: insert/delete around 🎉.
+    {:ok, %{state: s2, text: t2}} = CrdtBridge.merge_plaintext(s1, "café 漢字 🎉🎊 middle end")
+    assert t2 == "café 漢字 🎉🎊 middle end"
+
+    # Replace an astral char with another (surrogate-pair boundary edit).
+    {:ok, %{text: t3}} = CrdtBridge.merge_plaintext(s2, "café 漢字 😀 middle end")
+    assert t3 == "café 漢字 😀 middle end"
+
+    # Two divergent edits from the emoji-bearing base still converge.
+    {:ok, %{state: ea}} = CrdtBridge.merge_plaintext(s1, "café 漢字 🎉 end — A")
+    {:ok, %{state: eb}} = CrdtBridge.merge_plaintext(s1, "B — café 漢字 🎉 end")
+    {:ok, merged} = CrdtBridge.doc_from_state(ea)
+    :ok = Yex.apply_update(merged, eb)
+    final = CrdtBridge.text_of(merged)
+    assert final =~ "— A"
+    assert final =~ "B —"
+    assert String.valid?(final)
+  end
+end

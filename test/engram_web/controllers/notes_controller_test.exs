@@ -66,6 +66,8 @@ defmodule EngramWeb.NotesControllerTest do
 
   describe "POST /notes version conflict" do
     test "returns 409 when client version doesn't match server version", %{conn: conn} do
+      # v1 ships :crdt_enabled = false, so the legacy conflict path is live:
+      # a stale client_version yields 409, not a server-side CRDT merge.
       # Create note (version 1)
       post(conn, "/api/notes", %{path: "Test/Conflict.md", content: "# v1", mtime: 1_000.0})
 

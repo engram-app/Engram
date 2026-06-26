@@ -52,6 +52,10 @@ defmodule Engram.Application do
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
         {Engram.Idempotency, []},
+        # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
+        # cluster-wide singletons via :global; this supervisor is the local
+        # owner when a room is started on this node (see CrdtRegistry).
+        {DynamicSupervisor, name: Engram.Notes.CrdtDocSupervisor, strategy: :one_for_one},
         # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
         # is unset (dev, test, self-host), and Enum.reject below filters it out.
         pyroscope_child(),

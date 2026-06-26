@@ -379,15 +379,18 @@ defmodule Engram.Notes do
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
-          # A stale-version write that we refused — silent on the client's happy
-          # path, so log it server-side with the ids + versions for triage.
+          # Concurrent-insert race: two clients both saw nil on the lookup and
+          # both tried to INSERT the same new path. The loser's ON CONFLICT DO
+          # NOTHING no-ops the insert; we re-fetch and find the winner's row
+          # instead of our own id. Log server-side so the race is detectable in
+          # triage, then return the existing note so the caller (channel / REST
+          # controller) can hand back a 409 that the client reconciles.
           Logger.warning(
-            "note_version_conflict",
+            "note_concurrent_insert_race",
             Metadata.with_category(:warning, :sync,
               user_id: user.id,
               vault_id: vault.id,
               note_id: existing.id,
-              client_version: client_version,
               server_version: existing.version
             )
           )
@@ -405,7 +408,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, _tags, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -444,8 +447,20 @@ defmodule Engram.Notes do
             _ -> mint_id()
           end
 
-        with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
-          phase_b = inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, tags)
+        with {:ok, crdt} <- maybe_merge_crdt(nil, base_attrs.content, user, note_id),
+             merged_attrs = %{
+               base_attrs
+               | content: crdt.merged_text,
+                 title: Helpers.extract_title(crdt.merged_text, sanitized_path),
+                 tags: crdt.tags,
+                 content_hash: crdt.content_hash
+             },
+             {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+          phase_b =
+            inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
+            |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+            |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
           changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
           seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
@@ -526,6 +541,15 @@ defmodule Engram.Notes do
     end
   end
 
+  # Conflict resolution is gated on the :crdt_enabled flag (default false in v1):
+  #
+  #   * CRDT enabled  — merge_plaintext in do_update_note IS the resolution; a
+  #     stale client_version does NOT 409, the diverging write is merged
+  #     convergently into crdt_state.
+  #   * CRDT disabled — the legacy path is authoritative: a stale client_version
+  #     yields {:conflict, existing} (→ 409) which the client reconciles via its
+  #     3-way merge / conflict-copy flow. The plugin's conflict detection keys
+  #     off this 409, so it must remain until CRDT is the live sync path.
   defp update_existing_note(
          existing,
          base_attrs,
@@ -535,28 +559,90 @@ defmodule Engram.Notes do
          tags,
          client_version
        ) do
-    if client_version != nil and client_version != existing.version do
+    if not crdt_enabled?() and client_version != nil and client_version != existing.version do
       {:conflict, existing}
     else
       do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
     end
   end
 
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, tags) do
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, existing.id) do
-      phase_b = inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, tags)
+  # Opt-in gate for CRDT (Yjs) sync, mirroring the plugin's `enableCrdt` setting.
+  # Default false for v1: CRDT ships dormant until the path is functional
+  # end-to-end, so the server keeps legacy 409-on-stale-version semantics.
+  defp crdt_enabled?, do: Application.get_env(:engram, :crdt_enabled, false)
 
-      seq = Engram.Vaults.next_seq!(existing.vault_id)
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags) do
+    with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
+      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
-      existing
-      |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
-      |> Ecto.Changeset.put_change(:seq, seq)
-      |> Repo.update()
-      |> case do
-        {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-        {:error, changeset} -> {:error, changeset}
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: merged_title,
+          tags: crdt.tags,
+          content_hash: crdt.content_hash
+      }
+
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
+        phase_b =
+          inject_phase_b_fields(
+            encrypted,
+            user,
+            existing.id,
+            sanitized_path,
+            folder,
+            crdt.tags
+          )
+          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        seq = Engram.Vaults.next_seq!(existing.vault_id)
+
+        existing
+        |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+        |> Ecto.Changeset.put_change(:seq, seq)
+        |> Repo.update()
+        |> case do
+          {:ok, updated} -> {:ok, {existing.content_hash, updated}}
+          {:error, changeset} -> {:error, changeset}
+        end
       end
     end
+  end
+
+  # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
+  # Loads the row's encrypted crdt_state (nil → fresh doc), diffs the incoming
+  # plaintext onto the Y.Text (never full-replace), re-encodes + re-encrypts.
+  # Returns the merged text so callers compute content_hash + tags from the
+  # MERGED result — the public-API contract is "server merges, never clobbers."
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
+    prior_state =
+      case existing do
+        %Note{} = note ->
+          case Crypto.decrypt_crdt_state(note, user) do
+            {:ok, state} -> state
+            {:error, _} = err -> throw({:crdt_decrypt, err})
+          end
+
+        nil ->
+          nil
+      end
+
+    with {:ok, %{state: new_state, text: merged_text}} <-
+           Engram.Notes.CrdtBridge.merge_plaintext(prior_state, incoming_content),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      {:ok,
+       %{
+         crdt_state_ciphertext: ct,
+         crdt_state_nonce: nonce,
+         merged_text: merged_text,
+         content_hash: Crypto.hmac_content_hash(key, merged_text),
+         tags: Helpers.extract_tags(merged_text)
+       }}
+    end
+  catch
+    {:crdt_decrypt, err} -> err
   end
 
   @doc """
@@ -2902,6 +2988,15 @@ defmodule Engram.Notes do
   # folder / tags ciphertext.
   defp inject_phase_b_fields(attrs, user, note_id, path, folder, tags) do
     Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
+  end
+
+  @doc false
+  # Public delegate so `CrdtCheckpoint` can reuse the single source of truth
+  # for HMAC + envelope computation without duplicating the phase-B logic.
+  # The `defp` counterpart cannot be called across module boundaries; this
+  # thin wrapper exposes it without promoting it to an official public API.
+  def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags) do
+    inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
   end
 
   # Returns a keyword list of Phase B field updates suitable for splicing into

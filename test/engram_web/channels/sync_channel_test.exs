@@ -184,6 +184,7 @@ defmodule EngramWeb.SyncChannelTest do
       assert_reply ref, :ok, %{"note" => note}
       assert note["version"] == 1
 
+      # v1 ships :crdt_enabled = false, so the legacy conflict path is live.
       # Push again with a stale client version. upsert_note returns the 3-tuple
       # {:error, :version_conflict, server_note}; the channel must translate it
       # into an error reply carrying the server's copy — not raise CaseClauseError.
