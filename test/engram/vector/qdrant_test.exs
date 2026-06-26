@@ -290,7 +290,11 @@ defmodule Engram.Vector.QdrantTest do
         decoded = Jason.decode!(body)
 
         assert decoded["exact"] == true
+        # Tenant triple is mandatory (#755) — a regression dropping user_id or
+        # vault_id would silently count across tenants.
         must = decoded["filter"]["must"]
+        assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
+        assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
         assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
 
         conn

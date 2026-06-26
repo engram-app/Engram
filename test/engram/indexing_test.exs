@@ -626,13 +626,25 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
       note = %Engram.Notes.Note{id: Ecto.UUID.generate(), user_id: user.id, vault_id: vault.id}
 
+      old_b64 = Base.encode64(<<9>>)
+
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        must = Jason.decode!(body)["filter"]["must"]
+
+        # The wrapper must forward the full tenant triple to Qdrant (#755).
+        assert %{"key" => "user_id", "match" => %{"value" => to_string(user.id)}} in must
+        assert %{"key" => "vault_id", "match" => %{"value" => to_string(vault.id)}} in must
+
+        assert %{"key" => "path_hmac", "match" => %{"value" => ^old_b64}} =
+                 Enum.find(must, &(&1["key"] == "path_hmac"))
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, ~s({"result": {"count": 2}}))
       end)
 
-      assert {:ok, 2} = Engram.Indexing.count_points_by_path_hmac(note, Base.encode64(<<9>>))
+      assert {:ok, 2} = Engram.Indexing.count_points_by_path_hmac(note, old_b64)
     end
   end
 
