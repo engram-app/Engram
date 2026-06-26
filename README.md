@@ -19,11 +19,10 @@ MCP-native · semantic + keyword search · real-time sync · self-hostable · so
 
 </div>
 
-The AI memory layer where your notes are the storage — markdown you and your AI
-assistants both read and write to via [MCP](https://modelcontextprotocol.io).
-Built with Elixir/Phoenix. Pairs with the
-[Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin
-for real-time bidirectional sync.
+Your notes stay plain markdown that you and your AI assistants both read and
+write. Pairs with the
+[Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin to
+sync your whole vault.
 
 ## Self-Host (Docker Compose)
 
