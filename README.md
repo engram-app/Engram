@@ -1,21 +1,28 @@
+<div align="center">
+
 # Engram
 
 ![Engram — your notes are your AI's memory, synced everywhere and read by your AI](assets/vault-banner.gif)
 
-[![Verify](https://github.com/engram-app/Engram/actions/workflows/verify.yml/badge.svg)](https://github.com/engram-app/Engram/actions/workflows/verify.yml)
+**Your notes are your AI's memory.**
+
+MCP-native · semantic + keyword search · real-time sync · self-hostable · source-available · Elixir/Phoenix
+
+[![MCP](https://img.shields.io/badge/MCP-native-8A2BE2)](https://modelcontextprotocol.io)
 [![Last commit](https://img.shields.io/github/last-commit/engram-app/Engram)](https://github.com/engram-app/Engram/commits/main)
 [![Stars](https://img.shields.io/github/stars/engram-app/Engram?style=flat)](https://github.com/engram-app/Engram/stargazers)
 [![License](https://img.shields.io/badge/license-PolyForm_SB_1.0-blue)](LICENSE)
 [![Sponsor](https://img.shields.io/github/sponsors/engram-app?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/engram-app)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/engrams_sync)
 
-Your notes are your AI's memory.
+[Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian)
 
-The AI memory layer where your notes are the storage — markdown you and your AI
-assistants both read and write to via [MCP](https://modelcontextprotocol.io).
-Built with Elixir/Phoenix. Pairs with the
-[Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin
-for real-time bidirectional sync.
+</div>
+
+Your notes stay plain markdown that you and your AI assistants both read and
+write. Pairs with the
+[Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin to
+sync your whole vault.
 
 ## Self-Host (Docker Compose)
 
