@@ -42,6 +42,10 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
       PHX_SERVER: "true"
+      # DIAGNOSTIC (branch diag/crdt-on-e2e): turn the CRDT sync path ON so the
+      # headless two-Obsidian e2e exercises it. Pairs with enableCrdt:true in the
+      # plugin settings (e2e/helpers/obsidian.py). NOT for merge.
+      CRDT_ENABLED: "true"
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}

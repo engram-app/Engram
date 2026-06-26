@@ -131,6 +131,10 @@ class ObsidianInstance:
             "debounceMs": 500,
             "liveSyncEnabled": True,
             "maxFileSizeMB": 5,
+            # DIAGNOSTIC (branch diag/crdt-on-e2e): opt the plugin into the CRDT
+            # sync path so the e2e exercises it end-to-end. Pairs with
+            # CRDT_ENABLED=true on the backend (ci/compose.yml). NOT for merge.
+            "enableCrdt": True,
         }
         if self.client_id:
             settings["clientId"] = self.client_id
