@@ -70,11 +70,12 @@ defmodule Engram.Notes.CrdtDeliver do
   # Step 2 — discovery announce. Mirrors the channel's own `crdt_doc_ready`
   # event (CrdtChannel.ensure_room/2); the plugin handles both identically.
   defp announce(user_id, vault_id, path) do
-    EngramWeb.Endpoint.broadcast(
-      "crdt:#{user_id}:#{vault_id}",
-      "crdt_doc_ready",
-      %{"doc_id" => "#{vault_id}/#{path}"}
-    )
+    _ =
+      EngramWeb.Endpoint.broadcast(
+        "crdt:#{user_id}:#{vault_id}",
+        "crdt_doc_ready",
+        %{"doc_id" => "#{vault_id}/#{path}"}
+      )
 
     :ok
   end
