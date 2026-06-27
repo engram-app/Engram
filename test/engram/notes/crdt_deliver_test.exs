@@ -1,0 +1,156 @@
+defmodule Engram.Notes.CrdtDeliverTest do
+  # async: false — registers rooms under :global (cluster-wide names) and
+  # subscribes to Endpoint topics. Uses a BARE SharedDoc with no persistence
+  # module, so there is no terminate-time DB flush (the :global-room sandbox
+  # hazard documented in crdt_channel_test.exs is specifically CrdtPersistence's
+  # unbind; a no-op room avoids it).
+  use Engram.DataCase, async: false
+
+  alias Engram.Notes.{CrdtDeliver, CrdtRegistry}
+  alias Yex.Sync.SharedDoc
+
+  setup do
+    user = insert(:user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "DeliverTest"})
+    %{user: user, vault: vault}
+  end
+
+  describe "deliver_out/5 — announce" do
+    test "broadcasts crdt_doc_ready to the vault crdt topic", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      note_id = Ecto.UUID.generate()
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "a.md", note_id, "# A")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "crdt_doc_ready",
+        payload: %{"doc_id" => doc_id}
+      }
+
+      assert doc_id == "#{vault.id}/a.md"
+    end
+
+    test "announces even when no room is live (no crash, vault-prefixed nested path)",
+         %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      note_id = Ecto.UUID.generate()
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "deep/nest/b.md", note_id, "x")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "crdt_doc_ready",
+        payload: %{"doc_id" => doc_id}
+      }
+
+      assert doc_id == "#{vault.id}/deep/nest/b.md"
+    end
+  end
+
+  describe "deliver_out/5 — live-room frame push" do
+    test "pushes a yjs frame to a live room's observers", %{user: user, vault: vault} do
+      note_id = Ecto.UUID.generate()
+      room = start_bare_room(note_id, "base")
+      SharedDoc.observe(room)
+
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "n.md", note_id, "base updated")
+
+      # The observing test process receives the diff frame produced by applying
+      # the incoming plaintext onto the room's owned doc (deliver-out, gap 3).
+      assert_receive {:yjs, frame, ^room}, 1000
+      assert is_binary(frame)
+
+      # And the discovery announce still fires for vault clients lacking the room.
+      assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
+
+      # The room's owned text converged to the incoming plaintext.
+      doc = SharedDoc.get_doc(room)
+      assert Engram.Notes.CrdtBridge.text_of(doc) == "base updated"
+    end
+
+    test "no-op when incoming equals the room's current text (still announces)",
+         %{user: user, vault: vault} do
+      note_id = Ecto.UUID.generate()
+      room = start_bare_room(note_id, "same")
+      SharedDoc.observe(room)
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "n.md", note_id, "same")
+
+      # diff_into_text is a no-op on equality → no frame broadcast...
+      refute_receive {:yjs, _frame, ^room}, 200
+      # ...but the announce always fires.
+      assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
+    end
+  end
+
+  describe "upsert_note wiring — crdt_enabled gate" do
+    setup do
+      prev = Application.get_env(:engram, :crdt_enabled, false)
+      Application.put_env(:engram, :crdt_enabled, true)
+      on_exit(fn -> Application.put_env(:engram, :crdt_enabled, prev) end)
+      :ok
+    end
+
+    test "an upsert announces crdt_doc_ready when crdt is enabled",
+         %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      {:ok, _note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "w.md",
+          "content" => "hi",
+          "mtime" => 1.0
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "crdt_doc_ready",
+        payload: %{"doc_id" => doc_id}
+      }
+
+      assert doc_id == "#{vault.id}/w.md"
+    end
+  end
+
+  test "an upsert does NOT announce crdt_doc_ready when crdt is disabled (default)",
+       %{user: user, vault: vault} do
+    EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+    {:ok, _note} =
+      Engram.Notes.upsert_note(user, vault, %{
+        "path" => "w2.md",
+        "content" => "hi",
+        "mtime" => 1.0
+      })
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 200
+  end
+
+  # A SharedDoc with NO persistence module (no bind/unbind), registered under the
+  # same :global name CrdtRegistry uses, so CrdtRegistry.lookup/1 finds it.
+  # auto_exit: false keeps it alive across observer churn within the test.
+  defp start_bare_room(note_id, seed_text) do
+    {:ok, room} =
+      SharedDoc.start_link(
+        [
+          doc_name: note_id,
+          doc_option: %Yex.Doc.Options{offset_kind: :utf16},
+          auto_exit: false
+        ],
+        name: CrdtRegistry.global_name(note_id)
+      )
+
+    on_exit(fn -> if Process.alive?(room), do: GenServer.stop(room) end)
+
+    if seed_text do
+      SharedDoc.update_doc(room, fn doc ->
+        Yex.Text.insert(Yex.Doc.get_text(doc, Engram.Notes.CrdtBridge.text_name()), 0, seed_text)
+      end)
+    end
+
+    room
+  end
+end

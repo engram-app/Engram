@@ -29,6 +29,19 @@ defmodule Engram.Notes.CrdtRegistry do
   def global_name(note_id) when is_binary(note_id), do: {:global, {:crdt_doc, note_id}}
 
   @doc """
+  Find the live room for `note_id` WITHOUT starting one, returning `nil` when
+  no room is running anywhere in the cluster. Used by the deliver-out path,
+  which must never spin a room for a note nobody is observing.
+  """
+  @spec lookup(String.t()) :: pid() | nil
+  def lookup(note_id) when is_binary(note_id) do
+    case :global.whereis_name({:crdt_doc, note_id}) do
+      pid when is_pid(pid) -> pid
+      :undefined -> nil
+    end
+  end
+
+  @doc """
   Idempotently start (or find) the singleton room for `note_id`.
 
   Returns `{:ok, pid}` whether the room was just started or was already
