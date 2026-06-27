@@ -1,8 +1,8 @@
 """Test 55: Destructive confirm view in SyncPreviewModal.
 
 Covers the typed-"delete" gate for the two destructive sync directions:
-  - push-all-delete-remote ("Push all + delete remote")
-  - pull-all-delete-local  ("Pull all + delete local")
+  - push-all-delete-remote ("Delete all on remote, then upload local files")
+  - pull-all-delete-local  ("Delete all local files, then download from remote")
 
 Pre-PR-61 plugins lack the typed-confirm input — skip cleanly there.
 
@@ -46,10 +46,10 @@ async def _seed_divergent(
     """Produce a plan with BOTH a local-only and a remote-only file.
 
     Why both sides:
-      - "Push all + delete remote" only renders meaningfully when the plan has
+      - "Delete all on remote, then upload local files" only renders meaningfully when the plan has
         a non-zero ``deleteRemoteCount`` (i.e. at least one path lives ONLY on
         the server).
-      - "Pull all + delete local" only renders meaningfully when the plan has
+      - "Delete all local files, then download from remote" only renders meaningfully when the plan has
         a non-zero ``deleteLocalCount`` (i.e. at least one path lives ONLY in
         the vault).
 
@@ -141,8 +141,8 @@ async def divergent_seed(vault_a, cdp_a, api_sync):
 @pytest.mark.parametrize(
     "label",
     [
-        "Push all + delete remote",
-        "Pull all + delete local",
+        "Delete all on remote, then upload local files",
+        "Delete all local files, then download from remote",
     ],
 )
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_destructive_confirm_dispatches_choice(cdp_a, divergent_seed):
         await cdp_a.open_sync_preview_modal()
         await cdp_a.wait_for_sync_preview_modal()
 
-        await cdp_a.pick_modal_option("Push all + delete remote")
+        await cdp_a.pick_modal_option("Delete all on remote, then upload local files")
         await cdp_a.type_destructive_confirm("delete")
         await cdp_a.click_modal_confirm()
 

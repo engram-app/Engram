@@ -160,26 +160,8 @@ def test_free_attachment_blocked_note_passes():
         f"{att_after.status_code}: {att_after.text[:200]}"
     )
 
-
-@pytest.mark.skip(
-    reason=(
-        "Plugin Phase 7 not shipped: Sync Center 'needs Pro' marker + "
-        "/attachment.*skipped/i toast assertions live in the plugin's "
-        "UI. Re-enable once src/views/sync-center.ts surfaces the 402 "
-        "row and src/main.ts wires the toast on the attachment-skipped "
-        "telemetry. Backend 402 contract is covered by "
-        "test_free_attachment_blocked_note_passes above."
-    )
-)
-def test_sync_center_marks_attachment_needs_pro():
-    """Placeholder for the plugin-side Sync Center + toast assertions.
-
-    When Phase 7 ships, this will:
-      1. Provision a Free Obsidian instance (separate fixture).
-      2. write_binary(vault, 'image.png', TINY_PNG)
-      3. trigger_full_sync()
-      4. CDP-evaluate the Sync Center DOM for a row matching image.png
-         with the "needs Pro" marker, and assert a Notice fired matching
-         /attachment.*skipped/i.
-    """
-    raise NotImplementedError
+# NOTE: the plugin-side Sync Center "needs Pro" marker + attachment-skipped
+# toast assertions are NOT covered here — they belong in the plugin's own UI
+# tests once that surface ships. The backend 402 contract is covered by
+# test_free_attachment_blocked_note_passes above. (Removed a perpetually-skipped
+# NotImplementedError placeholder that never ran — see the no-skip policy.)

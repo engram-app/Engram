@@ -42,6 +42,10 @@ services:
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
       PHX_SERVER: "true"
+      # Advertise the file-level CRDT `crdt:` channel when the e2e-crdt job opts
+      # in (CRDT_ENABLED=true). Default off so the legacy e2e jobs run the REST
+      # push/pull path; a non-opted-in plugin never joins `crdt:` either way.
+      CRDT_ENABLED: ${CRDT_ENABLED:-false}
       OLLAMA_URL: http://10.0.20.214:11434
       QDRANT_URL: http://10.0.20.201:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ci_test_notes}

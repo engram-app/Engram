@@ -89,10 +89,10 @@ async def test_modal_appears_on_first_sync(vault_a, cdp_a):
     "label, expected_choice, destructive",
     [
         ("Sync", "smart-merge", False),
-        ("Push all + keep remote", "push-all-keep-remote", False),
-        ("Pull all + keep local", "pull-all-keep-local", False),
-        ("Push all + delete remote", "push-all-delete-remote", True),
-        ("Pull all + delete local", "pull-all-delete-local", True),
+        ("Upload local files without downloading the remote", "push-all-keep-remote", False),
+        ("Download remote files without uploading the local", "pull-all-keep-local", False),
+        ("Delete all on remote, then upload local files", "push-all-delete-remote", True),
+        ("Delete all local files, then download from remote", "pull-all-delete-local", True),
     ],
 )
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_vault_switch_reopens_modal(vault_a, cdp_a):
         await cdp_a.wait_for_sync_preview_modal()
 
         header = await cdp_a.get_modal_header_text()
-        assert "New vault detected" in header, (
+        assert "different cloud vault" in header, (
             f"Expected vault-switch header, got: {header!r}"
         )
 

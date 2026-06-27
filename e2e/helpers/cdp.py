@@ -454,31 +454,52 @@ class CdpClient:
         )
         return result or ""
 
-    async def pick_modal_option(self, label: str) -> None:
+    async def pick_modal_option(self, label: str, timeout: float = 10) -> None:
         """Click a SyncPreviewModal option button by its visible label.
+
+        The option buttons render asynchronously (plugin #145): the modal
+        opens in a loading view while computeSyncPlan runs in the background,
+        and the merge/push/pull options only appear once the plan resolves
+        (SyncPreviewModal.setPlan → render). Poll until the labelled option
+        is present before clicking, rather than assuming it exists the instant
+        the modal container mounts.
 
         For destructive choices the modal switches to the confirm view —
         call click_modal_confirm() afterward to resolve.
         """
         escaped = json.dumps(label)
-        clicked = await self.evaluate(
-            f"""
-            (() => {{
-                const labels = document.querySelectorAll(
-                    '.engram-sync-preview-modal .engram-sync-preview-option-label'
-                );
-                for (const span of labels) {{
-                    if (span.textContent.trim() === {escaped}) {{
-                        const btn = span.closest('button');
-                        if (btn) {{ btn.click(); return true; }}
+        deadline = time.monotonic() + timeout
+        while True:
+            clicked = await self.evaluate(
+                f"""
+                (() => {{
+                    const labels = document.querySelectorAll(
+                        '.engram-sync-preview-modal .engram-sync-preview-option-label'
+                    );
+                    for (const span of labels) {{
+                        if (span.textContent.trim() === {escaped}) {{
+                            const btn = span.closest('button');
+                            if (btn) {{
+                                // The push/pull options moved behind an
+                                // "Advanced sync options" <details> accordion
+                                // (plugin #145). Open any ancestor <details>
+                                // so the option is interactable before click.
+                                const det = btn.closest('details');
+                                if (det) det.open = true;
+                                btn.click();
+                                return true;
+                            }}
+                        }}
                     }}
-                }}
-                return false;
-            }})()
-            """
-        )
-        if clicked is not True:
-            raise CdpError(f"Modal option '{label}' not found")
+                    return false;
+                }})()
+                """
+            )
+            if clicked is True:
+                return
+            if time.monotonic() >= deadline:
+                raise CdpError(f"Modal option '{label}' not found")
+            await asyncio.sleep(0.2)
 
     async def click_modal_confirm(self) -> None:
         """Type "delete" and click the confirm button for a destructive choice.
