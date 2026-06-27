@@ -55,9 +55,11 @@ config :engram, :storage, Engram.Storage.S3
 # replacement for legacy push/pull (basic A→B delivery is not functional and it
 # changes offline-queue / versioning / conflict-file semantics). When false the
 # server keeps legacy 409-on-stale-version conflict resolution, and the plugin's
-# matching `enableCrdt` setting keeps it off the `crdt:` topic. Flip to true only
-# once the end-to-end CRDT path is verified.
-config :engram, :crdt_enabled, false
+# matching `enableCrdt` setting keeps it off the `crdt:` topic. CRDT is now the
+# DEFAULT content-sync path (verified e2e via the crdt: suite + gap-3 external
+# delivery); opt OUT explicitly with CRDT_ENABLED=false (falls back to legacy
+# 409-on-stale-version conflict resolution — the e2e-clerk lane + kill switch).
+config :engram, :crdt_enabled, true
 
 # Oban job queue (per-env overrides in dev/test/prod configs)
 config :engram, Oban,
