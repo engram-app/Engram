@@ -108,6 +108,12 @@ defmodule EngramWeb.CrdtChannel do
             |> assign(:rooms, Map.put(socket.assigns.rooms, doc_id, entry))
             |> assign(:room_doc, Map.put(socket.assigns.room_doc, room, doc_id))
 
+          # Announce to all OTHER clients on this vault's crdt: channel that a
+          # room is now active for doc_id. Recipients send a sync-step-1 (state
+          # vector) which the server answers with step-2 (the diff they're
+          # missing), so any device that doesn't yet have this note gets it.
+          broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})
+
           {:ok, socket, entry}
         end
     end

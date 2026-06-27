@@ -17,7 +17,7 @@ defmodule Engram.Notes.CrdtPersistence do
   import Ecto.Query
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtCheckpointTimer, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpointTimer, CrdtUpdateLog, Note}
 
   require Logger
 
@@ -33,12 +33,28 @@ defmodule Engram.Notes.CrdtPersistence do
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
           %Note{} = note ->
-            case Crypto.decrypt_crdt_state(note, user) do
-              {:ok, snapshot} when is_binary(snapshot) -> :ok = Yex.apply_update(doc, snapshot)
-              _ -> :ok
-            end
+            from_snapshot? =
+              case Crypto.decrypt_crdt_state(note, user) do
+                {:ok, snapshot} when is_binary(snapshot) ->
+                  :ok = Yex.apply_update(doc, snapshot)
+                  true
 
-            replay_tail(doc, user, note_id)
+                _ ->
+                  false
+              end
+
+            tail_count = replay_tail(doc, user, note_id)
+
+            # Fresh room: no snapshot AND no tail-log updates means this note has
+            # never been CRDT-edited, so the only source of truth is the plaintext
+            # `notes.content`. Seed the doc from it so a device that has never
+            # opened the note (discovery via the crdt_doc_ready announce or a
+            # /changes pull) still receives the body over the y-protocols
+            # handshake. The client's `seedOnce` guard (skips when an LCA exists)
+            # prevents a double-seed once the server is authoritative.
+            if not from_snapshot? and tail_count == 0 do
+              seed_from_content(doc, note, user)
+            end
 
           nil ->
             :ok
@@ -133,12 +149,17 @@ defmodule Engram.Notes.CrdtPersistence do
     :ok
   end
 
+  # Replays the encrypted tail-log onto `doc` and returns the number of rows
+  # found (whether or not each decrypted) so bind/3 can tell a fresh room (0
+  # rows) from one that already carries CRDT history.
   defp replay_tail(doc, user, note_id) do
-    CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id)
-    |> order_by([l], asc: l.inserted_at)
-    |> Repo.all()
-    |> Enum.each(fn row ->
+    rows =
+      CrdtUpdateLog
+      |> where([l], l.note_id == ^note_id)
+      |> order_by([l], asc: l.inserted_at)
+      |> Repo.all()
+
+    Enum.each(rows, fn row ->
       shaped = %Note{
         id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
@@ -166,5 +187,25 @@ defmodule Engram.Notes.CrdtPersistence do
           )
       end
     end)
+
+    length(rows)
+  end
+
+  # Seeds a fresh doc's text from the note's plaintext content. Used only when
+  # the note has no CRDT state yet (see bind/3) so discovery delivers the body.
+  # maybe_decrypt_note_fields/2 also UTF-8-scrubs the content, keeping the Yjs
+  # text JSON-safe. A nil/empty body seeds nothing (a blank note stays blank).
+  defp seed_from_content(doc, %Note{} = note, user) do
+    case Crypto.maybe_decrypt_note_fields(note, user) do
+      {:ok, %Note{content: content}} when is_binary(content) and content != "" ->
+        doc
+        |> Yex.Doc.get_text(CrdtBridge.text_name())
+        |> Yex.Text.insert(0, content)
+
+        :ok
+
+      _ ->
+        :ok
+    end
   end
 end
