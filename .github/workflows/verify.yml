@@ -1019,6 +1019,456 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+  e2e-crdt:
+    # CRDT-only E2E suite (spec §12a). Faithful clone of e2e-clerk's
+    # Obsidian/Xvfb/CDP machinery, but: local auth (no Clerk), CRDT_ENABLED=true
+    # stack, the ci/compose.local.yml overlay, and it runs ONLY tests/crdt/.
+    #
+    # Sequenced AFTER e2e-clerk (`needs: e2e-clerk`) so the two never run
+    # concurrently on the shared self-hosted runner — they'd otherwise collide
+    # on the same per-run-number Xvfb display window.
+    needs: [fingerprint, prebuild-ci-image, e2e-clerk]
+    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    runs-on: [self-hosted, linux, x64, isolated]
+
+    env:
+      # Distinct project name so containers/volumes never collide with
+      # e2e-clerk's engram-ci-<run_id> stack.
+      CI_PROJECT: engram-ci-crdt-${{ github.run_id }}
+      QDRANT_COLLECTION: ci_crdt_${{ github.run_id }}
+      MARKER_PREFIX: /tmp/ci-crdt-${{ github.run_id }}
+      E2E_VAULT_PREFIX: /tmp/e2e-crdt-vault-${{ github.run_id }}
+      E2E_CONFIG_PREFIX: /tmp/e2e-crdt-obsidian-config-${{ github.run_id }}
+      ENGRAM_CI_IMAGE: ${{ needs.prebuild-ci-image.outputs.image }}
+
+    steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ENGRAM_CI_CLIENT_ID }}
+          private-key: ${{ secrets.ENGRAM_CI_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram-obsidian
+
+      # ------------------------------------------------------------------
+      # Cleanup + checkout (both repos)
+      # ------------------------------------------------------------------
+      - name: Compute display range for this run
+        id: display
+        run: |
+          # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
+          # runs with different run_numbers (modulo 15) get non-overlapping
+          # 6-display windows. Pre-cleanup and tear-down both need this range
+          # so they can scope Xvfb kills to displays this run actually owns.
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
+          MIN=$((BASE - 5))
+          MAX=$BASE
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "min=$MIN" >> "$GITHUB_OUTPUT"
+          echo "max=$MAX" >> "$GITHUB_OUTPUT"
+          echo "Display range owned by this run: :$MIN..:$MAX"
+
+      - name: Pre-cleanup stale resources
+        env:
+          DISPLAY_MIN: ${{ steps.display.outputs.min }}
+          DISPLAY_MAX: ${{ steps.display.outputs.max }}
+        run: |
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
+          # Orphan Xvfb cleanup is scoped to THIS run's display range only,
+          # so a concurrent e2e-clerk on a different run_number bucket isn't
+          # killed mid-test. Xvfb processes match via the `:N` arg on the
+          # command line; lock files live at /tmp/.X{N}-lock and the socket
+          # at /tmp/.X11-unix/X{N}.
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
+            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
+          done
+          sleep 1
+          rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
+          # Sparse-checkout leak recovery. Cross-repo plugin checkouts and the
+          # obsidian-update workflow can leave `core.sparseCheckout=true` and
+          # skip-worktree bits on the shared workspace index. `git sparse-checkout
+          # disable` clears the config but NOT the index bits, so a subsequent
+          # `actions/checkout@v7 --clean:false` lands an empty working tree
+          # (mix.exs missing, etc.). Nuke `.git` when poison is detected so the
+          # next checkout reclones cleanly. Untracked caches (_build/, deps/,
+          # node_modules/) survive — they live outside .git.
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          clean: false  # Preserve _build/ and deps/ for incremental compilation
+
+      - name: Checkout plugin
+        env:
+          EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
+          CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Branch is used only to scope the fetch; the final checkout pins
+          # the exact PLUGIN_SHA resolved by the `fingerprint` job. This
+          # guarantees the tested commit matches the e2e cache key even if
+          # the upstream branch moves between fingerprint and this step.
+          # curl (not gh CLI) — engram-isolated runners don't ship gh on PATH.
+          if [ -n "$EXPLICIT_BRANCH" ] && [ "$EXPLICIT_BRANCH" != "main" ]; then
+            BRANCH="$EXPLICIT_BRANCH"
+          elif curl -fsS -o /dev/null \
+                 -H "Authorization: Bearer ${GH_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/engram-app/Engram-obsidian/branches/$CURRENT_BRANCH" 2>/dev/null; then
+            BRANCH="$CURRENT_BRANCH"
+            echo "🔗 Auto-linked plugin branch: $BRANCH"
+          else
+            BRANCH="main"
+          fi
+          echo "Plugin: $BRANCH @ $PLUGIN_SHA"
+          if [ -d plugin-src/.git ]; then
+            cd plugin-src
+            git checkout -- .
+            git clean -fd
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "$PLUGIN_SHA"
+          else
+            git clone --branch "$BRANCH" --single-branch \
+              "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git" plugin-src
+            cd plugin-src
+            git checkout "$PLUGIN_SHA"
+          fi
+
+      # ------------------------------------------------------------------
+      # Launch ALL long-running prep in parallel (background)
+      # ------------------------------------------------------------------
+      - name: Allocate dynamic ports
+        id: ports
+        env:
+          DISPLAY_BASE: ${{ steps.display.outputs.base }}
+        run: |
+          get_free_port() {
+            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+          }
+          ENGRAM_PORT=$(get_free_port)
+          PG_PORT=$(get_free_port)
+          # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports total.
+          # Per-worker env vars (E2E_CDP_PORT_A_W{0,1} etc) are consumed by
+          # e2e/conftest.py so dynamic (non-contiguous) allocation is safe.
+          CDP_PORT_A_W0=$(get_free_port)
+          CDP_PORT_B_W0=$(get_free_port)
+          CDP_PORT_C_W0=$(get_free_port)
+          CDP_PORT_A_W1=$(get_free_port)
+          CDP_PORT_B_W1=$(get_free_port)
+          CDP_PORT_C_W1=$(get_free_port)
+          # DISPLAY_BASE comes from the earlier "Compute display range" step so
+          # pre-cleanup and tear-down can scope Xvfb kills consistently.
+
+          # Validate all ports are non-empty (get_free_port can fail silently)
+          for var in ENGRAM_PORT PG_PORT \
+                     CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
+                     CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Port allocation failed for $var"
+              exit 1
+            fi
+          done
+
+          {
+            echo "engram_port=$ENGRAM_PORT"
+            echo "pg_port=$PG_PORT"
+            echo "cdp_port_a_w0=$CDP_PORT_A_W0"
+            echo "cdp_port_b_w0=$CDP_PORT_B_W0"
+            echo "cdp_port_c_w0=$CDP_PORT_C_W0"
+            echo "cdp_port_a_w1=$CDP_PORT_A_W1"
+            echo "cdp_port_b_w1=$CDP_PORT_B_W1"
+            echo "cdp_port_c_w1=$CDP_PORT_C_W1"
+            echo "display_base=$DISPLAY_BASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
+          echo "  w0 cdp: $CDP_PORT_A_W0 $CDP_PORT_B_W0 $CDP_PORT_C_W0"
+          echo "  w1 cdp: $CDP_PORT_A_W1 $CDP_PORT_B_W1 $CDP_PORT_C_W1"
+          echo "  display base :$DISPLAY_BASE (uses :$DISPLAY_BASE..:$((DISPLAY_BASE-5)))"
+
+      - name: "Background: CI stack + plugin build + Playwright + Ollama + Qdrant"
+        env:
+          CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
+          CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
+          QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
+        run: |
+          # --- CI stack build + start (background) ---
+          (
+            # Cap Docker build cache (--mount=type=cache grows unbounded)
+            docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
+
+            # Clean up stale CI collection on SlowRaid Qdrant before starting
+            curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
+
+            # Pull the image `prebuild-ci-image` published to the FastRaid
+            # registry — this runner may be a different host than the one that
+            # built it. Explicit pull (vs relying on compose's pull-on-missing)
+            # keeps the failure legible: a registry miss fails here with the
+            # real ref instead of a confusing Docker Hub denial during `up`.
+            docker pull "$ENGRAM_CI_IMAGE"
+            # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that
+            # exact tag. `--no-build` keeps startup honest — never a silent
+            # rebuild; the image must already exist (now pulled above).
+            # ci/compose.local.yml overlays local auth; CRDT_ENABLED=true opts
+            # the engram service into CRDT (compose.yml reads ${CRDT_ENABLED}).
+            CRDT_ENABLED=true docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait
+
+            # Quick verification — compose --wait already confirmed healthcheck,
+            # this just confirms the port mapping is reachable from the host
+            for i in $(seq 1 15); do
+              if curl -sf "http://localhost:${CI_ENGRAM_PORT}/api/health" > /dev/null 2>&1; then
+                echo "CI stack healthy on port ${CI_ENGRAM_PORT}"
+                touch "${MARKER_PREFIX}-stack.marker"
+                break
+              fi
+              sleep 1
+            done
+            if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
+              echo "ERROR: CI stack failed to start" >&2
+              touch "${MARKER_PREFIX}-stack-failed.marker"
+            fi
+          ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
+          echo "CI stack build started (PID $!)"
+
+          # --- Plugin build (background) ---
+          (
+            if [ -x "$HOME/.bun/bin/bun" ]; then
+              echo "bun already installed: $($HOME/.bun/bin/bun --version)"
+            else
+              curl -fsSL https://bun.sh/install | bash
+            fi
+            export PATH="$HOME/.bun/bin:$PATH"
+            cd plugin-src
+            bun install --frozen-lockfile --registry http://10.0.20.214:4873
+            bun run build
+            # Verify build
+            if [ -f main.js ] && [ -f manifest.json ]; then
+              touch "${MARKER_PREFIX}-plugin.marker"
+              echo "Plugin build OK: $(ls -la main.js)"
+            else
+              echo "ERROR: Plugin build failed — missing main.js or manifest.json" >&2
+              touch "${MARKER_PREFIX}-plugin-failed.marker"
+            fi
+          ) > "${MARKER_PREFIX}-plugin.log" 2>&1 &
+          echo "Plugin build started (PID $!)"
+
+          # --- Playwright install (background) ---
+          (
+            if python3 -c "from playwright.sync_api import sync_playwright" 2>/dev/null && \
+               ls -d "$HOME/.cache/ms-playwright/chromium-"* > /dev/null 2>&1; then
+              echo "Playwright + Chromium already installed, skipping"
+            else
+              pip install 'playwright>=1.48'
+              python3 -m playwright install chromium
+            fi
+            touch "${MARKER_PREFIX}-playwright.marker"
+          ) > "${MARKER_PREFIX}-playwright.log" 2>&1 &
+          echo "Playwright install started (PID $!)"
+
+          # --- Ollama reachability check (background) ---
+          (
+            if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
+              echo "Ollama OK"
+              touch "${MARKER_PREFIX}-ollama.marker"
+            else
+              echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
+              touch "${MARKER_PREFIX}-ollama-warn.marker"
+            fi
+          ) > "${MARKER_PREFIX}-ollama.log" 2>&1 &
+          echo "Ollama check started (PID $!)"
+
+          # --- Qdrant reachability check (background) ---
+          # SlowRaid (10.0.20.201) hosts persistent Qdrant with AVX2 for binary quantization.
+          # Runner VM (10.20.99.x) → SlowRaid host has intermittent connectivity (shim-br0 /
+          # MASQUERADE routing race per docs/context/runner-vm-setup.md gotcha #1). A single-shot
+          # probe sometimes fails even though Qdrant is up — retry 6× over 30s before giving up.
+          (
+            ok=false
+            for attempt in $(seq 1 6); do
+              if curl -sf --max-time 5 http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
+                echo "Qdrant OK (SlowRaid AVX2) — attempt ${attempt}"
+                ok=true
+                break
+              fi
+              echo "attempt ${attempt}: Qdrant probe failed; retrying in 5s…"
+              sleep 5
+            done
+            if $ok; then
+              touch "${MARKER_PREFIX}-qdrant.marker"
+            else
+              echo "ERROR: Qdrant on SlowRaid not reachable after 6 attempts — binary quantization tests will fail"
+              touch "${MARKER_PREFIX}-qdrant-failed.marker"
+            fi
+          ) > "${MARKER_PREFIX}-qdrant.log" 2>&1 &
+          echo "Qdrant check started (PID $!)"
+
+      # ------------------------------------------------------------------
+      # Wait for all background tasks
+      # ------------------------------------------------------------------
+      - name: Wait for CI stack + plugin + Playwright + Ollama + Qdrant
+        run: |
+          echo "Waiting for CI stack..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-stack.marker" ]; then echo "CI stack ready"; break; fi
+            if [ -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
+              echo "CI stack failed to start. Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
+            fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
+            echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
+          fi
+
+          echo "Waiting for plugin build..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-plugin.marker" ]; then echo "Plugin ready"; break; fi
+            if [ -f "${MARKER_PREFIX}-plugin-failed.marker" ]; then
+              echo "Plugin build failed. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+            fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-plugin.marker" ]; then
+            echo "Plugin build timed out. Logs:"; cat "${MARKER_PREFIX}-plugin.log"; exit 1
+          fi
+
+          echo "Waiting for Playwright..."
+          for i in $(seq 1 300); do
+            if [ -f "${MARKER_PREFIX}-playwright.marker" ]; then echo "Playwright ready"; break; fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-playwright.marker" ]; then
+            echo "Playwright install timed out. Logs:"; cat "${MARKER_PREFIX}-playwright.log"; exit 1
+          fi
+
+          echo "Waiting for Ollama check..."
+          for i in $(seq 1 30); do
+            if [ -f "${MARKER_PREFIX}-ollama.marker" ] || [ -f "${MARKER_PREFIX}-ollama-warn.marker" ]; then break; fi
+            sleep 1
+          done
+          if [ -f "${MARKER_PREFIX}-ollama-warn.marker" ]; then
+            cat "${MARKER_PREFIX}-ollama.log"
+          elif [ -f "${MARKER_PREFIX}-ollama.marker" ]; then
+            echo "Ollama OK"
+          else
+            echo "WARNING: Ollama check timed out. Logs:"; cat "${MARKER_PREFIX}-ollama.log" 2>/dev/null || true
+          fi
+
+          echo "Waiting for Qdrant check..."
+          for i in $(seq 1 15); do
+            if [ -f "${MARKER_PREFIX}-qdrant.marker" ]; then echo "Qdrant OK"; break; fi
+            if [ -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
+              echo "ERROR: Qdrant on SlowRaid (10.0.20.201) not reachable. Logs:"
+              cat "${MARKER_PREFIX}-qdrant.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ ! -f "${MARKER_PREFIX}-qdrant.marker" ] && [ ! -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
+            echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
+          fi
+
+          # Add bun to PATH for E2E tests (already installed by plugin build)
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      # ------------------------------------------------------------------
+      # CRDT E2E tests (local auth, CRDT_ENABLED stack)
+      # ------------------------------------------------------------------
+      - name: "Run CRDT E2E tests"
+        if: always()
+        working-directory: e2e
+        # -n 2 --dist=loadfile: two xdist workers, each owns whole test files
+        # (preserves intra-file ordering). E2E_WORKERS defaults to 2 but can be
+        # overridden to 1 for rollback.
+        run: |
+          # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
+          # into CRDT (E2E_ENABLE_CRDT=true) against a CRDT_ENABLED backend and
+          # uses eventually-consistent assertions.
+          python3 -m pytest tests/crdt/ -v --timeout=180 -p no:cacheprovider --no-header
+        env:
+          ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
+          ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
+          CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
+          CI_MINIO_CONTAINER: ${{ env.CI_PROJECT }}-minio-1
+          AUTH_PROVIDER: local
+          E2E_ENABLE_CRDT: "true"
+          E2E_VAULT_PREFIX: ${{ env.E2E_VAULT_PREFIX }}
+          E2E_CONFIG_PREFIX: ${{ env.E2E_CONFIG_PREFIX }}
+          E2E_CDP_PORT_A_W0: ${{ steps.ports.outputs.cdp_port_a_w0 }}
+          E2E_CDP_PORT_B_W0: ${{ steps.ports.outputs.cdp_port_b_w0 }}
+          E2E_CDP_PORT_C_W0: ${{ steps.ports.outputs.cdp_port_c_w0 }}
+          E2E_CDP_PORT_A_W1: ${{ steps.ports.outputs.cdp_port_a_w1 }}
+          E2E_CDP_PORT_B_W1: ${{ steps.ports.outputs.cdp_port_b_w1 }}
+          E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
+          E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
+
+      # ------------------------------------------------------------------
+      # Cleanup — MUST kill everything, even on cancel/failure
+      # ------------------------------------------------------------------
+      - name: Collect failure logs
+        if: failure()
+        run: |
+          mkdir -p ci-artifacts
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
+          cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
+          # Pytest detailed log (captures DEBUG+ from all helpers)
+          cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
+          for v in ${E2E_VAULT_PREFIX}-*; do
+            [ -d "$v" ] && tar czf "ci-artifacts/$(basename $v).tar.gz" -C /tmp "$(basename $v)" 2>/dev/null || true
+          done
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-crdt-debug-${{ github.sha }}
+          path: ci-artifacts/
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        env:
+          DISPLAY_MIN: ${{ steps.display.outputs.min }}
+          DISPLAY_MAX: ${{ steps.display.outputs.max }}
+        run: |
+          # Delete this run's Qdrant collection on SlowRaid
+          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
+          # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
+          pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
+          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
+          # by the display number we own. Scope is mandatory now that the
+          # workflow can run in parallel — blanket pkill would nuke neighbors.
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
+          done
+          # Wait for processes to die before removing their dirs
+          sleep 1
+          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
+            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
+          done
+          # Remove only this run's temp dirs + marker files
+          rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
+          # Tear down only this run's Docker stack
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          # Prune dangling images + volumes to reclaim disk
+          docker image prune -f 2>/dev/null || true
+          docker volume prune -f 2>/dev/null || true
+          # Keep only the 3 most recent engram-ci cache tags. Match BOTH the
+          # bare local build tag (engram-ci:<hash>) and the registry-qualified
+          # tag the e2e jobs now pull (${LOCAL_REGISTRY}/engram-ci:<hash>) —
+          # otherwise the pulled copies accumulate unbounded on each runner.
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            --filter "reference=engram-ci:*" --filter "reference=*/engram-ci:*" \
+            | tail -n +4 | xargs -r docker rmi 2>/dev/null || true
+          # Clean up ci-artifacts and stale Bun native cache files
+          rm -rf ci-artifacts/
+          find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
+
   unit-tests:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
@@ -2504,7 +2954,7 @@ jobs:
 
   ci:
     if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -2514,6 +2964,7 @@ jobs:
           LN="${{ needs.lint.result }}"
           SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
+          ED="${{ needs.e2e-crdt.result }}"
           EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
           LG="${{ needs.legal-cross-repo.result }}"
@@ -2537,7 +2988,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-local / e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "storage-database=$SD" "e2e-local=$EL" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "storage-database=$SD" "e2e-crdt=$ED" "e2e-local=$EL" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
