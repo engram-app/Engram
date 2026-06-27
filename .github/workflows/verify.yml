@@ -882,7 +882,11 @@ jobs:
         # (preserves intra-file ordering for test_31 restart + test_50 smoke).
         # E2E_WORKERS defaults to 2 but can be overridden to 1 for rollback.
         run: |
-          python3 -m pytest tests/ --ignore=tests/api_only/ \
+          # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
+          # into CRDT and uses eventually-consistent assertions, so it must NOT
+          # run on this REST-path job — it has its own (CRDT_ENABLED) job. Ignore
+          # it here so it isn't even collected as skips.
+          python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
             -n "${E2E_WORKERS:-2}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
