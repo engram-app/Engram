@@ -66,33 +66,6 @@ defmodule Engram.NotesTest do
       refute log =~ "note_path_rewritten"
     end
 
-    test "stale-version write 409s when CRDT disabled (default — legacy conflict path)", %{
-      user: user,
-      vault: vault
-    } do
-      # v1 ships with :crdt_enabled = false, so the legacy conflict path is
-      # authoritative: a stale client_version yields a version_conflict (→ 409)
-      # the client reconciles via its 3-way merge / conflict-copy flow. Without
-      # this the plugin's conflict detection (which keys off the 409) never fires.
-      {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Conflict.md",
-          "content" => "# v1",
-          "mtime" => 1_000.0
-        })
-
-      # Version 99 is stale (server is at 1) → conflict.
-      assert {:error, :version_conflict, existing} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/Conflict.md",
-                 "content" => "# v2",
-                 "mtime" => 2_000.0,
-                 "version" => 99
-               })
-
-      assert existing.content == "# v1"
-    end
-
     test "logs a summary when a batch upsert partially rejects entries", %{
       user: user,
       vault: vault

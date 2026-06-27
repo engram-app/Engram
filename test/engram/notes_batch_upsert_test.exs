@@ -123,37 +123,6 @@ defmodule Engram.NotesBatchUpsertTest do
   end
 
   describe "batch_upsert_notes/3 — conflicts and errors" do
-    test "stale client version yields a conflict entry carrying the server note", %{
-      user: user,
-      vault: vault
-    } do
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1", "mtime" => 1.0})
-
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v2", "mtime" => 2.0})
-
-      notes = [
-        %{"path" => "a.md", "content" => "mine", "mtime" => 3.0, "version" => 1},
-        %{"path" => "b.md", "content" => "ok", "mtime" => 3.0}
-      ]
-
-      assert {:ok, %{results: [conflict, ok]}} = Notes.batch_upsert_notes(user, vault, notes)
-
-      assert %{path: "a.md", status: :conflict, server_note: server_note} = conflict
-      assert server_note.content == "v2"
-      assert server_note.version == 2
-      assert server_note.path == "a.md"
-
-      # Conflict must not block the rest of the batch.
-      assert %{path: "b.md", status: :ok} = ok
-      assert {:ok, _} = Notes.get_note(user, vault, "b.md")
-
-      # Server content untouched by the stale push.
-      assert {:ok, note} = Notes.get_note(user, vault, "a.md")
-      assert note.content == "v2"
-    end
-
     test "blank path yields a per-note error entry without failing the batch", %{
       user: user,
       vault: vault
@@ -290,14 +259,12 @@ defmodule Engram.NotesBatchUpsertTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
     end
 
-    test "conflict and error entries are excluded from the digest", %{user: user, vault: vault} do
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1", "mtime" => 1.0})
-
+    test "error entries are excluded from the digest", %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
+      # A blank path is a per-note error; only the valid note reaches the digest.
       notes = [
-        %{"path" => "a.md", "content" => "stale", "mtime" => 2.0, "version" => 99},
+        %{"path" => "", "content" => "bad", "mtime" => 2.0},
         %{"path" => "ok.md", "content" => "x", "mtime" => 2.0}
       ]
 
@@ -311,15 +278,12 @@ defmodule Engram.NotesBatchUpsertTest do
       assert only["path"] == "ok.md"
     end
 
-    test "an all-conflict batch emits no digest", %{user: user, vault: vault} do
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1", "mtime" => 1.0})
-
+    test "an all-error batch emits no digest", %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
-      assert {:ok, %{results: [%{status: :conflict}]}} =
+      assert {:ok, %{results: [%{status: :error}]}} =
                Notes.batch_upsert_notes(user, vault, [
-                 %{"path" => "a.md", "content" => "stale", "mtime" => 2.0, "version" => 99}
+                 %{"path" => "", "content" => "bad", "mtime" => 2.0}
                ])
 
       refute_receive %Phoenix.Socket.Broadcast{event: "notes.batch"}, 100

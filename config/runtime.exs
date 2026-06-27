@@ -425,17 +425,6 @@ config :engram,
        :billing_enabled,
        auth_provider == :clerk and System.get_env("PADDLE_API_KEY") != nil
 
-# CRDT (Yjs) sync is the DEFAULT (config.exs sets true). A deploy opts OUT
-# explicitly with CRDT_ENABLED=false (kill switch + the e2e-clerk legacy lane);
-# CRDT_ENABLED=true is a harmless explicit-on. Unset → keep the default. Test
-# env pins false in config/test.exs to keep legacy-conflict unit tests
-# deterministic regardless of this env var.
-case System.get_env("CRDT_ENABLED") do
-  "false" -> config :engram, :crdt_enabled, false
-  "true" -> config :engram, :crdt_enabled, true
-  _ -> :ok
-end
-
 # Plan limits enforcement toggle.
 # SaaS default: enforce when Paddle is configured.
 # Self-host default: bypass when no Paddle key.

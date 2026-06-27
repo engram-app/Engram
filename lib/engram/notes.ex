@@ -290,7 +290,6 @@ defmodule Engram.Notes do
     # is unchanged, so the content_hash is stable for the common case.
     content = (attrs["content"] || attrs[:content] || "") |> Helpers.scrub_utf8(:write)
     mtime = attrs["mtime"] || attrs[:mtime]
-    client_version = attrs["version"] || attrs[:version]
     client_id = attrs["id"] || attrs[:id]
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
@@ -337,15 +336,7 @@ defmodule Engram.Notes do
               )
 
             existing ->
-              update_existing_note(
-                existing,
-                base_attrs,
-                user,
-                sanitized_path,
-                folder,
-                tags,
-                client_version
-              )
+              do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
           end
         end)
 
@@ -541,36 +532,9 @@ defmodule Engram.Notes do
     end
   end
 
-  # Conflict resolution is gated on the :crdt_enabled flag (default false in v1):
-  #
-  #   * CRDT enabled  — merge_plaintext in do_update_note IS the resolution; a
-  #     stale client_version does NOT 409, the diverging write is merged
-  #     convergently into crdt_state.
-  #   * CRDT disabled — the legacy path is authoritative: a stale client_version
-  #     yields {:conflict, existing} (→ 409) which the client reconciles via its
-  #     3-way merge / conflict-copy flow. The plugin's conflict detection keys
-  #     off this 409, so it must remain until CRDT is the live sync path.
-  defp update_existing_note(
-         existing,
-         base_attrs,
-         user,
-         sanitized_path,
-         folder,
-         tags,
-         client_version
-       ) do
-    if not crdt_enabled?() and client_version != nil and client_version != existing.version do
-      {:conflict, existing}
-    else
-      do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
-    end
-  end
-
-  # Opt-in gate for CRDT (Yjs) sync, mirroring the plugin's `enableCrdt` setting.
-  # Default false for v1: CRDT ships dormant until the path is functional
-  # end-to-end, so the server keeps legacy 409-on-stale-version semantics.
-  defp crdt_enabled?, do: Application.get_env(:engram, :crdt_enabled, false)
-
+  # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
+  # IS the conflict resolution. A stale client_version never 409s — the diverging
+  # write is merged convergently into crdt_state (no legacy conflict-copy flow).
   defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags) do
     with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
@@ -1280,7 +1244,6 @@ defmodule Engram.Notes do
           path_hmac: Crypto.hmac_field(filter_key, sanitized),
           content: content,
           mtime: attrs["mtime"] || attrs[:mtime],
-          client_version: attrs["version"] || attrs[:version],
           client_id: attrs["id"] || attrs[:id],
           title: Helpers.extract_title(content, sanitized),
           folder: Helpers.extract_folder(sanitized),
@@ -1438,24 +1401,20 @@ defmodule Engram.Notes do
     do: {entry, rows}
 
   defp update_batch_entry(entry, existing, user) do
-    if entry.client_version != nil and entry.client_version != existing.version do
-      {:conflict, existing}
-    else
-      base_attrs = batch_base_attrs(entry, user)
+    base_attrs = batch_base_attrs(entry, user)
 
-      case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
-        {:ok, {prev_hash, updated}} ->
-          {:ok,
-           %{
-             id: updated.id,
-             version: updated.version,
-             prev_hash: prev_hash,
-             updated_at: updated.updated_at
-           }}
+    case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
+      {:ok, {prev_hash, updated}} ->
+        {:ok,
+         %{
+           id: updated.id,
+           version: updated.version,
+           prev_hash: prev_hash,
+           updated_at: updated.updated_at
+         }}
 
-        {:error, changeset} ->
-          {:error, changeset}
-      end
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
@@ -2987,13 +2946,10 @@ defmodule Engram.Notes do
 
     # Deliver-out to CRDT clients (gap ③): push the merged plaintext to a live
     # room's observers and announce the doc so clients lacking it pull. Runs
-    # post-commit, best-effort, only when CRDT is enabled. CRDT-origin writes
-    # never reach here (the checkpoint writes the DB directly), so this fires
-    # solely for REST/MCP/web/cascade writes — no double-delivery.
-    _ =
-      if crdt_enabled?() do
-        Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
-      end
+    # post-commit, best-effort. CRDT-origin writes never reach here (the
+    # checkpoint writes the DB directly), so this fires solely for
+    # REST/MCP/web/cascade writes — no double-delivery.
+    _ = Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
 
     :ok
   end

@@ -23,8 +23,9 @@ defmodule Engram.Notes.CrdtDeliver do
        already-enrolled client only converges from a pushed frame, while a
        not-yet-enrolled client only converges from the announce.
 
-  The caller gates this on `crdt_enabled?/0`; this module always delivers when
-  invoked. It never raises — a delivery failure must not fail the write.
+  Called unconditionally from the write path (CRDT is the only content-sync
+  path); this module always delivers when invoked. It never raises — a delivery
+  failure must not fail the write.
   """
 
   alias Engram.Notes.{CrdtBridge, CrdtRegistry}

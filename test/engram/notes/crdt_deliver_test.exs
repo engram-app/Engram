@@ -87,15 +87,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
     end
   end
 
-  describe "upsert_note wiring — crdt_enabled gate" do
-    setup do
-      prev = Application.get_env(:engram, :crdt_enabled, false)
-      Application.put_env(:engram, :crdt_enabled, true)
-      on_exit(fn -> Application.put_env(:engram, :crdt_enabled, prev) end)
-      :ok
-    end
-
-    test "an upsert announces crdt_doc_ready when crdt is enabled",
+  describe "upsert_note wiring" do
+    test "an upsert announces crdt_doc_ready (CRDT is the only sync path)",
          %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
@@ -113,20 +106,6 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       assert doc_id == "#{vault.id}/w.md"
     end
-  end
-
-  test "an upsert does NOT announce crdt_doc_ready when crdt is disabled (default)",
-       %{user: user, vault: vault} do
-    EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
-
-    {:ok, _note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "w2.md",
-        "content" => "hi",
-        "mtime" => 1.0
-      })
-
-    refute_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 200
   end
 
   # A SharedDoc with NO persistence module (no bind/unbind), registered under the
