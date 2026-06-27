@@ -2985,6 +2985,16 @@ defmodule Engram.Notes do
           Engram.Sync.Broadcast.emit(topic, "note_changed", payload)
       end
 
+    # Deliver-out to CRDT clients (gap ③): push the merged plaintext to a live
+    # room's observers and announce the doc so clients lacking it pull. Runs
+    # post-commit, best-effort, only when CRDT is enabled. CRDT-origin writes
+    # never reach here (the checkpoint writes the DB directly), so this fires
+    # solely for REST/MCP/web/cascade writes — no double-delivery.
+    _ =
+      if crdt_enabled?() do
+        Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+      end
+
     :ok
   end
 
