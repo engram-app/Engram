@@ -470,7 +470,16 @@ class CdpClient:
                 for (const span of labels) {{
                     if (span.textContent.trim() === {escaped}) {{
                         const btn = span.closest('button');
-                        if (btn) {{ btn.click(); return true; }}
+                        if (btn) {{
+                            // The push/pull options moved behind an "Advanced
+                            // sync options" <details> accordion (plugin #145).
+                            // Open any ancestor <details> so the option is
+                            // interactable before clicking.
+                            const det = btn.closest('details');
+                            if (det) det.open = true;
+                            btn.click();
+                            return true;
+                        }}
                     }}
                 }}
                 return false;
