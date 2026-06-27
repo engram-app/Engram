@@ -202,6 +202,12 @@ config :sentry,
 # Runtime-overridable via RECONNECT_JITTER_MAX_MS (see runtime.exs).
 config :engram, :reconnect_jitter_max_ms, 5_000
 
+# ex_aws HTTP client. We override the stock `ExAws.Request.Hackney` adapter
+# because it only matches hackney's 4-tuple reply; hackney 4.x returns a
+# 3-tuple for body-less responses (HEAD), which breaks S3.head_object/exists?.
+# Engram.Storage.ExAwsHackney is the stock adapter plus that missing clause.
+config :ex_aws, :http_client, Engram.Storage.ExAwsHackney
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
