@@ -34,6 +34,59 @@ defmodule Engram.Notes.CrdtRegistryTest do
     refute p1 == p2
   end
 
+  describe "observe_with_retry/3 — auto-exit race recovery" do
+    test "observes once and returns the room when observe succeeds" do
+      test_pid = self()
+      start_fun = fn -> {:ok, :room1} end
+      observe_fun = fn room -> send(test_pid, {:observed, room}) && :ok end
+
+      assert {:ok, :room1} = CrdtRegistry.observe_with_retry(start_fun, observe_fun, 3)
+      assert_received {:observed, :room1}
+    end
+
+    test "retries with a fresh room when observe exits mid-race, then succeeds" do
+      # The singleton room auto-exits (last observer left) between whereis and
+      # observe, so the first observe exits. The retry must re-start a fresh room
+      # and observe THAT, not crash the caller.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      start_fun = fn ->
+        {:ok, Agent.get_and_update(counter, fn n -> {{:room, n}, n + 1} end)}
+      end
+
+      observe_fun = fn
+        {:room, 0} -> exit(:normal)
+        _ -> :ok
+      end
+
+      assert {:ok, {:room, 1}} = CrdtRegistry.observe_with_retry(start_fun, observe_fun, 3)
+    end
+
+    test "gives up with {:error, :room_unavailable} after exhausting attempts" do
+      start_fun = fn -> {:ok, :room} end
+      observe_fun = fn _ -> exit(:normal) end
+
+      assert {:error, :room_unavailable} =
+               CrdtRegistry.observe_with_retry(start_fun, observe_fun, 3)
+    end
+
+    test "propagates a start_fun error without retrying observe" do
+      start_fun = fn -> {:error, :nope} end
+      observe_fun = fn _ -> flunk("observe must not run when start fails") end
+
+      assert {:error, :nope} = CrdtRegistry.observe_with_retry(start_fun, observe_fun, 3)
+    end
+  end
+
+  # NOTE: `ensure_observed/3` against a real room is integration-tested via the
+  # CrdtChannel (ensure_room → ensure_observed), where the channel process owns
+  # the observer registration and ExUnit tears it down before the sandbox
+  # closes. Observing a :global room directly from the TEST process would leave
+  # it to auto-exit after the sandbox owner exits, and its terminate-time
+  # CrdtPersistence.unbind Repo write would crash and cascade the suite (the
+  # same hazard documented in crdt_channel_test.exs). The retry logic itself is
+  # covered deterministically by the observe_with_retry/3 tests above.
+
   test "room doc uses UTF-16 offset kind", ctx do
     %{user: u, vault: v} = ctx
     # Use a note with empty content so the doc starts blank — this isolates the

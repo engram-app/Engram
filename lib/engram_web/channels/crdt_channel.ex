@@ -99,8 +99,7 @@ defmodule EngramWeb.CrdtChannel do
         user = socket.assigns.current_user
 
         with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
-             {:ok, room} <- CrdtRegistry.ensure_started(user.id, vault.id, note_id) do
-          :ok = SharedDoc.observe(room)
+             {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id) do
           entry = %{room: room, note_id: note_id}
 
           socket =
