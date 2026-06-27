@@ -196,4 +196,21 @@ defmodule EngramWeb.CrdtChannelTest do
       assert Process.alive?(room_pid)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # crdt_doc_ready — device-B discovery announce
+  # ---------------------------------------------------------------------------
+  #
+  # When a client first opens a room, ensure_room/2 fires
+  # `broadcast_from!(socket, "crdt_doc_ready", %{"doc_id" => doc_id})` so OTHER
+  # devices on the vault topic learn the note exists and pull it (they would
+  # otherwise never observe the room, since the channel only observes rooms it
+  # has itself sent a crdt_msg for). Asserting this in a unit test requires a
+  # live :global room, and a room's terminate-time snapshot flush
+  # (CrdtPersistence.unbind) runs AFTER the test's sandbox owner exits — it
+  # crashes and cascades the Repo down for the next test (same hazard called
+  # out for the self-bootstrap case above). The full announce → step-1 → pull
+  # path is therefore covered by the CRDT-on e2e suite (device-B receive),
+  # not here. The plugin-side receive/dispatch is unit-tested in
+  # channel-crdt.test.ts (`NoteChannel inbound crdt_doc_ready`).
 end
