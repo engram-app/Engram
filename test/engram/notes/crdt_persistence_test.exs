@@ -81,12 +81,14 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert cached_user.id == user.id
   end
 
-  test "bind/3 with no snapshot (nil crdt_state) starts empty doc", ctx do
+  test "bind/3 seeds the doc from notes.content when fresh (no snapshot, no tail-log)", ctx do
     %{user: user, vault: vault} = ctx
-    # Write a note without crdt_state (via insert bypassing Notes.upsert_note
-    # side-effects). Since Notes.upsert_note always seeds crdt_state, we use
-    # a second fresh note and zero out its crdt_state columns manually.
-    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "empty.md", "content" => "hi"})
+    # A note whose CRDT state has never been written (no snapshot, no tail-log)
+    # but which carries plaintext content. A device that has never CRDT-edited
+    # this note (e.g. device B discovering it) must still receive that content
+    # over the y-protocols handshake — so bind seeds the doc from notes.content.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "seed.md", "content" => "hello world"})
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -100,8 +102,58 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
 
-    # An empty doc has an empty string — bind should not crash
-    assert is_binary(CrdtBridge.text_of(doc))
+    assert CrdtBridge.text_of(doc) == "hello world"
+  end
+
+  test "bind/3 does NOT seed from content when a tail-log exists (no double-seed)", ctx do
+    %{user: user, vault: vault} = ctx
+    # crdt_state snapshot is absent, but a tail-log update already represents the
+    # note's CRDT history. Seeding from notes.content here would duplicate text
+    # (content + tail). The tail-log is authoritative — content must NOT be added.
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "tail.md", "content" => "PLAINTEXT"})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+
+    # Append a tail-log update that sets the CRDT text to a distinct value.
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "TAIL")
+    seed_doc = CrdtBridge.new_doc()
+    _ = CrdtPersistence.update_v1(st, upd, note2.id, seed_doc)
+
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    # Only the tail-log content — notes.content ("PLAINTEXT") was not seeded on top.
+    text = CrdtBridge.text_of(doc)
+    assert text == "TAIL"
+    refute text =~ "PLAINTEXT"
+  end
+
+  test "bind/3 does not seed when content is empty (fresh, blank note)", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "blank.md", "content" => ""})
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    assert CrdtBridge.text_of(doc) == ""
   end
 
   # ── update_v1/4 writes encrypted log row ──────────────────────────────────
