@@ -12,7 +12,17 @@ defmodule Engram.Notes.CrdtRegistry do
   `DynamicSupervisor` wired in `Engram.Application`).
   """
 
+  alias Yex.Sync.SharedDoc
+
   @sup Engram.Notes.CrdtDocSupervisor
+
+  # The singleton room has `auto_exit: true`, so it stops when its last observer
+  # leaves. `:global.whereis_name` can hand back a room that is mid-termination,
+  # so a plain `observe/1` GenServer.call would exit and crash the caller. Retry
+  # a bounded number of times, yielding so `:global` drops the dead registration
+  # and a fresh room is started on the next attempt.
+  @observe_attempts 5
+  @observe_retry_delay_ms 5
 
   @doc "The `:global` registration name for a note's doc room."
   @spec global_name(String.t()) :: {:global, {:crdt_doc, String.t()}}
@@ -40,6 +50,51 @@ defmodule Engram.Notes.CrdtRegistry do
           {:error, {:already_started, pid}} -> {:ok, pid}
           {:error, _} = err -> err
         end
+    end
+  end
+
+  @doc """
+  Ensure the singleton room for `note_id` is started AND observed by the
+  CALLING process, recovering from the auto-exit race.
+
+  Must be called from the process that should receive `{:yjs, frame, room}`
+  broadcasts (the channel), since `SharedDoc.observe/1` registers `self()`.
+  Returns `{:error, :room_unavailable}` if the room keeps auto-exiting across
+  every attempt.
+  """
+  @spec ensure_observed(String.t(), String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
+  def ensure_observed(user_id, vault_id, note_id) do
+    observe_with_retry(
+      fn -> ensure_started(user_id, vault_id, note_id) end,
+      fn room -> SharedDoc.observe(room) end
+    )
+  end
+
+  @doc """
+  Retry helper backing `ensure_observed/3`. Calls `start_fun` to obtain a room,
+  then `observe_fun` on it; if `observe_fun` exits (the room auto-exited mid
+  race), yields and retries with a freshly obtained room. Extracted so the
+  retry logic is testable with injected functions.
+  """
+  @spec observe_with_retry((-> {:ok, room} | {:error, term()}), (room -> :ok), pos_integer()) ::
+          {:ok, room} | {:error, term()}
+        when room: term()
+  def observe_with_retry(start_fun, observe_fun, attempts \\ @observe_attempts)
+
+  def observe_with_retry(_start_fun, _observe_fun, attempts) when attempts <= 0 do
+    {:error, :room_unavailable}
+  end
+
+  def observe_with_retry(start_fun, observe_fun, attempts) do
+    with {:ok, room} <- start_fun.() do
+      try do
+        :ok = observe_fun.(room)
+        {:ok, room}
+      catch
+        :exit, _reason ->
+          Process.sleep(@observe_retry_delay_ms)
+          observe_with_retry(start_fun, observe_fun, attempts - 1)
+      end
     end
   end
 end
