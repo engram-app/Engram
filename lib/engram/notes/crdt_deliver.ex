@@ -39,8 +39,18 @@ defmodule Engram.Notes.CrdtDeliver do
   @spec deliver_out(String.t(), String.t(), String.t(), String.t(), String.t()) :: :ok
   def deliver_out(user_id, vault_id, path, note_id, content)
       when is_binary(content) do
-    push_to_live_room(note_id, content)
-    announce(user_id, vault_id, path)
+    # CRDT manages MARKDOWN content only — the plugin's routeModify enrolls only
+    # `.md` into Yjs (mirroring Relay's SyncType.Document = "markdown"; canvas and
+    # other types are separate, non-markdown-Yjs sync paths). Announcing CRDT for
+    # a non-markdown note (e.g. `.canvas`) makes the client enroll it into a Yjs
+    # doc, flush it to disk (marking the path recently-flushed), and then SUPPRESS
+    # the user's next real edit as an echo — silently dropping the write. Those
+    # files sync via the legacy push path, so only deliver/announce for `.md`.
+    if String.ends_with?(path, ".md") do
+      push_to_live_room(note_id, content)
+      announce(user_id, vault_id, path)
+    end
+
     :ok
   end
 
