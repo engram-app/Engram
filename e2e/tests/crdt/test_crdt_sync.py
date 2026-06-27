@@ -147,3 +147,23 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
 
     a_content = wait_for_content(vault_a, path, "appended on B", timeout=CRDT_TIMEOUT)
     assert "origin A" in a_content and "appended on B" in a_content
+
+
+@pytest.mark.asyncio
+async def test_illegal_path_chars_sanitized_under_crdt(vault_a, cdp_a, api_sync):
+    """A note authored with illegal filename chars is sanitized server-side on
+    the CRDT bootstrap path (get_or_bootstrap_note -> upsert_note ->
+    PathSanitizer), and its body still materializes to the CLEAN path after the
+    checkpoint. Proves the CRDT write path does NOT bypass path sanitization —
+    the dirty path never becomes a real note (path-traversal / illegal-char
+    defense holds under CRDT, not just on the REST upsert)."""
+    dirty_path = 'E2E/Crdt/What: A "Great" Day*.md'
+    clean_path = "E2E/Crdt/What A Great Day.md"
+
+    write_note(vault_a, dirty_path, "# What\nIllegal chars stripped under CRDT.")
+
+    # The sanitized clean path receives the body (eventually, post-checkpoint).
+    api_sync.wait_for_note_content(clean_path, "Illegal chars stripped", timeout=CRDT_TIMEOUT)
+
+    # The dirty path is never a real note — sanitization is not bypassed.
+    assert api_sync.get_note(dirty_path) is None
