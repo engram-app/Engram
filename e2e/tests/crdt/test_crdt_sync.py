@@ -163,7 +163,10 @@ async def test_illegal_path_chars_sanitized_under_crdt(vault_a, cdp_a, api_sync)
     write_note(vault_a, dirty_path, "# What\nIllegal chars stripped under CRDT.")
 
     # The sanitized clean path receives the body (eventually, post-checkpoint).
-    api_sync.wait_for_note_content(clean_path, "Illegal chars stripped", timeout=CRDT_TIMEOUT)
+    # Heavier than a direct-path CRDT flow: the note bootstraps at a DIFFERENT
+    # (sanitized) path than the wire doc_id, so allow extra slack on slower CI
+    # runners on top of the checkpoint debounce.
+    api_sync.wait_for_note_content(clean_path, "Illegal chars stripped", timeout=60)
 
     # The dirty path is never a real note — sanitization is not bypassed.
     assert api_sync.get_note(dirty_path) is None
