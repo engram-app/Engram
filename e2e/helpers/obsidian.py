@@ -132,6 +132,12 @@ class ObsidianInstance:
             "liveSyncEnabled": True,
             "maxFileSizeMB": 5,
         }
+        # Opt the plugin into the file-level CRDT sync path (spec §12a). Gated by
+        # the E2E_ENABLE_CRDT env so the legacy e2e jobs stay on the REST push/
+        # pull path while a dedicated CRDT job runs the same harness with CRDT on.
+        # Requires the backend to advertise the `crdt:` topic (CRDT_ENABLED=true).
+        if os.environ.get("E2E_ENABLE_CRDT") == "true":
+            settings["enableCrdt"] = True
         if self.client_id:
             settings["clientId"] = self.client_id
         data = {
