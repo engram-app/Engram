@@ -391,8 +391,10 @@ jobs:
   prebuild-mix:
     needs: fingerprint
     # Consumed by unit-tests, lint, e2e-browser — all backend-only and skipped
-    # on plugin dispatch.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # on plugin dispatch. NOT fingerprint-gated: unit-tests/lint always run
+    # (they're fast + cheap to recompile), and they hard-`needs` this job, so
+    # a skipped prebuild would drag them into skip. e2e-browser stays gated.
+    if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
@@ -1472,8 +1474,10 @@ jobs:
   unit-tests:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
-    # Also skip when fingerprint already proved green for this content.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # NOT fingerprint-gated: the suite is fast (~4min) and skipping it on a
+    # cache hit created a blind spot — it stopped executing on main for a
+    # stretch and let a Repo-crashing test land. Always run on backend pushes.
+    if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1752,8 +1756,10 @@ jobs:
   lint:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
-    # Also skip when fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # NOT fingerprint-gated: lint is fast and shares prebuild-mix with
+    # unit-tests; skipping it on a cache hit silently let credo/sobelow
+    # regressions merge. Always run on backend pushes.
+    if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
 
     steps:
