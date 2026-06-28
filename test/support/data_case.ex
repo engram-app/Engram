@@ -39,6 +39,41 @@ defmodule Engram.DataCase do
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Engram.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    # A test may spin up `:global` CrdtDoc rooms (any test exercising the CRDT
+    # sync path). A room is a sandbox-using process that is NOT linked to the
+    # test, so it outlives the test and its `terminate` -> `CrdtPersistence.unbind/3`
+    # (a DB write) runs AFTER `stop_owner/1` above has torn down the connection's
+    # owner — checking out a dead-owner connection and poisoning the shared
+    # sandbox for every later test (see #777).
+    #
+    # Fix: synchronously stop any live rooms before the owner is stopped. on_exit
+    # is LIFO, so registering this AFTER the stop_owner callback runs it FIRST —
+    # the room's unbind executes while the shared connection is still checked in.
+    #
+    # Gated on shared (non-async) mode only: there, this test runs alone, so
+    # stopping every room is safe. In async mode rooms belong to concurrently
+    # running tests and must not be touched (and an async test cannot lend its
+    # connection to an unrelated room anyway).
+    unless tags[:async] do
+      on_exit(&stop_crdt_rooms/0)
+    end
+  end
+
+  # Stop every live CrdtDoc room synchronously so its terminate/unbind runs
+  # against the still-checked-in shared sandbox connection. Best-effort: a room
+  # already mid-exit just resolves to an :exit we swallow.
+  defp stop_crdt_rooms do
+    for {_, pid, _, _} <- DynamicSupervisor.which_children(Engram.Notes.CrdtDocSupervisor),
+        is_pid(pid) do
+      try do
+        GenServer.stop(pid, :normal, 5_000)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
   end
 
   @doc """
