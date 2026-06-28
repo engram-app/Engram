@@ -27,7 +27,7 @@ defmodule Engram.Notes.Helpers do
     if String.valid?(str), do: str, else: do_scrub_utf8(str, <<>>)
   end
 
-  @scrub_boundaries [:write, :read, :search, :backfill]
+  @scrub_boundaries [:write, :read, :search, :backfill, :broadcast]
 
   @doc """
   Boundary-instrumented `scrub_utf8/1`. On the scrub slow path (invalid bytes
@@ -46,10 +46,15 @@ defmodule Engram.Notes.Helpers do
       spike `:write` and page on-call with a false "buggy client" signal — the
       repair pre-scrubs here, then the write path sees already-valid content
       and fast-paths (no `:write` tick).
+    * **`:broadcast`** — the sync-Channel egress (#738). Defense-in-depth: the
+      `note_changed` payload is scrubbed just before `Jason` encodes it, so even
+      a caller that hands the broadcast site content bypassing the write/read
+      scrubs (a direct DB or CRDT write) never crashes the serializer. Like
+      `:read`, counter-only — never pages.
 
   Valid input takes the fast path with no telemetry and no allocation.
   """
-  @spec scrub_utf8(String.t(), :write | :read | :search | :backfill) :: String.t()
+  @spec scrub_utf8(String.t(), :write | :read | :search | :backfill | :broadcast) :: String.t()
   def scrub_utf8(str, boundary) when is_binary(str) and boundary in @scrub_boundaries do
     if String.valid?(str) do
       str
@@ -78,6 +83,52 @@ defmodule Engram.Notes.Helpers do
 
   defp do_scrub_utf8(<<_bad, rest::binary>>, acc),
     do: do_scrub_utf8(rest, <<acc::binary, "�">>)
+
+  # Text fields of a `note_changed` upsert payload that originate from decrypted
+  # note content and so could carry invalid UTF-8 at rest. `path` is structural
+  # (sanitized + HMAC-validated at write) and always valid, so it is left alone.
+  @broadcast_text_fields ~w(content title folder)
+
+  @doc """
+  Scrubs the string fields of a `note_changed` broadcast payload to valid UTF-8
+  at the sync-Channel egress (#738 defense-in-depth).
+
+  Content/title/folder/tags decrypt from `bytea` ciphertext that bypasses
+  Postgres's UTF-8 guard; the write and read boundaries already scrub, but this
+  final pass keeps the channel self-defending against any caller (a direct DB or
+  CRDT write) that reaches the broadcast site with unscrubbed bytes — invalid
+  UTF-8 would otherwise crash the V2 JSON serializer and take down PubSub.
+
+  Only keys that are present and binary are touched, so the metadata-only
+  `delete` payload passes through untouched. Valid payloads return unchanged.
+  """
+  @spec scrub_broadcast_payload(map()) :: map()
+  def scrub_broadcast_payload(payload) when is_map(payload) do
+    payload
+    |> scrub_broadcast_text_fields()
+    |> scrub_broadcast_tags()
+  end
+
+  defp scrub_broadcast_text_fields(payload) do
+    Enum.reduce(@broadcast_text_fields, payload, fn key, acc ->
+      case acc do
+        %{^key => value} when is_binary(value) ->
+          %{acc | key => scrub_utf8(value, :broadcast)}
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp scrub_broadcast_tags(%{"tags" => tags} = payload) when is_list(tags) do
+    %{payload | "tags" => Enum.map(tags, &scrub_broadcast_tag/1)}
+  end
+
+  defp scrub_broadcast_tags(payload), do: payload
+
+  defp scrub_broadcast_tag(tag) when is_binary(tag), do: scrub_utf8(tag, :broadcast)
+  defp scrub_broadcast_tag(tag), do: tag
 
   @doc """
   Extracts the note title from content (frontmatter > h1 heading > filename).

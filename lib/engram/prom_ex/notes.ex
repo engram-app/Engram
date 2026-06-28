@@ -5,7 +5,7 @@ defmodule Engram.PromEx.Notes do
   Subscribes to:
 
     * `[:engram, :notes, :utf8_scrub]` — `%{count: 1}`, metadata
-      `%{boundary: :write | :read | :search | :backfill}`. Emitted on the scrub
+      `%{boundary: :write | :read | :search | :backfill | :broadcast}`. Emitted on the scrub
       slow path (invalid UTF-8 found at a JSON-materializing boundary, see
       `Engram.Notes.Helpers.scrub_utf8/2`). A rising `boundary="write"` rate
       means new corruption is entering at rest — a buggy client — and is the
@@ -45,7 +45,8 @@ defmodule Engram.PromEx.Notes do
         counter(
           metric_prefix ++ [:utf8_scrub, :total],
           event_name: @utf8_scrub_event,
-          description: "Invalid-UTF-8 scrubs by boundary (write | read | search).",
+          description:
+            "Invalid-UTF-8 scrubs by boundary (write | read | search | backfill | broadcast).",
           tags: [:boundary]
         )
       ]
