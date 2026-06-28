@@ -124,6 +124,23 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
      %{state | first_dirty_at: first_dirty_at, last_activity_at: now, settle_timer: timer}}
   end
 
+  @impl true
+  def handle_info(:tick, state) do
+    do_checkpoint(state)
+
+    # Reset dirty anchor — we just flushed.
+    {:noreply, %{state | first_dirty_at: nil, settle_timer: nil}}
+  end
+
+  # Room exited — we trap exits (Process.flag(:trap_exit, true) is set in init/1),
+  # so the linked room's exit is converted to a {:EXIT, pid, reason} message
+  # rather than an immediate process death. This lets us perform a clean stop
+  # for both normal and abnormal room exits without leaving an orphaned timer.
+  @impl true
+  def handle_info({:EXIT, _room_pid, _reason}, state) do
+    {:stop, :normal, state}
+  end
+
   @doc """
   Pure scheduling decision: given the timer `state` and a monotonic `now`,
   return `{delay_ms, first_dirty_at}` for the next checkpoint tick.
@@ -150,23 +167,6 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     delay = if quiet_before?, do: min(base, state.eager_ms), else: base
 
     {max(0, delay), first_dirty_at}
-  end
-
-  @impl true
-  def handle_info(:tick, state) do
-    do_checkpoint(state)
-
-    # Reset dirty anchor — we just flushed.
-    {:noreply, %{state | first_dirty_at: nil, settle_timer: nil}}
-  end
-
-  # Room exited — we trap exits (Process.flag(:trap_exit, true) is set in init/1),
-  # so the linked room's exit is converted to a {:EXIT, pid, reason} message
-  # rather than an immediate process death. This lets us perform a clean stop
-  # for both normal and abnormal room exits without leaving an orphaned timer.
-  @impl true
-  def handle_info({:EXIT, _room_pid, _reason}, state) do
-    {:stop, :normal, state}
   end
 
   # ---------------------------------------------------------------------------
