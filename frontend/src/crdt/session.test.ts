@@ -6,6 +6,7 @@ import {
   handleFrame,
   stopCrdtSession,
   resyncOpenDocs,
+  installCrdtResyncTriggers,
   docPathFromDocId,
 } from './session'
 
@@ -95,5 +96,26 @@ describe('crdt session', () => {
     await handleFrame('note.md', b64)
     const b = await openDoc('note.md')
     expect(b!.ytext.toJSON()).toContain('payload')
+  })
+
+  it('installCrdtResyncTriggers re-handshakes open docs on window focus', async () => {
+    const push = vi.fn()
+    startCrdtSession({ vaultId: VAULT, push })
+    await openDoc('note.md')
+    enroll('note.md')
+    await vi.waitFor(() => expect(push).toHaveBeenCalled())
+    push.mockClear()
+
+    const remove = installCrdtResyncTriggers()
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(push).toHaveBeenCalled())
+    expect(push.mock.calls[0]![0]).toBe(`${VAULT}/note.md`)
+
+    // Cleanup removes the listener: a later focus must NOT push again.
+    remove()
+    push.mockClear()
+    window.dispatchEvent(new Event('focus'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(push).not.toHaveBeenCalled()
   })
 })

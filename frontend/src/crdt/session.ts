@@ -96,6 +96,29 @@ export function resetAll(): void {
   session?.enrollment.resetAll()
 }
 
+/**
+ * Wire tab focus + visibility triggers to re-handshake open CRDT docs.
+ *
+ * A backgrounded/throttled tab can miss live `crdt_msg` pushes — the browser
+ * may idle-drop frames or keep the socket half-connected so the reconnect path
+ * (`resyncOpenDocs` on socket `onOpen`) never fires, leaving the editor diverged
+ * with no catch-up signal. On the tab becoming visible/focused we re-run STEP1
+ * for every open doc; the server answers STEP2 with only the diff, so it is
+ * cheap and idempotent (a no-op when already in sync). Returns a cleanup that
+ * removes the listeners.
+ */
+export function installCrdtResyncTriggers(): () => void {
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') resyncOpenDocs()
+  }
+  window.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', resyncOpenDocs)
+  return () => {
+    window.removeEventListener('visibilitychange', onVisible)
+    window.removeEventListener('focus', resyncOpenDocs)
+  }
+}
+
 export function docPathFromDocId(docId: string): string {
   const idx = docId.indexOf('/')
   return idx === -1 ? docId : docId.slice(idx + 1)
