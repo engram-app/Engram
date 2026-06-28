@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router'
-import { Awareness } from 'y-protocols/awareness'
+import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { useNote } from '../api/queries'
 import { closeDoc, enroll, openDoc } from '../crdt/session'

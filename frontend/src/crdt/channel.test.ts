@@ -36,7 +36,6 @@ describe('CrdtChannel', () => {
     const aCh = new CrdtChannel({ manager: aMgr, send: (id, f) => aSends.push([id, f]) })
     const aText = await aMgr.getSharedText('n.md')
     // Hook A's local update through sendUpdateRaw the way session.ts will.
-    aMgr // local edit:
     aText.insert(0, 'merged-content')
     // session forwards via sendUpdateRaw; emulate it:
     const update = await aMgr.encodeStateAsUpdate('n.md')

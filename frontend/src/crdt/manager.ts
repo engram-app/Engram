@@ -63,6 +63,13 @@ export class CrdtManager {
     return Y.encodeStateAsUpdate((await this.entry(path)).doc, sv)
   }
 
+  /** True if a Y.Doc entry is currently live for this path (opened via openDoc
+   *  or active via enrollment). False after closeDoc. Used to drop late inbound
+   *  frames instead of resurrecting a closed doc. */
+  hasDoc(path: string): boolean {
+    return this.docs.has(this.docId(path))
+  }
+
   closeDoc(path: string): void {
     const id = this.docId(path)
     const e = this.docs.get(id)

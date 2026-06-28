@@ -7,7 +7,7 @@ import {
   stopCrdtSession,
   handleFrame as crdtHandleFrame,
   enroll as crdtEnroll,
-  resetAll as crdtResetAll,
+  resyncOpenDocs,
   docPathFromDocId,
 } from '../crdt/session'
 
@@ -245,7 +245,7 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient, o
   // reconnect kicks a cursor pull to backfill the gap.
   // Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
   socket.onOpen(() => {
-    crdtResetAll()
+    resyncOpenDocs()
     onSocketOpen?.()
   })
 

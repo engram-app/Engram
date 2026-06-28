@@ -43,7 +43,7 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 export function stopCrdtSession(): void {
   if (!session) return
   for (const a of session.awareness.values()) a.destroy()
-  void session.manager.destroy()
+  void session.manager.destroy().catch((e) => console.warn('CRDT session teardown error', e))
   session = null
 }
 
@@ -76,7 +76,20 @@ export function enroll(path: string): void {
 
 export async function handleFrame(path: string, b64: string): Promise<void> {
   if (!session) return
+  if (!session.manager.hasDoc(path)) return // not active — drop; STEP1 re-syncs on reopen
   await session.channel.handleFrame(path, b64)
+}
+
+/** On socket reconnect: clear each open doc's handshake guard and re-enroll it
+ *  so a fresh STEP1 is sent. Removes the dependency on the server re-firing
+ *  crdt_doc_ready. Open docs are those with a live Awareness entry (created by
+ *  openDoc, removed by closeDoc). */
+export function resyncOpenDocs(): void {
+  if (!session) return
+  for (const path of session.awareness.keys()) {
+    session.enrollment.reset(path)   // clears enrolled set + CrdtChannel.initiated guard
+    session.enrollment.enroll(path)  // re-sends STEP1 (idempotent; reset re-armed it)
+  }
 }
 
 export function resetAll(): void {

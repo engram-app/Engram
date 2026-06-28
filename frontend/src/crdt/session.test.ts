@@ -5,6 +5,7 @@ import {
   enroll,
   handleFrame,
   stopCrdtSession,
+  resyncOpenDocs,
   docPathFromDocId,
 } from './session'
 
@@ -47,6 +48,37 @@ describe('crdt session', () => {
   it('docPathFromDocId strips the vault prefix', () => {
     startCrdtSession({ vaultId: VAULT, push: () => {} })
     expect(docPathFromDocId(`${VAULT}/a/b.md`)).toBe('a/b.md')
+  })
+
+  it('resyncOpenDocs re-sends STEP1 for open docs on reconnect', async () => {
+    const push = vi.fn()
+    startCrdtSession({ vaultId: VAULT, push })
+    await openDoc('note.md')
+    enroll('note.md')
+    await vi.waitFor(() => expect(push).toHaveBeenCalled())
+    push.mockClear()
+    resyncOpenDocs()
+    await vi.waitFor(() => expect(push).toHaveBeenCalled())
+    expect(push.mock.calls[0]![0]).toBe(`${VAULT}/note.md`)
+  })
+
+  it('handleFrame drops frames for docs not open in the session', async () => {
+    // Build a valid STEP2/UPDATE frame from a separate session
+    const frames: Array<[string, string]> = []
+    startCrdtSession({ vaultId: VAULT, push: (id, b64) => frames.push([id, b64]) })
+    const a = await openDoc('note.md')
+    a!.ytext.insert(0, 'ghost-content')
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0))
+    const [, b64] = frames[frames.length - 1]!
+    stopCrdtSession()
+
+    // New session — do NOT open ghost.md
+    startCrdtSession({ vaultId: VAULT, push: () => {} })
+    await handleFrame('ghost.md', b64)
+
+    // Now open ghost.md; it must not contain the leaked content
+    const ghostHandle = await openDoc('ghost.md')
+    expect(ghostHandle!.ytext.toJSON()).not.toContain('ghost-content')
   })
 
   it('handleFrame applies inbound bytes (two-session round-trip)', async () => {
