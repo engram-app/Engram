@@ -206,6 +206,52 @@ defmodule Engram.NotesTest do
       assert payload["content"] =~ "broadcast"
     end
 
+    test "#738: note_changed broadcast from rename is JSON-safe for a note corrupt at rest",
+         %{user: user, vault: vault} do
+      import Ecto.Query, only: [from: 2]
+
+      # Legacy row: written before the #740 write-time scrub, so its content
+      # decrypts to invalid UTF-8. Rename only changes the path, then re-broadcasts
+      # the note's content over the sync Channel — exercising the read-boundary
+      # scrub, NOT the upsert write scrub the other #738 test covers. Build a clean
+      # note, then overwrite its content ciphertext in place with invalid bytes.
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Rename Me.md",
+          "content" => "# Title\n\nclean placeholder",
+          "mtime" => 1.0
+        })
+
+      bad = "# Title\n\nrenamed" <> <<0xE2>> <> "payload"
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
+
+      {:ok, {1, _}} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          from(n in Engram.Notes.Note, where: n.id == ^note.id)
+          |> Engram.Repo.update_all(
+            set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]
+          )
+        end)
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} = Notes.rename_note(user, vault, "Test/Rename Me.md", "Test/Renamed.md")
+
+      # rename emits a metadata-only "delete" for the old path, then an "upsert"
+      # carrying the note body — that upsert is the payload that crashed #738.
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert"} = payload
+      }
+
+      assert {:ok, _} = Jason.encode(payload)
+      assert String.valid?(payload["content"])
+      assert String.valid?(payload["title"])
+      assert payload["content"] =~ "renamed"
+    end
+
     test "content_hash is HMAC-SHA256 (64-char hex), not legacy MD5",
          %{user: user, vault: vault} do
       content = "# Hash Format Probe\nbody"

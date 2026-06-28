@@ -29,6 +29,47 @@ defmodule Engram.Notes.HelpersTest do
     end
   end
 
+  describe "scrub_broadcast_payload/1" do
+    test "scrubs every text field of a note_changed payload to valid UTF-8" do
+      bad = "body" <> <<0xE2>> <> "tail"
+
+      payload = %{
+        "event_type" => "upsert",
+        "path" => "Test/Note.md",
+        "content" => bad,
+        "title" => "Title" <> <<0xE2>>,
+        "folder" => "Folder" <> <<0xE2>>,
+        "tags" => ["clean", "dirty" <> <<0xE2>>],
+        "version" => 3
+      }
+
+      out = Helpers.scrub_broadcast_payload(payload)
+
+      # The whole payload is what crashed Phoenix.PubSub/Jason on #738.
+      assert {:ok, _} = Jason.encode(out)
+      assert String.valid?(out["content"])
+      assert String.valid?(out["title"])
+      assert String.valid?(out["folder"])
+      assert Enum.all?(out["tags"], &String.valid?/1)
+      # Bad bytes are replaced, not dropped — the rest of the text survives.
+      assert out["content"] =~ "body"
+      assert out["content"] =~ "tail"
+      # Non-text fields pass through untouched.
+      assert out["version"] == 3
+      assert out["event_type"] == "upsert"
+    end
+
+    test "leaves an already-valid payload byte-identical" do
+      payload = %{"content" => "clean", "title" => "T", "folder" => "F", "tags" => ["a", "b"]}
+      assert Helpers.scrub_broadcast_payload(payload) == payload
+    end
+
+    test "tolerates a payload missing the optional text fields (delete shape)" do
+      payload = %{"event_type" => "delete", "path" => "Test/Gone.md", "vault_id" => "v"}
+      assert Helpers.scrub_broadcast_payload(payload) == payload
+    end
+  end
+
   describe "scrub_utf8/2 instrumentation" do
     import ExUnit.CaptureLog
 

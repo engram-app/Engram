@@ -2919,24 +2919,27 @@ defmodule Engram.Notes do
     # release after the plugin min-version floor covers the hash-only
     # handler (self-host backends and plugins update on independent
     # cadences — do NOT remove early).
-    # `note` here is always either freshly written (upsert/batch scrub its
+    # `note` here is normally either freshly written (upsert/batch scrub its
     # content) or loaded through Crypto.maybe_decrypt_note_fields (read-boundary
-    # scrub), so its text fields are already valid UTF-8 — no per-field scrub
-    # needed at this broadcast site (#738).
-    payload = %{
-      "event_type" => "upsert",
-      "id" => note.id,
-      "path" => path,
-      "vault_id" => vault_id,
-      "content" => note.content || "",
-      "content_hash" => note.content_hash,
-      "title" => note.title || "",
-      "folder" => note.folder || "",
-      "tags" => note.tags || [],
-      "mtime" => note.mtime,
-      "updated_at" => note.updated_at,
-      "version" => note.version
-    }
+    # scrub), so its text fields are usually already valid UTF-8. The egress
+    # scrub below is the last line of defense (#738): a caller that reaches this
+    # site with unscrubbed content (a direct DB or CRDT write) would otherwise
+    # ship invalid bytes that crash the V2 JSON serializer and take down PubSub.
+    payload =
+      Helpers.scrub_broadcast_payload(%{
+        "event_type" => "upsert",
+        "id" => note.id,
+        "path" => path,
+        "vault_id" => vault_id,
+        "content" => note.content || "",
+        "content_hash" => note.content_hash,
+        "title" => note.title || "",
+        "folder" => note.folder || "",
+        "tags" => note.tags || [],
+        "mtime" => note.mtime,
+        "updated_at" => note.updated_at,
+        "version" => note.version
+      })
 
     topic = "sync:#{user_id}:#{vault_id}"
 

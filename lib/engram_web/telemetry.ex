@@ -191,7 +191,8 @@ defmodule EngramWeb.Telemetry do
       # once the #739 backfill runs. Scraped to Grafana via Engram.PromEx.Notes.
       counter("engram.notes.utf8_scrub.count",
         tags: [:boundary],
-        description: "Invalid-UTF-8 scrubs by boundary (:write | :read | :search)"
+        description:
+          "Invalid-UTF-8 scrubs by boundary (:write | :read | :search | :backfill | :broadcast)"
       ),
       counter("engram.search.payload_shape_mismatch.count",
         description: "Qdrant payload shape mismatches — drift between writer and reader"
