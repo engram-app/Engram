@@ -1,62 +1,44 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
-import NoteEditor from './note-editor'
+import { buildEditorState } from './note-editor'
 
-vi.mock('../theme/theme-provider', () => ({
-  useTheme: () => ({ resolved: 'light' }),
-}))
-
-// CodeMirror uses layout APIs that happy-dom does not implement; its
-// contenteditable stays empty. Mock the wrapper so the test can exercise the
-// yCollab wiring without a real browser engine.
-vi.mock('@uiw/react-codemirror', () => ({
-  default: (props: { extensions?: unknown[] }) => {
-    // Find the yCollab extension (tagged object from our yCollab mock below)
-    // and render the Y.Text content so assertions can read it from the DOM.
-    const ytextContent = (() => {
-      for (const ext of props.extensions ?? []) {
-        const e = ext as Record<string, unknown>
-        if (e && typeof e === 'object' && 'ytext' in e) {
-          return String((e.ytext as Y.Text).toString())
-        }
-      }
-      return ''
-    })()
-    return (
-      <div data-testid="cm" className="cm-editor">
-        <div className="cm-content">{ytextContent}</div>
-      </div>
-    )
-  },
-}))
-
-// Capture what yCollab is called with so we can verify the binding.
-let lastYtext: Y.Text | null = null
-let lastAwareness: Awareness | null = null
-vi.mock('y-codemirror.next', () => ({
-  yCollab: (ytext: Y.Text, awareness: Awareness) => {
-    lastYtext = ytext
-    lastAwareness = awareness
-    // Return a tagged object so the mock CodeMirror above can find it.
-    return { ytext, awareness }
-  },
-}))
-
-describe('NoteEditor (CRDT)', () => {
-  it('renders the Y.Text content and passes the correct binding to yCollab', () => {
+// happy-dom cannot render a real CodeMirror EditorView, but EditorState.create
+// is pure (no DOM), so we can verify the one thing that was actually broken:
+// the editor must be SEEDED from the Y.Text. y-codemirror.next's ySync only
+// forwards incremental deltas — content already present in the Y.Text at bind
+// time never renders unless the initial EditorState.doc equals ytext.toString().
+describe('buildEditorState', () => {
+  it('seeds the editor document from the Y.Text content', () => {
     const doc = new Y.Doc()
     const ytext = doc.getText('content')
-    ytext.insert(0, '# Hello CRDT')
+    ytext.insert(0, '# Seeded heading\n\nbody text')
     const awareness = new Awareness(doc)
-    const { container } = render(
-      <NoteEditor ytext={ytext} awareness={awareness} />,
-    )
-    // yCollab seeds the editor from the bound Y.Text.
-    expect(container.querySelector('.cm-content')?.textContent).toContain('Hello CRDT')
-    // The correct ytext and awareness objects are passed to yCollab.
-    expect(lastYtext).toBe(ytext)
-    expect(lastAwareness).toBe(awareness)
+
+    const state = buildEditorState(ytext, awareness, false)
+
+    expect(state.doc.toString()).toBe('# Seeded heading\n\nbody text')
+  })
+
+  it('produces an empty document when the Y.Text is empty', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
+
+    const state = buildEditorState(ytext, awareness, true)
+
+    expect(state.doc.toString()).toBe('')
+  })
+
+  it('reflects all Y.Text content at build time (seed is current, not stale)', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
+    ytext.insert(0, 'first')
+    ytext.insert(ytext.length, ' second')
+
+    const state = buildEditorState(ytext, awareness, false)
+
+    expect(state.doc.toString()).toBe('first second')
   })
 })
