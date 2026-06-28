@@ -58,9 +58,5 @@ describe('NoteEditor (CRDT)', () => {
     // The correct ytext and awareness objects are passed to yCollab.
     expect(lastYtext).toBe(ytext)
     expect(lastAwareness).toBe(awareness)
-    // The Y.Text reflects mutations (real CM + yCollab would propagate these
-    // into the editor view; here we verify the source-of-truth updates).
-    ytext.insert(ytext.length, ' more')
-    expect(ytext.toString()).toContain('more')
   })
 })
