@@ -2917,7 +2917,13 @@ jobs:
   # the mirror check so a marketing-only bump is caught there too.
   legal-cross-repo:
     name: legal cross-repo hash check
-    if: github.event_name != 'repository_dispatch'
+    # Skipped on Dependabot PRs: this job mints a GH App token to read the
+    # marketing repo, but Dependabot runs with the Dependabot secret scope
+    # so create-github-app-token fails ("private-key must be non-empty") and
+    # the job errors rather than skips — which the `ci` aggregate treats as
+    # fatal, permanently blocking dep bumps. Dependabot never touches legal
+    # docs, so skip it (mirrors how e2e-clerk is skipped for Dependabot).
+    if: github.event_name != 'repository_dispatch' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
