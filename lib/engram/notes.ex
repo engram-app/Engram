@@ -2105,6 +2105,11 @@ defmodule Engram.Notes do
         # Per folder_hmac, pick any one row (for envelope decryption) and
         # count only kind='note' rows. Marker-only folders yield count 0;
         # mixed folders yield the note count (markers excluded).
+        #
+        # The count MUST equal what `list_notes_in_folder/3` returns for the
+        # same folder (both read kind='note' rows grouped by folder_hmac) — the
+        # MCP `list_folders` vs `list_folder` contract (#728). Guarded by the
+        # "invariant vs list_notes_in_folder/3 (#728)" tests in notes_test.exs.
         {:ok, rows} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
