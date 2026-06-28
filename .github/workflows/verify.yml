@@ -432,7 +432,7 @@ jobs:
 
       - name: Cache deps/
         id: cache-deps
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: deps
           key: ${{ steps.keys.outputs.deps }}
@@ -440,7 +440,7 @@ jobs:
 
       - name: Cache _build/dev
         id: cache-build-dev
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: _build/dev
           key: ${{ steps.keys.outputs.build-dev }}
@@ -448,7 +448,7 @@ jobs:
 
       - name: Cache _build/test
         id: cache-build-test
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: _build/test
           key: ${{ steps.keys.outputs.build-test }}
@@ -1548,7 +1548,7 @@ jobs:
       # BEAM files instead of recompiling.
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -1556,7 +1556,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/test cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: _build/test
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
@@ -1780,7 +1780,7 @@ jobs:
       # re-validation (no --force; cache was built warnings-clean).
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -1788,7 +1788,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -1805,7 +1805,7 @@ jobs:
         run: mix deps.get
 
       - name: Cache Dialyzer PLT
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: priv/plts
           key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
@@ -2233,7 +2233,7 @@ jobs:
       - name: Restore deps cache
         if: steps.gate.outputs.proceed == 'true'
         id: cache-deps
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2242,7 +2242,7 @@ jobs:
 
       - name: Restore _build/dev cache
         if: steps.gate.outputs.proceed == 'true'
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2440,7 +2440,7 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: cache-deps
         with:
@@ -2750,7 +2750,7 @@ jobs:
       # instead of recompiling at boot.
       - name: Restore deps cache
         id: cache-deps
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
@@ -2758,7 +2758,7 @@ jobs:
             mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Restore _build/dev cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: _build/dev
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
@@ -2945,7 +2945,7 @@ jobs:
           repositories: engram-marketing
 
       - name: Checkout engram-marketing legal docs
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: engram-app/engram-marketing
           token: ${{ steps.app-token.outputs.token }}
@@ -3343,7 +3343,7 @@ jobs:
       # now benefits from the same warm layers GHCR has used since #391.
       - name: Restore buildx cache
         if: steps.version.outputs.image_exists != 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/buildx-cache
           key: buildx-${{ runner.os }}-${{ hashFiles('Dockerfile', 'mix.lock', 'frontend/bun.lock') }}
@@ -3377,7 +3377,7 @@ jobs:
           secrets: |
             sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
 
-      # Atomically swap new cache over old. actions/cache@v5 has no built-in
+      # Atomically swap new cache over old. actions/cache@v6 has no built-in
       # rotation; without this step the cache grows unbounded across runs.
       - name: Rotate buildx cache
         if: steps.version.outputs.image_exists != 'true' && always()

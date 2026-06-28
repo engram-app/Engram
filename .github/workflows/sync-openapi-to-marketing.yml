@@ -32,7 +32,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Checkout backend (for openapi.json)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Generate engram-marketing App installation token
         id: app-token
@@ -44,7 +44,7 @@ jobs:
           repositories: engram-marketing
 
       - name: Checkout engram-marketing
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: engram-app/engram-marketing
           token: ${{ steps.app-token.outputs.token }}
