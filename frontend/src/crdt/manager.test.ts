@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import * as Y from 'yjs'
-import { CrdtManager, REMOTE_ORIGIN } from './manager'
+import { CrdtManager } from './manager'
 
 function freshDbName(): string {
   // Each test gets an isolated IndexedDB store name so fake-indexeddb state
