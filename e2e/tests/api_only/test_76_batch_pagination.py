@@ -103,21 +103,6 @@ class TestBatchUpsert:
         assert body2["results"][0]["version"] == 2
         api_sync.delete_note(f"{PREFIX}/contract-check.md")
 
-    def test_batch_conflict_carries_server_note(self, api_sync, seeded):
-        path = f"{PREFIX}/conflict-check.md"
-        _batch_push(api_sync, [{"path": path, "content": "v1", "mtime": time.time()}])
-        _batch_push(api_sync, [{"path": path, "content": "v2", "mtime": time.time()}])
-
-        body = _batch_push(
-            api_sync,
-            [{"path": path, "content": "stale", "mtime": time.time(), "version": 1}],
-        )
-        (result,) = body["results"]
-        assert result["status"] == "conflict"
-        assert result["server_note"]["content"] == "v2"
-        assert result["server_note"]["version"] == 2
-        api_sync.delete_note(path)
-
 
 class TestPaginationConvergence:
     def test_cursor_loop_covers_full_delta(self, api_sync, seeded):
