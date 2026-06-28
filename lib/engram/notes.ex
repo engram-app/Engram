@@ -636,9 +636,17 @@ defmodule Engram.Notes do
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
   def get_or_bootstrap_note(user, vault, path) do
-    case get_note(user, vault, path) do
+    # Sanitize FIRST so the lookup keys on the SAME path upsert_note persists
+    # under. The CRDT wire doc_id keeps the raw (possibly dirty) path, but the
+    # note is stored at the sanitized path. Without sanitizing here, get_note for
+    # a dirty path never matches the stored note, so every crdt_msg re-bootstraps
+    # via upsert_note(content: "") and repeatedly wipes the body — the note never
+    # materializes at the clean path (see e2e tests/crdt illegal-path test).
+    sanitized = PathSanitizer.sanitize(path)
+
+    case get_note(user, vault, sanitized) do
       {:ok, note} -> {:ok, note}
-      {:error, :not_found} -> upsert_note(user, vault, %{"path" => path, "content" => ""})
+      {:error, :not_found} -> upsert_note(user, vault, %{"path" => sanitized, "content" => ""})
     end
   end
 
