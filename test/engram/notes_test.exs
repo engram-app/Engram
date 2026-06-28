@@ -1101,6 +1101,70 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "list_folders_with_counts/2 invariant vs list_notes_in_folder/3 (#728)" do
+    # The MCP `list_folders` count MUST equal what `list_folder` actually
+    # returns for the same folder. #728: list_folders reported 1 for a folder
+    # that held 3 notes. Assert the invariant across folder shapes.
+    #
+    # Two directions, so neither a count mismatch NOR a dropped folder can
+    # slip past: (1) every `expected` folder is present in the result, and
+    # (2) every returned folder's count equals its `list_notes_in_folder` length.
+    defp assert_counts_match(user, vault, expected) do
+      {:ok, folders} = Notes.list_folders_with_counts(user, vault)
+      returned = MapSet.new(folders, & &1.folder)
+
+      for folder <- expected do
+        assert MapSet.member?(returned, folder),
+               "expected folder #{inspect(folder)} in list_folders_with_counts, " <>
+                 "got #{inspect(Enum.sort(returned))}"
+      end
+
+      for %{folder: folder, count: count} <- folders do
+        {:ok, notes} = Notes.list_notes_in_folder(user, vault, folder)
+
+        assert count == length(notes),
+               "folder #{inspect(folder)}: list_folders count=#{count} but " <>
+                 "list_notes_in_folder returned #{length(notes)}"
+      end
+    end
+
+    test "flat folder with 3 notes", %{user: user, vault: vault} do
+      for i <- 1..3 do
+        Notes.upsert_note(user, vault, %{
+          "path" => "Todos/Task#{i}.md",
+          "content" => "t#{i}",
+          "mtime" => 1.0
+        })
+      end
+
+      assert_counts_match(user, vault, ["Todos"])
+    end
+
+    test "nested folders: parent with direct notes + subfolder with notes",
+         %{user: user, vault: vault} do
+      Notes.upsert_note(user, vault, %{"path" => "Todos/A.md", "content" => "a", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "Todos/B.md", "content" => "b", "mtime" => 1.0})
+
+      Notes.upsert_note(user, vault, %{
+        "path" => "Todos/Sub/C.md",
+        "content" => "c",
+        "mtime" => 1.0
+      })
+
+      assert_counts_match(user, vault, ["Todos", "Todos/Sub"])
+    end
+
+    test "mixed: root notes + marker folder + populated folder",
+         %{user: user, vault: vault} do
+      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "r", "mtime" => 1.0})
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+      Notes.upsert_note(user, vault, %{"path" => "Work/X.md", "content" => "x", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "Work/Y.md", "content" => "y", "mtime" => 1.0})
+
+      assert_counts_match(user, vault, ["", "Empty", "Work"])
+    end
+  end
+
   describe "list_folders_with_counts/2 with markers" do
     test "marker for an otherwise-empty folder appears with count 0",
          %{user: user, vault: vault} do
