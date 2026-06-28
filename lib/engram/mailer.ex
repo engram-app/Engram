@@ -28,12 +28,12 @@ defmodule Engram.Mailer do
     body = """
     <mj-text font-size="18px" font-weight="600">Welcome to Engram, #{name}.</mj-text>
     <mj-text>Your account is ready. Engram keeps your Obsidian vault synced
-    across every device — and turns those notes into searchable, structured
+    across every device, and turns those notes into searchable, structured
     memory you can hand to any AI tool you use.</mj-text>
     <mj-text>To get started, install the Engram plugin in Obsidian and connect
     it to your account. Your notes start syncing immediately.</mj-text>
     <mj-button href="#{@install_url}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Install the Engram plugin</mj-button>
-    <mj-text>— The Engram team</mj-text>
+    <mj-text>The Engram team</mj-text>
     """
 
     render_and_deliver(email, "Welcome to Engram", body)
@@ -54,7 +54,7 @@ defmodule Engram.Mailer do
       anything is removed.</p>
       <p>Just open Obsidian with the Engram plugin enabled and we'll
       reset the clock.</p>
-      <p>— Engram</p>
+      <p>Engram</p>
       """,
       []
     )
@@ -63,15 +63,15 @@ defmodule Engram.Mailer do
   def send_inactivity_warning_80(%User{email: email}) do
     deliver(
       email,
-      "Engram: final notice — 10 days until auto-delete",
+      "Engram: final notice, 10 days until auto-delete",
       """
       <p>Hi,</p>
       <p>This is your final notice. Your Engram vault will be auto-deleted
       in ~10 days unless you sync at least once before then.</p>
       <p>Open Obsidian with the Engram plugin enabled to keep your vault.
-      Already moved on? No action needed — your data will be removed
+      Already moved on? No action needed, your data will be removed
       automatically.</p>
-      <p>— Engram</p>
+      <p>Engram</p>
       """,
       []
     )
@@ -97,9 +97,9 @@ defmodule Engram.Mailer do
       """
       <p>Hi,</p>
       <p>Your Engram vault has been auto-deleted after 90 days of inactivity.
-      Your Clerk login is still active — you can sign back in and start
+      Your Clerk login is still active, you can sign back in and start
       fresh whenever you want.</p>
-      <p>— Engram</p>
+      <p>Engram</p>
       """
     }
   end
@@ -110,7 +110,7 @@ defmodule Engram.Mailer do
       """
       <p>Hi,</p>
       <p>You requested account deletion. Your data is being removed.</p>
-      <p>— Engram</p>
+      <p>Engram</p>
       """
     }
   end
@@ -122,7 +122,7 @@ defmodule Engram.Mailer do
       <p>Hi,</p>
       <p>Your account was deleted via your authentication provider.
       Your data is being removed.</p>
-      <p>— Engram</p>
+      <p>Engram</p>
       """
     }
   end
@@ -139,7 +139,7 @@ defmodule Engram.Mailer do
     body = """
     <mj-text>Your Engram vault "#{vault_name}" has been deleted.</mj-text>
     <mj-text>It will be permanently removed on #{purge_date}. Until then you can
-    restore it — or, if you meant to delete it, remove it permanently now — from
+    restore it, or if you meant to delete it, remove it permanently now, from
     your vault settings.</mj-text>
     <mj-button href="#{manage_url}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Manage vault</mj-button>
     <mj-text>No action is needed if you want it gone; it will be cleaned up

@@ -32,8 +32,14 @@ defmodule Engram.Email.Template do
     |> Phoenix.HTML.safe_to_string()
   end
 
+  # Marketing-hosted absolute URL. The backend's own /email/engram-mark.png is
+  # unreachable in prod: app.engram.page is Cloudflare Pages (serves the SPA
+  # index.html for unknown paths) and api.engram.page rewrites /email ->
+  # /api/email -> 404. engram.page serves the asset reliably from public/.
+  @mark_url "https://engram.page/engram-mark.png"
+
   defp layout(body) do
-    mark_url = EngramWeb.Endpoint.url() <> "/email/engram-mark.png"
+    mark_url = @mark_url
 
     """
     <mjml>

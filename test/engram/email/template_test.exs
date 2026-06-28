@@ -20,9 +20,18 @@ defmodule Engram.Email.TemplateTest do
       refute html =~ "#5b5bd6"
     end
 
-    test "includes the mark image from the configured endpoint", %{html: html} do
-      assert html =~ "/email/engram-mark.png",
-             "expected the mark URL to appear in the rendered HTML"
+    test "includes the marketing-hosted mark image", %{html: html} do
+      assert html =~ "https://engram.page/engram-mark.png",
+             "expected the marketing-hosted mark URL in the rendered HTML"
+    end
+
+    test "does not reference the unreachable backend /email/ asset path", %{html: html} do
+      # app.engram.page is Cloudflare Pages (returns the SPA index.html) and
+      # api.engram.page rewrites /email -> /api/email -> 404, so the backend's
+      # own /email/engram-mark.png is unreachable. The logo must be the
+      # marketing-hosted absolute URL instead.
+      refute html =~ "/email/engram-mark.png",
+             "the backend /email/ asset path is unreachable in prod"
     end
 
     test "footer copy matches the memory-layer positioning", %{html: html} do
