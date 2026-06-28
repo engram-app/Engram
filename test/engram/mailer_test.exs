@@ -114,6 +114,18 @@ defmodule Engram.MailerTest do
 
       assert :ok = Mailer.send_welcome(user)
     end
+
+    test "copy contains no em dashes" do
+      user = insert(:user, email: "user@example.com", display_name: "Sam")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        refute subject =~ "—", "house style: no em dashes in copy"
+        refute html =~ "—", "house style: no em dashes in copy"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
   end
 
   describe "send_account_deleted_notice/2" do
@@ -124,6 +136,7 @@ defmodule Engram.MailerTest do
         assert to == "u@example.com"
         assert subject == "Engram: your vault was auto-deleted"
         assert html =~ "90 days of inactivity"
+        refute html =~ "—", "house style: no em dashes in copy"
         :ok
       end)
 
@@ -157,6 +170,32 @@ defmodule Engram.MailerTest do
     end
   end
 
+  describe "inactivity warnings" do
+    test "60-day warning copy contains no em dashes" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        refute subject =~ "—", "house style: no em dashes in copy"
+        refute html =~ "—", "house style: no em dashes in copy"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_inactivity_warning_60(user)
+    end
+
+    test "80-day warning copy contains no em dashes" do
+      user = insert(:user, email: "u@example.com")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        refute subject =~ "—", "house style: no em dashes in copy"
+        refute html =~ "—", "house style: no em dashes in copy"
+        :ok
+      end)
+
+      assert :ok = Mailer.send_inactivity_warning_80(user)
+    end
+  end
+
   describe "send_vault_deletion_notice/4" do
     test "returns :ok and includes the manage link, vault name, and purge date" do
       user = insert(:user, email: "u@example.com")
@@ -167,6 +206,8 @@ defmodule Engram.MailerTest do
         assert html =~ "My Vault"
         assert html =~ "June 27, 2026"
         assert html =~ "https://app.engram.page/settings/vaults?highlight=1"
+        refute subject =~ "—", "house style: no em dashes in copy"
+        refute html =~ "—", "house style: no em dashes in copy"
         :ok
       end)
 
