@@ -2,6 +2,14 @@ import { Socket, Channel } from 'phoenix'
 import type { QueryClient } from '@tanstack/react-query'
 import { getWsBase, joinWsUrl } from './base'
 import { ROOT_FOLDER_ID } from './queries'
+import {
+  startCrdtSession,
+  stopCrdtSession,
+  handleFrame as crdtHandleFrame,
+  enroll as crdtEnroll,
+  resetAll as crdtResetAll,
+  docPathFromDocId,
+} from '../crdt/session'
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000
 export const RECONNECT_JITTER_MAX_MS = 60_000
@@ -47,6 +55,7 @@ export function __resetServerJitterMs(): void {
 
 let socket: Socket | null = null
 let channel: Channel | null = null
+let crdtChannel: Channel | null = null
 
 interface ConnectOptions {
   userId: string
@@ -234,7 +243,11 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient, o
   // Fires on initial connect AND every reconnect — the durable-feed catch-up
   // trigger. The socket can drop events while disconnected (no replay), so a
   // reconnect kicks a cursor pull to backfill the gap.
-  if (onSocketOpen) socket.onOpen(onSocketOpen)
+  // Also re-arms CRDT handshakes on reconnect so the session re-syncs state.
+  socket.onOpen(() => {
+    crdtResetAll()
+    onSocketOpen?.()
+  })
 
   const topic = `sync:${userId}:${vaultId}`
   channel = socket.channel(topic)
@@ -254,10 +267,36 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient, o
       console.log(`Joined ${topic}`)
     })
     .receive('error', (resp) => console.error('Channel join failed', resp))
+
+  // CRDT note-sync channel — rides the same Clerk-authed socket. The session
+  // singleton owns the Y.Doc registry; this channel is just its transport.
+  startCrdtSession({
+    vaultId,
+    push: (docId, b64) => {
+      crdtChannel?.push('crdt_msg', { doc_id: docId, b64 })
+    },
+  })
+  const crdtTopic = `crdt:${userId}:${vaultId}`
+  crdtChannel = socket.channel(crdtTopic)
+  crdtChannel.on('crdt_msg', (p: { doc_id: string; b64: string }) => {
+    void crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64)
+  })
+  crdtChannel.on('crdt_doc_ready', (p: { doc_id: string }) => {
+    crdtEnroll(docPathFromDocId(p.doc_id))
+  })
+  crdtChannel
+    .join()
+    .receive('ok', () => console.log(`Joined ${crdtTopic}`))
+    .receive('error', (resp) => console.error('CRDT channel join failed', resp))
 }
 
 export function disconnectChannel() {
   __resetNoteChangeBatch()
+  if (crdtChannel) {
+    crdtChannel.leave()
+    crdtChannel = null
+  }
+  stopCrdtSession()
   if (channel) {
     channel.leave()
     channel = null
