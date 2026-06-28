@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto'
 import '@testing-library/jest-dom'
 
 // happy-dom returns 0 for clientHeight / scrollHeight by default, which
