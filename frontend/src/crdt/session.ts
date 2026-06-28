@@ -1,4 +1,3 @@
-// backend/frontend/src/crdt/session.ts
 import { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { CrdtChannel } from './channel'

@@ -1,4 +1,3 @@
-// backend/frontend/src/crdt/enrollment.ts
 export class CrdtEnrollment {
   private readonly enrolled = new Set<string>()
   private readonly startSync: (path: string) => Promise<void>

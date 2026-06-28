@@ -1,4 +1,3 @@
-// backend/frontend/src/crdt/session.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   startCrdtSession,
