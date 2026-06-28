@@ -17,12 +17,6 @@ config :engram, :pre_auth_rate_limit_override, 10_000
 # cover BootCanary directly via Engram.Crypto.BootCanaryTest.
 config :engram, :boot_canary_enabled, false
 
-# CRDT is the default content-sync path in config.exs, but unit tests assert
-# the legacy 409-on-stale-version conflict path and the deliver-out gate's
-# default-off behavior. Pin false here; tests that exercise CRDT opt in
-# per-test via Application.put_env(:engram, :crdt_enabled, true).
-config :engram, :crdt_enabled, false
-
 # #619 — bootstrap admin advisory lock disabled in tests. It's a global
 # pg_advisory_xact_lock; under the SQL sandbox (one transaction per test) it's
 # held for the whole test and deadlocks once enough user-creating tests run

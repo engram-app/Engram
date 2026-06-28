@@ -79,34 +79,6 @@ defmodule EngramWeb.NotesControllerBatchUpsertTest do
       assert %{"path" => "ok.md", "status" => "ok"} = ok_result
     end
 
-    test "stale version yields a conflict entry mirroring the single-note 409 body", %{
-      conn: conn,
-      user: user,
-      vault: vault
-    } do
-      {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "v1", mtime: 1.0})
-
-      {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "v2", mtime: 2.0})
-
-      body =
-        conn
-        |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
-        |> post(~p"/api/notes/batch", %{
-          notes: [%{path: "a.md", content: "mine", mtime: 3.0, version: 1}]
-        })
-        |> json_response(200)
-
-      assert [%{"path" => "a.md", "status" => "conflict", "server_note" => server_note}] =
-               body["results"]
-
-      assert server_note["content"] == "v2"
-      assert server_note["version"] == 2
-      assert server_note["path"] == "a.md"
-      assert is_binary(server_note["content_hash"])
-    end
-
     test "cap exceeded → 402 with LimitResponse shape, nothing committed", %{
       conn: conn,
       user: user,

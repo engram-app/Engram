@@ -15,9 +15,24 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
       config :engram, Engram.Notes.CrdtCheckpointTimer,
         settle_ms: 100,
-        ceiling_ms: 500
+        ceiling_ms: 500,
+        eager_ms: 20
 
-  Defaults: settle 5 000 ms / ceiling 60 000 ms.
+  Defaults: settle 5 000 ms / ceiling 60 000 ms / eager 250 ms.
+
+  ## Eager first flush
+
+  A plain settle/ceiling debounce means the plaintext `notes.content`
+  projection — which only updates on a checkpoint — stays stale for up to
+  `settle_ms` (5 s) after an edit, and longer under sustained typing. Every
+  non-CRDT reader (REST `/api/notes`, the web app, the search index, a second
+  device seeding a fresh room) then sees stale content for seconds. So the
+  FIRST edit after a genuine idle gap (>= `settle_ms`, i.e. the note had gone
+  quiet and flushed) schedules an `eager_ms` (~250 ms) flush instead of waiting
+  the full settle — content materializes promptly. Sustained editing thereafter
+  stays settle-debounced and ceiling-capped, so there is still exactly ONE
+  checkpoint per dirty streak (no per-keystroke churn, no double flush, no
+  version/seq thrash). The cheap O(append) `update_v1` hot path is untouched.
   """
   use GenServer
 
@@ -27,6 +42,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   @default_settle_ms 5_000
   @default_ceiling_ms 60_000
+  @default_eager_ms 250
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -65,6 +81,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     cfg = Application.get_env(:engram, __MODULE__, [])
     settle_ms = Keyword.get(cfg, :settle_ms, @default_settle_ms)
     ceiling_ms = Keyword.get(cfg, :ceiling_ms, @default_ceiling_ms)
+    eager_ms = Keyword.get(cfg, :eager_ms, @default_eager_ms)
 
     # Trap exits so we receive {:EXIT, room_pid, reason} as a handle_info
     # message instead of dying silently. This lets us flush or log before
@@ -79,8 +96,15 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       note_id: note_id,
       settle_ms: settle_ms,
       ceiling_ms: ceiling_ms,
-      # Monotonic ms of the last activity event — nil until first activity.
+      eager_ms: eager_ms,
+      # Monotonic ms when the current dirty streak began (the ceiling anchor) —
+      # nil between checkpoints.
       first_dirty_at: nil,
+      # Monotonic ms of the previous activity event — nil until first activity.
+      # Used to detect a genuine idle gap (>= settle) that makes the next edit
+      # eager-eligible. NOT reset on flush, so typing that resumes right after a
+      # ceiling/settle flush is correctly seen as still-active (not eager).
+      last_activity_at: nil,
       settle_timer: nil
     }
 
@@ -90,20 +114,14 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   @impl true
   def handle_info(:activity, state) do
     now = monotonic_ms()
-
-    # Record the ceiling anchor on the first dirty event after a checkpoint.
-    first_dirty_at = state.first_dirty_at || now
+    {delay, first_dirty_at} = compute_delay(state, now)
 
     # Cancel any existing settle timer and re-arm it.
     _ = if state.settle_timer, do: Process.cancel_timer(state.settle_timer)
-
-    remaining_until_ceiling = state.ceiling_ms - (now - first_dirty_at)
-
-    # Schedule the tick at whichever comes first: settle idle or ceiling.
-    delay = max(0, min(state.settle_ms, remaining_until_ceiling))
     timer = Process.send_after(self(), :tick, delay)
 
-    {:noreply, %{state | first_dirty_at: first_dirty_at, settle_timer: timer}}
+    {:noreply,
+     %{state | first_dirty_at: first_dirty_at, last_activity_at: now, settle_timer: timer}}
   end
 
   @impl true
@@ -121,6 +139,34 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   @impl true
   def handle_info({:EXIT, _room_pid, _reason}, state) do
     {:stop, :normal, state}
+  end
+
+  @doc """
+  Pure scheduling decision: given the timer `state` and a monotonic `now`,
+  return `{delay_ms, first_dirty_at}` for the next checkpoint tick.
+
+  - `first_dirty_at` anchors the dirty streak (the ceiling clock); it is set on
+    the first activity after a checkpoint and threaded back into state.
+  - The base delay is the settle window, capped by the remaining ceiling budget
+    so a continuously-edited note still flushes.
+  - When this activity follows a genuine idle gap (no prior activity, or the gap
+    since the last one is at least `settle_ms` — meaning the note had gone quiet
+    and already flushed), the first flush of the new streak is pulled forward to
+    `eager_ms` so the plaintext projection materializes promptly. Sustained
+    editing (gap < settle) keeps the settle/ceiling debounce.
+  """
+  @spec compute_delay(map(), integer()) :: {non_neg_integer(), integer()}
+  def compute_delay(state, now) do
+    first_dirty_at = state.first_dirty_at || now
+    remaining_until_ceiling = state.ceiling_ms - (now - first_dirty_at)
+    base = min(state.settle_ms, remaining_until_ceiling)
+
+    quiet_before? =
+      is_nil(state.last_activity_at) or now - state.last_activity_at >= state.settle_ms
+
+    delay = if quiet_before?, do: min(base, state.eager_ms), else: base
+
+    {max(0, delay), first_dirty_at}
   end
 
   # ---------------------------------------------------------------------------

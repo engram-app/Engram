@@ -51,16 +51,6 @@ config :engram, :embedder, Engram.Embedders.Voyage
 # Storage adapter — S3-compatible object storage (MinIO local, AWS S3 prod).
 config :engram, :storage, Engram.Storage.S3
 
-# CRDT (Yjs) file sync. Ships dormant in v1: the CRDT path is not yet a drop-in
-# replacement for legacy push/pull (basic A→B delivery is not functional and it
-# changes offline-queue / versioning / conflict-file semantics). When false the
-# server keeps legacy 409-on-stale-version conflict resolution, and the plugin's
-# matching `enableCrdt` setting keeps it off the `crdt:` topic. CRDT is now the
-# DEFAULT content-sync path (verified e2e via the crdt: suite + gap-3 external
-# delivery); opt OUT explicitly with CRDT_ENABLED=false (falls back to legacy
-# 409-on-stale-version conflict resolution — the e2e-clerk lane + kill switch).
-config :engram, :crdt_enabled, true
-
 # Oban job queue (per-env overrides in dev/test/prod configs)
 config :engram, Oban,
   engine: Oban.Engines.Basic,
