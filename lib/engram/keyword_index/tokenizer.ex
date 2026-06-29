@@ -17,11 +17,18 @@ defmodule Engram.KeywordIndex.Tokenizer do
   # Hiragana/Katakana, CJK Ext-A, CJK Unified, Hangul syllables, CJK compat.
   @cjk_re ~r/[\x{3040}-\x{30FF}\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}]/u
 
+  # Strip combining marks that appear immediately after a Latin base character.
+  # This removes casefold artifacts like Turkish İ → i + U+0307 (combining dot)
+  # and zalgo-style combining-mark spam on Latin text, without touching Arabic
+  # diacritics (harakat), Cyrillic, or precomposed accents on non-Latin scripts.
+  @strip_marks ~r/(?<=\p{Latin})\p{Mn}+/u
+
   @spec tokens(String.t() | any()) :: [String.t()]
   def tokens(text) when is_binary(text) do
     text
     |> String.normalize(:nfkc)
     |> String.downcase(:default)
+    |> String.replace(@strip_marks, "")
     |> then(&Regex.scan(@word_re, &1))
     |> Enum.map(&hd/1)
     |> Enum.flat_map(&expand/1)
