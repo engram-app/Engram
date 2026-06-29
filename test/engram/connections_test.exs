@@ -487,5 +487,33 @@ defmodule Engram.ConnectionsTest do
       assert :ok = Connections.revoke_by_vault(user.id, vault.id)
       assert :ok = Connections.revoke_by_vault(user.id, vault.id)
     end
+
+    test "returns :ok and revokes nothing for a vault with no tokens" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+    end
+
+    test "leaves OAuth grants with no vault binding (vault_id: nil) untouched" do
+      # vault_id is cast-only on OAuth refresh tokens (not required), so a grant
+      # can have nil binding. Such a grant is NOT scoped to any vault — it shows
+      # on the connections page with vault_id: nil, independent of any vault.
+      # Deleting a vault must not collaterally revoke it.
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil
+      )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      # The unbound grant survives — it was never the deleted vault's connection
+      assert Connections.count_active(user.id, :mcp) == 1
+    end
   end
 end

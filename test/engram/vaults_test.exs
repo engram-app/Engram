@@ -567,23 +567,40 @@ defmodule Engram.VaultsTest do
     end
 
     test "revokes vault-scoped OAuth and device tokens on soft-delete", %{user: user} do
-      {:ok, vault} = Vaults.create_vault(user, %{name: "Gone"})
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, gone} = Vaults.create_vault(user, %{name: "Gone"})
+      {:ok, kept} = Vaults.create_vault(user, %{name: "Kept"})
       client = insert(:oauth_client, kind: "mcp")
-      family_id = Ecto.UUID.generate()
 
+      # Connections on the doomed vault…
       insert(:oauth_refresh_token,
         user_id: user.id,
         client_id: client.client_id,
-        vault_id: vault.id
+        vault_id: gone.id
       )
 
-      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+      insert(:device_refresh_token, user: user, vault: gone, family_id: Ecto.UUID.generate())
 
-      assert {:ok, _} = Vaults.delete_vault(user, vault.id)
+      # …and connections on a vault that survives.
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: kept.id
+      )
 
-      # Both token kinds revoked immediately — no 30-day wait
-      assert Connections.count_active(user.id, :mcp) == 0
-      assert Connections.count_active(user.id, :obsidian) == 0
+      insert(:device_refresh_token, user: user, vault: kept, family_id: Ecto.UUID.generate())
+
+      assert {:ok, _} = Vaults.delete_vault(user, gone.id)
+
+      # The deleted vault's connections vanish from the page immediately (the
+      # #764 symptom is the connections list, not just the active count).
+      vault_ids = user |> Connections.list_for_user() |> Enum.map(& &1.vault_id)
+      refute gone.id in vault_ids
+      assert kept.id in vault_ids
+
+      # Both kept-vault token kinds remain active — no collateral revocation.
+      assert Connections.count_active(user.id, :mcp) == 1
+      assert Connections.count_active(user.id, :obsidian) == 1
     end
   end
 
