@@ -3,7 +3,9 @@ defmodule Engram.KeywordIndex.Tokenizer do
   Language-neutral exact-token tokenizer for the keyword search leg (#595).
 
   Pipeline: Unicode NFKC normalize → Unicode case-fold → extract word runs
-  (`[\\p{L}\\p{N}_]+`, so identifiers like `paddle_api_key` stay whole) →
+  (`[\\p{L}\\p{N}\\p{M}_]+`, so identifiers like `paddle_api_key` stay whole
+  and vocalized non-Latin scripts like Arabic harakat and Hebrew niqqud are
+  kept attached to their base letters rather than shattering the word) →
   for CJK runs (no word spaces) emit overlapping character bigrams.
 
   No stemming: exact-token recall is this leg's job; morphology/semantics are
@@ -12,7 +14,7 @@ defmodule Engram.KeywordIndex.Tokenizer do
   boundary.
   """
 
-  @word_re ~r/[\p{L}\p{N}_]+/u
+  @word_re ~r/[\p{L}\p{N}\p{M}_]+/u
 
   # Hiragana/Katakana, CJK Ext-A, CJK Unified, Hangul syllables, CJK compat.
   @cjk_re ~r/[\x{3040}-\x{30FF}\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}]/u
