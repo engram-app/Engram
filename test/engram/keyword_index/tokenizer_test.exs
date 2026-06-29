@@ -51,4 +51,23 @@ defmodule Engram.KeywordIndex.TokenizerTest do
     assert Tokenizer.tokens("бегущий") == ["бегущий"]
     assert Tokenizer.tokens("東京都") == ["東京", "京都"]
   end
+
+  # Task 2: dual-emit + English stemming
+
+  test "tokens/1 (no language) is unchanged — raw only" do
+    assert Tokenizer.tokens("running cats") == ["running", "cats"]
+  end
+
+  test "Latin tokens dual-emit raw + English stem" do
+    assert Tokenizer.tokens("running", :en) == ["running", "run"]
+    assert Tokenizer.tokens("cats", :en) == ["cats", "cat"]
+  end
+
+  test "token whose stem equals raw is emitted once" do
+    assert Tokenizer.tokens("run", :en) == ["run"]
+  end
+
+  test "CJK is never stemmed regardless of language" do
+    assert Tokenizer.tokens("東京都", :en) == ["東京", "京都"]
+  end
 end

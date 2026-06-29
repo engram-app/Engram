@@ -141,6 +141,9 @@ defmodule Engram.MixProject do
       # contents in memory.
       {:zstream, "~> 0.6"},
 
+      # Keyword search — English (and future) stemming (pure Elixir, Snowball)
+      {:text_stemmer, "~> 0.1.0"},
+
       # Test
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},
