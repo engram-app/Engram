@@ -300,8 +300,7 @@ defmodule Engram.Search do
     end
   end
 
-  # Slice 1: English only. Replaced by lingua per-query detection in Slice 2b.
-  defp detect_query_language(_query), do: :en
+  defp detect_query_language(query), do: Engram.KeywordIndex.LangDetect.detect(query) || :en
 
   # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...]
   # subset to merge into Qdrant search opts, or :no_dek_with_filter when the

@@ -320,6 +320,5 @@ defmodule Engram.Indexing do
   defp encode_hmac(nil), do: nil
   defp encode_hmac(bin) when is_binary(bin), do: Base.encode64(bin)
 
-  # Slice 1: English only. Replaced by lingua per-chunk detection in Slice 2b.
-  defp detect_language(_text), do: :en
+  defp detect_language(text), do: Engram.KeywordIndex.LangDetect.detect(text)
 end
