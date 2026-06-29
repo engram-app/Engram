@@ -25,10 +25,17 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     u32
   end
 
+  # Back-compat delegating clauses (NOT @impl) — keep old call sites in
+  # indexing.ex / search.ex compiling until Task 4 threads language through.
+  def encode_document(text, filter_key, doc_len, avgdl),
+    do: encode_document(text, filter_key, doc_len, avgdl, nil)
+
+  def encode_query(query, filter_key), do: encode_query(query, filter_key, nil)
+
   @impl Engram.KeywordIndex
-  def encode_document(text, filter_key, doc_len, avgdl) do
+  def encode_document(text, filter_key, doc_len, avgdl, language) do
     text
-    |> Tokenizer.tokens()
+    |> Tokenizer.tokens(language)
     |> Enum.frequencies()
     |> Enum.reduce(%{}, fn {token, tf}, acc ->
       d = dim(filter_key, token)
@@ -40,9 +47,9 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   end
 
   @impl Engram.KeywordIndex
-  def encode_query(query, filter_key) do
+  def encode_query(query, filter_key, language) do
     query
-    |> Tokenizer.tokens()
+    |> Tokenizer.tokens(language)
     |> Enum.uniq()
     |> Enum.reduce(%{}, fn token, acc -> Map.put(acc, dim(filter_key, token), 1.0) end)
     |> to_sparse()
