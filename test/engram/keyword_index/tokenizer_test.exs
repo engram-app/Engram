@@ -78,4 +78,26 @@ defmodule Engram.KeywordIndex.TokenizerTest do
   test "CJK is never stemmed regardless of language" do
     assert Tokenizer.tokens("東京都", :en) == ["東京", "京都"]
   end
+
+  # Task 6: non-Latin script-default stemming (Slice 2a)
+
+  test "non-Latin scripts auto-route to their default Snowball language" do
+    # Cyrillic -> :ru
+    assert "бегущ" in Tokenizer.tokens("бегущий", :en)
+    # Greek -> :el
+    assert "τρεχ" in Tokenizer.tokens("τρέχοντας", :en)
+    # Arabic -> :ar
+    assert "مدرس" in Tokenizer.tokens("مدرسة", :en)
+  end
+
+  test "non-Latin scripts dual-emit raw token alongside the stem" do
+    assert "бегущий" in Tokenizer.tokens("бегущий", :en)
+    assert "τρέχοντας" in Tokenizer.tokens("τρέχοντας", :en)
+    assert "مدرسة" in Tokenizer.tokens("مدرسة", :en)
+  end
+
+  test "Latin token still uses the passed language, not a script-override" do
+    assert "run" in Tokenizer.tokens("running", :en)
+    assert "running" in Tokenizer.tokens("running", :en)
+  end
 end

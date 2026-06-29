@@ -28,6 +28,10 @@ defmodule Engram.KeywordIndex.Tokenizer do
 
   @supported_langs MapSet.new(Text.Stemmer.supported_languages())
 
+  @cyrillic ~r/[\x{0400}-\x{04FF}]/u
+  @greek ~r/[\x{0370}-\x{03FF}]/u
+  @arabic ~r/[\x{0600}-\x{06FF}\x{0750}-\x{077F}]/u
+
   @type lang :: atom() | nil
 
   @spec tokens(String.t() | any(), lang()) :: [String.t()]
@@ -66,11 +70,19 @@ defmodule Engram.KeywordIndex.Tokenizer do
     end
   end
 
-  # Stem via Snowball/text_stemmer. Only called for supported languages.
-  # Non-Latin script routing (e.g. Arabic, Russian) is deferred to Task 6.
+  # Stem via Snowball/text_stemmer. Routes non-Latin scripts to their default
+  # Snowball language before checking support; Latin/other uses the passed language.
   defp stem(token, language) do
-    if MapSet.member?(@supported_langs, language) do
-      Text.Stemmer.stem(token, language)
+    lang =
+      cond do
+        Regex.match?(@cyrillic, token) -> :ru
+        Regex.match?(@greek, token) -> :el
+        Regex.match?(@arabic, token) -> :ar
+        true -> language
+      end
+
+    if MapSet.member?(@supported_langs, lang) do
+      Text.Stemmer.stem(token, lang)
     else
       token
     end
