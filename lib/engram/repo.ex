@@ -18,8 +18,10 @@ defmodule Engram.Repo do
   @doc """
   The tables guarded by `prepare_query/3`, which must equal the set of tables
   with ROW LEVEL SECURITY enabled in the schema. Exposed for the drift test.
+
+  No `@spec`: the body is a compile-time-constant list, so any `[atom()]` spec
+  is a dialyzer `contract_supertype` of the inferred literal type.
   """
-  @spec tenant_tables() :: [atom()]
   def tenant_tables, do: @tenant_tables
 
   @doc """
