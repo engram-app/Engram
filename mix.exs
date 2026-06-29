@@ -144,8 +144,11 @@ defmodule Engram.MixProject do
       # Keyword search — English (and future) stemming (pure Elixir, Snowball)
       {:text_stemmer, "~> 0.1.0"},
 
-      # Per-chunk language detection (pure Elixir n-gram model, no NIF dep conflicts)
-      {:paasaa, "~> 1.0"},
+      # Per-chunk language detection (lingua Rust NIF — precompiled, no build-time Rust).
+      # lingua pins rustler_precompiled ~> 0.8.4 conservatively; mjml pins ~> 0.9.0.
+      # The override forces 0.9.x which lingua compiles and runs against fine.
+      {:lingua, "~> 0.3.0"},
+      {:rustler_precompiled, "~> 0.9.0", override: true},
 
       # Test
       {:ex_machina, "~> 2.8", only: :test},

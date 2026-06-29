@@ -7,38 +7,41 @@ defmodule Engram.KeywordIndex.LangDetect do
   elsewhere). Detections below the confidence floor also return `nil`, which
   causes the caller to fall back to raw (unstemmed) token indexing.
 
-  Uses `Paasaa` (pure-Elixir n-gram model) rather than a NIF to avoid
-  dependency conflicts with other NIF-based packages in the project.
+  Uses the `Lingua` NIF (precompiled Rust, no build-time Rust required).
+  The rustler_precompiled version is overridden to 0.9.x in mix.exs so it
+  coexists with the mjml NIF under the same resolved version.
   """
 
   # Confidence floor — below this we trust raw-only indexing more.
-  @floor 0.50
+  @floor 0.40
 
-  # paasaa ISO 639-3 → text_stemmer ISO 639-1 (only languages where both
-  # libraries overlap; unmapped codes return nil → raw-only, never crash).
+  # lingua language atom → text_stemmer ISO 639-1 atom.
+  # Only languages where both libraries overlap; unmapped atoms return nil → raw-only.
   @lang_map %{
-    "eng" => :en,
-    "deu" => :de,
-    "fra" => :fr,
-    "spa" => :es,
-    "ita" => :it,
-    "por" => :pt,
-    "nld" => :nl,
-    "dan" => :da,
-    "fin" => :fi,
-    "hun" => :hu,
-    "ron" => :ro,
-    "swe" => :sv,
-    "tur" => :tr,
-    "cat" => :ca,
-    "ces" => :cs,
-    "epo" => :eo,
-    "ekk" => :et,
-    "ind" => :id,
-    "lit" => :lt,
-    "pol" => :pl,
-    "nob" => :no,
-    "nno" => :no
+    english: :en,
+    german: :de,
+    french: :fr,
+    spanish: :es,
+    italian: :it,
+    portuguese: :pt,
+    dutch: :nl,
+    danish: :da,
+    finnish: :fi,
+    hungarian: :hu,
+    romanian: :ro,
+    swedish: :sv,
+    turkish: :tr,
+    catalan: :ca,
+    czech: :cs,
+    esperanto: :eo,
+    estonian: :et,
+    indonesian: :id,
+    irish: :ga,
+    lithuanian: :lt,
+    polish: :pl,
+    basque: :eu,
+    bokmal: :no,
+    nynorsk: :no
   }
 
   @spec detect(String.t()) :: atom() | nil
@@ -49,9 +52,16 @@ defmodule Engram.KeywordIndex.LangDetect do
   # ---
 
   defp classify(text) do
-    case Paasaa.all(text) do
-      [{code, confidence} | _] when confidence >= @floor ->
-        Map.get(@lang_map, code)
+    result =
+      Lingua.detect(text,
+        builder_option: :all_languages_with_latin_script,
+        compute_language_confidence_values: true,
+        preload_language_models: false
+      )
+
+    case result do
+      {:ok, [{lang_atom, confidence} | _]} when confidence >= @floor ->
+        Map.get(@lang_map, lang_atom)
 
       _ ->
         nil
