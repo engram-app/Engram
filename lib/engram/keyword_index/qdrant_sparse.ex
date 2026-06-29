@@ -25,8 +25,8 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     u32
   end
 
-  # Back-compat delegating clauses (NOT @impl) — keep old call sites in
-  # indexing.ex / search.ex compiling until Task 4 threads language through.
+  # Back-compat arity (language defaults to nil = raw-only). Retained for
+  # existing test call sites and as a convenience overload.
   def encode_document(text, filter_key, doc_len, avgdl),
     do: encode_document(text, filter_key, doc_len, avgdl, nil)
 
