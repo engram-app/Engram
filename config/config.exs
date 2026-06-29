@@ -83,6 +83,9 @@ config :engram, Oban,
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
        {"30 3 * * *", Engram.Workers.InactivityCleanup},
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+       # Daily client_logs retention sweep (Engram#792 — the log sink was
+       # unbounded at ~98% of the DB).
+       {"15 4 * * *", Engram.Workers.ClientLogsPruner},
        # Cross-store orphan sweep — weekly safety net for failed
        # event-driven Qdrant/S3 deletes. Sun 05:00 UTC, off-peak.
        {"0 5 * * 0", Engram.Workers.OrphanSweep}
@@ -193,6 +196,10 @@ config :sentry,
 # freshly-booted node. Client-side default + clamp guard a missing/bad value.
 # Runtime-overridable via RECONNECT_JITTER_MAX_MS (see runtime.exs).
 config :engram, :reconnect_jitter_max_ms, 5_000
+
+# Retention for the client_logs plugin remote-log sink. Rows older than this
+# are deleted daily by Engram.Workers.ClientLogsPruner (Engram#792).
+config :engram, :client_logs_retention_days, 30
 
 # ex_aws HTTP client. We override the stock `ExAws.Request.Hackney` adapter
 # because it only matches hackney's 4-tuple reply; hackney 4.x returns a

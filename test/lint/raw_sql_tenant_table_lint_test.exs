@@ -9,8 +9,8 @@ defmodule Engram.RawSqlTenantTableLintTest do
   *structured* `Ecto.Query` ASTs. A raw SQL string bypasses that net entirely,
   so a tenant-table query issued outside `with_tenant` would run unscoped.
 
-  Tenant tables: notes, chunks, attachments, api_keys, vaults, user_agreements
-  (kept in sync with `Engram.Repo.@tenant_tables`).
+  Tenant tables are sourced directly from `Engram.Repo.tenant_tables/0`, so this
+  lint can't drift from the actual guarded set.
 
   If you must run raw SQL touching a tenant table (e.g. an operator backfill
   that is intentionally cross-tenant), add the file to @allowlist with a
@@ -22,7 +22,7 @@ defmodule Engram.RawSqlTenantTableLintTest do
 
   @lib_dir Path.expand("../../lib", __DIR__)
 
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)
+  @tenant_tables Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
 
   # Files allowed to run raw SQL against a tenant table. Each entry needs a
   # comment explaining WHY the cross-tenant raw query is legitimate.
