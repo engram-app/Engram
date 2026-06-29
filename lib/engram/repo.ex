@@ -5,7 +5,22 @@ defmodule Engram.Repo do
 
   require Logger
 
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)a
+  # MUST stay in lockstep with the set of tables that have ROW LEVEL SECURITY
+  # enabled in the schema. `tenant_table_guard_test` asserts this list equals
+  # the live RLS set so the two can't drift. onboarding_actions and
+  # crdt_update_log were added 2026-06-29: the audit found them RLS-on in the
+  # DB but absent here, so the prepare_query tripwire wasn't covering them
+  # (Engram#788). Their access is already correct — onboarding_actions via
+  # `skip_tenant_check`, crdt_update_log via `with_tenant` — so listing them
+  # only tightens the guard, it doesn't change behavior.
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log)a
+
+  @doc """
+  The tables guarded by `prepare_query/3`, which must equal the set of tables
+  with ROW LEVEL SECURITY enabled in the schema. Exposed for the drift test.
+  """
+  @spec tenant_tables() :: [atom()]
+  def tenant_tables, do: @tenant_tables
 
   @doc """
   Executes `fun` inside a transaction with RLS tenant context set.

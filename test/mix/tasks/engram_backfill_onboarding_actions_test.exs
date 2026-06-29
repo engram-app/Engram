@@ -13,8 +13,9 @@ defmodule Mix.Tasks.Engram.BackfillOnboardingActionsTest do
     {:ok, _} = Vaults.create_vault(user_with, %{name: "Main"})
 
     # Simulate a legacy user: clear the row created by the T5 hook so the test
-    # exercises pure backfill.
-    Repo.delete_all(Action)
+    # exercises pure backfill. Cross-tenant test cleanup — onboarding_actions is
+    # now a tenant table (Engram#788), so the guard needs the explicit bypass.
+    Repo.delete_all(Action, skip_tenant_check: true)
 
     BackfillOnboardingActions.run([])
 
