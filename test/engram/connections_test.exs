@@ -410,4 +410,82 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(other.id, :obsidian) == 1
     end
   end
+
+  describe "revoke_by_vault/2" do
+    test "revokes all active OAuth tokens scoped to the vault" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      other_vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: other_vault.id
+      )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      # The other-vault token must survive
+      assert Connections.count_active(user.id, :mcp) == 1
+    end
+
+    test "revokes all active device tokens scoped to the vault" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      other_vault = insert(:vault, user: user)
+
+      family1 = Ecto.UUID.generate()
+      family2 = Ecto.UUID.generate()
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family1)
+      insert(:device_refresh_token, user: user, vault: other_vault, family_id: family2)
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      # The other-vault device token must survive
+      assert Connections.count_active(user.id, :obsidian) == 1
+    end
+
+    test "does not touch tokens belonging to a different user" do
+      user = insert_user()
+      other = insert_user()
+      vault = insert(:vault, user: other)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: other.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      insert(:device_refresh_token, user: other, vault: vault)
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      # other user's connections must be untouched
+      assert Connections.count_active(other.id, :mcp) == 1
+      assert Connections.count_active(other.id, :obsidian) == 1
+    end
+
+    test "is idempotent — second call on already-revoked vault returns :ok" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+    end
+  end
 end

@@ -126,6 +126,38 @@ defmodule Engram.Connections do
   end
 
   @doc """
+  Revokes all active OAuth refresh tokens and device refresh tokens scoped to
+  `vault_id` for `user_id`.
+
+  Called at vault soft-delete time so the connections page clears immediately.
+  Idempotent — safe to call twice.
+  """
+  @spec revoke_by_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
+  def revoke_by_vault(user_id, vault_id) do
+    now = DateTime.utc_now(:second)
+
+    Repo.update_all(
+      from(t in RefreshToken,
+        where: t.user_id == ^user_id,
+        where: t.vault_id == ^vault_id,
+        where: is_nil(t.revoked_at)
+      ),
+      set: [revoked_at: now]
+    )
+
+    Repo.update_all(
+      from(rt in DeviceRefreshToken,
+        where: rt.user_id == ^user_id,
+        where: rt.vault_id == ^vault_id,
+        where: is_nil(rt.revoked_at)
+      ),
+      set: [revoked_at: now]
+    )
+
+    :ok
+  end
+
+  @doc """
   Revokes (sets `revoked_at = now`) all active device refresh tokens for
   `(user_id, family_id)`.
 

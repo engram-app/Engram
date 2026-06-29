@@ -3,6 +3,7 @@ defmodule Engram.VaultsTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Billing.OverrideCache
+  alias Engram.Connections
   alias Engram.Vaults
 
   setup do
@@ -563,6 +564,26 @@ defmodule Engram.VaultsTest do
         worker: Engram.Workers.VaultDeletedEmail,
         args: %{vault_id: v.id, user_id: user.id}
       )
+    end
+
+    test "revokes vault-scoped OAuth and device tokens on soft-delete", %{user: user} do
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Gone"})
+      client = insert(:oauth_client, kind: "mcp")
+      family_id = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id
+      )
+
+      insert(:device_refresh_token, user: user, vault: vault, family_id: family_id)
+
+      assert {:ok, _} = Vaults.delete_vault(user, vault.id)
+
+      # Both token kinds revoked immediately — no 30-day wait
+      assert Connections.count_active(user.id, :mcp) == 0
+      assert Connections.count_active(user.id, :obsidian) == 0
     end
   end
 
