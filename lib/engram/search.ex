@@ -288,7 +288,9 @@ defmodule Engram.Search do
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
-        case KeywordIndex.module().encode_query(query, filter_key) do
+        language = detect_query_language(query)
+
+        case KeywordIndex.module().encode_query(query, filter_key, language) do
           %{indices: []} -> :no_vault
           sparse -> {:ok, sparse}
         end
@@ -297,6 +299,8 @@ defmodule Engram.Search do
         :no_vault
     end
   end
+
+  defp detect_query_language(query), do: Engram.KeywordIndex.LangDetect.detect(query) || :en
 
   # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...]
   # subset to merge into Qdrant search opts, or :no_dek_with_filter when the

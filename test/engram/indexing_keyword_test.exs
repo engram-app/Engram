@@ -30,6 +30,100 @@ defmodule Engram.IndexingKeywordTest do
     %{bypass: bypass, user: user, vault: vault, note: note}
   end
 
+  test "slice-1 stemming: inflected English term produces stem dim and raw token_count", %{
+    bypass: bypass,
+    user: user,
+    vault: vault
+  } do
+    # Note content contains an inflected form; expect the stem dim to appear.
+    chunk_text = "deploying containers"
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "stem_test.md",
+        "content" => chunk_text,
+        "mtime" => 2_000.0
+      })
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, prepared} = Indexing.prepare_index(note, vault)
+    [point | _] = prepared.qdrant_points
+    %{"keyword" => %{indices: indices}} = point.vector
+
+    {:ok, key} = Crypto.dek_filter_key(user)
+
+    # "deploying" must produce the "deploy" stem dim (Slice-1 English dual-emit)
+    assert QdrantSparse.dim(key, "deploy") in indices
+
+    # token_count = RAW token count (language nil), not dual-emit count
+    alias Engram.KeywordIndex.Tokenizer
+    expected_raw = chunk_text |> Tokenizer.tokens(nil) |> length()
+    assert hd(prepared.chunk_rows).token_count == expected_raw
+  end
+
+  test "per-chunk detection: German note indexed with German stems (not English stems)", %{
+    bypass: bypass,
+    user: user,
+    vault: vault
+  } do
+    # Long enough that lingua detects :de confidently.
+    chunk_text = "Die Änderungen wurden erfolgreich getestet und hochgeladen"
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "german_test.md",
+        "content" => chunk_text,
+        "mtime" => 3_000.0
+      })
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, prepared} = Indexing.prepare_index(note, vault)
+    [point | _] = prepared.qdrant_points
+    %{"keyword" => %{indices: indices}} = point.vector
+
+    {:ok, key} = Crypto.dek_filter_key(user)
+
+    # Tokenizer normalises to NFKC + downcase before stemming, so the stem
+    # input is "änderungen" → Text.Stemmer.stem("änderungen", :de) == "ander".
+    # This dim must be present only when detect_language returned :de.
+    german_stem = Text.Stemmer.stem("änderungen", :de)
+
+    assert QdrantSparse.dim(key, german_stem) in indices,
+           "Expected German stem #{inspect(german_stem)} in sparse indices; " <>
+             "got #{inspect(indices)} — lingua may not have detected :de"
+
+    # The English stemmer would produce "änderung" (or leave it unstemmed).
+    # Verify the German path was taken, not the English one.
+    english_stem = Text.Stemmer.stem("änderungen", :en)
+
+    assert german_stem != english_stem,
+           "German and English stems are identical — test is vacuous"
+  end
+
   test "each qdrant point carries a named dense + keyword sparse vector", %{
     bypass: bypass,
     user: user,

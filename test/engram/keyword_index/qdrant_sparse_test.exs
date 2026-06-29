@@ -44,4 +44,15 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   test "empty text encodes to empty sparse vector", %{key_a: key} do
     assert QdrantSparse.encode_document("", key, 0, 10.0) == %{indices: [], values: []}
   end
+
+  test "a stemmed document and a stemmed query share a dimension (recall)", %{key_a: key} do
+    doc = QdrantSparse.encode_document("running fast", key, 2, 10.0, :en)
+    q = QdrantSparse.encode_query("run", key, :en)
+    assert Enum.any?(q.indices, &(&1 in doc.indices))
+  end
+
+  test "language nil preserves raw-only behavior", %{key_a: key} do
+    assert QdrantSparse.encode_query("running", key, nil) ==
+             QdrantSparse.encode_query("running", key)
+  end
 end

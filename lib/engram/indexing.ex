@@ -245,8 +245,11 @@ defmodule Engram.Indexing do
       |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
         point_id = Ecto.UUID.generate()
 
-        doc_len = chunk.text |> Tokenizer.tokens() |> length()
-        sparse = KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl)
+        doc_len = chunk.text |> Tokenizer.tokens(nil) |> length()
+        language = detect_language(chunk.text)
+
+        sparse =
+          KeywordIndex.module().encode_document(chunk.text, filter_key, doc_len, avgdl, language)
 
         base_payload = %{
           user_id: to_string(note.user_id),
@@ -316,4 +319,6 @@ defmodule Engram.Indexing do
   # rows don't poison filters with a fake hmac.
   defp encode_hmac(nil), do: nil
   defp encode_hmac(bin) when is_binary(bin), do: Base.encode64(bin)
+
+  defp detect_language(text), do: Engram.KeywordIndex.LangDetect.detect(text)
 end

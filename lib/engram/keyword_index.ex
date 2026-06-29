@@ -16,11 +16,13 @@ defmodule Engram.KeywordIndex do
               text :: String.t(),
               filter_key :: binary(),
               doc_len :: non_neg_integer(),
-              avgdl :: float()
+              avgdl :: float(),
+              language :: atom() | nil
             ) :: sparse()
 
   @doc "Encode a query string into a sparse query vector (unit values)."
-  @callback encode_query(query :: String.t(), filter_key :: binary()) :: sparse()
+  @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::
+              sparse()
 
   @doc "The configured keyword-index adapter."
   @spec module() :: module()
