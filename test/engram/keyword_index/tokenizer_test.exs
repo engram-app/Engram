@@ -54,8 +54,16 @@ defmodule Engram.KeywordIndex.TokenizerTest do
 
   # Task 2: dual-emit + English stemming
 
-  test "tokens/1 (no language) is unchanged — raw only" do
+  test "tokens/2 with nil language is raw-only" do
     assert Tokenizer.tokens("running cats") == ["running", "cats"]
+  end
+
+  test "unsupported language atom falls back to raw with no crash" do
+    assert Tokenizer.tokens("run", :klingon) == ["run"]
+  end
+
+  test "supported non-English language stems correctly" do
+    assert Tokenizer.tokens("courir", :fr) == ["courir", "cour"]
   end
 
   test "Latin tokens dual-emit raw + English stem" do

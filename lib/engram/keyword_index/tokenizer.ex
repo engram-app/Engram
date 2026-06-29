@@ -26,6 +26,8 @@ defmodule Engram.KeywordIndex.Tokenizer do
   # diacritics (harakat), Cyrillic, or precomposed accents on non-Latin scripts.
   @strip_marks ~r/(?<=\p{Latin})\p{Mn}+/u
 
+  @supported_langs MapSet.new(Text.Stemmer.supported_languages())
+
   @type lang :: atom() | nil
 
   @spec tokens(String.t() | any(), lang()) :: [String.t()]
@@ -64,12 +66,14 @@ defmodule Engram.KeywordIndex.Tokenizer do
     end
   end
 
-  # Stem via Snowball/text_stemmer. Falls back to raw on any error.
+  # Stem via Snowball/text_stemmer. Only called for supported languages.
   # Non-Latin script routing (e.g. Arabic, Russian) is deferred to Task 6.
   defp stem(token, language) do
-    Text.Stemmer.stem(token, language)
-  rescue
-    _ -> token
+    if MapSet.member?(@supported_langs, language) do
+      Text.Stemmer.stem(token, language)
+    else
+      token
+    end
   end
 
   defp bigrams([single]), do: [single]
