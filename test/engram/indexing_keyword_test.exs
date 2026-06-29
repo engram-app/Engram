@@ -30,6 +30,49 @@ defmodule Engram.IndexingKeywordTest do
     %{bypass: bypass, user: user, vault: vault, note: note}
   end
 
+  test "slice-1 stemming: inflected English term produces stem dim and raw token_count", %{
+    bypass: bypass,
+    user: user,
+    vault: vault
+  } do
+    # Note content contains an inflected form; expect the stem dim to appear.
+    chunk_text = "deploying containers"
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "stem_test.md",
+        "content" => chunk_text,
+        "mtime" => 2_000.0
+      })
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, prepared} = Indexing.prepare_index(note, vault)
+    [point | _] = prepared.qdrant_points
+    %{"keyword" => %{indices: indices}} = point.vector
+
+    {:ok, key} = Crypto.dek_filter_key(user)
+
+    # "deploying" must produce the "deploy" stem dim (Slice-1 English dual-emit)
+    assert QdrantSparse.dim(key, "deploy") in indices
+
+    # token_count = RAW token count (language nil), not dual-emit count
+    alias Engram.KeywordIndex.Tokenizer
+    expected_raw = chunk_text |> Tokenizer.tokens(nil) |> length()
+    assert hd(prepared.chunk_rows).token_count == expected_raw
+  end
+
   test "each qdrant point carries a named dense + keyword sparse vector", %{
     bypass: bypass,
     user: user,
