@@ -103,11 +103,10 @@ defmodule Engram.Notes.Frontmatter do
   def emit(order, values) when is_list(order) and is_map(values) do
     order
     |> Enum.filter(&Map.has_key?(values, &1))
-    |> Enum.map(fn key ->
+    |> Enum.map_join("", fn key ->
       decoded = Jason.decode!(values[key])
       Ymlr.document!(%{key => decoded}, sort_maps: false) |> String.replace_prefix("---\n", "")
     end)
-    |> Enum.join("")
     |> ensure_trailing_newline()
   end
 
