@@ -64,62 +64,62 @@ defmodule Engram.Notes.CrdtBridgeTest do
 
   describe "text_of vs body_of" do
     test "text_of returns the full projected note; body_of returns body only" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
-      assert Engram.Notes.CrdtBridge.text_of(doc) == "---\ntitle: Hi\n---\nbody\n"
-      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.text_of(doc) == "---\ntitle: Hi\n---\nbody\n"
+      assert CrdtBridge.body_of(doc) == "body\n"
     end
   end
 
   describe "ingest_plaintext/2" do
     test "splits frontmatter into the map/order and body into the text" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
-      assert Engram.Notes.CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
-      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
+      assert CrdtBridge.body_of(doc) == "body\n"
     end
 
     test "malformed frontmatter keeps the whole text as body" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\nbroken: : :\n---\nbody\n")
-      assert Engram.Notes.CrdtBridge.frontmatter_of(doc) == {[], %{}}
-      assert Engram.Notes.CrdtBridge.text_of(doc) == "---\nbroken: : :\n---\nbody\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\nbroken: : :\n---\nbody\n")
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.text_of(doc) == "---\nbroken: : :\n---\nbody\n"
     end
   end
 
   describe "project_doc/1" do
     test "round-trips ingest then project back to equivalent plaintext" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
-      assert Engram.Notes.CrdtBridge.project_doc(doc) == "---\ntitle: Hi\n---\nbody\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.project_doc(doc) == "---\ntitle: Hi\n---\nbody\n"
     end
 
     test "body-only doc projects to body only" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "no frontmatter\n")
-      assert Engram.Notes.CrdtBridge.project_doc(doc) == "no frontmatter\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "no frontmatter\n")
+      assert CrdtBridge.project_doc(doc) == "no frontmatter\n"
     end
   end
 
   describe "merge_plaintext/2 with frontmatter" do
     test "ingests frontmatter and returns projected text + re-encodable state" do
       {:ok, %{state: state, text: text}} =
-        Engram.Notes.CrdtBridge.merge_plaintext(nil, "---\ntitle: Hi\n---\nbody\n")
+        CrdtBridge.merge_plaintext(nil, "---\ntitle: Hi\n---\nbody\n")
 
       assert text == "---\ntitle: Hi\n---\nbody\n"
       assert is_binary(state)
 
-      {:ok, doc2} = Engram.Notes.CrdtBridge.doc_from_state(state)
-      assert Engram.Notes.CrdtBridge.frontmatter_of(doc2) == {["title"], %{"title" => "\"Hi\""}}
+      {:ok, doc2} = CrdtBridge.doc_from_state(state)
+      assert CrdtBridge.frontmatter_of(doc2) == {["title"], %{"title" => "\"Hi\""}}
     end
   end
 
   describe "flatten/1 preserves frontmatter" do
     test "flattened doc keeps frontmatter and body" do
-      doc = Engram.Notes.CrdtBridge.new_doc()
-      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
-      {:ok, %{doc: flat}} = Engram.Notes.CrdtBridge.flatten(doc)
-      assert Engram.Notes.CrdtBridge.text_of(flat) == "---\ntitle: Hi\n---\nbody\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      {:ok, %{doc: flat}} = CrdtBridge.flatten(doc)
+      assert CrdtBridge.text_of(flat) == "---\ntitle: Hi\n---\nbody\n"
     end
   end
 

@@ -15,6 +15,8 @@ defmodule Engram.Notes.CrdtBridge do
 
   import Bitwise
 
+  alias Engram.Notes.Frontmatter
+
   @text_name "content"
   @frontmatter_name "frontmatter"
   @order_name "frontmatter_order"
@@ -83,7 +85,7 @@ defmodule Engram.Notes.CrdtBridge do
   @spec project_doc(Yex.Doc.t()) :: String.t()
   def project_doc(%Yex.Doc{} = doc) do
     {order, values} = frontmatter_of(doc)
-    Engram.Notes.Frontmatter.project(order, values, body_of(doc))
+    Frontmatter.project(order, values, body_of(doc))
   end
 
   @doc "Full projected note plaintext (frontmatter + body)."
@@ -163,10 +165,10 @@ defmodule Engram.Notes.CrdtBridge do
   """
   @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
   def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
-    {fm_block, body} = Engram.Notes.Frontmatter.split(plaintext)
+    {fm_block, body} = Frontmatter.split(plaintext)
 
     {order, values, body} =
-      case fm_block && Engram.Notes.Frontmatter.parse(fm_block) do
+      case fm_block && Frontmatter.parse(fm_block) do
         {:ok, order, values} -> {order, values, body}
         # nil (no frontmatter) or :error (malformed) -> whole text is body
         _ -> {[], %{}, plaintext}
