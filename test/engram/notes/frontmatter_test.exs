@@ -36,4 +36,19 @@ defmodule Engram.Notes.FrontmatterTest do
                {"title: Hi\n", "body\n"}
     end
   end
+
+  describe "parse/1" do
+    test "returns ordered keys and JSON-encoded values" do
+      assert Frontmatter.parse("title: Hi\ntags:\n  - a\n  - b\n") ==
+               {:ok, ["title", "tags"], %{"title" => "\"Hi\"", "tags" => "[\"a\",\"b\"]"}}
+    end
+
+    test "empty block yields empty order and values" do
+      assert Frontmatter.parse("") == {:ok, [], %{}}
+    end
+
+    test "malformed yaml returns :error" do
+      assert Frontmatter.parse("title: : : broken\n  - bad indent\n") == :error
+    end
+  end
 end
