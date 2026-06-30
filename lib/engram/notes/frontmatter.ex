@@ -117,6 +117,17 @@ defmodule Engram.Notes.Frontmatter do
     if String.ends_with?(s, "\n"), do: s, else: s <> "\n"
   end
 
+  @doc "Assemble full note plaintext from frontmatter parts and body."
+  @spec project([String.t()], %{String.t() => String.t()}, String.t()) :: String.t()
+  def project([], _values, body), do: body
+
+  def project(order, values, body) when is_binary(body) do
+    case emit(order, values) do
+      "" -> body
+      block -> "---\n" <> block <> "---\n" <> body
+    end
+  end
+
   # Recover source order: top-level keys appear as `key:` at column 0.
   defp top_level_key_order(block, map) do
     block

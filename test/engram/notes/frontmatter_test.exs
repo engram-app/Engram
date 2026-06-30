@@ -107,4 +107,15 @@ defmodule Engram.Notes.FrontmatterTest do
                {:ok, %{"a" => "1", "b" => "\"hello\""}}
     end
   end
+
+  describe "project/3" do
+    test "wraps frontmatter in fences and prepends to body" do
+      assert Frontmatter.project(["title"], %{"title" => "\"Hi\""}, "body\n") ==
+               "---\ntitle: Hi\n---\nbody\n"
+    end
+
+    test "empty frontmatter produces body only (no fence)" do
+      assert Frontmatter.project([], %{}, "body only\n") == "body only\n"
+    end
+  end
 end
