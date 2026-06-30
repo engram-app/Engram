@@ -467,20 +467,25 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get
 
-      - name: Compile :dev
-        env:
-          MIX_ENV: dev
+      - name: Compile :dev and :test (parallel)
         run: |
-          # --warnings-as-errors here means the lint job downstream can
-          # skip its own --force compile (cache restore + this proven
-          # warning-free build = same guarantee).
-          mix compile --warnings-as-errors
-
-      - name: Compile :test
-        env:
-          MIX_ENV: test
-        run: |
-          mix compile --warnings-as-errors
+          # Compile both envs concurrently. They write to separate _build/dev
+          # and _build/test dirs from the same read-only source + deps, so there
+          # is no write conflict. On the 32-thread runner this roughly halves the
+          # cold-compile wall-clock vs the old sequential dev-then-test (measured
+          # dev 99s + test 148s sequential, ~max(dev,test) in parallel).
+          # --warnings-as-errors keeps the downstream lint compile a fast no-op
+          # on cache restore. --no-deps-check: deps were just reconciled by the
+          # `mix deps.get` step above, so skip the redundant lockfile recheck.
+          MIX_ENV=dev  mix compile --warnings-as-errors --no-deps-check >/tmp/compile-dev.log 2>&1 &
+          pid_dev=$!
+          MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
+          pid_test=$!
+          wait "$pid_dev";  rc_dev=$?
+          wait "$pid_test"; rc_test=$?
+          echo "::group::Compile :dev output";  cat /tmp/compile-dev.log;  echo "::endgroup::"
+          echo "::group::Compile :test output"; cat /tmp/compile-test.log; echo "::endgroup::"
+          [ "$rc_dev" -eq 0 ] && [ "$rc_test" -eq 0 ]
 
   version-check:
     # Skip on Dependabot PRs — they can't bump app version, and the `ci`
