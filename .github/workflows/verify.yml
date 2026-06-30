@@ -109,6 +109,17 @@ jobs:
       backend-cache-hit: ${{ steps.backend-lookup.outputs.cache-hit }}
       e2e-cache-hit: ${{ steps.e2e-lookup.outputs.cache-hit }}
       plugin-sha: ${{ steps.plugin-sha.outputs.sha }}
+      is-full: ${{ steps.skips.outputs.is-full }}
+      skip-lint: ${{ steps.skips.outputs.skip-lint }}
+      skip-unit-tests: ${{ steps.skips.outputs.skip-unit-tests }}
+      skip-storage-database: ${{ steps.skips.outputs.skip-storage-database }}
+      skip-e2e-clerk: ${{ steps.skips.outputs.skip-e2e-clerk }}
+      skip-e2e-crdt: ${{ steps.skips.outputs.skip-e2e-crdt }}
+      skip-e2e-local: ${{ steps.skips.outputs.skip-e2e-local }}
+      skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
+      skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
+      skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
+      hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
     steps:
       - name: Generate App token
         id: app-token
@@ -303,6 +314,28 @@ jobs:
           else
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Fine-grained skip flags (SHADOW, log-only)
+        id: skips
+        env:
+          PLUGIN_SHA: ${{ steps.plugin-sha.outputs.sha }}
+        run: |
+          # Resolve the BEAM tag (mirrors prebuild-mix) so OTP/Elixir changes bust hashes.
+          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
+          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
+          ELX=$(elixir --short-version)
+          export BEAM_TAG="otp${OTP}-erts${ERTS}-elx${ELX}"
+          # is-full: main pushes and [ci-full]/force_full runs validate everything (no skips).
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "is-full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is-full=false" >> "$GITHUB_OUTPUT"
+          fi
+          # compute.sh emit writes skip-<job>/hash-<job> lines to $GITHUB_OUTPUT.
+          bash ci/fingerprint/compute.sh emit
+          echo "::group::SHADOW fine-grained skip predictions (log-only, not enforced)"
+          grep -E '^skip-' "$GITHUB_OUTPUT" | sed 's/^/  /' || true
+          echo "::endgroup::"
 
       - name: Report decision
         run: |
