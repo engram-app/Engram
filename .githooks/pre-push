@@ -54,18 +54,31 @@ if [ -z "$branch_version" ] || [ -z "$main_version" ]; then
 fi
 
 if [ "$branch_version" = "$main_version" ]; then
-  cat >&2 <<EOF
-✖ pre-push: mix.exs version ($branch_version) has not been bumped from main.
+  # Path-aware bump gate (mirrors CI's version-check + build-and-publish guards):
+  # only require a bump when a DEPLOYABLE path actually changed. verify.yml / ci/
+  # / docs ship no new release image, so a CI/docs-only branch needs no bump —
+  # CI's version-check now agrees (it diffs the same path set), so blocking here
+  # only forced a needless `--no-verify`. A real lib/priv/config/frontend/
+  # Dockerfile/rel/mix.* change with an unbumped version is still rejected.
+  deployable="$(git diff --name-only origin/main...HEAD -- \
+    lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock 2>/dev/null || true)"
+  if [ -n "$deployable" ]; then
+    cat >&2 <<EOF
+✖ pre-push: mix.exs version ($branch_version) has not been bumped from main,
+  but deployable paths changed:
+$(echo "$deployable" | sed 's/^/    /')
 
   Bump the version in mix.exs before pushing:
     sed -i 's/version: "$main_version"/version: "<new>"/' mix.exs
 
   To push WIP without bumping, use: git push --no-verify
 EOF
-  exit 1
+    exit 1
+  fi
+  echo "✓ pre-push: version unchanged but only non-deployable paths changed (CI/docs) — bump not required"
+else
+  echo "✓ pre-push: mix.exs version differs from main (main=$main_version, branch=$branch_version)"
 fi
-
-echo "✓ pre-push: mix.exs version differs from main (main=$main_version, branch=$branch_version)"
 
 # ── Quality gates ────────────────────────────────────────────────────────
 # Two stages, each parallelized. Cuts wall time roughly in half:
