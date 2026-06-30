@@ -222,6 +222,27 @@ defmodule Engram.CryptoTest do
       assert out.content =~ "PRs #71"
     end
 
+    test "scrubs invalid UTF-8 in a decrypted path so the changes feed is JSON-safe (#798)",
+         %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+
+      # `change_map/1` emits :path on the REST /api/changes feed, but the
+      # read-boundary scrub skipped path — the one egress text field left
+      # unscrubbed. A legacy path holding a truncated multibyte char (`–`
+      # cut to its 0xE2 lead byte) would crash Jason on that feed.
+      note = %Engram.Notes.Note{
+        id: Ecto.UUID.generate(),
+        path: "Notes/PRs #71" <> <<0xE2>> <> ".md",
+        folder: "Notes"
+      }
+
+      {:ok, out} = Crypto.maybe_decrypt_note_fields(note, user)
+
+      assert String.valid?(out.path)
+      assert {:ok, _} = Jason.encode(%{path: out.path})
+      assert out.path =~ "PRs #71"
+    end
+
     test "newly-inserted note rows carry dek_version=1 (T3.4 / H5)", %{user: user} do
       # T3.4 / H5 — the per-row column was added with default 1. New rows
       # inserted via the factory satisfy that default. This test locks the

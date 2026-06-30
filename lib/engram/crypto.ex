@@ -382,6 +382,7 @@ defmodule Engram.Crypto do
       note
       | content: scrub_field(note.content),
         title: scrub_field(note.title),
+        path: scrub_field(note.path),
         folder: scrub_field(note.folder),
         tags: scrub_tags(note.tags)
     }
