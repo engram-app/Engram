@@ -603,6 +603,26 @@ jobs:
           # --warnings-as-errors keeps the downstream lint compile a fast no-op
           # on cache restore. --no-deps-check: deps were just reconciled by the
           # `mix deps.get` step above, so skip the redundant lockfile recheck.
+          #
+          # Compile dependencies FIRST. On a cold _build (a lockfile change busts
+          # the mix.lock-scoped build cache, so no _build is restored), the app
+          # compile below uses --no-deps-check and will NOT build deps itself —
+          # it fails fast with "module Ecto.* is not loaded". deps.compile builds
+          # them; it is a near no-op when _build was restored warm (lockfile
+          # unchanged). Parallel per env to mirror the app-compile parallelism.
+          MIX_ENV=dev  mix deps.compile >/tmp/deps-dev.log 2>&1 &
+          dpid_dev=$!
+          MIX_ENV=test mix deps.compile >/tmp/deps-test.log 2>&1 &
+          dpid_test=$!
+          drc_dev=0; drc_test=0
+          wait "$dpid_dev"  || drc_dev=$?
+          wait "$dpid_test" || drc_test=$?
+          if [ "$drc_dev" -ne 0 ] || [ "$drc_test" -ne 0 ]; then
+            echo "::group::deps.compile :dev output";  cat /tmp/deps-dev.log;  echo "::endgroup::"
+            echo "::group::deps.compile :test output"; cat /tmp/deps-test.log; echo "::endgroup::"
+            echo "deps.compile failed (dev=$drc_dev test=$drc_test)" >&2
+            exit 1
+          fi
           MIX_ENV=dev  mix compile --warnings-as-errors --no-deps-check >/tmp/compile-dev.log 2>&1 &
           pid_dev=$!
           MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
