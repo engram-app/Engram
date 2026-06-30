@@ -119,6 +119,16 @@ jobs:
       skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
       skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
       skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
+      # Per-job hashes — consumed by record-job-markers so a recorded marker
+      # matches the exact hash a later run looks up (no recompute on the recorder).
+      hash-lint: ${{ steps.skips.outputs.hash-lint }}
+      hash-unit-tests: ${{ steps.skips.outputs.hash-unit-tests }}
+      hash-storage-database: ${{ steps.skips.outputs.hash-storage-database }}
+      hash-e2e-clerk: ${{ steps.skips.outputs.hash-e2e-clerk }}
+      hash-e2e-crdt: ${{ steps.skips.outputs.hash-e2e-crdt }}
+      hash-e2e-local: ${{ steps.skips.outputs.hash-e2e-local }}
+      hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
+      hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
     steps:
       - name: Generate App token
@@ -328,10 +338,13 @@ jobs:
           # is-full: main pushes and [ci-full]/force_full runs validate everything (no skips).
           if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
+            export IS_FULL_RUN=true
           else
             echo "is-full=false" >> "$GITHUB_OUTPUT"
+            export IS_FULL_RUN=false
           fi
           # compute.sh emit writes skip-<job>/hash-<job> lines to $GITHUB_OUTPUT.
+          # IS_FULL_RUN is read by emit to force every skip-* false on full runs.
           bash ci/fingerprint/compute.sh emit
           echo "::group::SHADOW fine-grained skip predictions (log-only, not enforced)"
           grep -E '^skip-' "$GITHUB_OUTPUT" | sed 's/^/  /' || true
@@ -592,7 +605,10 @@ jobs:
     #     bumps and the same coverage runs when we merge into main).
     # `ci` aggregate updated below to allow this job's `skipped` result on
     # Dependabot PRs.
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
+    # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
+    # content already passed full on main; forced false on full runs.
+    if: needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1115,7 +1131,8 @@ jobs:
     # separate display band below (+150 vs e2e-clerk's +50): clerk spans
     # displays ~45-134, crdt ~145-234.
     needs: [fingerprint, prebuild-ci-image]
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
+    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1559,10 +1576,14 @@ jobs:
   unit-tests:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
-    # NOT fingerprint-gated: the suite is fast (~4min) and skipping it on a
-    # cache hit created a blind spot — it stopped executing on main for a
-    # stretch and let a Repo-crashing test land. Always run on backend pushes.
-    if: github.event_name != 'repository_dispatch'
+    # Per-job fingerprint skip (skip-unit-tests) is safe here even though a coarse
+    # cache-hit was historically NOT trusted (it once let a Repo-crashing test
+    # ride a green on main): markers seed ONLY on full runs and `is-full` forces
+    # skip=false on main, so unit-tests ALWAYS executes on main and can never
+    # silently stop. On a PR it skips only when this exact
+    # elixir-src+test+migrations content already passed full on main.
+    # (Phase 3 will further narrow PR runs to `mix test --stale`.)
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1764,9 +1785,10 @@ jobs:
     # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
     # storage adapter via `bin/engram rpc`. This is the only job that exercises
     # the no-MinIO boot path — the rest of CI runs STORAGE_BACKEND=s3. Skipped on
-    # cross-repo plugin dispatch (can't regress backend) and when the backend
-    # fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # cross-repo plugin dispatch (can't regress backend) and via the per-job
+    # fingerprint skip (skip-storage-database = elixir-src+migrations+docker-image;
+    # forced false on full runs).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-storage-database != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1841,10 +1863,13 @@ jobs:
   lint:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
-    # NOT fingerprint-gated: lint is fast and shares prebuild-mix with
-    # unit-tests; skipping it on a cache hit silently let credo/sobelow
-    # regressions merge. Always run on backend pushes.
-    if: github.event_name != 'repository_dispatch'
+    # Per-job fingerprint skip (skip-lint) is safe even though a coarse cache-hit
+    # was historically NOT trusted (it once let credo/sobelow regressions merge):
+    # markers seed ONLY on full runs and `is-full` forces skip=false on main, so
+    # lint ALWAYS executes on main. On a PR it skips only when this exact
+    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
+    # already passed full on main.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     steps:
@@ -2441,10 +2466,14 @@ jobs:
     # Simpler than the original plan: applies migrations, doesn't run
     # the prev release's full mix test (brittle across versions). The
     # "migrate applies cleanly" check is the load-bearing invariant.
+    # Per-job skip (skip-n1-compat = elixir-src+migrations; forced false on full
+    # runs). n1-compat is branch-only (never runs on main), so its marker only
+    # seeds via a [ci-full]/force_full branch run — in practice it nearly always
+    # runs, which is fine (it's a cheap expand-phase migration apply check).
     if: |
       github.event_name == 'push' &&
       github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.backend-cache-hit != 'true'
+      needs.fingerprint.outputs.skip-n1-compat != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [fingerprint, prebuild-mix]
     permissions:
@@ -2686,10 +2715,11 @@ jobs:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
-    # Also skip when fingerprint already proved green, or when running on a
-    # Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
+    # Also skip via the per-job fingerprint (skip-e2e-local =
+    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
+    # on a Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
     # access; unit-tests + lint cover the meaningful surface).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-local != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -2806,9 +2836,10 @@ jobs:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
-    # Also skip when fingerprint already proved green, or on Dependabot PRs
-    # (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Also skip via the per-job fingerprint (skip-e2e-browser =
+    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
+    # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -3151,6 +3182,65 @@ jobs:
           docker push "$TAG"
           rm -rf "$WORKDIR"
           echo "::notice::Saved e2e marker $TAG"
+
+  # Fine-grained per-job markers (ci-<job>:<hash-job>) in LOCAL_REGISTRY — the
+  # forward-looking replacement for the coarse ci-pass/ci-e2e-pass markers above
+  # (legacy record-pass retired in Phase 5). Recorded ONLY on full runs (main /
+  # [ci-full] / force_full): the whole job is gated on `is-full`, so a reduced-mode
+  # PR pass (future Phase 3 `--stale` unit, Phase 4 targeted e2e) can NEVER seed a
+  # marker. PRs consume these via the fingerprint job's skip-<job> lookup; they
+  # never produce. Each job seeds its own marker independently iff it ran to
+  # success this run; skipped/failed jobs are left unmarked. Hashes come straight
+  # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
+  # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
+  record-job-markers:
+    if: always() && needs.fingerprint.outputs.is-full == 'true'
+    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser, n1-compat]
+    runs-on: [self-hosted, linux, x64, isolated]
+    env:
+      LINT_RESULT: ${{ needs.lint.result }}
+      UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+      STORAGE_DATABASE_RESULT: ${{ needs.storage-database.result }}
+      E2E_CLERK_RESULT: ${{ needs.e2e-clerk.result }}
+      E2E_CRDT_RESULT: ${{ needs.e2e-crdt.result }}
+      E2E_LOCAL_RESULT: ${{ needs.e2e-local.result }}
+      E2E_BROWSER_RESULT: ${{ needs.e2e-browser.result }}
+      N1_COMPAT_RESULT: ${{ needs.n1-compat.result }}
+      HASH_LINT: ${{ needs.fingerprint.outputs.hash-lint }}
+      HASH_UNIT_TESTS: ${{ needs.fingerprint.outputs.hash-unit-tests }}
+      HASH_STORAGE_DATABASE: ${{ needs.fingerprint.outputs.hash-storage-database }}
+      HASH_E2E_CLERK: ${{ needs.fingerprint.outputs.hash-e2e-clerk }}
+      HASH_E2E_CRDT: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
+      HASH_E2E_LOCAL: ${{ needs.fingerprint.outputs.hash-e2e-local }}
+      HASH_E2E_BROWSER: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
+      HASH_N1_COMPAT: ${{ needs.fingerprint.outputs.hash-n1-compat }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Record per-job markers for jobs that passed this full run
+        run: |
+          set -uo pipefail
+          # record <job> <result> <hash>: seed ci-<job>:<hash> iff the job
+          # succeeded. record.sh self-guards on IS_FULL_RUN and uses MARKER_HASH
+          # verbatim (no recompute) so the tag matches the fingerprint lookup.
+          record() {
+            if [ "$2" != "success" ]; then
+              echo "::notice::skip marker $1 (result=$2)"
+              return 0
+            fi
+            if [ -z "$3" ]; then
+              echo "::warning::no hash for $1 — marker not recorded"
+              return 0
+            fi
+            IS_FULL_RUN=true MARKER_HASH="$3" bash ci/fingerprint/record.sh record "$1"
+          }
+          record lint             "$LINT_RESULT"             "$HASH_LINT"
+          record unit-tests       "$UNIT_TESTS_RESULT"       "$HASH_UNIT_TESTS"
+          record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
+          record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
+          record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
+          record e2e-local        "$E2E_LOCAL_RESULT"        "$HASH_E2E_LOCAL"
+          record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
+          record n1-compat        "$N1_COMPAT_RESULT"        "$HASH_N1_COMPAT"
 
   # When plugin dispatch arrives and the (backend, plugin) pair is already
   # cached green, e2e-clerk is skipped — its in-job "Report E2E status to

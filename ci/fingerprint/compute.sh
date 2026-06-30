@@ -31,9 +31,20 @@ emit_skips() { # writes skip-<job>/hash-<job> to GITHUB_OUTPUT
   local job h skip
   for job in $(job_names); do
     h=$(job_hash "$job")
-    if marker_exists "$job" "$h"; then skip=true; else skip=false; fi
+    # Full runs (main / [ci-full] / force_full) NEVER skip: main is the safety
+    # net that re-runs everything and re-seeds markers, so force skip=false there
+    # regardless of marker presence. PRs skip only when a marker already exists.
+    if [ "${IS_FULL_RUN:-false}" = true ]; then
+      skip=false
+    elif marker_exists "$job" "$h"; then
+      skip=true
+    else
+      skip=false
+    fi
     echo "skip-$job=$skip" >> "$GITHUB_OUTPUT"
     echo "hash-$job=$h"    >> "$GITHUB_OUTPUT"
   done
 }
-[ "${1:-}" = emit ] && emit_skips || true
+# `if` (not `&& ... || true`) so a real emit failure propagates while sourcing
+# this file with no args stays exit-0 (source-safe for compute_test / record.sh).
+if [ "${1:-}" = emit ]; then emit_skips; fi
