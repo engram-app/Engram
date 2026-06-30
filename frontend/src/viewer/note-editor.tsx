@@ -1,11 +1,11 @@
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { defaultKeymap } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { EditorState, Prec } from '@codemirror/state'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { drawSelection, EditorView, keymap } from '@codemirror/view'
 import { useEffect, useRef } from 'react'
-import { yCollab } from 'y-codemirror.next'
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
 import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { useTheme } from '../theme/theme-provider'
@@ -58,10 +58,10 @@ export function buildEditorState(
   return EditorState.create({
     doc: ytext.toString(),
     extensions: [
-      history(),
       drawSelection(),
       EditorView.lineWrapping,
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      Prec.highest(keymap.of(yUndoManagerKeymap)),
+      keymap.of(defaultKeymap),
       markdown({ base: markdownLanguage }),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       ...(dark ? [oneDark] : []),
