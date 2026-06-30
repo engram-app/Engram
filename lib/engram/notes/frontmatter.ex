@@ -6,6 +6,8 @@ defmodule Engram.Notes.Frontmatter do
   """
 
   @fence "---"
+  @fence_line_pattern ~r/\n---[ \t]*\r?\n/
+  @fence_eof_pattern ~r/\n---[ \t]*\r?$/
 
   @doc """
   Split a note into its frontmatter YAML block (text between the fences, without
@@ -22,8 +24,8 @@ defmodule Engram.Notes.Frontmatter do
             {"", body}
 
           _ ->
-            # Look for closing fence preceded by newline
-            case String.split(rest, "\n#{@fence}\n", parts: 2) do
+            # Look for closing fence preceded by newline (with optional trailing whitespace/CR)
+            case Regex.split(@fence_line_pattern, rest, parts: 2) do
               [block, body] ->
                 {block <> "\n", body}
 
@@ -39,7 +41,7 @@ defmodule Engram.Notes.Frontmatter do
   end
 
   defp split_trailing(rest, original) do
-    case String.split(rest, "\n#{@fence}", parts: 2) do
+    case Regex.split(@fence_eof_pattern, rest, parts: 2) do
       [block, ""] -> {block <> "\n", ""}
       _ -> {nil, original}
     end

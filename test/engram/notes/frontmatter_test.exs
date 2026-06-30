@@ -25,5 +25,15 @@ defmodule Engram.Notes.FrontmatterTest do
       assert Frontmatter.split("\n---\ntitle: Hi\n---\nbody\n") ==
                {nil, "\n---\ntitle: Hi\n---\nbody\n"}
     end
+
+    test "closing fence at EOF with no trailing newline" do
+      assert Frontmatter.split("---\ntitle: Hi\n---") ==
+               {"title: Hi\n", ""}
+    end
+
+    test "closing fence with trailing space" do
+      assert Frontmatter.split("---\ntitle: Hi\n--- \nbody\n") ==
+               {"title: Hi\n", "body\n"}
+    end
   end
 end
