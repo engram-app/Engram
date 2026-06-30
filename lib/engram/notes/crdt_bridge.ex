@@ -29,7 +29,10 @@ defmodule Engram.Notes.CrdtBridge do
   def text_name, do: @text_name
 
   @doc "The CRDT doc schema version. Bump on any incompatible doc-shape change."
-  @spec doc_schema_version() :: pos_integer()
+  # Spec is the exact literal, not pos_integer(): the project's dialyzer flags
+  # overspecs (contract_supertype) and this returns the compile-time constant.
+  # Bump both @doc_schema_version and this spec together on a doc-shape change.
+  @spec doc_schema_version() :: 2
   def doc_schema_version, do: @doc_schema_version
 
   @doc """
