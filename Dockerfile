@@ -77,6 +77,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /app
 
 ENV MIX_ENV="prod"
+# Optional LAN Hex pull-through mirror (e.g. http://10.0.20.214:8090). Empty =
+# upstream repo.hex.pm, so non-LAN builders are unaffected. Both `mix deps.get`
+# calls below honor it. Hex still verifies package signatures against hex.pm's
+# key, so a caching mirror is safe (we never set unsafe_registry).
+ARG HEX_MIRROR=""
+ENV HEX_MIRROR=${HEX_MIRROR}
 # Persist hex + rebar package caches across builds (self-hosted runner disk).
 # Without these mounts, mix.exs invalidation re-downloads every hex tarball.
 RUN --mount=type=cache,target=/root/.hex,id=mix-hex \

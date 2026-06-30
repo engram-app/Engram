@@ -61,6 +61,10 @@ env:
   # downstream callers (line ~929, ~2165) used to tolerate unset via shell
   # fallback to Docker Hub — that fallback path is now dead.
   LOCAL_REGISTRY: "10.0.20.214:5001"
+  # LAN Hex pull-through mirror (nginx proxy_cache -> repo.hex.pm). Workflow-wide
+  # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
+  # pull hex from the LAN instead of WAN. Signatures still verified client-side.
+  HEX_MIRROR: "http://10.0.20.214:8090"
 
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
@@ -3381,6 +3385,7 @@ jobs:
             VITE_GIT_SHA=${{ github.sha }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
+            HEX_MIRROR=${{ env.HEX_MIRROR }}
           secrets: |
             sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
 
