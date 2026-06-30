@@ -148,6 +148,50 @@ defmodule Engram.Notes.CrdtBridge do
   end
 
   @doc """
+  Ingest full note plaintext into the doc's frontmatter Y.Map + order Y.Array and
+  body Y.Text. Only changed map keys are written. Malformed frontmatter falls
+  back to treating the entire text as body.
+  """
+  @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
+  def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
+    {fm_block, body} = Engram.Notes.Frontmatter.split(plaintext)
+
+    {order, values, body} =
+      case fm_block && Engram.Notes.Frontmatter.parse(fm_block) do
+        {:ok, order, values} -> {order, values, body}
+        # nil (no frontmatter) or :error (malformed) -> whole text is body
+        _ -> {[], %{}, plaintext}
+      end
+
+    apply_frontmatter(doc, order, values)
+    text = Yex.Doc.get_text(doc, @text_name)
+    :ok = diff_into_text(text, body)
+    :ok
+  end
+
+  defp apply_frontmatter(doc, order, values) do
+    map = Yex.Doc.get_map(doc, @frontmatter_name)
+    current = Yex.Map.to_map(map)
+
+    # Upsert changed keys.
+    Enum.each(values, fn {k, v} ->
+      if Map.get(current, k) != v, do: Yex.Map.set(map, k, v)
+    end)
+
+    # Delete keys no longer present.
+    Enum.each(Map.keys(current), fn k ->
+      unless Map.has_key?(values, k), do: Yex.Map.delete(map, k)
+    end)
+
+    # Replace the order array wholesale (small list; simplest correct form).
+    arr = Yex.Doc.get_array(doc, @order_name)
+    len = arr |> Yex.Array.to_list() |> length()
+    if len > 0, do: Yex.Array.delete_range(arr, 0, len)
+    if order != [], do: Yex.Array.insert_list(arr, 0, order)
+    :ok
+  end
+
+  @doc """
   Distinct client IDs present in the doc's state vector.
 
   The y-js v1 state vector is LEB128-encoded: a leading varint gives the
