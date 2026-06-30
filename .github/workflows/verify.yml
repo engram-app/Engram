@@ -109,6 +109,30 @@ jobs:
       backend-cache-hit: ${{ steps.backend-lookup.outputs.cache-hit }}
       e2e-cache-hit: ${{ steps.e2e-lookup.outputs.cache-hit }}
       plugin-sha: ${{ steps.plugin-sha.outputs.sha }}
+      is-full: ${{ steps.skips.outputs.is-full }}
+      skip-lint: ${{ steps.skips.outputs.skip-lint }}
+      skip-unit-tests: ${{ steps.skips.outputs.skip-unit-tests }}
+      skip-storage-database: ${{ steps.skips.outputs.skip-storage-database }}
+      skip-e2e-clerk: ${{ steps.skips.outputs.skip-e2e-clerk }}
+      skip-e2e-crdt: ${{ steps.skips.outputs.skip-e2e-crdt }}
+      skip-e2e-local: ${{ steps.skips.outputs.skip-e2e-local }}
+      skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
+      skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
+      skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
+      # Per-job hashes — consumed by record-job-markers so a recorded marker
+      # matches the exact hash a later run looks up (no recompute on the recorder).
+      hash-lint: ${{ steps.skips.outputs.hash-lint }}
+      hash-unit-tests: ${{ steps.skips.outputs.hash-unit-tests }}
+      hash-storage-database: ${{ steps.skips.outputs.hash-storage-database }}
+      hash-e2e-clerk: ${{ steps.skips.outputs.hash-e2e-clerk }}
+      hash-e2e-crdt: ${{ steps.skips.outputs.hash-e2e-crdt }}
+      hash-e2e-local: ${{ steps.skips.outputs.hash-e2e-local }}
+      hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
+      hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
+      hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
+      # Phase 4 targeted e2e ([e2e: suite/pattern] in HEAD commit). Empty = full e2e.
+      e2e-target-suite: ${{ steps.skips.outputs.e2e-target-suite }}
+      e2e-target-pattern: ${{ steps.skips.outputs.e2e-target-pattern }}
     steps:
       - name: Generate App token
         id: app-token
@@ -303,6 +327,67 @@ jobs:
           else
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Self-test fingerprint scripts
+        # Fails the fingerprint job (and thus the whole run) if a groups.sh /
+        # compute.sh edit breaks group hashing or maps a job to an unknown group
+        # — the skip logic gates real coverage, so a silent break here would
+        # mis-skip jobs. Runs in ~1s.
+        run: bash ci/fingerprint/test/groups_test.sh
+
+      - name: Fine-grained per-job skip flags (enforced)
+        id: skips
+        env:
+          PLUGIN_SHA: ${{ steps.plugin-sha.outputs.sha }}
+        run: |
+          # Resolve the BEAM tag (mirrors prebuild-mix) so OTP/Elixir changes bust hashes.
+          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
+          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
+          ELX=$(elixir --short-version)
+          export BEAM_TAG="otp${OTP}-erts${ERTS}-elx${ELX}"
+          # is-full: main pushes and [ci-full]/force_full runs validate everything (no skips).
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "is-full=true" >> "$GITHUB_OUTPUT"
+            export IS_FULL_RUN=true
+          else
+            echo "is-full=false" >> "$GITHUB_OUTPUT"
+            export IS_FULL_RUN=false
+          fi
+          # Phase 4: opt-in targeted e2e. `[e2e: <suite>/<pattern>]` in the HEAD
+          # commit message runs ONLY that suite's e2e job, with `pytest -k <pattern>`,
+          # and marks the run NON-mergeable (the ci aggregate fails on a target).
+          # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
+          #
+          # IGNORED on full runs (main / [ci-full] / force_full): main must always
+          # run the full e2e matrix, and ignoring the tag here also stops
+          # record-job-markers from seeding a full-hash e2e marker off a single
+          # -k subset (a squash-merge whose body still carries the tag).
+          #
+          # SECURITY: the pattern is restricted to a pytest -k -safe charset
+          # ([A-Za-z0-9_ .:/()-]) — anything with shell metacharacters (quotes,
+          # $(), backticks, ;, |) fails to match and is treated as no target. The
+          # value is ALSO consumed by the pytest steps via env: (NOT template
+          # interpolation into the run script), so it can never be expanded as
+          # shell. Two layers against commit-message command injection on the
+          # self-hosted runner. Only the four known suite names match, so prose /
+          # placeholder text never accidentally triggers a (non-mergeable) run.
+          E2E_SUITE=""; E2E_PATTERN=""
+          if [ "$IS_FULL_RUN" != true ]; then
+            E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[A-Za-z0-9_ .:/()-]+\]' | head -1 || true)
+            if [ -n "$E2E_LINE" ]; then
+              E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/.*#\1#I' | tr 'A-Z' 'a-z')
+              E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/([A-Za-z0-9_ .:/()-]+)\]#\2#I')
+              echo "::notice::Targeted e2e: suite=$E2E_SUITE pattern='$E2E_PATTERN' — run is NON-mergeable (ci will fail)."
+            fi
+          fi
+          echo "e2e-target-suite=$E2E_SUITE"     >> "$GITHUB_OUTPUT"
+          echo "e2e-target-pattern=$E2E_PATTERN" >> "$GITHUB_OUTPUT"
+          # compute.sh emit writes skip-<job>/hash-<job> lines to $GITHUB_OUTPUT.
+          # IS_FULL_RUN is read by emit to force every skip-* false on full runs.
+          bash ci/fingerprint/compute.sh emit
+          echo "::group::Fine-grained per-job skip decisions (ENFORCED — gates the jobs below)"
+          grep -E '^skip-' "$GITHUB_OUTPUT" | sed 's/^/  /' || true
+          echo "::endgroup::"
 
       - name: Report decision
         run: |
@@ -542,6 +627,26 @@ jobs:
             echo "Backend + e2e content already shipped (fingerprint cache-hit): no new image will build, version bump not required."
             exit 0
           fi
+          # Path-aware bump gate. The CACHE_HIT_BOTH signal above is NOT a reliable
+          # "is this deployable?" test: verify.yml is deliberately inside BACKEND_HASH
+          # (so a CI-logic change forces a full re-run), which means a CI-only branch
+          # MISSES the fingerprint cache yet builds NO new image. Decouple the deploy
+          # question from the CI-fingerprint by diffing the actual runtime paths against
+          # main; require a bump only when one of them moved. A real lib/priv/config/
+          # frontend/Dockerfile/mix.* change still demands a bump (and build-and-publish
+          # still errors on a version-exists collision), so this only relaxes the gate
+          # for non-deployable (CI/docs/test/lint-config) branches.
+          # rel/ is baked into the release image (Dockerfile `COPY rel rel`:
+          # env.sh.eex cluster gate + RELEASE_NODE), so a rel change IS deployable
+          # and must require a bump. (Keep this list in sync with groups.sh's
+          # deployable groups — elixir-src+priv+frontend+docker-image.)
+          DEPLOYABLE=$(git diff --name-only origin/main...HEAD -- \
+            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
+          if [ -z "$DEPLOYABLE" ]; then
+            echo "No deployable paths changed vs main (CI/docs/test/lint-config only) — version bump not required."
+            exit 0
+          fi
+          echo "::group::Deployable paths changed vs main"; echo "$DEPLOYABLE"; echo "::endgroup::"
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           MAIN_VERSION=$(git show origin/main:mix.exs | grep 'version:' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ "$BRANCH_VERSION" = "$MAIN_VERSION" ]; then
@@ -559,7 +664,10 @@ jobs:
     #     bumps and the same coverage runs when we merge into main).
     # `ci` aggregate updated below to allow this job's `skipped` result on
     # Dependabot PRs.
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
+    # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
+    # content already passed full on main; forced false on full runs.
+    if: needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -937,10 +1045,17 @@ jobs:
           # into CRDT and uses eventually-consistent assertions, so it must NOT
           # run on this REST-path job — it has its own (CRDT_ENABLED) job. Ignore
           # it here so it isn't even collected as skips.
+          # Phase 4: inject `-k <pattern>` when [e2e: clerk/<pattern>] targeted; empty => full.
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # template-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
+            "${K_ARGS[@]}" \
             -n "${E2E_WORKERS:-2}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
@@ -1082,7 +1197,8 @@ jobs:
     # separate display band below (+150 vs e2e-clerk's +50): clerk spans
     # displays ~45-134, crdt ~145-234.
     needs: [fingerprint, prebuild-ci-image]
-    if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
+    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1443,8 +1559,14 @@ jobs:
           # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
           # into CRDT (E2E_ENABLE_CRDT=true) against a CRDT_ENABLED backend and
           # uses eventually-consistent assertions.
-          python3 -m pytest tests/crdt/ -v --timeout=180 -p no:cacheprovider --no-header
+          # Phase 4: inject `-k <pattern>` when [e2e: crdt/<pattern>] targeted; empty => full.
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # template-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
+          python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
         env:
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
@@ -1526,10 +1648,14 @@ jobs:
   unit-tests:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend ExUnit.
-    # NOT fingerprint-gated: the suite is fast (~4min) and skipping it on a
-    # cache hit created a blind spot — it stopped executing on main for a
-    # stretch and let a Repo-crashing test land. Always run on backend pushes.
-    if: github.event_name != 'repository_dispatch'
+    # Per-job fingerprint skip (skip-unit-tests) is safe here even though a coarse
+    # cache-hit was historically NOT trusted (it once let a Repo-crashing test
+    # ride a green on main): markers seed ONLY on full runs and `is-full` forces
+    # skip=false on main, so unit-tests ALWAYS executes on main and can never
+    # silently stop. On a PR it skips only when this exact
+    # elixir-src+test+migrations content already passed full on main.
+    # (Phase 3 will further narrow PR runs to `mix test --stale`.)
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-unit-tests != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1650,7 +1776,20 @@ jobs:
           # job; this extends the same bar to test/**.
           # --slowest 20 surfaces the slowest tests each run so async/serial
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
-          mix test --warnings-as-errors --slowest 20
+          #
+          # Phase 3: PRs run `mix test --stale` (only tests whose modules changed
+          # vs the restored _build/test manifest, plus their compile-dependents)
+          # for fast iteration; full runs (main / [ci-full] / force_full, via
+          # is-full) run the WHOLE suite as the safety net. ExUnit compile-tracking
+          # drives --stale; because main always re-validates everything, a
+          # mis-narrowed --stale set on a PR is caught at merge, never shipped.
+          if [ "${{ needs.fingerprint.outputs.is-full }}" = "true" ]; then
+            echo "::notice::Full run (is-full) — entire ExUnit suite"
+            mix test --warnings-as-errors --slowest 20
+          else
+            echo "::notice::PR run — mix test --stale (full suite runs on main)"
+            mix test --stale --warnings-as-errors --slowest 20
+          fi
 
       - name: OpenAPI spec drift gate
         env:
@@ -1731,9 +1870,10 @@ jobs:
     # (Postgres bytea, no MinIO) and round-trip attachment bytes through the
     # storage adapter via `bin/engram rpc`. This is the only job that exercises
     # the no-MinIO boot path — the rest of CI runs STORAGE_BACKEND=s3. Skipped on
-    # cross-repo plugin dispatch (can't regress backend) and when the backend
-    # fingerprint already proved green.
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'
+    # cross-repo plugin dispatch (can't regress backend) and via the per-job
+    # fingerprint skip (skip-storage-database = elixir-src+migrations+docker-image;
+    # forced false on full runs).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-storage-database != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1808,10 +1948,13 @@ jobs:
   lint:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — plugin can't regress backend lints.
-    # NOT fingerprint-gated: lint is fast and shares prebuild-mix with
-    # unit-tests; skipping it on a cache hit silently let credo/sobelow
-    # regressions merge. Always run on backend pushes.
-    if: github.event_name != 'repository_dispatch'
+    # Per-job fingerprint skip (skip-lint) is safe even though a coarse cache-hit
+    # was historically NOT trusted (it once let credo/sobelow regressions merge):
+    # markers seed ONLY on full runs and `is-full` forces skip=false on main, so
+    # lint ALWAYS executes on main. On a PR it skips only when this exact
+    # elixir-src+test+lint-config content (incl. .credo.exs/.sobelow-conf/.formatter.exs)
+    # already passed full on main.
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-lint != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
 
     steps:
@@ -2408,10 +2551,14 @@ jobs:
     # Simpler than the original plan: applies migrations, doesn't run
     # the prev release's full mix test (brittle across versions). The
     # "migrate applies cleanly" check is the load-bearing invariant.
+    # Per-job skip (skip-n1-compat = elixir-src+migrations; forced false on full
+    # runs). n1-compat is branch-only (never runs on main), so its marker only
+    # seeds via a [ci-full]/force_full branch run — in practice it nearly always
+    # runs, which is fine (it's a cheap expand-phase migration apply check).
     if: |
       github.event_name == 'push' &&
       github.ref != 'refs/heads/main' &&
-      needs.fingerprint.outputs.backend-cache-hit != 'true'
+      needs.fingerprint.outputs.skip-n1-compat != 'true'
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [fingerprint, prebuild-mix]
     permissions:
@@ -2653,10 +2800,11 @@ jobs:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
     # so the local-auth API path is backend-internal.
-    # Also skip when fingerprint already proved green, or when running on a
-    # Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
+    # Also skip via the per-job fingerprint (skip-e2e-local =
+    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
+    # on a Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
     # access; unit-tests + lint cover the meaningful surface).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-local != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'local')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -2742,7 +2890,14 @@ jobs:
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
-        run: python3 -m pytest tests/api_only/ -v --timeout=180 -p no:cacheprovider --no-header
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
+        run: |
+          # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # template-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
+          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
 
       - name: Collect failure logs
         if: failure()
@@ -2773,9 +2928,10 @@ jobs:
     needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
-    # Also skip when fingerprint already proved green, or on Dependabot PRs
-    # (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true' && github.actor != 'dependabot[bot]'
+    # Also skip via the per-job fingerprint (skip-e2e-browser =
+    # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
+    # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -3033,6 +3189,14 @@ jobs:
           EB="${{ needs.e2e-browser.result }}"
           LG="${{ needs.legal-cross-repo.result }}"
 
+          # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
+          # only one suite ran (with -k), so the full integration matrix is unproven.
+          # Drop the tag and push to run the full suite before merging.
+          if [ -n "${{ needs.fingerprint.outputs.e2e-target-suite }}" ]; then
+            echo "::error::Targeted e2e run ([e2e: ${{ needs.fingerprint.outputs.e2e-target-suite }}/...]) is not mergeable — remove the [e2e: ...] tag and push to run the full e2e suite."
+            exit 1
+          fi
+
           # version-check is skipped on main (only runs on branches) — that's expected.
           if [ "$VC" != "success" ] && [ "$VC" != "skipped" ]; then
             echo "::error::version-check failed — bump mix.exs version before merging"
@@ -3118,6 +3282,67 @@ jobs:
           docker push "$TAG"
           rm -rf "$WORKDIR"
           echo "::notice::Saved e2e marker $TAG"
+
+  # Fine-grained per-job markers (ci-<job>:<hash-job>) in LOCAL_REGISTRY — the
+  # forward-looking replacement for the coarse ci-pass/ci-e2e-pass markers above
+  # (legacy record-pass retired in Phase 5). Recorded ONLY on full runs (main /
+  # [ci-full] / force_full): the whole job is gated on `is-full`, so a reduced-mode
+  # PR pass (future Phase 3 `--stale` unit, Phase 4 targeted e2e) can NEVER seed a
+  # marker. PRs consume these via the fingerprint job's skip-<job> lookup; they
+  # never produce. Each job seeds its own marker independently iff it ran to
+  # success this run; skipped/failed jobs are left unmarked. Hashes come straight
+  # from the fingerprint job (MARKER_HASH) so a recorded tag always matches the
+  # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
+  record-job-markers:
+    if: always() && needs.fingerprint.outputs.is-full == 'true'
+    # n1-compat is intentionally EXCLUDED: it has several early `exit 0` success
+    # paths (no open PR, no phase/expand label, no new migrations) that return
+    # green WITHOUT running the migration rollforward. Recording a marker off
+    # those would let a later identical-content PR skip the real check. It is a
+    # cheap branch-only job, so it simply always runs (never marker-skipped).
+    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser]
+    runs-on: [self-hosted, linux, x64, isolated]
+    env:
+      LINT_RESULT: ${{ needs.lint.result }}
+      UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+      STORAGE_DATABASE_RESULT: ${{ needs.storage-database.result }}
+      E2E_CLERK_RESULT: ${{ needs.e2e-clerk.result }}
+      E2E_CRDT_RESULT: ${{ needs.e2e-crdt.result }}
+      E2E_LOCAL_RESULT: ${{ needs.e2e-local.result }}
+      E2E_BROWSER_RESULT: ${{ needs.e2e-browser.result }}
+      HASH_LINT: ${{ needs.fingerprint.outputs.hash-lint }}
+      HASH_UNIT_TESTS: ${{ needs.fingerprint.outputs.hash-unit-tests }}
+      HASH_STORAGE_DATABASE: ${{ needs.fingerprint.outputs.hash-storage-database }}
+      HASH_E2E_CLERK: ${{ needs.fingerprint.outputs.hash-e2e-clerk }}
+      HASH_E2E_CRDT: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
+      HASH_E2E_LOCAL: ${{ needs.fingerprint.outputs.hash-e2e-local }}
+      HASH_E2E_BROWSER: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Record per-job markers for jobs that passed this full run
+        run: |
+          set -uo pipefail
+          # record <job> <result> <hash>: seed ci-<job>:<hash> iff the job
+          # succeeded. record.sh self-guards on IS_FULL_RUN and uses MARKER_HASH
+          # verbatim (no recompute) so the tag matches the fingerprint lookup.
+          record() {
+            if [ "$2" != "success" ]; then
+              echo "::notice::skip marker $1 (result=$2)"
+              return 0
+            fi
+            if [ -z "$3" ]; then
+              echo "::warning::no hash for $1 — marker not recorded"
+              return 0
+            fi
+            IS_FULL_RUN=true MARKER_HASH="$3" bash ci/fingerprint/record.sh record "$1"
+          }
+          record lint             "$LINT_RESULT"             "$HASH_LINT"
+          record unit-tests       "$UNIT_TESTS_RESULT"       "$HASH_UNIT_TESTS"
+          record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
+          record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
+          record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
+          record e2e-local        "$E2E_LOCAL_RESULT"        "$HASH_E2E_LOCAL"
+          record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
   # When plugin dispatch arrives and the (backend, plugin) pair is already
   # cached green, e2e-clerk is skipped — its in-job "Report E2E status to
@@ -3277,14 +3502,26 @@ jobs:
           # github.run_attempt is 1 on the first push-triggered run, 2+ on
           # any `gh run rerun` invocation. Cleanly distinguishes "operator
           # didn't bump" from "operator is retrying a known-good build".
+          # Path-aware collision guard. The "version exists but not cache-hit"
+          # ERROR is meant to catch a developer who changed deployable code but
+          # forgot to bump. But verify.yml / ci/ live INSIDE BACKEND_HASH, so a
+          # CI-only merge misses the coarse cache (cache_hit_both=false) while
+          # leaving the image byte-identical — the existing tag IS correct and a
+          # bump would be a no-op. So only ERROR when a DEPLOYABLE path actually
+          # changed in this merge (same path set version-check uses). HEAD~1..HEAD
+          # = the squash-merge just landed on main (checkout is fetch-depth: 0).
+          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- \
+            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
-            if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ]; then
-              echo "ERROR: Version ${VERSION} already exists in GHCR. Bump the version in mix.exs before merging." >&2
+            if [ "${{ github.run_attempt }}" = "1" ] && [ "$CACHE_HIT_BOTH" != "true" ] && [ -n "$DEPLOYABLE" ]; then
+              echo "ERROR: Version ${VERSION} already exists in GHCR and deployable paths changed in this merge. Bump the version in mix.exs before merging." >&2
+              echo "::group::Deployable paths changed (HEAD~1..HEAD)"; echo "$DEPLOYABLE"; echo "::endgroup::"
               exit 1
             fi
-            echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}); skipping build, jumping to deploy."
+            DEP_NOTE=$([ -n "$DEPLOYABLE" ] && echo "deployable changed" || echo "CI/docs-only, image unchanged")
+            echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}, ${DEP_NOTE}); skipping build, jumping to deploy."
             IMAGE_EXISTS=true
           fi
 
