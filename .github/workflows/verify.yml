@@ -35,6 +35,11 @@ on:
         description: "Plugin branch to test against (default: main)"
         required: false
         default: "main"
+      force_full:
+        description: "Run ALL test jobs even if the fingerprint shows a cached pass (for validating CI changes)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -251,6 +256,15 @@ jobs:
         env:
           BACKEND_HASH: ${{ steps.compute.outputs.backend-hash }}
         run: |
+          # Force-full override: a `[ci-full]` tag in the HEAD commit message, or
+          # the workflow_dispatch force_full input, bypasses the fingerprint so a
+          # CI-config change can be validated against the full suite even when the
+          # backend tree is unchanged (which would otherwise skip every test job).
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "::notice::force-full requested ([ci-full] tag or workflow_dispatch): bypassing backend fingerprint"
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "${LOCAL_REGISTRY:-}" ]; then
             echo "::warning::LOCAL_REGISTRY unset — fingerprint short-circuit disabled"
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -270,6 +284,13 @@ jobs:
         env:
           E2E_HASH: ${{ steps.compute.outputs.e2e-hash }}
         run: |
+          # Force-full override (see backend-lookup): [ci-full] tag or the
+          # force_full dispatch input bypasses the e2e fingerprint too.
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "::notice::force-full requested: bypassing e2e fingerprint"
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "${LOCAL_REGISTRY:-}" ]; then
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
