@@ -1720,7 +1720,20 @@ jobs:
           # job; this extends the same bar to test/**.
           # --slowest 20 surfaces the slowest tests each run so async/serial
           # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
-          mix test --warnings-as-errors --slowest 20
+          #
+          # Phase 3: PRs run `mix test --stale` (only tests whose modules changed
+          # vs the restored _build/test manifest, plus their compile-dependents)
+          # for fast iteration; full runs (main / [ci-full] / force_full, via
+          # is-full) run the WHOLE suite as the safety net. ExUnit compile-tracking
+          # drives --stale; because main always re-validates everything, a
+          # mis-narrowed --stale set on a PR is caught at merge, never shipped.
+          if [ "${{ needs.fingerprint.outputs.is-full }}" = "true" ]; then
+            echo "::notice::Full run (is-full) — entire ExUnit suite"
+            mix test --warnings-as-errors --slowest 20
+          else
+            echo "::notice::PR run — mix test --stale (full suite runs on main)"
+            mix test --stale --warnings-as-errors --slowest 20
+          fi
 
       - name: OpenAPI spec drift gate
         env:
