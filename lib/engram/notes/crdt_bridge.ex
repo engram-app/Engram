@@ -16,12 +16,32 @@ defmodule Engram.Notes.CrdtBridge do
   import Bitwise
 
   @text_name "content"
+  @frontmatter_name "frontmatter"
+  @order_name "frontmatter_order"
+  @doc_schema_version 2
   @flatten_bytes 500_000
   @flatten_clients 1_000
 
   @doc "The shared Y.Text key holding note body content."
   @spec text_name() :: String.t()
   def text_name, do: @text_name
+
+  @doc "The CRDT doc schema version. Bump on any incompatible doc-shape change."
+  @spec doc_schema_version() :: pos_integer()
+  def doc_schema_version, do: @doc_schema_version
+
+  @doc """
+  Current frontmatter order list and JSON-encoded values map of a doc.
+
+  Returns `{[], %{}}` for a fresh doc where neither the `@order_name` Y.Array
+  nor the `@frontmatter_name` Y.Map have ever been written to.
+  """
+  @spec frontmatter_of(Yex.Doc.t()) :: {[String.t()], %{String.t() => String.t()}}
+  def frontmatter_of(%Yex.Doc{} = doc) do
+    order = doc |> Yex.Doc.get_array(@order_name) |> Yex.Array.to_list()
+    values = doc |> Yex.Doc.get_map(@frontmatter_name) |> Yex.Map.to_map()
+    {order, values}
+  end
 
   @doc """
   A fresh Y.Doc with the UTF-16 offset kind. The SINGLE source of truth for

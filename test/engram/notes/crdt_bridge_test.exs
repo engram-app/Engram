@@ -51,6 +51,17 @@ defmodule Engram.Notes.CrdtBridgeTest do
   # code units. The Gate 0 spike only exercised ASCII; an astral-plane edit
   # (emoji are surrogate pairs = 2 UTF-16 units) is where a bytes/graphemes
   # offset corrupts the doc. These round-trips prove the unit is correct.
+  describe "frontmatter accessors" do
+    test "frontmatter_of returns empty order and values for a fresh doc" do
+      doc = CrdtBridge.new_doc()
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+    end
+
+    test "doc_schema_version is 2" do
+      assert CrdtBridge.doc_schema_version() == 2
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.
