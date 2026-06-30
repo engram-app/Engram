@@ -66,6 +66,33 @@ defmodule Engram.Notes.FrontmatterTest do
     end
   end
 
+  describe "emit/2 and self-idempotency" do
+    test "emits keys in order and round-trips through parse" do
+      order = ["title", "tags"]
+      values = %{"title" => "\"Hi\"", "tags" => "[\"a\",\"b\"]"}
+      block = Frontmatter.emit(order, values)
+      assert {:ok, ^order, ^values} = Frontmatter.parse(block)
+    end
+
+    test "empty inputs emit an empty string" do
+      assert Frontmatter.emit([], %{}) == ""
+    end
+
+    test "keys missing from values are silently skipped" do
+      order = ["title", "missing_key"]
+      values = %{"title" => "\"Hello\""}
+      block = Frontmatter.emit(order, values)
+      assert {:ok, ["title"], %{"title" => "\"Hello\""}} = Frontmatter.parse(block)
+    end
+
+    test "nested map value round-trips" do
+      order = ["meta"]
+      values = %{"meta" => "{\"author\":\"Todd\"}"}
+      block = Frontmatter.emit(order, values)
+      assert {:ok, ^order, ^values} = Frontmatter.parse(block)
+    end
+  end
+
   describe "encode_values/1" do
     # Route: YamlElixir special floats (.nan/.inf) are parsed to atoms, which
     # Jason encodes as strings, so they do NOT trigger an encode error. The

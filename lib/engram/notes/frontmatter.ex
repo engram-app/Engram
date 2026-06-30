@@ -89,6 +89,34 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
+  @doc """
+  Render ordered keys and JSON-encoded values into a YAML block (no fences).
+  Empty inputs yield "". Output parses back to the same values (self-idempotent).
+
+  Each value in `values` is a JSON string (as produced by `parse/1`); it is
+  decoded before handing to the YAML emitter so the output is canonical YAML,
+  not a string-of-JSON-literal.
+  """
+  @spec emit([String.t()], %{String.t() => String.t()}) :: String.t()
+  def emit([], _values), do: ""
+
+  def emit(order, values) when is_list(order) and is_map(values) do
+    order
+    |> Enum.filter(&Map.has_key?(values, &1))
+    |> Enum.map(fn key ->
+      decoded = Jason.decode!(values[key])
+      Ymlr.document!(%{key => decoded}, sort_maps: false) |> String.replace_prefix("---\n", "")
+    end)
+    |> Enum.join("")
+    |> ensure_trailing_newline()
+  end
+
+  defp ensure_trailing_newline(""), do: ""
+
+  defp ensure_trailing_newline(s) do
+    if String.ends_with?(s, "\n"), do: s, else: s <> "\n"
+  end
+
   # Recover source order: top-level keys appear as `key:` at column 0.
   defp top_level_key_order(block, map) do
     block
