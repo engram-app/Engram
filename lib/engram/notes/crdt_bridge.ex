@@ -83,13 +83,16 @@ defmodule Engram.Notes.CrdtBridge do
   @spec project_doc(Yex.Doc.t()) :: String.t()
   def project_doc(%Yex.Doc{} = doc) do
     {order, values} = frontmatter_of(doc)
-    body = doc |> Yex.Doc.get_text(@text_name) |> Yex.Text.to_string()
-    Engram.Notes.Frontmatter.project(order, values, body)
+    Engram.Notes.Frontmatter.project(order, values, body_of(doc))
   end
 
-  @doc "Current plaintext of the doc's content Y.Text."
+  @doc "Full projected note plaintext (frontmatter + body)."
   @spec text_of(Yex.Doc.t()) :: String.t()
-  def text_of(%Yex.Doc{} = doc) do
+  def text_of(%Yex.Doc{} = doc), do: project_doc(doc)
+
+  @doc "Body-only plaintext (the content Y.Text, no frontmatter)."
+  @spec body_of(Yex.Doc.t()) :: String.t()
+  def body_of(%Yex.Doc{} = doc) do
     doc |> Yex.Doc.get_text(@text_name) |> Yex.Text.to_string()
   end
 
@@ -228,9 +231,8 @@ defmodule Engram.Notes.CrdtBridge do
   """
   @spec flatten(Yex.Doc.t()) :: {:ok, %{doc: Yex.Doc.t(), state: binary()}} | {:error, term()}
   def flatten(%Yex.Doc{} = doc) do
-    text = text_of(doc)
     fresh = new_doc()
-    Yex.Text.insert(Yex.Doc.get_text(fresh, @text_name), 0, text)
+    :ok = ingest_plaintext(fresh, project_doc(doc))
 
     case Yex.encode_state_as_update(fresh) do
       {:ok, state} -> {:ok, %{doc: fresh, state: state}}

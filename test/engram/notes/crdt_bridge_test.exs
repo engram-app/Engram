@@ -62,12 +62,21 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "text_of vs body_of" do
+    test "text_of returns the full projected note; body_of returns body only" do
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert Engram.Notes.CrdtBridge.text_of(doc) == "---\ntitle: Hi\n---\nbody\n"
+      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
+    end
+  end
+
   describe "ingest_plaintext/2" do
     test "splits frontmatter into the map/order and body into the text" do
       doc = Engram.Notes.CrdtBridge.new_doc()
       :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
       assert Engram.Notes.CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
-      assert Engram.Notes.CrdtBridge.text_of(doc) == "body\n"
+      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
     end
 
     test "malformed frontmatter keeps the whole text as body" do
