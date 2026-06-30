@@ -130,6 +130,9 @@ jobs:
       hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
       hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
+      # Phase 4 targeted e2e ([e2e: suite/pattern] in HEAD commit). Empty = full e2e.
+      e2e-target-suite: ${{ steps.skips.outputs.e2e-target-suite }}
+      e2e-target-pattern: ${{ steps.skips.outputs.e2e-target-pattern }}
     steps:
       - name: Generate App token
         id: app-token
@@ -342,6 +345,23 @@ jobs:
           else
             echo "is-full=false" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=false
+          fi
+          # Phase 4: opt-in targeted e2e. `[e2e: <suite>/<pattern>]` in the HEAD
+          # commit message runs ONLY that suite's e2e job, with `pytest -k <pattern>`,
+          # and marks the run NON-mergeable (the ci aggregate fails on a target).
+          # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
+          # Lets you iterate on a single e2e test without the full suite; the real
+          # coverage runs unconditionally on merge to main.
+          E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*[a-z]+/[^]]+\]' | head -1 || true)
+          if [ -n "$E2E_LINE" ]; then
+            E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*([a-z]+)\/.*/\1/I' | tr 'A-Z' 'a-z')
+            E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*[a-z]+\/([^]]+)\]/\1/I')
+            echo "e2e-target-suite=$E2E_SUITE"     >> "$GITHUB_OUTPUT"
+            echo "e2e-target-pattern=$E2E_PATTERN" >> "$GITHUB_OUTPUT"
+            echo "::notice::Targeted e2e: suite=$E2E_SUITE pattern='$E2E_PATTERN' — run is NON-mergeable (ci will fail)."
+          else
+            echo "e2e-target-suite="   >> "$GITHUB_OUTPUT"
+            echo "e2e-target-pattern=" >> "$GITHUB_OUTPUT"
           fi
           # compute.sh emit writes skip-<job>/hash-<job> lines to $GITHUB_OUTPUT.
           # IS_FULL_RUN is read by emit to force every skip-* false on full runs.
@@ -624,7 +644,7 @@ jobs:
     # Per-job fingerprint skip (skip-e2e-clerk) replaces the coarse e2e-cache-hit:
     # skips only when this exact (docker-image+elixir-src+e2e-harness+plugin)
     # content already passed full on main; forced false on full runs.
-    if: needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]'
+    if: needs.fingerprint.outputs.skip-e2e-clerk != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1002,7 +1022,11 @@ jobs:
           # into CRDT and uses eventually-consistent assertions, so it must NOT
           # run on this REST-path job — it has its own (CRDT_ENABLED) job. Ignore
           # it here so it isn't even collected as skips.
+          # Phase 4: inject `-k <pattern>` when [e2e: clerk/<pattern>] targeted; empty => full.
+          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
+            "${K_ARGS[@]}" \
             -n "${E2E_WORKERS:-2}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
@@ -1148,7 +1172,7 @@ jobs:
     # displays ~45-134, crdt ~145-234.
     needs: [fingerprint, prebuild-ci-image]
     # Per-job skip (skip-e2e-crdt): same group as e2e-clerk; forced false on full runs.
-    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]'
+    if: needs.fingerprint.outputs.skip-e2e-crdt != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -1509,7 +1533,10 @@ jobs:
           # tests/crdt/ is the CRDT-only suite (spec §12a). It opts the plugin
           # into CRDT (E2E_ENABLE_CRDT=true) against a CRDT_ENABLED backend and
           # uses eventually-consistent assertions.
-          python3 -m pytest tests/crdt/ -v --timeout=180 -p no:cacheprovider --no-header
+          # Phase 4: inject `-k <pattern>` when [e2e: crdt/<pattern>] targeted; empty => full.
+          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
+          python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
         env:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
@@ -2748,7 +2775,7 @@ jobs:
     # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
     # on a Dependabot PR (Phoenix webServer boot needs secrets Dependabot can't
     # access; unit-tests + lint cover the meaningful surface).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-local != 'true' && github.actor != 'dependabot[bot]'
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-local != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'local')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -2834,7 +2861,11 @@ jobs:
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
-        run: python3 -m pytest tests/api_only/ -v --timeout=180 -p no:cacheprovider --no-header
+        run: |
+          # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
+          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
+          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
 
       - name: Collect failure logs
         if: failure()
@@ -2868,7 +2899,7 @@ jobs:
     # Also skip via the per-job fingerprint (skip-e2e-browser =
     # docker-image+elixir-src+e2e-harness+frontend; forced false on full runs), or
     # on Dependabot PRs (Phoenix webServer needs Clerk secrets Dependabot can't access).
-    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]'
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-e2e-browser != 'true' && github.actor != 'dependabot[bot]' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'browser')
     runs-on: [self-hosted, linux, x64, isolated]
 
     env:
@@ -3125,6 +3156,14 @@ jobs:
           EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
           LG="${{ needs.legal-cross-repo.result }}"
+
+          # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
+          # only one suite ran (with -k), so the full integration matrix is unproven.
+          # Drop the tag and push to run the full suite before merging.
+          if [ -n "${{ needs.fingerprint.outputs.e2e-target-suite }}" ]; then
+            echo "::error::Targeted e2e run ([e2e: ${{ needs.fingerprint.outputs.e2e-target-suite }}/...]) is not mergeable — remove the [e2e: ...] tag and push to run the full e2e suite."
+            exit 1
+          fi
 
           # version-check is skipped on main (only runs on branches) — that's expected.
           if [ "$VC" != "success" ] && [ "$VC" != "skipped" ]; then
