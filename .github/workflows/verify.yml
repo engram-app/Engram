@@ -35,6 +35,11 @@ on:
         description: "Plugin branch to test against (default: main)"
         required: false
         default: "main"
+      force_full:
+        description: "Run ALL test jobs even if the fingerprint shows a cached pass (for validating CI changes)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -61,6 +66,10 @@ env:
   # downstream callers (line ~929, ~2165) used to tolerate unset via shell
   # fallback to Docker Hub — that fallback path is now dead.
   LOCAL_REGISTRY: "10.0.20.214:5001"
+  # LAN Hex pull-through mirror (nginx proxy_cache -> repo.hex.pm). Workflow-wide
+  # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
+  # pull hex from the LAN instead of WAN. Signatures still verified client-side.
+  HEX_MIRROR: "http://10.0.20.214:8090"
 
   # CI-only encryption master key. Ephemeral — CI databases are recreated per run,
   # so the key does not protect persistent data. Production deploys must override
@@ -247,6 +256,15 @@ jobs:
         env:
           BACKEND_HASH: ${{ steps.compute.outputs.backend-hash }}
         run: |
+          # Force-full override: a `[ci-full]` tag in the HEAD commit message, or
+          # the workflow_dispatch force_full input, bypasses the fingerprint so a
+          # CI-config change can be validated against the full suite even when the
+          # backend tree is unchanged (which would otherwise skip every test job).
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "::notice::force-full requested ([ci-full] tag or workflow_dispatch): bypassing backend fingerprint"
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "${LOCAL_REGISTRY:-}" ]; then
             echo "::warning::LOCAL_REGISTRY unset — fingerprint short-circuit disabled"
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -266,6 +284,13 @@ jobs:
         env:
           E2E_HASH: ${{ steps.compute.outputs.e2e-hash }}
         run: |
+          # Force-full override (see backend-lookup): [ci-full] tag or the
+          # force_full dispatch input bypasses the e2e fingerprint too.
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+            echo "::notice::force-full requested: bypassing e2e fingerprint"
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "${LOCAL_REGISTRY:-}" ]; then
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -419,13 +444,15 @@ jobs:
         env:
           BEAM: ${{ steps.beam.outputs.tag }}
         run: |
-          # BEAM files are tied to OTP version — include in every key.
-          # _build keys hash the source content the compiler actually
-          # reads. :test additionally hashes test/** because that's part
-          # of its compile scope; :dev does not.
+          # BEAM files are tied to OTP version -- include in every key.
+          # _build keys hash mix.lock ONLY (not source). Source changes do NOT rotate
+          # the key, so actions/cache skips the slow save (GitHub cache UPLOAD throttles
+          # to ~0.2 MB/s from self-hosted runners). Downstream restores via the exact
+          # key and `mix compile` recompiles the changed-module delta (cheap). The save
+          # runs only when mix.lock changes. See spec 2026-06-29-lan-primary-ci-caching.
           DEPS_KEY="mix-deps-${BEAM}-${{ hashFiles('mix.lock') }}"
-          DEV_KEY="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**') }}"
-          TEST_KEY="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock', 'lib/**', 'config/**', 'priv/**', 'test/**') }}"
+          DEV_KEY="mix-build-dev-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
+          TEST_KEY="mix-build-test-v2-${BEAM}-${{ hashFiles('mix.lock') }}"
           echo "deps=$DEPS_KEY" >> "$GITHUB_OUTPUT"
           echo "build-dev=$DEV_KEY" >> "$GITHUB_OUTPUT"
           echo "build-test=$TEST_KEY" >> "$GITHUB_OUTPUT"
@@ -465,24 +492,30 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get
 
-      - name: Compile :dev
-        env:
-          MIX_ENV: dev
+      - name: Compile :dev and :test (parallel)
         run: |
-          # --warnings-as-errors here means the lint job downstream can
-          # skip its own --force compile (cache restore + this proven
-          # warning-free build = same guarantee).
-          mix compile --warnings-as-errors
-
-      - name: Compile :test
-        env:
-          MIX_ENV: test
-        run: |
-          mix compile --warnings-as-errors
+          # Compile both envs concurrently. They write to separate _build/dev
+          # and _build/test dirs from the same read-only source + deps, so there
+          # is no write conflict. On the 32-thread runner this roughly halves the
+          # cold-compile wall-clock vs the old sequential dev-then-test (measured
+          # dev 99s + test 148s sequential, ~max(dev,test) in parallel).
+          # --warnings-as-errors keeps the downstream lint compile a fast no-op
+          # on cache restore. --no-deps-check: deps were just reconciled by the
+          # `mix deps.get` step above, so skip the redundant lockfile recheck.
+          MIX_ENV=dev  mix compile --warnings-as-errors --no-deps-check >/tmp/compile-dev.log 2>&1 &
+          pid_dev=$!
+          MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
+          pid_test=$!
+          wait "$pid_dev";  rc_dev=$?
+          wait "$pid_test"; rc_test=$?
+          echo "::group::Compile :dev output";  cat /tmp/compile-dev.log;  echo "::endgroup::"
+          echo "::group::Compile :test output"; cat /tmp/compile-test.log; echo "::endgroup::"
+          [ "$rc_dev" -eq 0 ] && [ "$rc_test" -eq 0 ]
 
   version-check:
     # Skip on Dependabot PRs — they can't bump app version, and the `ci`
     # aggregate already treats `skipped` as OK for version-check.
+    needs: fingerprint
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -490,13 +523,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require version bump vs main
+      - name: Require version bump vs main (unless content already shipped)
+        env:
+          # Gate on the SAME signal build-and-publish-image uses to decide
+          # build-vs-skip, so the two can never disagree. When BOTH fingerprints
+          # are green, the backend tree (BACKEND_HASH = lib/priv/config/test/
+          # frontend/Dockerfile/entrypoint.sh/.dockerignore/mix.lock + non-version
+          # mix.exs) and the e2e contract are byte-identical to an already-shipped
+          # build: no new image is produced and nothing deploys, so no version
+          # bump is required. Pure CI/docs/infra changes (.github/, ci/, docs/,
+          # *.md) fall outside BACKEND_HASH -> cache-hit -> no bump. A deployable
+          # change misses the cache -> bump required, which also matches
+          # build-and-publish (it errors on an unbumped version-exists collision
+          # when NOT cache-hit). Sharing the signal avoids that class of error.
+          CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
         run: |
+          if [ "$CACHE_HIT_BOTH" = "true" ]; then
+            echo "Backend + e2e content already shipped (fingerprint cache-hit): no new image will build, version bump not required."
+            exit 0
+          fi
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           MAIN_VERSION=$(git show origin/main:mix.exs | grep 'version:' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-
           if [ "$BRANCH_VERSION" = "$MAIN_VERSION" ]; then
-            echo "::error::mix.exs version ($BRANCH_VERSION) has not been bumped from main. Bump the version before merging."
+            echo "::error::Deployable content changed but mix.exs version ($BRANCH_VERSION) was not bumped from main. Bump it before merging."
             exit 1
           fi
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
@@ -1026,10 +1075,13 @@ jobs:
     # Obsidian/Xvfb/CDP machinery, but: local auth (no Clerk), CRDT_ENABLED=true
     # stack, the ci/compose.local.yml overlay, and it runs ONLY tests/crdt/.
     #
-    # Sequenced AFTER e2e-clerk (`needs: e2e-clerk`) so the two never run
-    # concurrently on the shared self-hosted runner — they'd otherwise collide
-    # on the same per-run-number Xvfb display window.
-    needs: [fingerprint, prebuild-ci-image, e2e-clerk]
+    # Runs CONCURRENTLY with e2e-clerk (no `needs: e2e-clerk`). Every shared
+    # resource is already isolated from e2e-clerk: stack name (engram-ci-crdt-),
+    # Qdrant collection (ci_crdt_), temp dirs, and dynamic ports. The one
+    # remaining collision, the per-run Xvfb display window, is avoided by a
+    # separate display band below (+150 vs e2e-clerk's +50): clerk spans
+    # displays ~45-134, crdt ~145-234.
+    needs: [fingerprint, prebuild-ci-image]
     if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
@@ -1063,7 +1115,7 @@ jobs:
           # runs with different run_numbers (modulo 15) get non-overlapping
           # 6-display windows. Pre-cleanup and tear-down both need this range
           # so they can scope Xvfb kills to displays this run actually owns.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 150 ))
           MIN=$((BASE - 5))
           MAX=$BASE
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
@@ -3374,6 +3426,7 @@ jobs:
             VITE_GIT_SHA=${{ github.sha }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ vars.SENTRY_PROJECT_FRONTEND }}
+            HEX_MIRROR=${{ env.HEX_MIRROR }}
           secrets: |
             sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
 
