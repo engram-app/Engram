@@ -328,7 +328,14 @@ jobs:
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Fine-grained skip flags (SHADOW, log-only)
+      - name: Self-test fingerprint scripts
+        # Fails the fingerprint job (and thus the whole run) if a groups.sh /
+        # compute.sh edit breaks group hashing or maps a job to an unknown group
+        # — the skip logic gates real coverage, so a silent break here would
+        # mis-skip jobs. Runs in ~1s.
+        run: bash ci/fingerprint/test/groups_test.sh
+
+      - name: Fine-grained per-job skip flags (enforced)
         id: skips
         env:
           PLUGIN_SHA: ${{ steps.plugin-sha.outputs.sha }}
@@ -350,26 +357,35 @@ jobs:
           # commit message runs ONLY that suite's e2e job, with `pytest -k <pattern>`,
           # and marks the run NON-mergeable (the ci aggregate fails on a target).
           # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
-          # Lets you iterate on a single e2e test without the full suite; the real
-          # coverage runs unconditionally on merge to main.
-          # Match ONLY the four known suite names so prose / placeholder text like
-          # a literal e2e-colon-suite-slash-pattern example in a commit body does
-          # not accidentally trigger a (non-mergeable) targeted run.
-          E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[^]]+\]' | head -1 || true)
-          if [ -n "$E2E_LINE" ]; then
-            E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)\/.*/\1/I' | tr 'A-Z' 'a-z')
-            E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)\/([^]]+)\]/\2/I')
-            echo "e2e-target-suite=$E2E_SUITE"     >> "$GITHUB_OUTPUT"
-            echo "e2e-target-pattern=$E2E_PATTERN" >> "$GITHUB_OUTPUT"
-            echo "::notice::Targeted e2e: suite=$E2E_SUITE pattern='$E2E_PATTERN' — run is NON-mergeable (ci will fail)."
-          else
-            echo "e2e-target-suite="   >> "$GITHUB_OUTPUT"
-            echo "e2e-target-pattern=" >> "$GITHUB_OUTPUT"
+          #
+          # IGNORED on full runs (main / [ci-full] / force_full): main must always
+          # run the full e2e matrix, and ignoring the tag here also stops
+          # record-job-markers from seeding a full-hash e2e marker off a single
+          # -k subset (a squash-merge whose body still carries the tag).
+          #
+          # SECURITY: the pattern is restricted to a pytest -k -safe charset
+          # ([A-Za-z0-9_ .:/()-]) — anything with shell metacharacters (quotes,
+          # $(), backticks, ;, |) fails to match and is treated as no target. The
+          # value is ALSO consumed by the pytest steps via env: (NOT ${{ }}
+          # interpolation into the run script), so it can never be expanded as
+          # shell. Two layers against commit-message command injection on the
+          # self-hosted runner. Only the four known suite names match, so prose /
+          # placeholder text never accidentally triggers a (non-mergeable) run.
+          E2E_SUITE=""; E2E_PATTERN=""
+          if [ "$IS_FULL_RUN" != true ]; then
+            E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[A-Za-z0-9_ .:/()-]+\]' | head -1 || true)
+            if [ -n "$E2E_LINE" ]; then
+              E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/.*#\1#I' | tr 'A-Z' 'a-z')
+              E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's#.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)/([A-Za-z0-9_ .:/()-]+)\]#\2#I')
+              echo "::notice::Targeted e2e: suite=$E2E_SUITE pattern='$E2E_PATTERN' — run is NON-mergeable (ci will fail)."
+            fi
           fi
+          echo "e2e-target-suite=$E2E_SUITE"     >> "$GITHUB_OUTPUT"
+          echo "e2e-target-pattern=$E2E_PATTERN" >> "$GITHUB_OUTPUT"
           # compute.sh emit writes skip-<job>/hash-<job> lines to $GITHUB_OUTPUT.
           # IS_FULL_RUN is read by emit to force every skip-* false on full runs.
           bash ci/fingerprint/compute.sh emit
-          echo "::group::SHADOW fine-grained skip predictions (log-only, not enforced)"
+          echo "::group::Fine-grained per-job skip decisions (ENFORCED — gates the jobs below)"
           grep -E '^skip-' "$GITHUB_OUTPUT" | sed 's/^/  /' || true
           echo "::endgroup::"
 
@@ -620,8 +636,12 @@ jobs:
           # frontend/Dockerfile/mix.* change still demands a bump (and build-and-publish
           # still errors on a version-exists collision), so this only relaxes the gate
           # for non-deployable (CI/docs/test/lint-config) branches.
+          # rel/ is baked into the release image (Dockerfile `COPY rel rel`:
+          # env.sh.eex cluster gate + RELEASE_NODE), so a rel change IS deployable
+          # and must require a bump. (Keep this list in sync with groups.sh's
+          # deployable groups — elixir-src+priv+frontend+docker-image.)
           DEPLOYABLE=$(git diff --name-only origin/main...HEAD -- \
-            lib priv config frontend Dockerfile entrypoint.sh .dockerignore mix.exs mix.lock)
+            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
           if [ -z "$DEPLOYABLE" ]; then
             echo "No deployable paths changed vs main (CI/docs/test/lint-config only) — version bump not required."
             exit 0
@@ -1026,13 +1046,16 @@ jobs:
           # run on this REST-path job — it has its own (CRDT_ENABLED) job. Ignore
           # it here so it isn't even collected as skips.
           # Phase 4: inject `-k <pattern>` when [e2e: clerk/<pattern>] targeted; empty => full.
-          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # ${{ }}-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
             "${K_ARGS[@]}" \
             -n "${E2E_WORKERS:-2}" --dist=loadfile \
             -v --timeout=300 -p no:cacheprovider --no-header
         env:
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
@@ -1537,10 +1560,13 @@ jobs:
           # into CRDT (E2E_ENABLE_CRDT=true) against a CRDT_ENABLED backend and
           # uses eventually-consistent assertions.
           # Phase 4: inject `-k <pattern>` when [e2e: crdt/<pattern>] targeted; empty => full.
-          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # ${{ }}-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
         env:
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
@@ -2864,9 +2890,12 @@ jobs:
           QDRANT_URL: http://10.0.20.201:6333
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
+          E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
         run: |
           # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
-          E2E_K="${{ needs.fingerprint.outputs.e2e-target-pattern }}"
+          # E2E_PATTERN arrives via env: (charset-restricted at source), never
+          # ${{ }}-interpolated into this script — no command-injection surface.
+          E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
 
@@ -3266,7 +3295,12 @@ jobs:
   # hash a later run looks up — no recompute, no BEAM-on-recorder-host dependency.
   record-job-markers:
     if: always() && needs.fingerprint.outputs.is-full == 'true'
-    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser, n1-compat]
+    # n1-compat is intentionally EXCLUDED: it has several early `exit 0` success
+    # paths (no open PR, no phase/expand label, no new migrations) that return
+    # green WITHOUT running the migration rollforward. Recording a marker off
+    # those would let a later identical-content PR skip the real check. It is a
+    # cheap branch-only job, so it simply always runs (never marker-skipped).
+    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     env:
       LINT_RESULT: ${{ needs.lint.result }}
@@ -3276,7 +3310,6 @@ jobs:
       E2E_CRDT_RESULT: ${{ needs.e2e-crdt.result }}
       E2E_LOCAL_RESULT: ${{ needs.e2e-local.result }}
       E2E_BROWSER_RESULT: ${{ needs.e2e-browser.result }}
-      N1_COMPAT_RESULT: ${{ needs.n1-compat.result }}
       HASH_LINT: ${{ needs.fingerprint.outputs.hash-lint }}
       HASH_UNIT_TESTS: ${{ needs.fingerprint.outputs.hash-unit-tests }}
       HASH_STORAGE_DATABASE: ${{ needs.fingerprint.outputs.hash-storage-database }}
@@ -3284,7 +3317,6 @@ jobs:
       HASH_E2E_CRDT: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
       HASH_E2E_LOCAL: ${{ needs.fingerprint.outputs.hash-e2e-local }}
       HASH_E2E_BROWSER: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
-      HASH_N1_COMPAT: ${{ needs.fingerprint.outputs.hash-n1-compat }}
     steps:
       - uses: actions/checkout@v7
       - name: Record per-job markers for jobs that passed this full run
@@ -3311,7 +3343,6 @@ jobs:
           record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
           record e2e-local        "$E2E_LOCAL_RESULT"        "$HASH_E2E_LOCAL"
           record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
-          record n1-compat        "$N1_COMPAT_RESULT"        "$HASH_N1_COMPAT"
 
   # When plugin dispatch arrives and the (backend, plugin) pair is already
   # cached green, e2e-clerk is skipped — its in-job "Report E2E status to

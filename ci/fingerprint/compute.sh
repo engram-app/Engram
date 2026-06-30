@@ -3,14 +3,17 @@
 # job -> groups (SUPERSETS; see spec). plugin handled via PLUGIN_SHA.
 job_names() { echo "lint unit-tests storage-database e2e-clerk e2e-crdt e2e-local e2e-browser n1-compat build-and-publish-image"; }
 job_groups() {
+  # ci-meta on EVERY job so a workflow/fingerprint-script change re-runs all jobs.
+  # e2e jobs include `priv` because the e2e stack boots the real release, which
+  # runs Engram.Release.migrate() at startup — a migration-only change must bust them.
   case "$1" in
-    lint)              echo "elixir-src unit-tests lint-config" ;;
-    unit-tests)        echo "elixir-src unit-tests migrations" ;;
-    storage-database)  echo "elixir-src migrations docker-image" ;;
-    e2e-clerk|e2e-crdt) echo "docker-image elixir-src e2e-harness +plugin" ;;
-    e2e-local|e2e-browser) echo "docker-image elixir-src e2e-harness frontend" ;;
-    n1-compat)         echo "elixir-src migrations" ;;
-    build-and-publish-image) echo "docker-image elixir-src frontend migrations" ;;
+    lint)              echo "elixir-src unit-tests lint-config ci-meta" ;;
+    unit-tests)        echo "elixir-src unit-tests priv ci-meta" ;;
+    storage-database)  echo "elixir-src priv docker-image ci-meta" ;;
+    e2e-clerk|e2e-crdt) echo "docker-image elixir-src e2e-harness priv +plugin ci-meta" ;;
+    e2e-local|e2e-browser) echo "docker-image elixir-src e2e-harness frontend priv ci-meta" ;;
+    n1-compat)         echo "elixir-src priv ci-meta" ;;
+    build-and-publish-image) echo "docker-image elixir-src frontend priv ci-meta" ;;
     *) echo "unknown job: $1" >&2; return 2 ;;
   esac
 }
