@@ -366,7 +366,7 @@ jobs:
           # SECURITY: the pattern is restricted to a pytest -k -safe charset
           # ([A-Za-z0-9_ .:/()-]) — anything with shell metacharacters (quotes,
           # $(), backticks, ;, |) fails to match and is treated as no target. The
-          # value is ALSO consumed by the pytest steps via env: (NOT ${{ }}
+          # value is ALSO consumed by the pytest steps via env: (NOT template
           # interpolation into the run script), so it can never be expanded as
           # shell. Two layers against commit-message command injection on the
           # self-hosted runner. Only the four known suite names match, so prose /
@@ -1047,7 +1047,7 @@ jobs:
           # it here so it isn't even collected as skips.
           # Phase 4: inject `-k <pattern>` when [e2e: clerk/<pattern>] targeted; empty => full.
           # E2E_PATTERN arrives via env: (charset-restricted at source), never
-          # ${{ }}-interpolated into this script — no command-injection surface.
+          # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/ --ignore=tests/api_only/ --ignore=tests/crdt/ \
@@ -1561,7 +1561,7 @@ jobs:
           # uses eventually-consistent assertions.
           # Phase 4: inject `-k <pattern>` when [e2e: crdt/<pattern>] targeted; empty => full.
           # E2E_PATTERN arrives via env: (charset-restricted at source), never
-          # ${{ }}-interpolated into this script — no command-injection surface.
+          # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/crdt/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
@@ -2894,7 +2894,7 @@ jobs:
         run: |
           # Phase 4: inject `-k <pattern>` when [e2e: local/<pattern>] targeted; empty => full.
           # E2E_PATTERN arrives via env: (charset-restricted at source), never
-          # ${{ }}-interpolated into this script — no command-injection surface.
+          # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
           python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=180 -p no:cacheprovider --no-header
