@@ -7,12 +7,30 @@ one), so we create them here to satisfy VaultPlug.
 Provider-agnostic: works with both Clerk and local auth.
 """
 
+import os
+
 import pytest
+
+
+@pytest.fixture(scope="session")
+def qdrant_collection():
+    """Per-xdist-worker Qdrant collection so parallel writes don't collide.
+
+    Serial runs (no xdist) fall back to 'gw0' so the name is stable.
+    """
+    base = os.environ["QDRANT_COLLECTION"]
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    return f"{base}_{worker}"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_vaults(api_sync, api_iso):
-    """Create default vaults so vault-scoped endpoints don't 404."""
+    """Create default vaults so vault-scoped endpoints don't 404.
+
+    api_sync and api_iso are already per-worker (defined in the parent
+    conftest.py; each uses a worker-suffixed ts for the Clerk email and
+    a w{N}-suffixed vault name). No override needed here.
+    """
     api_sync.create_vault("e2e-api-only")
     api_iso.create_vault("e2e-api-only-iso")
 
