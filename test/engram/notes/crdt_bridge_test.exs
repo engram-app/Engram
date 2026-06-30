@@ -78,6 +78,20 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "project_doc/1" do
+    test "round-trips ingest then project back to equivalent plaintext" do
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert Engram.Notes.CrdtBridge.project_doc(doc) == "---\ntitle: Hi\n---\nbody\n"
+    end
+
+    test "body-only doc projects to body only" do
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "no frontmatter\n")
+      assert Engram.Notes.CrdtBridge.project_doc(doc) == "no frontmatter\n"
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.

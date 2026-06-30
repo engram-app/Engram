@@ -79,6 +79,14 @@ defmodule Engram.Notes.CrdtBridge do
     end
   end
 
+  @doc "Rebuild full note plaintext from the doc's frontmatter + body."
+  @spec project_doc(Yex.Doc.t()) :: String.t()
+  def project_doc(%Yex.Doc{} = doc) do
+    {order, values} = frontmatter_of(doc)
+    body = doc |> Yex.Doc.get_text(@text_name) |> Yex.Text.to_string()
+    Engram.Notes.Frontmatter.project(order, values, body)
+  end
+
   @doc "Current plaintext of the doc's content Y.Text."
   @spec text_of(Yex.Doc.t()) :: String.t()
   def text_of(%Yex.Doc{} = doc) do
