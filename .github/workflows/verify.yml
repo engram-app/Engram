@@ -3444,7 +3444,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3454,6 +3454,7 @@ jobs:
           LN="${{ needs.lint.result }}"
           SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
+          EA="${{ needs.e2e-api.result }}"
           ED="${{ needs.e2e-crdt.result }}"
           EL="${{ needs.e2e-local.result }}"
           EB="${{ needs.e2e-browser.result }}"
@@ -3480,6 +3481,13 @@ jobs:
           # to main, which is the path of record anyway.
           if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
             echo "::error::e2e-clerk failed: $EC"
+            exit 1
+          fi
+
+          # e2e-api carries the api_only contract slice; same Dependabot-skip
+          # tolerance as e2e-clerk (no Clerk/App secrets on Dependabot PRs).
+          if [ "$EA" != "success" ] && [ "$EA" != "skipped" ]; then
+            echo "::error::e2e-api failed: $EA"
             exit 1
           fi
 
