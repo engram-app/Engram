@@ -50,5 +50,19 @@ defmodule Engram.Notes.FrontmatterTest do
     test "malformed yaml returns :error" do
       assert Frontmatter.parse("title: : : broken\n  - bad indent\n") == :error
     end
+
+    test "nested map value encodes to JSON, nested keys do not appear in order" do
+      result = Frontmatter.parse("meta:\n  author: Todd\n")
+      assert result == {:ok, ["meta"], %{"meta" => "{\"author\":\"Todd\"}"}}
+    end
+
+    test "inline colon in value extracts key correctly" do
+      result = Frontmatter.parse("url: https://example.com\n")
+      assert result == {:ok, ["url"], %{"url" => "\"https://example.com\""}}
+    end
+
+    test "bare list (not a map) returns :error" do
+      assert Frontmatter.parse("- a\n- b\n") == :error
+    end
   end
 end

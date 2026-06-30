@@ -49,8 +49,9 @@ defmodule Engram.Notes.Frontmatter do
 
   @doc """
   Parse a frontmatter YAML block into `{:ok, order, values}` where `values` maps
-  each top-level key to the `Jason.encode!` of its parsed value, and `order` is
-  the source key order. Returns `:error` on malformed YAML.
+  each top-level key to the JSON-encoded string of its parsed value, and `order` is
+  the source key order. Returns `:error` on malformed YAML or if any value cannot
+  be JSON-encoded.
   """
   @spec parse(String.t()) :: {:ok, [String.t()], %{String.t() => String.t()}} | :error
   def parse(""), do: {:ok, [], %{}}
@@ -59,11 +60,31 @@ defmodule Engram.Notes.Frontmatter do
     case YamlElixir.read_from_string(block) do
       {:ok, map} when is_map(map) ->
         order = top_level_key_order(block, map)
-        values = Map.new(map, fn {k, v} -> {k, Jason.encode!(v)} end)
-        {:ok, order, values}
+
+        case encode_values(map) do
+          {:ok, values} -> {:ok, order, values}
+          :error -> :error
+        end
 
       _ ->
         :error
+    end
+  end
+
+  # Encode all map values to JSON strings. Returns {:ok, values_map} on success,
+  # :error if any value cannot be encoded (unencodable exotic types like tuples).
+  defp encode_values(map) do
+    result =
+      Enum.reduce_while(map, %{}, fn {k, v}, acc ->
+        case Jason.encode(v) do
+          {:ok, json_str} -> {:cont, Map.put(acc, k, json_str)}
+          :error -> {:halt, :error}
+        end
+      end)
+
+    case result do
+      :error -> :error
+      values_map -> {:ok, values_map}
     end
   end
 
