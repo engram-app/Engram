@@ -420,8 +420,18 @@ jobs:
     # Image consumed by e2e-clerk (any trigger, gated on e2e-cache-hit) and
     # e2e-local (push/workflow_dispatch only, gated on backend-cache-hit).
     # Build whenever at least one consumer will run.
+    #
+    # is-full forces a build on full runs (main / [ci-full] / force_full). The
+    # e2e + storage-database jobs `needs:` this image and, on full runs, their
+    # per-job skip flags are forced false — but a job whose dependency was
+    # SKIPPED is itself skipped regardless of its own if:. Without this clause a
+    # main merge that hit the coarse cache (e.g. a change outside BACKEND_HASH)
+    # skipped this prebuild, cascade-skipping every e2e/storage job, so "main
+    # runs everything full" silently did not hold. This makes the coarse gate
+    # is-full-aware to match the per-job layer.
     if: |
-      needs.fingerprint.outputs.e2e-cache-hit != 'true'
+      needs.fingerprint.outputs.is-full == 'true'
+      || needs.fingerprint.outputs.e2e-cache-hit != 'true'
       || (github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true')
     runs-on: [self-hosted, linux, x64, isolated]
     outputs:
@@ -3185,7 +3195,11 @@ jobs:
             marketing-md=_marketing/src/legal
 
   ci:
-    if: always() && (needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
+    # is-full keeps the aggregate gate alive on full runs (main / [ci-full] /
+    # force_full) even when the coarse cache hit — otherwise ci skips on main
+    # and a real e2e/unit failure there is never gated. Mirrors the per-job +
+    # prebuild is-full forcing so main is genuinely the full safety net.
+    if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
     needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
