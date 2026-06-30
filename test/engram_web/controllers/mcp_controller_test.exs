@@ -656,4 +656,81 @@ defmodule EngramWeb.McpControllerTest do
     build_conn()
     |> put_req_header("authorization", auth_header)
   end
+
+  # ---------------------------------------------------------------------------
+  # Trapped tool-handler errors. Regression for the prod 5xx: a tool raised a
+  # function_clause error, the catch trapped it, then the formatter called
+  # Exception.message/1 on the bare :function_clause atom — which itself has no
+  # clause for an atom and raised, escaping the trap into a 500. The formatter
+  # must (1) never crash on a non-exception reason and (2) never embed the
+  # offending term in the client message (it can carry decrypted %Note{} data).
+  # ---------------------------------------------------------------------------
+  describe "safe_trapped_message/3" do
+    test "returns a safe string for a bare error reason instead of crashing" do
+      msg = EngramWeb.McpController.safe_trapped_message(:error, :function_clause, [])
+
+      assert is_binary(msg)
+      assert msg =~ "FunctionClauseError"
+    end
+
+    test "does not leak the offending term for an exception that carries data" do
+      secret = "SUPER_SECRET_DECRYPTED_NOTE_BODY"
+
+      reason =
+        try do
+          Map.fetch!(%{unrelated: secret}, :missing_key)
+        rescue
+          e -> e
+        end
+
+      msg = EngramWeb.McpController.safe_trapped_message(:error, reason, [])
+
+      assert is_binary(msg)
+      refute msg =~ secret
+      assert msg =~ "KeyError"
+    end
+
+    test "does not leak a tuple reason term carrying decrypted data" do
+      secret = "DECRYPTED_NOTE_FROM_CRYPTO_PATH"
+
+      msg = EngramWeb.McpController.safe_trapped_message(:error, {:badmatch, %{body: secret}}, [])
+
+      assert is_binary(msg)
+      refute msg =~ secret
+      assert msg =~ "MatchError"
+    end
+
+    test "exit and throw return generic messages without the reason term" do
+      assert EngramWeb.McpController.safe_trapped_message(:exit, {:shutdown, :secret_detail}, []) ==
+               "Process exited"
+
+      assert EngramWeb.McpController.safe_trapped_message(:throw, %{secret: "leak"}, []) ==
+               "Unexpected throw"
+    end
+  end
+
+  describe "run_tool_handler/4 trap path" do
+    test "a crashing handler returns a clean error and logs the tool name" do
+      crashing = %{
+        name: "search_notes",
+        handler: fn _user, _vault, _args -> :erlang.error(:function_clause) end
+      }
+
+      {{result, status, _bytes}, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          EngramWeb.McpController.run_tool_handler(crashing, :user, :vault, %{})
+        end)
+
+      # No 500 — the trap produces a structured MCP error result, not a raise.
+      assert status == :error
+      {:ok, payload} = result
+      assert payload["isError"] == true
+      assert hd(payload["content"])["text"] =~ "Tool execution failed (FunctionClauseError)"
+
+      # The server-side log must name the tool so future occurrences are
+      # diagnosable (the original stacktrace is trapped and otherwise lost).
+      assert log =~ "mcp tool dispatch trapped"
+      assert log =~ "search_notes"
+    end
+  end
 end

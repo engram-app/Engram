@@ -145,7 +145,8 @@ defmodule EngramWeb.McpController do
     result
   end
 
-  defp run_tool_handler(tool, user, vault, args) do
+  @doc false
+  def run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
         result = {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
@@ -170,17 +171,13 @@ defmodule EngramWeb.McpController do
       Logger.error(
         "mcp tool dispatch trapped",
         Engram.Logger.Metadata.with_category(:error, :http,
+          tool: tool.name,
           kind: kind,
           reason_label: classify_throw_reason(reason)
         )
       )
 
-      message =
-        case kind do
-          :error -> Exception.message(reason)
-          :exit -> "Process exited"
-          :throw -> "Unexpected throw"
-        end
+      message = safe_trapped_message(kind, reason, __STACKTRACE__)
 
       result =
         {:ok,
@@ -191,6 +188,27 @@ defmodule EngramWeb.McpController do
 
       {result, :error, byte_size_safe(message)}
   end
+
+  # Builds a client-safe message for a trapped tool-handler failure.
+  #
+  # For `:error`, the raw `reason` may be a bare term (e.g. the atom
+  # `:function_clause`) rather than an exception struct, so we cannot call
+  # `Exception.message/1` on it directly — that itself raises and would escape
+  # the trap into a 500. `Exception.normalize/3` coerces any reason into an
+  # exception struct. We surface only its struct name (low-cardinality, no user
+  # data) and never its message, which can embed the offending term — including
+  # decrypted %Note{} fields. Full detail is logged server-side above.
+  @doc false
+  def safe_trapped_message(:error, reason, stacktrace) do
+    exception = Exception.normalize(:error, reason, stacktrace)
+    # Module name only (e.g. "KeyError") — never inspect/Exception.message the
+    # struct, whose contents can embed decrypted %Note{} fields (T3.0.6).
+    type = exception.__struct__ |> Module.split() |> List.last()
+    "Tool execution failed (#{type})"
+  end
+
+  def safe_trapped_message(:exit, _reason, _stacktrace), do: "Process exited"
+  def safe_trapped_message(:throw, _reason, _stacktrace), do: "Unexpected throw"
 
   defp byte_size_safe(s) when is_binary(s), do: byte_size(s)
   defp byte_size_safe(_), do: 0
