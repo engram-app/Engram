@@ -73,11 +73,13 @@ defmodule Engram.Notes.Frontmatter do
 
   # Encode all map values to JSON strings. Returns {:ok, values_map} on success,
   # :error if any value cannot be encoded (unencodable exotic types like tuples).
+  # Values are deep-sorted before encoding so nested-map keys are canonical
+  # (lexicographic, matching JS JSON.stringify with sorted keys in the plugin).
   @doc false
   def encode_values(map) do
     result =
       Enum.reduce_while(map, %{}, fn {k, v}, acc ->
-        case Jason.encode(v) do
+        case Jason.encode(deep_sort(v)) do
           {:ok, json_str} -> {:cont, Map.put(acc, k, json_str)}
           {:error, _} -> {:halt, :error}
         end
@@ -88,6 +90,22 @@ defmodule Engram.Notes.Frontmatter do
       values_map -> {:ok, values_map}
     end
   end
+
+  # Recursively sort map keys for canonical JSON encoding. Arrays keep their
+  # order. Scalars (string, number, bool, nil) are returned as-is. Unencodable
+  # values (e.g. tuples) pass through unchanged so Jason.encode still returns
+  # {:error, _} on them, preserving the :halt/:error path in encode_values/1.
+  defp deep_sort(value) when is_map(value) do
+    Jason.OrderedObject.new(
+      value
+      |> Enum.sort_by(fn {k, _} -> k end)
+      |> Enum.map(fn {k, v} -> {k, deep_sort(v)} end)
+    )
+  end
+
+  defp deep_sort(value) when is_list(value), do: Enum.map(value, &deep_sort/1)
+
+  defp deep_sort(value), do: value
 
   @doc """
   Render ordered keys and JSON-encoded values into a YAML block (no fences).

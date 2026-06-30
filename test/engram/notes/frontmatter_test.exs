@@ -56,6 +56,16 @@ defmodule Engram.Notes.FrontmatterTest do
       assert result == {:ok, ["meta"], %{"meta" => "{\"author\":\"Todd\"}"}}
     end
 
+    test "nested map value uses recursively sorted keys (canonical JSON, matches plugin)" do
+      result = Frontmatter.parse("meta:\n  b: 2\n  a: 1\n")
+      assert result == {:ok, ["meta"], %{"meta" => "{\"a\":1,\"b\":2}"}}
+    end
+
+    test "deeply nested map value uses recursively sorted keys at all levels" do
+      result = Frontmatter.parse("outer:\n  z:\n    y: 1\n    x: 2\n")
+      assert result == {:ok, ["outer"], %{"outer" => "{\"z\":{\"x\":2,\"y\":1}}"}}
+    end
+
     test "inline colon in value extracts key correctly" do
       result = Frontmatter.parse("url: https://example.com\n")
       assert result == {:ok, ["url"], %{"url" => "\"https://example.com\""}}
