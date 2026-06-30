@@ -51,6 +51,78 @@ defmodule Engram.Notes.CrdtBridgeTest do
   # code units. The Gate 0 spike only exercised ASCII; an astral-plane edit
   # (emoji are surrogate pairs = 2 UTF-16 units) is where a bytes/graphemes
   # offset corrupts the doc. These round-trips prove the unit is correct.
+  describe "frontmatter accessors" do
+    test "frontmatter_of returns empty order and values for a fresh doc" do
+      doc = CrdtBridge.new_doc()
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+    end
+
+    test "doc_schema_version is 2" do
+      assert CrdtBridge.doc_schema_version() == 2
+    end
+  end
+
+  describe "text_of vs body_of" do
+    test "text_of returns the full projected note; body_of returns body only" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.text_of(doc) == "---\ntitle: Hi\n---\nbody\n"
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+  end
+
+  describe "ingest_plaintext/2" do
+    test "splits frontmatter into the map/order and body into the text" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+
+    test "malformed frontmatter keeps the whole text as body" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\nbroken: : :\n---\nbody\n")
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.text_of(doc) == "---\nbroken: : :\n---\nbody\n"
+    end
+  end
+
+  describe "project_doc/1" do
+    test "round-trips ingest then project back to equivalent plaintext" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      assert CrdtBridge.project_doc(doc) == "---\ntitle: Hi\n---\nbody\n"
+    end
+
+    test "body-only doc projects to body only" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "no frontmatter\n")
+      assert CrdtBridge.project_doc(doc) == "no frontmatter\n"
+    end
+  end
+
+  describe "merge_plaintext/2 with frontmatter" do
+    test "ingests frontmatter and returns projected text + re-encodable state" do
+      {:ok, %{state: state, text: text}} =
+        CrdtBridge.merge_plaintext(nil, "---\ntitle: Hi\n---\nbody\n")
+
+      assert text == "---\ntitle: Hi\n---\nbody\n"
+      assert is_binary(state)
+
+      {:ok, doc2} = CrdtBridge.doc_from_state(state)
+      assert CrdtBridge.frontmatter_of(doc2) == {["title"], %{"title" => "\"Hi\""}}
+    end
+  end
+
+  describe "flatten/1 preserves frontmatter" do
+    test "flattened doc keeps frontmatter and body" do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      {:ok, %{doc: flat}} = CrdtBridge.flatten(doc)
+      assert CrdtBridge.text_of(flat) == "---\ntitle: Hi\n---\nbody\n"
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.

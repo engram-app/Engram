@@ -41,7 +41,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     socket_a_raw = user_socket(user)
 
     {:ok, _, joined_a} =
-      subscribe_and_join(socket_a_raw, EngramWeb.CrdtChannel, topic, %{})
+      subscribe_and_join(socket_a_raw, EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
 
     Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined_a.channel_pid)
 
@@ -132,7 +132,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     socket_b_raw = user_socket(user)
 
     {:ok, _, joined_b} =
-      subscribe_and_join(socket_b_raw, EngramWeb.CrdtChannel, topic, %{})
+      subscribe_and_join(socket_b_raw, EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
 
     Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined_b.channel_pid)
 

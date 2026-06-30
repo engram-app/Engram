@@ -15,13 +15,38 @@ defmodule Engram.Notes.CrdtBridge do
 
   import Bitwise
 
+  alias Engram.Notes.Frontmatter
+
   @text_name "content"
+  @frontmatter_name "frontmatter"
+  @order_name "frontmatter_order"
+  @doc_schema_version 2
   @flatten_bytes 500_000
   @flatten_clients 1_000
 
   @doc "The shared Y.Text key holding note body content."
   @spec text_name() :: String.t()
   def text_name, do: @text_name
+
+  @doc "The CRDT doc schema version. Bump on any incompatible doc-shape change."
+  # Spec is the exact literal, not pos_integer(): the project's dialyzer flags
+  # overspecs (contract_supertype) and this returns the compile-time constant.
+  # Bump both @doc_schema_version and this spec together on a doc-shape change.
+  @spec doc_schema_version() :: 2
+  def doc_schema_version, do: @doc_schema_version
+
+  @doc """
+  Current frontmatter order list and JSON-encoded values map of a doc.
+
+  Returns `{[], %{}}` for a fresh doc where neither the `@order_name` Y.Array
+  nor the `@frontmatter_name` Y.Map have ever been written to.
+  """
+  @spec frontmatter_of(Yex.Doc.t()) :: {[String.t()], %{String.t() => String.t()}}
+  def frontmatter_of(%Yex.Doc{} = doc) do
+    order = doc |> Yex.Doc.get_array(@order_name) |> Yex.Array.to_list()
+    values = doc |> Yex.Doc.get_map(@frontmatter_name) |> Yex.Map.to_map()
+    {order, values}
+  end
 
   @doc """
   A fresh Y.Doc with the UTF-16 offset kind. The SINGLE source of truth for
@@ -59,9 +84,20 @@ defmodule Engram.Notes.CrdtBridge do
     end
   end
 
-  @doc "Current plaintext of the doc's content Y.Text."
+  @doc "Rebuild full note plaintext from the doc's frontmatter + body."
+  @spec project_doc(Yex.Doc.t()) :: String.t()
+  def project_doc(%Yex.Doc{} = doc) do
+    {order, values} = frontmatter_of(doc)
+    Frontmatter.project(order, values, body_of(doc))
+  end
+
+  @doc "Full projected note plaintext (frontmatter + body)."
   @spec text_of(Yex.Doc.t()) :: String.t()
-  def text_of(%Yex.Doc{} = doc) do
+  def text_of(%Yex.Doc{} = doc), do: project_doc(doc)
+
+  @doc "Body-only plaintext (the content Y.Text, no frontmatter)."
+  @spec body_of(Yex.Doc.t()) :: String.t()
+  def body_of(%Yex.Doc{} = doc) do
     doc |> Yex.Doc.get_text(@text_name) |> Yex.Text.to_string()
   end
 
@@ -72,14 +108,12 @@ defmodule Engram.Notes.CrdtBridge do
   @spec merge_plaintext(binary() | nil, String.t()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
   def merge_plaintext(state, incoming) when is_binary(incoming) do
-    with {:ok, doc} <- doc_from_state(state) do
-      text = Yex.Doc.get_text(doc, @text_name)
-      :ok = diff_into_text(text, incoming)
-
-      case Yex.encode_state_as_update(doc) do
-        {:ok, encoded} -> {:ok, %{state: encoded, text: Yex.Text.to_string(text)}}
-        {:error, reason} -> {:error, {:encode_failed, reason}}
-      end
+    with {:ok, doc} <- doc_from_state(state),
+         :ok <- ingest_plaintext(doc, incoming),
+         {:ok, encoded} <- Yex.encode_state_as_update(doc) do
+      {:ok, %{state: encoded, text: project_doc(doc)}}
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -128,6 +162,50 @@ defmodule Engram.Notes.CrdtBridge do
   end
 
   @doc """
+  Ingest full note plaintext into the doc's frontmatter Y.Map + order Y.Array and
+  body Y.Text. Only changed map keys are written. Malformed frontmatter falls
+  back to treating the entire text as body.
+  """
+  @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
+  def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
+    {fm_block, body} = Frontmatter.split(plaintext)
+
+    {order, values, body} =
+      case fm_block && Frontmatter.parse(fm_block) do
+        {:ok, order, values} -> {order, values, body}
+        # nil (no frontmatter) or :error (malformed) -> whole text is body
+        _ -> {[], %{}, plaintext}
+      end
+
+    apply_frontmatter(doc, order, values)
+    text = Yex.Doc.get_text(doc, @text_name)
+    :ok = diff_into_text(text, body)
+    :ok
+  end
+
+  defp apply_frontmatter(doc, order, values) do
+    map = Yex.Doc.get_map(doc, @frontmatter_name)
+    current = Yex.Map.to_map(map)
+
+    # Upsert changed keys.
+    Enum.each(values, fn {k, v} ->
+      if Map.get(current, k) != v, do: Yex.Map.set(map, k, v)
+    end)
+
+    # Delete keys no longer present.
+    Enum.each(Map.keys(current), fn k ->
+      unless Map.has_key?(values, k), do: Yex.Map.delete(map, k)
+    end)
+
+    # Replace the order array wholesale (small list; simplest correct form).
+    arr = Yex.Doc.get_array(doc, @order_name)
+    len = arr |> Yex.Array.to_list() |> length()
+    if len > 0, do: Yex.Array.delete_range(arr, 0, len)
+    if order != [], do: Yex.Array.insert_list(arr, 0, order)
+    :ok
+  end
+
+  @doc """
   Distinct client IDs present in the doc's state vector.
 
   The y-js v1 state vector is LEB128-encoded: a leading varint gives the
@@ -158,13 +236,12 @@ defmodule Engram.Notes.CrdtBridge do
   """
   @spec flatten(Yex.Doc.t()) :: {:ok, %{doc: Yex.Doc.t(), state: binary()}} | {:error, term()}
   def flatten(%Yex.Doc{} = doc) do
-    text = text_of(doc)
     fresh = new_doc()
-    Yex.Text.insert(Yex.Doc.get_text(fresh, @text_name), 0, text)
+    :ok = ingest_plaintext(fresh, project_doc(doc))
 
     case Yex.encode_state_as_update(fresh) do
       {:ok, state} -> {:ok, %{doc: fresh, state: state}}
-      {:error, reason} -> {:error, {:encode_failed, reason}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

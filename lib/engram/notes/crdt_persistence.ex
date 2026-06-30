@@ -191,18 +191,17 @@ defmodule Engram.Notes.CrdtPersistence do
     length(rows)
   end
 
-  # Seeds a fresh doc's text from the note's plaintext content. Used only when
-  # the note has no CRDT state yet (see bind/3) so discovery delivers the body.
+  # Seeds a fresh doc from the note's plaintext content via the frontmatter
+  # codec. Used only when the note has no CRDT state yet (see bind/3) so
+  # discovery delivers the body. Frontmatter is split into Y.Map("frontmatter")
+  # + Y.Array("frontmatter_order") and only the body lands in the body Y.Text,
+  # ensuring concurrent frontmatter edits engage the LWW per-key path.
   # maybe_decrypt_note_fields/2 also UTF-8-scrubs the content, keeping the Yjs
   # text JSON-safe. A nil/empty body seeds nothing (a blank note stays blank).
   defp seed_from_content(doc, %Note{} = note, user) do
     case Crypto.maybe_decrypt_note_fields(note, user) do
       {:ok, %Note{content: content}} when is_binary(content) and content != "" ->
-        doc
-        |> Yex.Doc.get_text(CrdtBridge.text_name())
-        |> Yex.Text.insert(0, content)
-
-        :ok
+        :ok = CrdtBridge.ingest_plaintext(doc, content)
 
       _ ->
         :ok

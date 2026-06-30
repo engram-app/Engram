@@ -25,7 +25,17 @@ defmodule EngramWeb.CrdtChannel do
   #   room_doc :: %{room_pid => doc_id}  (reverse map for broadcast routing)
 
   @impl true
-  def join("crdt:" <> ids, _params, socket) do
+  def join("crdt:" <> ids, params, socket) do
+    proto = Map.get(params, "crdt_proto", 1)
+
+    if proto < Engram.Notes.CrdtBridge.doc_schema_version() do
+      {:error, %{reason: "crdt_proto_too_old", min: Engram.Notes.CrdtBridge.doc_schema_version()}}
+    else
+      join_authenticated("crdt:" <> ids, socket)
+    end
+  end
+
+  defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
 
     user_id_str = to_string(user.id)

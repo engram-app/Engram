@@ -20,7 +20,7 @@ defmodule EngramWeb.CrdtChannelTest do
         socket,
         EngramWeb.CrdtChannel,
         "crdt:#{user.id}:#{vault.id}",
-        %{}
+        %{"crdt_proto" => 2}
       )
 
     {:ok, _, joined} = result
@@ -49,6 +49,36 @@ defmodule EngramWeb.CrdtChannelTest do
                  socket,
                  EngramWeb.CrdtChannel,
                  "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
+    test "rejects join when crdt_proto is below server schema version", %{
+      user: user,
+      vault: vault
+    } do
+      socket = user_socket(user)
+
+      assert {:error, %{reason: "crdt_proto_too_old", min: 2}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 1}
+               )
+    end
+
+    test "rejects join when crdt_proto is absent (defaults to 1)", %{
+      user: user,
+      vault: vault
+    } do
+      socket = user_socket(user)
+
+      assert {:error, %{reason: "crdt_proto_too_old", min: 2}} =
+               subscribe_and_join(
+                 socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
                  %{}
                )
     end
@@ -65,7 +95,7 @@ defmodule EngramWeb.CrdtChannelTest do
                  socket,
                  EngramWeb.CrdtChannel,
                  "crdt:#{user.id}:#{vault.id}",
-                 %{}
+                 %{"crdt_proto" => 2}
                )
     end
 
@@ -79,7 +109,7 @@ defmodule EngramWeb.CrdtChannelTest do
                  socket,
                  EngramWeb.CrdtChannel,
                  "crdt:#{user.id}:#{other_vault.id}",
-                 %{}
+                 %{"crdt_proto" => 2}
                )
     end
 
@@ -91,7 +121,7 @@ defmodule EngramWeb.CrdtChannelTest do
                  socket,
                  EngramWeb.CrdtChannel,
                  "crdt:#{user.id}:not-a-uuid",
-                 %{}
+                 %{"crdt_proto" => 2}
                )
     end
   end
