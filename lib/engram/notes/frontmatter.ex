@@ -73,12 +73,13 @@ defmodule Engram.Notes.Frontmatter do
 
   # Encode all map values to JSON strings. Returns {:ok, values_map} on success,
   # :error if any value cannot be encoded (unencodable exotic types like tuples).
-  defp encode_values(map) do
+  @doc false
+  def encode_values(map) do
     result =
       Enum.reduce_while(map, %{}, fn {k, v}, acc ->
         case Jason.encode(v) do
           {:ok, json_str} -> {:cont, Map.put(acc, k, json_str)}
-          :error -> {:halt, :error}
+          {:error, _} -> {:halt, :error}
         end
       end)
 

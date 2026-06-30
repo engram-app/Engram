@@ -65,4 +65,19 @@ defmodule Engram.Notes.FrontmatterTest do
       assert Frontmatter.parse("- a\n- b\n") == :error
     end
   end
+
+  describe "encode_values/1" do
+    # Route: YamlElixir special floats (.nan/.inf) are parsed to atoms, which
+    # Jason encodes as strings, so they do NOT trigger an encode error. The
+    # encode-failure branch is tested directly via a map containing a tuple
+    # value, which is unencodable by the Jason.Encoder protocol.
+    test "returns :error when a value is unencodable (e.g. a tuple)" do
+      assert Frontmatter.encode_values(%{"key" => {:not, :encodable}}) == :error
+    end
+
+    test "returns {:ok, values_map} when all values are encodable" do
+      assert Frontmatter.encode_values(%{"a" => 1, "b" => "hello"}) ==
+               {:ok, %{"a" => "1", "b" => "\"hello\""}}
+    end
+  end
 end
