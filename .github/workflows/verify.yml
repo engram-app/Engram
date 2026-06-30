@@ -588,6 +588,22 @@ jobs:
             echo "Backend + e2e content already shipped (fingerprint cache-hit): no new image will build, version bump not required."
             exit 0
           fi
+          # Path-aware bump gate. The CACHE_HIT_BOTH signal above is NOT a reliable
+          # "is this deployable?" test: verify.yml is deliberately inside BACKEND_HASH
+          # (so a CI-logic change forces a full re-run), which means a CI-only branch
+          # MISSES the fingerprint cache yet builds NO new image. Decouple the deploy
+          # question from the CI-fingerprint by diffing the actual runtime paths against
+          # main; require a bump only when one of them moved. A real lib/priv/config/
+          # frontend/Dockerfile/mix.* change still demands a bump (and build-and-publish
+          # still errors on a version-exists collision), so this only relaxes the gate
+          # for non-deployable (CI/docs/test/lint-config) branches.
+          DEPLOYABLE=$(git diff --name-only origin/main...HEAD -- \
+            lib priv config frontend Dockerfile entrypoint.sh .dockerignore mix.exs mix.lock)
+          if [ -z "$DEPLOYABLE" ]; then
+            echo "No deployable paths changed vs main (CI/docs/test/lint-config only) — version bump not required."
+            exit 0
+          fi
+          echo "::group::Deployable paths changed vs main"; echo "$DEPLOYABLE"; echo "::endgroup::"
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           MAIN_VERSION=$(git show origin/main:mix.exs | grep 'version:' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ "$BRANCH_VERSION" = "$MAIN_VERSION" ]; then
