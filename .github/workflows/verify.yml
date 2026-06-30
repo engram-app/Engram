@@ -555,16 +555,22 @@ jobs:
         uses: actions/cache@v6
         with:
           path: _build/dev
+          # No restore-keys: the key is mix.lock-scoped, so a restore-key prefix
+          # hit would reuse a _build compiled against a DIFFERENT dependency set
+          # after a lockfile change. Incremental compile on such a stale _build
+          # crashes protocol consolidation (FunctionClauseError in
+          # :elixir_erl.dynamic_form/1). A lockfile change should cold-compile.
           key: ${{ steps.keys.outputs.build-dev }}
-          restore-keys: mix-build-dev-v2-${{ steps.beam.outputs.tag }}-
 
       - name: Cache _build/test
         id: cache-build-test
         uses: actions/cache@v6
         with:
           path: _build/test
+          # No restore-keys: see the _build/dev cache above. A restore-key hit
+          # across a mix.lock change reuses a _build built against different deps
+          # and crashes protocol consolidation on the incremental compile.
           key: ${{ steps.keys.outputs.build-test }}
-          restore-keys: mix-build-test-v2-${{ steps.beam.outputs.tag }}-
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — the cache's `restore-keys`
@@ -591,8 +597,14 @@ jobs:
           pid_dev=$!
           MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
           pid_test=$!
-          wait "$pid_dev";  rc_dev=$?
-          wait "$pid_test"; rc_test=$?
+          # Capture exit codes WITHOUT aborting under `set -e`. A bare
+          # `wait "$pid"; rc=$?` lets a failing wait trip `set -e` and kill the
+          # script before the logs below print, hiding the compile error
+          # entirely (every failed compile showed up as an empty log). `|| rc=$?`
+          # tolerates the failure so the cat + final gate still run.
+          rc_dev=0; rc_test=0
+          wait "$pid_dev"  || rc_dev=$?
+          wait "$pid_test" || rc_test=$?
           echo "::group::Compile :dev output";  cat /tmp/compile-dev.log;  echo "::endgroup::"
           echo "::group::Compile :test output"; cat /tmp/compile-test.log; echo "::endgroup::"
           [ "$rc_dev" -eq 0 ] && [ "$rc_test" -eq 0 ]
