@@ -37,7 +37,7 @@ class TestRenameRepathSearch:
     """A folder rename must move the note's Qdrant points to the new
     folder_hmac without re-embedding, so folder-filtered search follows it."""
 
-    def test_folder_rename_repaths_points_in_qdrant(self, api_sync):
+    def test_folder_rename_repaths_points_in_qdrant(self, api_sync, qdrant_collection):
         vaults = api_sync.list_vaults()
         assert vaults, "api_sync should have a registered vault"
         vault_id = vaults[0]["id"]
@@ -66,7 +66,7 @@ class TestRenameRepathSearch:
         assert resp.ok, f"upsert {old_path} failed: {resp.status_code} {resp.text[:300]}"
 
         old_path_hmac = latest_note_path_hmac(vault_id)
-        wait_for_qdrant_indexed(vault_id, old_path_hmac, old_path, timeout=90)
+        wait_for_qdrant_indexed(vault_id, old_path_hmac, old_path, timeout=90, collection=qdrant_collection)
 
         # 1a. Baseline: folder-scoped search finds it under the OLD folder.
         before = self._search(client, query, folder=src_folder, limit=10)
