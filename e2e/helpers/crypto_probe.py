@@ -27,7 +27,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
-_QDRANT_COLLECTION_DEFAULT = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
@@ -72,11 +72,10 @@ def latest_note_path_hmac(vault_id: str) -> str:
     return val
 
 
-def _qdrant_scroll(vault_id: str, limit: int = 100, collection: str | None = None) -> list[dict]:
+def _qdrant_scroll(vault_id: str, limit: int = 100) -> list[dict]:
     """POST /collections/{coll}/points/scroll with a vault_id filter."""
-    coll = collection or _QDRANT_COLLECTION_DEFAULT
     resp = requests.post(
-        f"{QDRANT_URL}/collections/{coll}/points/scroll",
+        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
         json={
             "filter": {"must": [{"key": "vault_id", "match": {"value": str(vault_id)}}]},
             "limit": limit,
@@ -89,11 +88,11 @@ def _qdrant_scroll(vault_id: str, limit: int = 100, collection: str | None = Non
     return resp.json()["result"]["points"]
 
 
-def assert_qdrant_ciphertext(vault_id: str, min_chunks: int = 1, collection: str | None = None) -> None:
+def assert_qdrant_ciphertext(vault_id: str, min_chunks: int = 1) -> None:
     """Assert Qdrant payload for this vault contains ciphertext, not plaintext.
     Phase 4 spec: every encrypted vault has its text/title/heading_path
     replaced with *_ciphertext + *_nonce. Plaintext keys are absent."""
-    points = _qdrant_scroll(vault_id, collection=collection)
+    points = _qdrant_scroll(vault_id)
     assert len(points) >= min_chunks, (
         f"Expected >= {min_chunks} Qdrant points for vault_id={vault_id}, got {len(points)}"
     )
@@ -124,11 +123,7 @@ def _looks_base64(s: str) -> bool:
 
 
 def wait_for_qdrant_indexed(
-    vault_id: str,
-    path_hmac_b64: str,
-    path: str | None = None,
-    timeout: float = 30.0,
-    collection: str | None = None,
+    vault_id: str, path_hmac_b64: str, path: str | None = None, timeout: float = 30.0
 ) -> None:
     """Poll Qdrant for a point whose `path_hmac` matches. Raises TimeoutError on
     timeout. Needed before probing Qdrant in tests because the embed worker is
@@ -138,16 +133,12 @@ def wait_for_qdrant_indexed(
     removed plaintext `source_path`. Get `path_hmac_b64` from
     `latest_note_path_hmac/1` right after seeding. `path` is plaintext for the
     error message only.
-
-    Pass `collection` to address a per-worker collection (xdist). Defaults to
-    the ``QDRANT_COLLECTION`` env var for serial / non-xdist runs.
     """
-    coll = collection or _QDRANT_COLLECTION_DEFAULT
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             resp = requests.post(
-                f"{QDRANT_URL}/collections/{coll}/points/scroll",
+                f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
                 json={
                     "filter": {
                         "must": [

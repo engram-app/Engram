@@ -18,30 +18,31 @@ from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
 
 ENGRAM_API_URL = os.environ.get("ENGRAM_API_URL", "http://localhost:8100/api")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 
-def _collection_info(collection: str):
+def _collection_info():
     resp = requests.get(
-        f"{QDRANT_URL}/collections/{collection}", timeout=10
+        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}", timeout=10
     )
     resp.raise_for_status()
     return resp.json()["result"]
 
 
-def _wait_for_collection(collection: str, timeout=30):
+def _wait_for_collection(timeout=30):
     """Poll until the Qdrant collection exists (created on first indexing)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            return _collection_info(collection)
+            return _collection_info()
         except (requests.HTTPError, requests.ConnectionError, KeyError):
             time.sleep(2)
-    raise TimeoutError(f"Collection {collection} not created within {timeout}s")
+    raise TimeoutError(f"Collection {QDRANT_COLLECTION} not created within {timeout}s")
 
 
 @pytest.fixture(scope="module")
-def seeded_note(api_sync, qdrant_collection):
+def seeded_note(api_sync):
     """Create a note to trigger ensure_collection + indexing pipeline."""
     vaults = api_sync.list_vaults()
     assert vaults, "At least one vault must exist (created by api_only conftest)"
@@ -62,15 +63,9 @@ def seeded_note(api_sync, qdrant_collection):
     # points by its non-sensitive path_hmac, read from the notes row.
     path_hmac = latest_note_path_hmac(vault_id)
 
-    _wait_for_collection(qdrant_collection)
+    _wait_for_collection()
 
-    return {
-        "path": path,
-        "api": scoped,
-        "vault_id": vault_id,
-        "path_hmac": path_hmac,
-        "qdrant_collection": qdrant_collection,
-    }
+    return {"path": path, "api": scoped, "vault_id": vault_id, "path_hmac": path_hmac}
 
 
 class TestQdrantConfig:
@@ -78,12 +73,12 @@ class TestQdrantConfig:
 
     def test_collection_exists(self, seeded_note):
         """The app should have created the collection after indexing."""
-        info = _collection_info(seeded_note["qdrant_collection"])
+        info = _collection_info()
         assert info is not None, "Collection should exist"
 
     def test_vector_dimensions_1024(self, seeded_note):
         """Vectors should be 1024d to match Voyage prod config."""
-        info = _collection_info(seeded_note["qdrant_collection"])
+        info = _collection_info()
         # Named vectors (#595 hybrid search): the dense vector lives under the
         # "dense" key, alongside the "keyword" sparse vector.
         vectors = info["config"]["params"]["vectors"]["dense"]
@@ -94,7 +89,7 @@ class TestQdrantConfig:
 
     def test_binary_quantization_enabled(self, seeded_note):
         """Binary quantization should be enabled with always_ram=true (prod parity)."""
-        info = _collection_info(seeded_note["qdrant_collection"])
+        info = _collection_info()
         quant_config = info["config"].get("quantization_config", {})
         binary_config = quant_config.get("binary", {})
         assert binary_config.get("always_ram") is True, (
@@ -119,8 +114,7 @@ class TestSearchRoundTrip:
         # CI load. This doesn't mask perf regressions — the RDS/ECS health
         # alarms (#259) still fire on real slowdowns.
         wait_for_qdrant_indexed(
-            seeded_note["vault_id"], path_hmac, note_path, timeout=120,
-            collection=seeded_note["qdrant_collection"],
+            seeded_note["vault_id"], path_hmac, note_path, timeout=120
         )
 
         # Step 2: Embed query directly via Ollama
@@ -137,7 +131,7 @@ class TestSearchRoundTrip:
 
         # Step 3: Search Qdrant directly with the embedded vector
         search_resp = requests.post(
-            f"{QDRANT_URL}/collections/{seeded_note['qdrant_collection']}/points/query",
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/query",
             json={
                 "query": vector,
                 "using": "dense",
@@ -179,8 +173,7 @@ class TestSearchAPI:
         # Wait for the note to be indexed. #590: match by path_hmac, not the
         # removed plaintext source_path.
         wait_for_qdrant_indexed(
-            seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60,
-            collection=seeded_note["qdrant_collection"],
+            seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60
         )
 
         # Hit the Engram search API (not Qdrant directly)

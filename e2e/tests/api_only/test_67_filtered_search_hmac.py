@@ -47,7 +47,7 @@ class TestFilteredSearchOnEncryptedVault:
     """Folder + tag filters on /api/search must translate to HMAC filters
     in Qdrant and still narrow the result set."""
 
-    def test_folder_and_tag_filters_compose(self, api_sync, qdrant_collection):
+    def test_folder_and_tag_filters_compose(self, api_sync):
         vaults = api_sync.list_vaults()
         assert vaults, "api_sync should have a registered vault"
         vault_id = vaults[0]["id"]
@@ -88,7 +88,7 @@ class TestFilteredSearchOnEncryptedVault:
 
         # 3. Wait for the embed worker to land all three in Qdrant
         for path, _, _ in note_specs:
-            wait_for_qdrant_indexed(vault_id, path_hmacs[path], path, timeout=90, collection=qdrant_collection)
+            wait_for_qdrant_indexed(vault_id, path_hmacs[path], path, timeout=90)
 
         # 3a. Sanity — confirm frontmatter parsing landed `target_tag` on the
         #     target note. Without this guard, a future regression in
