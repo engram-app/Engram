@@ -236,7 +236,7 @@ defmodule Engram.Notes.CrdtBridge do
 
     case Yex.encode_state_as_update(fresh) do
       {:ok, state} -> {:ok, %{doc: fresh, state: state}}
-      {:error, reason} -> {:error, {:encode_failed, reason}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

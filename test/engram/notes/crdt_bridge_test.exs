@@ -114,6 +114,15 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "flatten/1 preserves frontmatter" do
+    test "flattened doc keeps frontmatter and body" do
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
+      {:ok, %{doc: flat}} = Engram.Notes.CrdtBridge.flatten(doc)
+      assert Engram.Notes.CrdtBridge.text_of(flat) == "---\ntitle: Hi\n---\nbody\n"
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.
