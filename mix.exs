@@ -86,6 +86,10 @@ defmodule Engram.MixProject do
       # Markdown parsing
       {:earmark, "~> 1.4"},
 
+      # YAML parsing and generation for frontmatter codec
+      {:yaml_elixir, "~> 2.11"},
+      {:ymlr, "~> 5.1"},
+
       # Yjs CRDT engine (Rust `yrs` via Rustler NIF). Stock Hex release with
       # precompiled binaries — NO fork, NO DirtyCpu (Gate 0 spike proved
       # bounded docs stay under the 1ms NIF budget). v1 wire format only.
