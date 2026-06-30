@@ -352,10 +352,13 @@ jobs:
           # suite is one of clerk|crdt|local|browser; pattern is a pytest -k expr.
           # Lets you iterate on a single e2e test without the full suite; the real
           # coverage runs unconditionally on merge to main.
-          E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*[a-z]+/[^]]+\]' | head -1 || true)
+          # Match ONLY the four known suite names so prose / placeholder text like
+          # a literal e2e-colon-suite-slash-pattern example in a commit body does
+          # not accidentally trigger a (non-mergeable) targeted run.
+          E2E_LINE=$(git log -1 --pretty=%B | grep -oiE '\[e2e:[[:space:]]*(clerk|crdt|local|browser)/[^]]+\]' | head -1 || true)
           if [ -n "$E2E_LINE" ]; then
-            E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*([a-z]+)\/.*/\1/I' | tr 'A-Z' 'a-z')
-            E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*[a-z]+\/([^]]+)\]/\1/I')
+            E2E_SUITE=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)\/.*/\1/I' | tr 'A-Z' 'a-z')
+            E2E_PATTERN=$(printf '%s' "$E2E_LINE" | sed -E 's/.*\[e2e:[[:space:]]*(clerk|crdt|local|browser)\/([^]]+)\]/\2/I')
             echo "e2e-target-suite=$E2E_SUITE"     >> "$GITHUB_OUTPUT"
             echo "e2e-target-pattern=$E2E_PATTERN" >> "$GITHUB_OUTPUT"
             echo "::notice::Targeted e2e: suite=$E2E_SUITE pattern='$E2E_PATTERN' — run is NON-mergeable (ci will fail)."
