@@ -92,6 +92,19 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "merge_plaintext/2 with frontmatter" do
+    test "ingests frontmatter and returns projected text + re-encodable state" do
+      {:ok, %{state: state, text: text}} =
+        Engram.Notes.CrdtBridge.merge_plaintext(nil, "---\ntitle: Hi\n---\nbody\n")
+
+      assert text == "---\ntitle: Hi\n---\nbody\n"
+      assert is_binary(state)
+
+      {:ok, doc2} = Engram.Notes.CrdtBridge.doc_from_state(state)
+      assert Engram.Notes.CrdtBridge.frontmatter_of(doc2) == {["title"], %{"title" => "\"Hi\""}}
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.

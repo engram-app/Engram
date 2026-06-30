@@ -100,14 +100,12 @@ defmodule Engram.Notes.CrdtBridge do
   @spec merge_plaintext(binary() | nil, String.t()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
   def merge_plaintext(state, incoming) when is_binary(incoming) do
-    with {:ok, doc} <- doc_from_state(state) do
-      text = Yex.Doc.get_text(doc, @text_name)
-      :ok = diff_into_text(text, incoming)
-
-      case Yex.encode_state_as_update(doc) do
-        {:ok, encoded} -> {:ok, %{state: encoded, text: Yex.Text.to_string(text)}}
-        {:error, reason} -> {:error, {:encode_failed, reason}}
-      end
+    with {:ok, doc} <- doc_from_state(state),
+         :ok <- ingest_plaintext(doc, incoming),
+         {:ok, encoded} <- Yex.encode_state_as_update(doc) do
+      {:ok, %{state: encoded, text: project_doc(doc)}}
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
