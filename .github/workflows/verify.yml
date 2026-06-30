@@ -494,6 +494,7 @@ jobs:
   version-check:
     # Skip on Dependabot PRs — they can't bump app version, and the `ci`
     # aggregate already treats `skipped` as OK for version-check.
+    needs: fingerprint
     if: github.event_name == 'push' && github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -501,38 +502,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require version bump vs main (only when deployable code changed)
+      - name: Require version bump vs main (unless content already shipped)
+        env:
+          # Gate on the SAME signal build-and-publish-image uses to decide
+          # build-vs-skip, so the two can never disagree. When BOTH fingerprints
+          # are green, the backend tree (BACKEND_HASH = lib/priv/config/test/
+          # frontend/Dockerfile/entrypoint.sh/.dockerignore/mix.lock + non-version
+          # mix.exs) and the e2e contract are byte-identical to an already-shipped
+          # build: no new image is produced and nothing deploys, so no version
+          # bump is required. Pure CI/docs/infra changes (.github/, ci/, docs/,
+          # *.md) fall outside BACKEND_HASH -> cache-hit -> no bump. A deployable
+          # change misses the cache -> bump required, which also matches
+          # build-and-publish (it errors on an unbumped version-exists collision
+          # when NOT cache-hit). Sharing the signal avoids that class of error.
+          CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
         run: |
-          # Only require a version bump when DEPLOYABLE code changed vs main.
-          # Pure CI/docs/infra pushes (.github/, ci/, docs/, *.md) ship without a
-          # bump: they produce no new image (build-and-publish-image self-skips
-          # when the version is unchanged) and trigger no deploy, so forcing a
-          # bump just churns the prod image for nothing. Deployable = anything
-          # that changes the built image or runtime. Mirrors the pre-push hook's
-          # path logic. fetch-depth: 0 above makes origin/main resolvable.
-          DEPLOYABLE_REGEX='^(lib|frontend|config|priv|rel)/|^Dockerfile$|^entrypoint\.sh$|^mix\.lock$'
-          CHANGED="$(git diff --name-only origin/main...HEAD | grep -E "$DEPLOYABLE_REGEX" || true)"
-
-          # mix.exs counts as deployable ONLY if lines other than the version
-          # line changed (a bare version bump is not itself a code change).
-          if git diff --name-only origin/main...HEAD | grep -qx 'mix.exs'; then
-            NON_VERSION="$(git diff --unified=0 origin/main...HEAD -- mix.exs \
-              | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' \
-              | grep -vE '^[+-][[:space:]]*version: "[0-9]+\.[0-9]+\.[0-9]+",?[[:space:]]*$' || true)"
-            [ -n "$NON_VERSION" ] && CHANGED="$(printf '%s\nmix.exs' "$CHANGED")"
-          fi
-
-          if [ -z "$(echo "$CHANGED" | tr -d '[:space:]')" ]; then
-            echo "No deployable files changed vs main (CI/docs/infra only): version bump not required."
+          if [ "$CACHE_HIT_BOTH" = "true" ]; then
+            echo "Backend + e2e content already shipped (fingerprint cache-hit): no new image will build, version bump not required."
             exit 0
           fi
-
-          echo "Deployable changes detected:"
-          echo "$CHANGED" | sed '/^$/d' | sed 's/^/  /'
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
           MAIN_VERSION=$(git show origin/main:mix.exs | grep 'version:' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ "$BRANCH_VERSION" = "$MAIN_VERSION" ]; then
-            echo "::error::Deployable code changed but mix.exs version ($BRANCH_VERSION) was not bumped from main. Bump the version before merging."
+            echo "::error::Deployable content changed but mix.exs version ($BRANCH_VERSION) was not bumped from main. Bump it before merging."
             exit 1
           fi
           echo "Version bumped: $MAIN_VERSION → $BRANCH_VERSION"
