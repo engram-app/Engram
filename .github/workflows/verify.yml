@@ -1075,10 +1075,13 @@ jobs:
     # Obsidian/Xvfb/CDP machinery, but: local auth (no Clerk), CRDT_ENABLED=true
     # stack, the ci/compose.local.yml overlay, and it runs ONLY tests/crdt/.
     #
-    # Sequenced AFTER e2e-clerk (`needs: e2e-clerk`) so the two never run
-    # concurrently on the shared self-hosted runner — they'd otherwise collide
-    # on the same per-run-number Xvfb display window.
-    needs: [fingerprint, prebuild-ci-image, e2e-clerk]
+    # Runs CONCURRENTLY with e2e-clerk (no `needs: e2e-clerk`). Every shared
+    # resource is already isolated from e2e-clerk: stack name (engram-ci-crdt-),
+    # Qdrant collection (ci_crdt_), temp dirs, and dynamic ports. The one
+    # remaining collision, the per-run Xvfb display window, is avoided by a
+    # separate display band below (+150 vs e2e-clerk's +50): clerk spans
+    # displays ~45-134, crdt ~145-234.
+    needs: [fingerprint, prebuild-ci-image]
     if: needs.fingerprint.outputs.e2e-cache-hit != 'true' && github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, x64, isolated]
 
@@ -1112,7 +1115,7 @@ jobs:
           # runs with different run_numbers (modulo 15) get non-overlapping
           # 6-display windows. Pre-cleanup and tear-down both need this range
           # so they can scope Xvfb kills to displays this run actually owns.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 150 ))
           MIN=$((BASE - 5))
           MAX=$BASE
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
