@@ -337,6 +337,42 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert is_binary(CrdtBridge.text_of(doc))
   end
 
+  # ── seed_from_content routes frontmatter through the codec ────────────────
+
+  test "bind/3 seed routes frontmatter into Y.Map, not body Y.Text", ctx do
+    %{user: user, vault: vault} = ctx
+
+    # Note whose plaintext content includes a frontmatter block.
+    content = "---\ntitle: Hi\n---\nbody\n"
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "fm_seed.md", "content" => content})
+
+    # Clear CRDT state so bind/3 takes the fresh-room / seed path.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note2.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
+    doc = CrdtBridge.new_doc()
+    _returned = CrdtPersistence.bind(st, note2.id, doc)
+
+    {fm_order, fm_values} = CrdtBridge.frontmatter_of(doc)
+
+    # Frontmatter must be populated in the Y.Map — not silently dropped.
+    assert fm_order != [], "frontmatter_order should be non-empty after seed"
+    assert Map.has_key?(fm_values, "title"), "Y.Map must contain the 'title' key"
+
+    # Body Y.Text must NOT contain the raw frontmatter block.
+    body = CrdtBridge.body_of(doc)
+    refute String.contains?(body, "---"), "raw frontmatter delimiters must not appear in body"
+    assert String.contains?(body, "body"), "body content must be preserved"
+  end
+
   # ── bind/3 replays tail-log after snapshot ────────────────────────────────
 
   test "bind/3 replays tail-log rows on top of the snapshot", ctx do
