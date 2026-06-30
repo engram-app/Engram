@@ -52,23 +52,42 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     # Re-open the gate the same way a user accepting the PreSync modal does
     # (persists the fingerprint + flips syncBlocked false).
     await cdp_a.accept_sync_gate()
-    await cdp_a.evaluate(
+
+    # Drive the bulk first sync to server-side convergence within the time
+    # bound. A single fullSync()'s `pushed` count is an unreliable proxy under
+    # CI load, in two ways (both observed as issue #627):
+    #   1. fullSync() returns {pulled:0, pushed:0} when syncBlocked is still
+    #      true — the plugin's async startup can re-assert it AFTER our unblock.
+    #   2. A batch chunk that errors against a loaded backend goes offline with
+    #      the remainder queued (sync.ts pushNotesViaBatch), so one call can
+    #      report a partial count (e.g. pushed=2) even though the rest land
+    #      moments later.
+    # So we re-assert unblocked and re-trigger fullSync until the SERVER
+    # manifest holds all 1,000 notes, bounded by PUSH_TIME_BOUND_S. The bound
+    # is the batch-vs-per-note guarantee: 1,000 paced per-note pushes cannot
+    # converge within it, so a silent fallback still fails this test — the
+    # success criterion is "bulk lands in bounded time", not a single call's
+    # push tally.
+    unblock = (
         "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked(false)"
     )
-
     started = time.monotonic()
-    result = await cdp_a.trigger_full_sync()
+    deadline = started + PUSH_TIME_BOUND_S
+    bulk_count = 0
+    while time.monotonic() < deadline:
+        await cdp_a.evaluate(unblock)
+        await cdp_a.trigger_full_sync()
+        manifest = api_sync.get_manifest()
+        bulk_count = sum(
+            1 for n in manifest["notes"] if n["path"].startswith("Bulk/")
+        )
+        if bulk_count >= NOTE_COUNT:
+            break
+        time.sleep(2)
     elapsed = time.monotonic() - started
 
-    assert result.get("pushed", 0) >= NOTE_COUNT, f"fullSync result: {result}"
-    assert elapsed < PUSH_TIME_BOUND_S, (
-        f"bulk first sync took {elapsed:.1f}s (bound {PUSH_TIME_BOUND_S}s) — "
-        "did the plugin fall back to per-note pushes?"
-    )
-
-    # Server-side proof: every note is in the manifest.
-    manifest = api_sync.get_manifest()
-    bulk_paths = [n["path"] for n in manifest["notes"] if n["path"].startswith("Bulk/")]
-    assert len(bulk_paths) >= NOTE_COUNT, (
-        f"manifest holds {len(bulk_paths)}/{NOTE_COUNT} bulk notes"
+    assert bulk_count >= NOTE_COUNT, (
+        f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes in "
+        f"{elapsed:.1f}s (bound {PUSH_TIME_BOUND_S}s) — did the plugin fall "
+        "back to per-note pushes or stall?"
     )
