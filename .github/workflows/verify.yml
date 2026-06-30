@@ -1394,7 +1394,10 @@ jobs:
       # ------------------------------------------------------------------
       - name: "Run API-only tests"
         working-directory: e2e
-        run: python3 -m pytest tests/api_only/ --ignore=tests/api_only/local -v --timeout=180 -p no:cacheprovider --no-header
+        run: |
+          python3 -m pytest tests/api_only/ --ignore=tests/api_only/local \
+            -n "${E2E_API_WORKERS:-2}" --dist=loadfile \
+            -v --timeout=180 -p no:cacheprovider --no-header
         env:
           ENGRAM_API_URL: http://localhost:${{ steps.ports.outputs.engram_port }}/api
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
