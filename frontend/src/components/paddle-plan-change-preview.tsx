@@ -1,18 +1,18 @@
-import { mapPreviewToPlanChangeData } from "@/lib/plan-change-preview-utils"
-import { PlanChangePreview, type PlanChangePreviewProps } from "./plan-change-preview"
+import { mapPreviewToPlanChangeData } from "@/lib/plan-change-preview-utils";
+import { PlanChangePreview, type PlanChangePreviewProps } from "./plan-change-preview";
 
-type PaddleSubscription = Parameters<typeof mapPreviewToPlanChangeData>[0]
-type PreviewResponse = Parameters<typeof mapPreviewToPlanChangeData>[1]
-type PaddleDiscount = Parameters<typeof mapPreviewToPlanChangeData>[2]
+type PaddleSubscription = Parameters<typeof mapPreviewToPlanChangeData>[0];
+type PreviewResponse = Parameters<typeof mapPreviewToPlanChangeData>[1];
+type PaddleDiscount = Parameters<typeof mapPreviewToPlanChangeData>[2];
 
 export type PaddlePlanChangePreviewProps = {
-  /** Current Paddle Subscription (before the change) */
-  subscription: PaddleSubscription
-  /** Subscription update preview response with the proposed changes */
-  previewResponse: PreviewResponse
-  /** Paddle Discount for enriched discount display */
-  discount?: PaddleDiscount
-} & Omit<PlanChangePreviewProps, "preview">
+	/** Current Paddle Subscription (before the change) */
+	subscription: PaddleSubscription;
+	/** Subscription update preview response with the proposed changes */
+	previewResponse: PreviewResponse;
+	/** Paddle Discount for enriched discount display */
+	discount?: PaddleDiscount;
+} & Omit<PlanChangePreviewProps, "preview">;
 
 /**
  * Paddle-aware wrapper for `PlanChangePreview`.
@@ -35,11 +35,11 @@ export type PaddlePlanChangePreviewProps = {
  * />
  */
 export function PaddlePlanChangePreview({
-  subscription,
-  previewResponse,
-  discount,
-  ...uiProps
+	subscription,
+	previewResponse,
+	discount,
+	...uiProps
 }: PaddlePlanChangePreviewProps) {
-  const preview = mapPreviewToPlanChangeData(subscription, previewResponse, discount)
-  return <PlanChangePreview preview={preview} {...uiProps} />
+	const preview = mapPreviewToPlanChangeData(subscription, previewResponse, discount);
+	return <PlanChangePreview preview={preview} {...uiProps} />;
 }

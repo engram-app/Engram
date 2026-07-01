@@ -7,21 +7,21 @@
  * one line of muted copy. Centralized so the two surfaces can't drift.
  */
 interface SyncStatusPillProps {
-  message: string
+	message: string;
 }
 
 export function SyncStatusPill({ message }: SyncStatusPillProps) {
-  return (
-    <p
-      role="status"
-      aria-live="polite"
-      className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-    >
-      <span
-        aria-hidden
-        className="inline-block size-2 shrink-0 animate-pulse rounded-full bg-primary"
-      />
-      <span>{message}</span>
-    </p>
-  )
+	return (
+		<p
+			role="status"
+			aria-live="polite"
+			className="flex items-center gap-2 rounded-md border border-border border-dashed bg-muted/40 px-3 py-2 text-muted-foreground text-sm"
+		>
+			<span
+				aria-hidden
+				className="inline-block size-2 shrink-0 animate-pulse rounded-full bg-primary"
+			/>
+			<span>{message}</span>
+		</p>
+	);
 }

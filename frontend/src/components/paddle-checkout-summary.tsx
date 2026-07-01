@@ -1,15 +1,15 @@
-import { mapCheckoutEventsToSummary } from "@/lib/checkout-summary-utils"
-import { CheckoutSummary, type CheckoutSummaryProps } from "./checkout-summary"
+import { mapCheckoutEventsToSummary } from "@/lib/checkout-summary-utils";
+import { CheckoutSummary, type CheckoutSummaryProps } from "./checkout-summary";
 
-type CheckoutEventsInput = Parameters<typeof mapCheckoutEventsToSummary>[0]
+type CheckoutEventsInput = Parameters<typeof mapCheckoutEventsToSummary>[0];
 
 export type PaddleCheckoutSummaryProps = {
-  /**
-   * Raw `CheckoutEventsData` from a Paddle.js checkout event callback
-   * (e.g. `checkout.loaded`, `checkout.updated`).
-   */
-  checkoutData?: CheckoutEventsInput
-} & Omit<CheckoutSummaryProps, "summary">
+	/**
+	 * Raw `CheckoutEventsData` from a Paddle.js checkout event callback
+	 * (e.g. `checkout.loaded`, `checkout.updated`).
+	 */
+	checkoutData?: CheckoutEventsInput;
+} & Omit<CheckoutSummaryProps, "summary">;
 
 /**
  * Paddle-aware wrapper for `CheckoutSummary`.
@@ -28,6 +28,6 @@ export type PaddleCheckoutSummaryProps = {
  * />
  */
 export function PaddleCheckoutSummary({ checkoutData, ...uiProps }: PaddleCheckoutSummaryProps) {
-  const summary = checkoutData ? mapCheckoutEventsToSummary(checkoutData) : undefined
-  return <CheckoutSummary summary={summary} {...uiProps} />
+	const summary = checkoutData ? mapCheckoutEventsToSummary(checkoutData) : undefined;
+	return <CheckoutSummary summary={summary} {...uiProps} />;
 }

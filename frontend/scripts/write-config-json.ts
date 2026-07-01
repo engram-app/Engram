@@ -7,19 +7,21 @@
 // engram-inline-bootstrap plugin in vite.config.ts), so the SPA normally
 // resolves config synchronously and never fetches this. Kept as a belt-and-
 // suspenders fallback and for use-bootstrap.ts.
-import { writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { bootstrapConfigFromEnv } from './bootstrap-config'
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { bootstrapConfigFromEnv } from "./bootstrap-config";
 
-const target = process.argv[2] ?? 'dist/config.json'
+const target = process.argv[2] ?? "dist/config.json";
 
-const { config, errors } = bootstrapConfigFromEnv(process.env)
+const { config, errors } = bootstrapConfigFromEnv(process.env);
 
 if (errors.length > 0) {
-  for (const err of errors) console.error(`[write-config-json] ${err}`)
-  process.exit(1)
+	for (const err of errors) {
+		console.error(`[write-config-json] ${err}`);
+	}
+	process.exit(1);
 }
 
-mkdirSync(dirname(target), { recursive: true })
-writeFileSync(target, JSON.stringify(config, null, 2))
-console.log(`[write-config-json] wrote ${target}`)
+mkdirSync(dirname(target), { recursive: true });
+writeFileSync(target, JSON.stringify(config, null, 2));
+console.log(`[write-config-json] wrote ${target}`);

@@ -1,15 +1,15 @@
-import { useBillingStatus } from "../api/queries"
+import { useBillingStatus } from "../api/queries";
 
 export interface ConnectionCapState {
-  isLoading: boolean
-  atCap: boolean
-  limit: number | null
-  current: number
-  // Hours remaining on the Free-tier device-swap cooldown after a recent
-  // device revoke; `null` when no cooldown is in effect. /link uses this
-  // to render a cooldown-specific banner + disable Authorize so the user
-  // doesn't trip the 402 mid-flow.
-  swapCooldownHours: number | null
+	isLoading: boolean;
+	atCap: boolean;
+	limit: number | null;
+	current: number;
+	// Hours remaining on the Free-tier device-swap cooldown after a recent
+	// device revoke; `null` when no cooldown is in effect. /link uses this
+	// to render a cooldown-specific banner + disable Authorize so the user
+	// doesn't trip the 402 mid-flow.
+	swapCooldownHours: number | null;
 }
 
 /**
@@ -21,28 +21,27 @@ export interface ConnectionCapState {
  * flow for the disconnect panel without an extra fetch.
  */
 export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
-  const { data: billing } = useBillingStatus()
-  if (!billing)
-    return {
-      isLoading: true,
-      atCap: false,
-      limit: null,
-      current: 0,
-      swapCooldownHours: null,
-    }
+	const { data: billing } = useBillingStatus();
+	if (!billing) {
+		return {
+			isLoading: true,
+			atCap: false,
+			limit: null,
+			current: 0,
+			swapCooldownHours: null,
+		};
+	}
 
-  const limit =
-    kind === "obsidian"
-      ? billing.caps.obsidian_connections
-      : billing.caps.mcp_connections
-  const current = billing.current_connections?.[kind] ?? 0
-  const atCap = typeof limit === "number" && limit > 0 && current >= limit
+	const limit =
+		kind === "obsidian" ? billing.caps.obsidian_connections : billing.caps.mcp_connections;
+	const current = billing.current_connections?.[kind] ?? 0;
+	const atCap = typeof limit === "number" && limit > 0 && current >= limit;
 
-  return {
-    isLoading: false,
-    atCap,
-    limit,
-    current,
-    swapCooldownHours: billing.device_swap_cooldown_remaining_hours ?? null,
-  }
+	return {
+		isLoading: false,
+		atCap,
+		limit,
+		current,
+		swapCooldownHours: billing.device_swap_cooldown_remaining_hours ?? null,
+	};
 }

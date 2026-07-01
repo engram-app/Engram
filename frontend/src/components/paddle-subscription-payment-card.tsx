@@ -1,32 +1,32 @@
 import {
-  mapSubscriptionToNextPayment,
-  mapTransactionToPaymentMethod,
-  getUpdatePaymentMethodUrl,
-} from "@/lib/subscription-payment-card-utils"
+	getUpdatePaymentMethodUrl,
+	mapSubscriptionToNextPayment,
+	mapTransactionToPaymentMethod,
+} from "@/lib/subscription-payment-card-utils";
 import {
-  SubscriptionPaymentCard,
-  type SubscriptionPaymentCardProps,
-} from "./subscription-payment-card"
+	SubscriptionPaymentCard,
+	type SubscriptionPaymentCardProps,
+} from "./subscription-payment-card";
 
-type SubscriptionInput = Parameters<typeof mapSubscriptionToNextPayment>[0]
-type NextTransactionInput = Parameters<typeof mapSubscriptionToNextPayment>[1]
+type SubscriptionInput = Parameters<typeof mapSubscriptionToNextPayment>[0];
+type NextTransactionInput = Parameters<typeof mapSubscriptionToNextPayment>[1];
 
 export type PaddleSubscriptionPaymentCardProps = {
-  /** Paddle Subscription */
-  subscription: SubscriptionInput
-  /**
-   * `next_transaction` include from the subscription fetch.
-   * Required for accurate next-bill amount. Fetch with:
-   * `paddle.subscriptions.get(id, { include: ["next_transaction"] })`
-   */
-  nextTransaction?: NextTransactionInput
-  /**
-   * Most recent completed transaction for the subscription.
-   * Used to determine the stored payment method. Fetch with:
-   * `paddle.transactions.list({ subscriptionId, status: ["completed"], perPage: 1 })`
-   */
-  lastTransaction?: NextTransactionInput
-} & Omit<SubscriptionPaymentCardProps, "nextPayment" | "paymentMethod" | "updatePaymentMethodUrl">
+	/** Paddle Subscription */
+	subscription: SubscriptionInput;
+	/**
+	 * `next_transaction` include from the subscription fetch.
+	 * Required for accurate next-bill amount. Fetch with:
+	 * `paddle.subscriptions.get(id, { include: ["next_transaction"] })`
+	 */
+	nextTransaction?: NextTransactionInput;
+	/**
+	 * Most recent completed transaction for the subscription.
+	 * Used to determine the stored payment method. Fetch with:
+	 * `paddle.transactions.list({ subscriptionId, status: ["completed"], perPage: 1 })`
+	 */
+	lastTransaction?: NextTransactionInput;
+} & Omit<SubscriptionPaymentCardProps, "nextPayment" | "paymentMethod" | "updatePaymentMethodUrl">;
 
 /**
  * Paddle-aware wrapper for `SubscriptionPaymentCard`.
@@ -42,21 +42,21 @@ export type PaddleSubscriptionPaymentCardProps = {
  * />
  */
 export function PaddleSubscriptionPaymentCard({
-  subscription,
-  nextTransaction,
-  lastTransaction,
-  ...uiProps
+	subscription,
+	nextTransaction,
+	lastTransaction,
+	...uiProps
 }: PaddleSubscriptionPaymentCardProps) {
-  const nextPayment = mapSubscriptionToNextPayment(subscription, nextTransaction)
-  const paymentMethod = mapTransactionToPaymentMethod(lastTransaction)
-  const updatePaymentMethodUrl = getUpdatePaymentMethodUrl(subscription)
+	const nextPayment = mapSubscriptionToNextPayment(subscription, nextTransaction);
+	const paymentMethod = mapTransactionToPaymentMethod(lastTransaction);
+	const updatePaymentMethodUrl = getUpdatePaymentMethodUrl(subscription);
 
-  return (
-    <SubscriptionPaymentCard
-      nextPayment={nextPayment}
-      paymentMethod={paymentMethod}
-      updatePaymentMethodUrl={updatePaymentMethodUrl}
-      {...uiProps}
-    />
-  )
+	return (
+		<SubscriptionPaymentCard
+			nextPayment={nextPayment}
+			paymentMethod={paymentMethod}
+			updatePaymentMethodUrl={updatePaymentMethodUrl}
+			{...uiProps}
+		/>
+	);
 }

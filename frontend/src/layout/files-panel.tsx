@@ -1,30 +1,32 @@
-import { FolderTreeProvider } from './folder-tree-context'
-import FolderActions from './folder-actions'
-import VaultSwitcher from './vault-switcher'
-import FolderTree from '../viewer/folder-tree'
-import { useDemoVaultOptional } from '../onboarding/tour/demo-vault-provider'
+import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
+import FolderTree from "../viewer/folder-tree";
+import FolderActions from "./folder-actions";
+import { FolderTreeProvider } from "./folder-tree-context";
+import VaultSwitcher from "./vault-switcher";
 
 export default function FilesPanel() {
-  const demoActive = useDemoVaultOptional()?.active === true
-  return (
-    <FolderTreeProvider>
-      <div className="flex h-full flex-col">
-        <header className="flex shrink-0 items-center border-b border-border px-3 py-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Files</h2>
-        </header>
-        <FolderTree />
-        <FolderActions />
-        <section className="relative">
-          <VaultSwitcher />
-          {demoActive && (
-            <div
-              data-tour="sidebar-vaults"
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-0 -top-24"
-            />
-          )}
-        </section>
-      </div>
-    </FolderTreeProvider>
-  )
+	const demoActive = useDemoVaultOptional()?.active === true;
+	return (
+		<FolderTreeProvider>
+			<div className="flex h-full flex-col">
+				<header className="flex shrink-0 items-center border-border border-b px-3 py-2">
+					<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
+						Files
+					</h2>
+				</header>
+				<FolderTree />
+				<FolderActions />
+				<section className="relative">
+					<VaultSwitcher />
+					{demoActive && (
+						<div
+							data-tour="sidebar-vaults"
+							aria-hidden
+							className="pointer-events-none absolute inset-x-0 -top-24 bottom-0"
+						/>
+					)}
+				</section>
+			</div>
+		</FolderTreeProvider>
+	);
 }

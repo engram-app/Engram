@@ -1,6 +1,6 @@
 interface CollideBumpOptions {
-  /** Hard cap to avoid runaway loops on malformed input. Default 1000. */
-  cap?: number
+	/** Hard cap to avoid runaway loops on malformed input. Default 1000. */
+	cap?: number;
 }
 
 /**
@@ -13,19 +13,21 @@ interface CollideBumpOptions {
  * (the user almost certainly does not have 1000 Untitled.md files).
  */
 export function collideBump(
-  existing: ReadonlySet<string>,
-  base: string,
-  opts: CollideBumpOptions = {},
+	existing: ReadonlySet<string>,
+	base: string,
+	opts: CollideBumpOptions = {},
 ): string {
-  const cap = opts.cap ?? 1000
-  const lastDot = base.lastIndexOf('.')
-  const hasExtension = lastDot > 0
-  const stem = hasExtension ? base.slice(0, lastDot) : base
-  const extension = hasExtension ? base.slice(lastDot) : ''
+	const cap = opts.cap ?? 1000;
+	const lastDot = base.lastIndexOf(".");
+	const hasExtension = lastDot > 0;
+	const stem = hasExtension ? base.slice(0, lastDot) : base;
+	const extension = hasExtension ? base.slice(lastDot) : "";
 
-  for (let i = 0; i < cap; i++) {
-    const candidate = i === 0 ? base : `${stem} ${i}${extension}`
-    if (!existing.has(candidate)) return candidate
-  }
-  throw new Error(`collideBump: too many collisions for "${base}" (cap ${cap})`)
+	for (let i = 0; i < cap; i++) {
+		const candidate = i === 0 ? base : `${stem} ${i}${extension}`;
+		if (!existing.has(candidate)) {
+			return candidate;
+		}
+	}
+	throw new Error(`collideBump: too many collisions for "${base}" (cap ${cap})`);
 }

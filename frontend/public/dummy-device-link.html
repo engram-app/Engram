@@ -42,12 +42,12 @@
 
 <pre id="log">Ready. Click "Start device-flow + open /link" to mint a code and go to the link page.</pre>
 
-<script>
+<script>"use strict";
 const logEl = document.getElementById('log');
 function log(msg, cls) {
   const line = document.createElement('span');
   line.textContent = `[${new Date().toISOString().slice(11,19)}] ${msg}\n`;
-  if (cls) line.className = cls;
+  if (cls) { line.className = cls; }
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
 }

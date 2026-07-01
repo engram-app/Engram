@@ -1,18 +1,18 @@
-import { mapSubscriptionToStatusData } from "@/lib/subscription-status-card-utils"
+import { mapSubscriptionToStatusData } from "@/lib/subscription-status-card-utils";
 import {
-  SubscriptionStatusCard,
-  type SubscriptionStatusCardProps,
-} from "./subscription-status-card"
+	SubscriptionStatusCard,
+	type SubscriptionStatusCardProps,
+} from "./subscription-status-card";
 
-type PaddleSubscription = Parameters<typeof mapSubscriptionToStatusData>[0]
-type RecurringTransactionDetails = Parameters<typeof mapSubscriptionToStatusData>[1]
-type PaddleDiscount = Parameters<typeof mapSubscriptionToStatusData>[2]
+type PaddleSubscription = Parameters<typeof mapSubscriptionToStatusData>[0];
+type RecurringTransactionDetails = Parameters<typeof mapSubscriptionToStatusData>[1];
+type PaddleDiscount = Parameters<typeof mapSubscriptionToStatusData>[2];
 
 export type PaddleSubscriptionStatusCardProps = {
-  subscription: PaddleSubscription
-  recurringTransactionDetails: RecurringTransactionDetails
-  discount?: PaddleDiscount
-} & Omit<SubscriptionStatusCardProps, "subscription">
+	subscription: PaddleSubscription;
+	recurringTransactionDetails: RecurringTransactionDetails;
+	discount?: PaddleDiscount;
+} & Omit<SubscriptionStatusCardProps, "subscription">;
 
 /**
  * Paddle-aware wrapper for `SubscriptionStatusCard`.
@@ -35,11 +35,11 @@ export type PaddleSubscriptionStatusCardProps = {
  * />
  */
 export function PaddleSubscriptionStatusCard({
-  subscription,
-  recurringTransactionDetails,
-  discount,
-  ...uiProps
+	subscription,
+	recurringTransactionDetails,
+	discount,
+	...uiProps
 }: PaddleSubscriptionStatusCardProps) {
-  const data = mapSubscriptionToStatusData(subscription, recurringTransactionDetails, discount)
-  return <SubscriptionStatusCard subscription={data} {...uiProps} />
+	const data = mapSubscriptionToStatusData(subscription, recurringTransactionDetails, discount);
+	return <SubscriptionStatusCard subscription={data} {...uiProps} />;
 }

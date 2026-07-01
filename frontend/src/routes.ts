@@ -3,10 +3,10 @@
 // inter-page links. Keeps `/sign-in` from drifting in one place and
 // silently breaking redirects in another.
 export const ROUTES = {
-  HOME: '/',
-  SIGN_IN: '/sign-in',
-  SIGN_UP: '/sign-up',
-  WAITLIST: '/waitlist',
-  DEVICE_LINK: '/link',
-  OAUTH_CONSENT: '/oauth/consent',
-} as const
+	HOME: "/",
+	SIGN_IN: "/sign-in",
+	SIGN_UP: "/sign-up",
+	WAITLIST: "/waitlist",
+	DEVICE_LINK: "/link",
+	OAUTH_CONSENT: "/oauth/consent",
+} as const;

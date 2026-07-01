@@ -1,16 +1,16 @@
-import { cn } from '@/lib/utils'
+import { cn } from "@/lib/utils";
 
 interface Props {
-  /**
-   * Tailwind gradient classes for the sweep. Defaults to a brand-tint sweep
-   * suited for light backgrounds. Override with e.g.
-   * `'from-transparent via-white/35 to-transparent'` for dark backgrounds.
-   */
-  gradient?: string
-  className?: string
+	/**
+	 * Tailwind gradient classes for the sweep. Defaults to a brand-tint sweep
+	 * suited for light backgrounds. Override with e.g.
+	 * `'from-transparent via-white/35 to-transparent'` for dark backgrounds.
+	 */
+	gradient?: string;
+	className?: string;
 }
 
-const DEFAULT_GRADIENT = 'from-transparent via-primary/15 to-transparent'
+const DEFAULT_GRADIENT = "from-transparent via-primary/15 to-transparent";
 
 /**
  * Decorative shimmer overlay. Absolute-positioned, pointer-events:none.
@@ -20,14 +20,14 @@ const DEFAULT_GRADIENT = 'from-transparent via-primary/15 to-transparent'
  * `main.css` short-circuits the animation for users who opted out.
  */
 export function Shimmer({ gradient = DEFAULT_GRADIENT, className }: Props) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'pointer-events-none absolute inset-0 animate-shimmer-sweep bg-gradient-to-r [background-size:200%_100%]',
-        gradient,
-        className,
-      )}
-    />
-  )
+	return (
+		<span
+			aria-hidden
+			className={cn(
+				"pointer-events-none absolute inset-0 animate-shimmer-sweep bg-gradient-to-r [background-size:200%_100%]",
+				gradient,
+				className,
+			)}
+		/>
+	);
 }

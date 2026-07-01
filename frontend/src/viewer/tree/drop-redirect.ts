@@ -1,6 +1,6 @@
 export interface DropSource {
-  id: string
-  parentId: string | undefined
+	id: string;
+	parentId: string | undefined;
 }
 
 /**
@@ -13,13 +13,17 @@ export interface DropSource {
  * already live in `destId`.
  */
 export function resolveDropMove(
-  sources: DropSource[],
-  destId: string | undefined,
+	sources: DropSource[],
+	destId: string | undefined,
 ): { dest: string; ids: string[] } | null {
-  // A root destination is allowed (move to vault root). Only a missing target
-  // is a no-op. Sources already at root are filtered below.
-  if (destId == null) return null
-  const ids = sources.filter((s) => s.parentId !== destId).map((s) => s.id)
-  if (ids.length === 0) return null
-  return { dest: destId, ids }
+	// A root destination is allowed (move to vault root). Only a missing target
+	// is a no-op. Sources already at root are filtered below.
+	if (destId == null) {
+		return null;
+	}
+	const ids = sources.filter((s) => s.parentId !== destId).map((s) => s.id);
+	if (ids.length === 0) {
+		return null;
+	}
+	return { dest: destId, ids };
 }

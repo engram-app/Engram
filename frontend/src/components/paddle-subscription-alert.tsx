@@ -1,13 +1,13 @@
-"use client"
+"use client";
 
-import { mapSubscriptionToAlertData } from "@/lib/subscription-alert-utils"
-import { SubscriptionAlert, type SubscriptionAlertProps } from "./subscription-alert"
+import { mapSubscriptionToAlertData } from "@/lib/subscription-alert-utils";
+import { SubscriptionAlert, type SubscriptionAlertProps } from "./subscription-alert";
 
-type PaddleSubscription = Parameters<typeof mapSubscriptionToAlertData>[0]
+type PaddleSubscription = Parameters<typeof mapSubscriptionToAlertData>[0];
 
 export type PaddleSubscriptionAlertProps = {
-  subscription: PaddleSubscription
-} & Omit<SubscriptionAlertProps, "subscription">
+	subscription: PaddleSubscription;
+} & Omit<SubscriptionAlertProps, "subscription">;
 
 /**
  * Paddle-aware wrapper for `SubscriptionAlert`.
@@ -22,9 +22,9 @@ export type PaddleSubscriptionAlertProps = {
  * />
  */
 export function PaddleSubscriptionAlert({
-  subscription,
-  ...uiProps
+	subscription,
+	...uiProps
 }: PaddleSubscriptionAlertProps) {
-  const data = mapSubscriptionToAlertData(subscription)
-  return <SubscriptionAlert subscription={data} {...uiProps} />
+	const data = mapSubscriptionToAlertData(subscription);
+	return <SubscriptionAlert subscription={data} {...uiProps} />;
 }
