@@ -66,7 +66,10 @@
 				"rules": {
 					"a11y": {
 						"noAutofocus": "off",
-						"noLabelWithoutControl": "off",
+						"noLabelWithoutControl": {
+							"level": "error",
+							"options": { "inputComponents": ["Checkbox"] }
+						},
 						"noNoninteractiveElementToInteractiveRole": "off",
 						"useAriaPropsForRole": "off",
 						"useAriaPropsSupportedByRole": "off",
