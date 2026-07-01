@@ -1,42 +1,39 @@
-import type {
-  NextPaymentData,
-  PaymentMethodData,
-} from "@/lib/paddle-types"
-import { parseAmount } from "@/lib/paddle-format"
+import { parseAmount } from "@/lib/paddle-format";
+import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 
 // ---
 // Input shapes — minimal types matching the Paddle Node SDK / API response.
 // ---
 
-type MethodDetails = {
-  type: string
-  card?: {
-    type?: string | null
-    last4?: string | null
-    expiryMonth?: number | null
-    expiryYear?: number | null
-  } | null
+interface MethodDetails {
+	type: string;
+	card?: {
+		type?: string | null;
+		last4?: string | null;
+		expiryMonth?: number | null;
+		expiryYear?: number | null;
+	} | null;
 }
 
-type PaymentEntry = {
-  methodDetails?: MethodDetails | null
+interface PaymentEntry {
+	methodDetails?: MethodDetails | null;
 }
 
-type PaddleTransaction = {
-  payments?: PaymentEntry[] | null
-  details?: {
-    totals?: {
-      grandTotal?: string | null
-    } | null
-  } | null
+interface PaddleTransaction {
+	payments?: PaymentEntry[] | null;
+	details?: {
+		totals?: {
+			grandTotal?: string | null;
+		} | null;
+	} | null;
 }
 
-type PaddleSubscription = {
-  currencyCode: string
-  nextBilledAt?: string | null
-  managementUrls?: {
-    updatePaymentMethod?: string | null
-  } | null
+interface PaddleSubscription {
+	currencyCode: string;
+	nextBilledAt?: string | null;
+	managementUrls?: {
+		updatePaymentMethod?: string | null;
+	} | null;
 }
 
 /**
@@ -59,20 +56,22 @@ type PaddleSubscription = {
  * const nextPayment = mapSubscriptionToNextPayment(data, data.nextTransaction)
  */
 export function mapSubscriptionToNextPayment(
-  subscription: PaddleSubscription,
-  nextTransaction?: PaddleTransaction | null
+	subscription: PaddleSubscription,
+	nextTransaction?: PaddleTransaction | null,
 ): NextPaymentData | undefined {
-  if (!subscription.nextBilledAt) return undefined
+	if (!subscription.nextBilledAt) {
+		return;
+	}
 
-  const amount = nextTransaction?.details?.totals?.grandTotal
-    ? parseAmount(nextTransaction.details.totals.grandTotal, subscription.currencyCode)
-    : 0
+	const amount = nextTransaction?.details?.totals?.grandTotal
+		? parseAmount(nextTransaction.details.totals.grandTotal, subscription.currencyCode)
+		: 0;
 
-  return {
-    amount,
-    currency: subscription.currencyCode,
-    date: subscription.nextBilledAt,
-  }
+	return {
+		amount,
+		currency: subscription.currencyCode,
+		date: subscription.nextBilledAt,
+	};
 }
 
 /**
@@ -95,18 +94,20 @@ export function mapSubscriptionToNextPayment(
  * const paymentMethod = mapTransactionToPaymentMethod(transactions.data[0])
  */
 export function mapTransactionToPaymentMethod(
-  transaction?: PaddleTransaction | null
+	transaction?: PaddleTransaction | null,
 ): PaymentMethodData | undefined {
-  const methodDetails = transaction?.payments?.[0]?.methodDetails
-  if (!methodDetails) return undefined
+	const methodDetails = transaction?.payments?.[0]?.methodDetails;
+	if (!methodDetails) {
+		return;
+	}
 
-  return {
-    type: methodDetails.type,
-    cardBrand: methodDetails.card?.type ?? undefined,
-    last4: methodDetails.card?.last4 ?? undefined,
-    expiryMonth: methodDetails.card?.expiryMonth ?? undefined,
-    expiryYear: methodDetails.card?.expiryYear ?? undefined,
-  }
+	return {
+		type: methodDetails.type,
+		cardBrand: methodDetails.card?.type ?? undefined,
+		last4: methodDetails.card?.last4 ?? undefined,
+		expiryMonth: methodDetails.card?.expiryMonth ?? undefined,
+		expiryYear: methodDetails.card?.expiryYear ?? undefined,
+	};
 }
 
 /**
@@ -120,5 +121,5 @@ export function mapTransactionToPaymentMethod(
  * @returns Portal URL, or `undefined` if unavailable
  */
 export function getUpdatePaymentMethodUrl(subscription: PaddleSubscription): string | undefined {
-  return subscription.managementUrls?.updatePaymentMethod ?? undefined
+	return subscription.managementUrls?.updatePaymentMethod ?? undefined;
 }

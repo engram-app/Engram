@@ -35,22 +35,22 @@
 
 <pre id="log">Ready. Click a Connect button to start the flow.</pre>
 
-<script>
+<script>"use strict";
 const BACKEND = ''; // same-origin (Vite proxies /api and /oauth to Phoenix)
-const REDIRECT_URI = window.location.origin + '/dummy-oauth-test.html';
+const REDIRECT_URI = `${window.location.origin}/dummy-oauth-test.html`;
 
 const logEl = document.getElementById('log');
 function log(msg, cls) {
   const line = document.createElement('span');
   line.textContent = `[${new Date().toISOString().slice(11,19)}] ${msg}\n`;
-  if (cls) line.className = cls;
+  if (cls) { line.className = cls; }
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 function b64url(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    .replace(/\+/gu,'-').replace(/\//gu,'_').replace(/[=]+$/u,'');
 }
 async function pkcePair() {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -60,7 +60,7 @@ async function pkcePair() {
 
 async function dcrRegister(clientName) {
   log(`DCR register: ${clientName}`);
-  const res = await fetch(BACKEND + '/oauth/register', {
+  const res = await fetch(`${BACKEND}/oauth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -72,7 +72,7 @@ async function dcrRegister(clientName) {
       scope: 'mcp',
     }),
   });
-  if (!res.ok) throw new Error(`DCR failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) { throw new Error(`DCR failed: ${res.status} ${await res.text()}`); }
   const body = await res.json();
   log(`DCR ok — client_id=${body.client_id.slice(0,16)}…`, 'ok');
   return body;
@@ -83,10 +83,10 @@ async function startConnect(label) {
     const client = await dcrRegister(label);
     const { verifier, challenge } = await pkcePair();
     const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
-    sessionStorage.setItem('oauth_test_' + state, JSON.stringify({
+    sessionStorage.setItem(`oauth_test_${state}`, JSON.stringify({
       verifier, client_id: client.client_id, label,
     }));
-    const url = new URL(BACKEND + '/oauth/authorize', window.location.origin);
+    const url = new URL(`${BACKEND}/oauth/authorize`, window.location.origin);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', client.client_id);
     url.searchParams.set('redirect_uri', REDIRECT_URI);
@@ -108,29 +108,30 @@ async function handleRedirect() {
   const error = params.get('error');
   const errorDesc = params.get('error_description');
 
-  if (!code && !error) return; // fresh page load
+  if (!(code || error)) { return; // fresh page load
+}
 
   // Strip params from URL so a refresh doesn't replay
   window.history.replaceState({}, '', '/dummy-oauth-test.html');
 
   if (error) {
-    log(`Authorize returned error=${error}${errorDesc ? ' — ' + errorDesc : ''}`, 'err');
-    if (errorDesc && errorDesc.includes('mcp_connections')) {
+    log(`Authorize returned error=${error}${errorDesc ? ` — ${errorDesc}` : ''}`, 'err');
+    if (errorDesc?.includes('mcp_connections')) {
       log('⛔ This is the Free-tier MCP connection cap hitting. Upgrade to add more.', 'err');
     }
     return;
   }
 
-  const saved = sessionStorage.getItem('oauth_test_' + state);
+  const saved = sessionStorage.getItem(`oauth_test_${state}`);
   if (!saved) {
     log(`No PKCE state for ${state} — flow restarted?`, 'err');
     return;
   }
-  sessionStorage.removeItem('oauth_test_' + state);
+  sessionStorage.removeItem(`oauth_test_${state}`);
   const { verifier, client_id, label } = JSON.parse(saved);
   log(`Got code for ${label}. Exchanging for token…`);
 
-  const tokenRes = await fetch(BACKEND + '/oauth/token', {
+  const tokenRes = await fetch(`${BACKEND}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -147,7 +148,7 @@ async function handleRedirect() {
   }
   const token = await tokenRes.json();
   log(`✓ ${label} connected. access_token=${token.access_token.slice(0,20)}…`, 'ok');
-  log(`Connection registered server-side. Go to /settings/connections to see it.`, 'ok');
+  log("Connection registered server-side. Go to /settings/connections to see it.", 'ok');
 }
 
 document.getElementById('connect-a').addEventListener('click', () => startConnect('Dummy Client A'));

@@ -1,29 +1,32 @@
-import { render, screen, fireEvent } from '@testing-library/react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const setTheme = vi.fn()
-let theme = 'system'
-vi.mock('@/theme/theme-provider', () => ({
-  useTheme: () => ({ theme, resolved: 'dark', setTheme }),
-}))
+const setTheme = vi.fn();
+let theme = "system";
+vi.mock("@/theme/theme-provider", () => ({
+	useTheme: () => ({ theme, resolved: "dark", setTheme }),
+}));
 
-import { AppearanceSection } from './appearance-section'
+import { AppearanceSection } from "./appearance-section";
 
-describe('AppearanceSection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    theme = 'system'
-  })
+describe("AppearanceSection", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		theme = "system";
+	});
 
-  it('marks the active theme as pressed', () => {
-    render(<AppearanceSection />)
-    expect(screen.getByRole('button', { name: /system/i })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: /dark/i })).toHaveAttribute('aria-pressed', 'false')
-  })
+	it("marks the active theme as pressed", () => {
+		render(<AppearanceSection />);
+		expect(screen.getByRole("button", { name: /system/iu })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		expect(screen.getByRole("button", { name: /dark/iu })).toHaveAttribute("aria-pressed", "false");
+	});
 
-  it('calls setTheme when a choice is clicked', () => {
-    render(<AppearanceSection />)
-    fireEvent.click(screen.getByRole('button', { name: /dark/i }))
-    expect(setTheme).toHaveBeenCalledWith('dark')
-  })
-})
+	it("calls setTheme when a choice is clicked", () => {
+		render(<AppearanceSection />);
+		fireEvent.click(screen.getByRole("button", { name: /dark/iu }));
+		expect(setTheme).toHaveBeenCalledWith("dark");
+	});
+});

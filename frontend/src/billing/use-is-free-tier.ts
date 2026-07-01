@@ -1,5 +1,5 @@
-import { useBillingStatus } from '../api/queries'
-import { useConfig } from '../config-context'
+import { useBillingStatus } from "../api/queries";
+import { useConfig } from "../config-context";
 
 /**
  * True only when paid tiers exist AND the user is on the free tier.
@@ -11,8 +11,10 @@ import { useConfig } from '../config-context'
  * free-tier UI affordance on this hook instead of comparing tier directly.
  */
 export function useIsFreeTier(): boolean {
-  const { billingEnabled } = useConfig()
-  const { data } = useBillingStatus()
-  if (!billingEnabled) return false
-  return data?.tier === 'free' || data?.tier === 'none'
+	const { billingEnabled } = useConfig();
+	const { data } = useBillingStatus();
+	if (!billingEnabled) {
+		return false;
+	}
+	return data?.tier === "free" || data?.tier === "none";
 }

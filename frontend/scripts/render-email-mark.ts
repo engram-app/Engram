@@ -9,7 +9,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Resvg } from "@resvg/resvg-js";
 import pngquant from "pngquant-bin";
@@ -19,29 +19,27 @@ const appRoot = join(HERE, "..");
 const dest = join(appRoot, "..", "priv/static/email/engram-mark.png");
 
 const svg = readFileSync(join(appRoot, "public/engram-mark.svg"));
-const truecolor = new Resvg(svg, { fitTo: { mode: "width", value: 256 } })
-  .render()
-  .asPng();
+const truecolor = new Resvg(svg, { fitTo: { mode: "width", value: 256 } }).render().asPng();
 
 const tmp = `${dest}.truecolor.tmp`;
 writeFileSync(tmp, truecolor);
 try {
-  execFileSync(pngquant, [
-    "--quality=95-100",
-    "--speed=1",
-    "--strip",
-    "--force",
-    "--output",
-    dest,
-    tmp,
-  ]);
+	execFileSync(pngquant, [
+		"--quality=95-100",
+		"--speed=1",
+		"--strip",
+		"--force",
+		"--output",
+		dest,
+		tmp,
+	]);
 } finally {
-  unlinkSync(tmp);
+	unlinkSync(tmp);
 }
 
 const finalSize = readFileSync(dest).byteLength;
 console.log(
-  `wrote ${finalSize} bytes -> ${dest} ` +
-    `(${truecolor.byteLength} truecolor -> ${finalSize} quantized, ` +
-    `${Math.round((1 - finalSize / truecolor.byteLength) * 100)}% smaller)`,
+	`wrote ${finalSize} bytes -> ${dest} ` +
+		`(${truecolor.byteLength} truecolor -> ${finalSize} quantized, ` +
+		`${Math.round((1 - finalSize / truecolor.byteLength) * 100)}% smaller)`,
 );

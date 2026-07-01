@@ -1,0 +1,199 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": [
+			"**",
+			"!**/dist",
+			"!**/node_modules",
+			"!public",
+			"!**/playwright-report",
+			"!**/test-results",
+			"!bun.lock"
+		]
+	},
+	"css": {
+		"parser": {
+			"cssModules": false,
+			"tailwindDirectives": true
+		},
+		"formatter": {
+			"enabled": true
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100,
+		"lineEnding": "lf"
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always",
+			"trailingCommas": "all"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"a11y": "error",
+			"complexity": "error",
+			"correctness": "error",
+			"nursery": "error",
+			"performance": "error",
+			"security": "error",
+			"style": "error",
+			"suspicious": "error"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**"],
+			"linter": {
+				"rules": {
+					"a11y": {
+						"noLabelWithoutControl": {
+							"level": "error",
+							"options": { "inputComponents": ["Checkbox"] }
+						}
+					},
+					"complexity": {
+						"noExcessiveLinesPerFunction": "off",
+						"useMaxParams": "off",
+						"noExcessiveCognitiveComplexity": "off",
+						"noForEach": "off",
+						"noVoid": "off"
+					},
+					"correctness": {
+						"useQwikValidLexicalScope": "off",
+						"noInvalidPositionAtImportRule": "off",
+						"noUndeclaredDependencies": "off",
+						"useExhaustiveDependencies": "off",
+						"useImageSize": "off",
+						"useUniqueElementIds": "off"
+					},
+					"nursery": {
+						"useExplicitType": "off",
+						"useExplicitReturnType": "off",
+						"noReactNativeRawText": "off",
+						"noComponentHookFactories": "off",
+						"noConditionalExpect": "off",
+						"noDuplicateSelectors": "off",
+						"noInlineStyles": "off",
+						"useBaseline": "off",
+						"useDomQuerySelector": "off",
+						"useExpect": "off",
+						"useImportsFirst": "off",
+						"useNamedCaptureGroup": "off",
+						"useReactFunctionComponentDefinition": "off",
+						"useRegexpTest": "off",
+						"useTestHooksOnTop": "off",
+						"useThisInClassMethods": "off",
+						"useUnicodeRegex": "off"
+					},
+					"performance": {
+						"useTopLevelRegex": "off",
+						"useSolidForComponent": "off",
+						"noImgElement": "off",
+						"noJsxPropsBind": "off",
+						"noAwaitInLoops": "off",
+						"noBarrelFile": "off",
+						"noNamespaceImport": "off"
+					},
+					"security": {
+						"noDangerouslySetInnerHtml": "off",
+						"noSecrets": "off"
+					},
+					"style": {
+						"useNamingConvention": "off",
+						"noMagicNumbers": "off",
+						"noDefaultExport": "off",
+						"noImplicitBoolean": "off",
+						"noJsxLiterals": "off",
+						"noTernary": "off",
+						"noHexColors": "off",
+						"useGlobalThis": "off",
+						"noContinue": "off",
+						"noExcessiveClassesPerFile": "off",
+						"noExcessiveLinesPerFile": "off",
+						"noExportedImports": "off",
+						"noIncrementDecrement": "off",
+						"noNestedTernary": "off",
+						"noNonNullAssertion": "off",
+						"noParameterProperties": "off",
+						"useAtIndex": "off",
+						"useComponentExportOnlyModules": "off",
+						"useConsistentMemberAccessibility": "off",
+						"useConsistentMethodSignatures": "off",
+						"useDestructuring": "off",
+						"useExportsLast": "off"
+					},
+					"suspicious": {
+						"noReactSpecificProps": "off",
+						"noAlert": "off",
+						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
+						"noEmptyBlockStatements": "off",
+						"noEqualsToNull": "off",
+						"noReturnAssign": "off",
+						"noShadow": "off",
+						"noSkippedTests": "off",
+						"noUnnecessaryConditions": "off",
+						"useAwait": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off",
+						"noGlobalDirnameFilename": "off"
+					},
+					"style": { "noProcessEnv": "off" },
+					"suspicious": { "noConsole": "off" }
+				}
+			}
+		},
+		{
+			"includes": [
+				"**/*.test.ts",
+				"**/*.test.tsx",
+				"src/test-setup.ts",
+				"**/__mocks__/**",
+				"e2e/**"
+			],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off",
+						"noGlobalDirnameFilename": "off"
+					},
+					"style": { "noProcessEnv": "off" },
+					"suspicious": { "noConsole": "off", "noExplicitAny": "off" },
+					"performance": { "noDelete": "off" },
+					"nursery": {
+						"noPlaywrightWaitForTimeout": "off",
+						"useConsistentTestIt": "off"
+					}
+				}
+			}
+		}
+	]
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from "react";
 
 /**
  * Trailing debounce of a changing value. Unlike `useDeferredValue` — which
@@ -8,12 +8,12 @@ import { useEffect, useState } from 'react'
  * instead of once per keystroke.
  */
 export function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
+	const [debounced, setDebounced] = useState(value);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs)
-    return () => clearTimeout(timer)
-  }, [value, delayMs])
+	useEffect(() => {
+		const timer = setTimeout(() => setDebounced(value), delayMs);
+		return () => clearTimeout(timer);
+	}, [value, delayMs]);
 
-  return debounced
+	return debounced;
 }

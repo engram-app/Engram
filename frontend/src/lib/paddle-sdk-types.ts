@@ -1,24 +1,24 @@
 export type {
-  Paddle,
-  Environments,
-  PaddleEventData,
-  PricePreviewParams,
-  PricePreviewResponse,
-  CheckoutEventsData,
-  CheckoutCustomer,
-  TimePeriod,
-  CheckoutOpenLineItem,
-} from "@paddle/paddle-js"
+	CheckoutCustomer,
+	CheckoutEventsData,
+	CheckoutOpenLineItem,
+	Environments,
+	Paddle,
+	PaddleEventData,
+	PricePreviewParams,
+	PricePreviewResponse,
+	TimePeriod,
+} from "@paddle/paddle-js";
 
-export { CheckoutEventNames } from "@paddle/paddle-js"
+export { CheckoutEventNames } from "@paddle/paddle-js";
 
 // CheckoutSettings from the SDK, widened to include "express" in the variant
 // union. The express variant is a valid Paddle.js variant not yet reflected in
 // the SDK's Variant type ('multi-page' | 'one-page').
-import type { CheckoutSettings as SDKCheckoutSettings, CheckoutCustomer } from "@paddle/paddle-js"
+import type { CheckoutCustomer, CheckoutSettings as SDKCheckoutSettings } from "@paddle/paddle-js";
 export type CheckoutSettings = Omit<SDKCheckoutSettings, "variant"> & {
-  variant?: SDKCheckoutSettings["variant"] | "express"
-}
+	variant?: SDKCheckoutSettings["variant"] | "express";
+};
 
 // ---
 // Hook API types
@@ -36,14 +36,14 @@ export type CheckoutSettings = Omit<SDKCheckoutSettings, "variant"> & {
  * Note: this is a simplified wrapper over the raw Paddle SDK `CheckoutOpenOptions`.
  * For full control over the checkout, use `paddle.Checkout.open()` directly.
  */
-export type OpenCheckoutOptions = {
-  priceId: string
-  items?: Array<{ priceId: string; quantity?: number }>
-  customer?: CheckoutCustomer
-  customerAuthToken?: string
-  discountCode?: string
-  discountId?: string
-  customData?: Record<string, unknown>
-  /** Must be an absolute URL (starting with `https://` or `http://`) */
-  successUrl?: string
+export interface OpenCheckoutOptions {
+	priceId: string;
+	items?: Array<{ priceId: string; quantity?: number }>;
+	customer?: CheckoutCustomer;
+	customerAuthToken?: string;
+	discountCode?: string;
+	discountId?: string;
+	customData?: Record<string, unknown>;
+	/** Must be an absolute URL (starting with `https://` or `http://`) */
+	successUrl?: string;
 }

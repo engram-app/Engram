@@ -373,6 +373,30 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert String.contains?(body, "body"), "body content must be preserved"
   end
 
+  # ── bind/3 self-heals legacy docs with fence inline in Y.Text ───────────
+
+  test "bind heals a persisted doc whose body Y.Text still holds a frontmatter fence",
+       %{user: user, note: note} do
+    # Craft an illegal at-rest state: fence inline in the body Y.Text, empty Y.Map.
+    doc = CrdtBridge.new_doc()
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    Yex.Text.insert(text, 0, "---\ntitle: Hi\n---\nbody\n")
+    {:ok, state} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    bound = CrdtBridge.new_doc()
+    CrdtPersistence.bind(st, note.id, bound)
+
+    assert CrdtBridge.frontmatter_of(bound) == {["title"], %{"title" => "\"Hi\""}}
+    assert CrdtBridge.body_of(bound) == "body\n"
+  end
+
   # ── bind/3 replays tail-log after snapshot ────────────────────────────────
 
   test "bind/3 replays tail-log rows on top of the snapshot", ctx do

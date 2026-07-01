@@ -1,8 +1,8 @@
-import { Navigate, useLocation } from 'react-router'
-import LoadingScreen from '../layout/loading-screen'
-import NotFoundPage from '../not-found'
-import { signInRedirectTarget } from './sign-in-redirect'
-import { useAuthAdapter } from './use-auth-adapter'
+import { Navigate, useLocation } from "react-router";
+import LoadingScreen from "../layout/loading-screen";
+import NotFoundPage from "../not-found";
+import { signInRedirectTarget } from "./sign-in-redirect";
+import { useAuthAdapter } from "./use-auth-adapter";
 
 // Auth-aware catch-all for unmatched paths.
 //
@@ -12,16 +12,16 @@ import { useAuthAdapter } from './use-auth-adapter'
 // Signed-in users still get the real 404; a typo for them is just a typo,
 // not a reason to round-trip through auth.
 export default function CatchAllRoute() {
-  const { isLoaded, isSignedIn } = useAuthAdapter()
-  const location = useLocation()
+	const { isLoaded, isSignedIn } = useAuthAdapter();
+	const location = useLocation();
 
-  if (!isLoaded) {
-    return <LoadingScreen />
-  }
+	if (!isLoaded) {
+		return <LoadingScreen />;
+	}
 
-  if (!isSignedIn) {
-    return <Navigate to={signInRedirectTarget(location)} replace />
-  }
+	if (!isSignedIn) {
+		return <Navigate to={signInRedirectTarget(location)} replace />;
+	}
 
-  return <NotFoundPage />
+	return <NotFoundPage />;
 }

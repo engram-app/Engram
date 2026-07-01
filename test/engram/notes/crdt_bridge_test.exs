@@ -123,6 +123,83 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "normalize_doc/1" do
+    defp seed_body(doc, str) do
+      text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+      Yex.Text.insert(text, 0, str)
+      doc
+    end
+
+    test "lifts a single leading fence into the Y.Map and strips it from the body" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\ntitle: Hi\n---\nbody\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+
+    test "heals stacked fences in one call, appending fence-only keys in order" do
+      doc =
+        CrdtBridge.new_doc()
+        |> seed_body("---\nasdf: asdf\n---\n---\ntitle: Hi\ntags:\n  - a\n---\nbody\n")
+
+      assert :ok = CrdtBridge.normalize_doc(doc)
+
+      assert CrdtBridge.frontmatter_of(doc) ==
+               {["asdf", "title", "tags"],
+                %{"asdf" => "\"asdf\"", "title" => "\"Hi\"", "tags" => "[\"a\"]"}}
+
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+
+    test "Y.Map wins on a key collision; fence value is discarded" do
+      doc = CrdtBridge.new_doc()
+      map = Yex.Doc.get_map(doc, "frontmatter")
+      Yex.Map.set(map, "title", "\"New\"")
+      arr = Yex.Doc.get_array(doc, "frontmatter_order")
+      Yex.Array.insert_list(arr, 0, ["title"])
+      seed_body(doc, "---\ntitle: Old\n---\nbody\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"New\""}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+
+    test "no-op when the body has no leading fence" do
+      doc = CrdtBridge.new_doc() |> seed_body("just body\nmore\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == "just body\nmore\n"
+    end
+
+    test "no-op on a mid-body horizontal rule (fence not at the very top)" do
+      doc = CrdtBridge.new_doc() |> seed_body("text\n---\nmore\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == "text\n---\nmore\n"
+    end
+
+    test "leaves a non-map YAML top block untouched (not real frontmatter)" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\njust a scalar line\n---\nx\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == "---\njust a scalar line\n---\nx\n"
+    end
+
+    test "is idempotent" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\ntitle: Hi\n---\nbody\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      first = {CrdtBridge.frontmatter_of(doc), CrdtBridge.body_of(doc)}
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert {CrdtBridge.frontmatter_of(doc), CrdtBridge.body_of(doc)} == first
+    end
+
+    test "strips an empty frontmatter fence and terminates" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\n---\nbody\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+  end
+
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
     # Astral emoji 🎉 / 😀 are 2 UTF-16 code units each; multibyte BMP chars
     # (é, 漢) are 1 unit but >1 byte — a :bytes offset would mis-slice both.
