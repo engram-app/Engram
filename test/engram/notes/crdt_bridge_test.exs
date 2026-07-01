@@ -191,6 +191,13 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert :ok = CrdtBridge.normalize_doc(doc)
       assert {CrdtBridge.frontmatter_of(doc), CrdtBridge.body_of(doc)} == first
     end
+
+    test "strips an empty frontmatter fence and terminates" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\n---\nbody\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
   end
 
   test "multibyte + astral-plane (emoji) edits round-trip without corruption" do
