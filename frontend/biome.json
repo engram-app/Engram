@@ -97,7 +97,6 @@
 						"useDomQuerySelector": "off",
 						"useExpect": "off",
 						"useImportsFirst": "off",
-						"useNamedCaptureGroup": "off",
 						"useReactFunctionComponentDefinition": "off",
 						"useRegexpTest": "off",
 						"useTestHooksOnTop": "off",

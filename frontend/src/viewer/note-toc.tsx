@@ -12,7 +12,7 @@ function extractHeadings(markdown: string): Heading[] {
 	const headings: Heading[] = [];
 	// Strip fenced code blocks so `# foo` inside them isn't picked up.
 	const stripped = markdown.replace(/```[\s\S]*?```/gu, "");
-	const re = /^(#{1,6})\s+(.+?)\s*#*\s*$/gmu;
+	const re = /^(?<hashes>#{1,6})\s+(?<text>.+?)\s*#*\s*$/gmu;
 	let match = re.exec(stripped);
 	while (match !== null) {
 		const hashes = match[1] ?? "";
