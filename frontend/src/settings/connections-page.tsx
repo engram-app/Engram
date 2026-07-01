@@ -9,6 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { useAutofocus } from "@/hooks/use-autofocus";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { ApiError } from "../api/client";
 import {
@@ -416,6 +417,7 @@ function CreatePatModal({
 }) {
 	const [name, setName] = useState("");
 	const create = useCreatePat();
+	const nameRef = useAutofocus<HTMLInputElement>();
 
 	async function submit(e: React.FormEvent) {
 		e.preventDefault();
@@ -436,7 +438,7 @@ function CreatePatModal({
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">Name</span>
 					<input
-						autoFocus
+						ref={nameRef}
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 						placeholder="e.g. ci-bot"
