@@ -66,8 +66,8 @@ function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
       onChange={(e) => setDraft(e.target.value)}
       onFocus={() => onFocusChange?.(true)}
       onBlur={() => {
-        onFocusChange?.(false)
         commit()
+        onFocusChange?.(false)
       }}
     />
   )

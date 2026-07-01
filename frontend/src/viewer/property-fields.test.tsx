@@ -19,6 +19,9 @@ describe('PropertyField', () => {
     fireEvent.change(input, { target: { value: '7' } })
     fireEvent.blur(input)
     expect(onCommit).toHaveBeenLastCalledWith(7)
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    expect(onCommit).toHaveBeenLastCalledWith(null)
   })
 
   test('checkbox commits immediately', () => {
