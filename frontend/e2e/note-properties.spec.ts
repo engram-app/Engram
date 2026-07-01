@@ -196,7 +196,7 @@ test.describe('PropertiesWidget e2e', () => {
 
     // Open the type dropdown and select "date".
     await typeButton.click()
-    await page.getByRole('menuitem', { name: 'date' }).click()
+    await page.getByRole('menuitem', { name: 'date', exact: true }).click()
 
     // After override: the type button should now read "date" and the value
     // input should be type="date" (the ScalarField renders htmlType="date").
