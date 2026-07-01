@@ -124,7 +124,7 @@ export default function NotePage() {
 				</Button>
 			</div>
 
-			{handle && <PropertiesWidget doc={handle.doc} />}
+			{handle ? <PropertiesWidget doc={handle.doc} /> : null}
 
 			{mode === "reading" ? (
 				<ScrollArea className="min-h-0 flex-1">
