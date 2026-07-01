@@ -84,32 +84,40 @@ export function CadenceToggle({
 	return (
 		<div role="radiogroup" aria-label="Billing cadence" className="flex justify-center">
 			<div className="inline-flex rounded-full border border-border bg-muted p-1 text-sm">
-				<button
-					type="button"
-					role="radio"
-					aria-checked={cadence === "monthly"}
-					onClick={() => onChange("monthly")}
+				<label
 					className={cn(
-						"inline-flex items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition",
+						"inline-flex cursor-pointer items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1",
 						cadence === "monthly"
 							? "bg-primary text-primary-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					)}
 				>
+					<input
+						type="radio"
+						name="billing-cadence"
+						value="monthly"
+						checked={cadence === "monthly"}
+						onChange={() => onChange("monthly")}
+						className="sr-only"
+					/>
 					Monthly
-				</button>
-				<button
-					type="button"
-					role="radio"
-					aria-checked={cadence === "annual"}
-					onClick={() => onChange("annual")}
+				</label>
+				<label
 					className={cn(
-						"inline-flex items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition",
+						"inline-flex cursor-pointer items-center justify-center rounded-full px-4 py-1.5 font-medium leading-none transition focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1",
 						cadence === "annual"
 							? "bg-primary text-primary-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					)}
 				>
+					<input
+						type="radio"
+						name="billing-cadence"
+						value="annual"
+						checked={cadence === "annual"}
+						onChange={() => onChange("annual")}
+						className="sr-only"
+					/>
 					Annual{" "}
 					<span
 						className={cn(
@@ -119,7 +127,7 @@ export function CadenceToggle({
 					>
 						save 17%
 					</span>
-				</button>
+				</label>
 			</div>
 		</div>
 	);
