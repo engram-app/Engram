@@ -96,7 +96,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 
 	if (!config) {
 		return (
-			<section role="region" aria-label="Change plan" className="py-2">
+			<section aria-label="Change plan" className="py-2">
 				<p className="text-muted-foreground text-sm">Loading plan options…</p>
 			</section>
 		);
@@ -116,7 +116,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	}
 
 	return (
-		<section role="region" aria-label="Change plan" className="space-y-5 pt-2">
+		<section aria-label="Change plan" className="space-y-5 pt-2">
 			<header>
 				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
 				<p className="mt-2 text-muted-foreground text-sm">
@@ -218,7 +218,7 @@ function TrialNotice({
 
 	if (alreadyCanceled) {
 		return (
-			<section role="region" aria-label="Change plan" className="space-y-4 pt-2">
+			<section aria-label="Change plan" className="space-y-4 pt-2">
 				<header>
 					<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
 					<p className="mt-2 text-muted-foreground text-sm">
@@ -247,7 +247,7 @@ function TrialNotice({
 	}
 
 	return (
-		<section role="region" aria-label="Change plan" className="space-y-4 pt-2">
+		<section aria-label="Change plan" className="space-y-4 pt-2">
 			<header>
 				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
 				<p className="mt-2 text-muted-foreground text-sm">

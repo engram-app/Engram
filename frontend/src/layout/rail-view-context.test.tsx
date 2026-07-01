@@ -7,8 +7,12 @@ function Probe() {
 	return (
 		<>
 			<span data-testid="view">{view}</span>
-			<button onClick={() => setView("search")}>to-search</button>
-			<button onClick={() => setView("files")}>to-files</button>
+			<button type="button" onClick={() => setView("search")}>
+				to-search
+			</button>
+			<button type="button" onClick={() => setView("files")}>
+				to-files
+			</button>
 		</>
 	);
 }

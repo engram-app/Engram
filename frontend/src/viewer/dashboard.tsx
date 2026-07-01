@@ -58,7 +58,7 @@ function FolderNotes({ folder }: { folder: string }) {
 
 	return (
 		<section aria-label={`Notes in ${folder}`}>
-			<ul role="list">
+			<ul>
 				{notes.map((note) => (
 					<li key={note.path}>
 						<NoteRow note={note} />
