@@ -1,12 +1,12 @@
-import { mapPreviewToBreakdownData } from "@/lib/plan-change-breakdown-utils"
-import { PlanChangeBreakdown, type PlanChangeBreakdownProps } from "./plan-change-breakdown"
+import { mapPreviewToBreakdownData } from "@/lib/plan-change-breakdown-utils";
+import { PlanChangeBreakdown, type PlanChangeBreakdownProps } from "./plan-change-breakdown";
 
-type BreakdownPreviewResponse = Parameters<typeof mapPreviewToBreakdownData>[0]
+type BreakdownPreviewResponse = Parameters<typeof mapPreviewToBreakdownData>[0];
 
 export type PaddlePlanChangeBreakdownProps = {
-  /** Subscription update preview response with the proposed changes */
-  previewResponse: BreakdownPreviewResponse
-} & Omit<PlanChangeBreakdownProps, "breakdown">
+	/** Subscription update preview response with the proposed changes */
+	previewResponse: BreakdownPreviewResponse;
+} & Omit<PlanChangeBreakdownProps, "breakdown">;
 
 /**
  * Paddle-aware wrapper for `PlanChangeBreakdown`.
@@ -25,9 +25,9 @@ export type PaddlePlanChangeBreakdownProps = {
  * />
  */
 export function PaddlePlanChangeBreakdown({
-  previewResponse,
-  ...uiProps
+	previewResponse,
+	...uiProps
 }: PaddlePlanChangeBreakdownProps) {
-  const breakdown = mapPreviewToBreakdownData(previewResponse)
-  return <PlanChangeBreakdown breakdown={breakdown} {...uiProps} />
+	const breakdown = mapPreviewToBreakdownData(previewResponse);
+	return <PlanChangeBreakdown breakdown={breakdown} {...uiProps} />;
 }

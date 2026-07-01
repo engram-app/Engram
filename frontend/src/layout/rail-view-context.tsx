@@ -1,32 +1,32 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
-export type RailView = 'files' | 'search'
+export type RailView = "files" | "search";
 
-const STORAGE_KEY = 'engram:rail-view'
-const VALID: ReadonlySet<RailView> = new Set(['files', 'search'])
+const STORAGE_KEY = "engram:rail-view";
+const VALID: ReadonlySet<RailView> = new Set(["files", "search"]);
 
-type Ctx = { view: RailView; setView: (v: RailView) => void }
-const RailViewCtx = createContext<Ctx | null>(null)
+type Ctx = { view: RailView; setView: (v: RailView) => void };
+const RailViewCtx = createContext<Ctx | null>(null);
 
 function readStored(): RailView {
-  if (typeof window === 'undefined') return 'files'
-  const raw = window.localStorage.getItem(STORAGE_KEY)
-  return raw && VALID.has(raw as RailView) ? (raw as RailView) : 'files'
+	if (typeof window === "undefined") return "files";
+	const raw = window.localStorage.getItem(STORAGE_KEY);
+	return raw && VALID.has(raw as RailView) ? (raw as RailView) : "files";
 }
 
 export function RailViewProvider({ children }: { children: ReactNode }) {
-  const [view, setViewState] = useState<RailView>(readStored)
+	const [view, setViewState] = useState<RailView>(readStored);
 
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, view)
-  }, [view])
+	useEffect(() => {
+		window.localStorage.setItem(STORAGE_KEY, view);
+	}, [view]);
 
-  const setView = useCallback((v: RailView) => setViewState(v), [])
-  return <RailViewCtx.Provider value={{ view, setView }}>{children}</RailViewCtx.Provider>
+	const setView = useCallback((v: RailView) => setViewState(v), []);
+	return <RailViewCtx.Provider value={{ view, setView }}>{children}</RailViewCtx.Provider>;
 }
 
 export function useRailView(): Ctx {
-  const ctx = useContext(RailViewCtx)
-  if (!ctx) throw new Error('useRailView must be used inside RailViewProvider')
-  return ctx
+	const ctx = useContext(RailViewCtx);
+	if (!ctx) throw new Error("useRailView must be used inside RailViewProvider");
+	return ctx;
 }

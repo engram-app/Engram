@@ -3,7 +3,7 @@
 // features (callout, wikilink, code fence) so the editor renders something
 // non-trivial. Update freely — it's not load-bearing.
 
-export const WELCOME_NOTE_PATH = 'Welcome.md'
+export const WELCOME_NOTE_PATH = "Welcome.md";
 
 export const WELCOME_NOTE_CONTENT = `# Welcome to Engram
 
@@ -24,4 +24,4 @@ end
 \`\`\`
 
 Delete this note any time and start fresh — it's just a sample.
-`
+`;

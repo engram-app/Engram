@@ -1,65 +1,65 @@
-import type React from 'react'
-import { useCallback, useEffect, useRef } from 'react'
+import type React from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 interface Options {
-  onLongPress: () => void
-  onMoveExceedThreshold?: () => void
-  delayMs?: number
-  moveThresholdPx?: number
+	onLongPress: () => void;
+	onMoveExceedThreshold?: () => void;
+	delayMs?: number;
+	moveThresholdPx?: number;
 }
 
 export function useLongPress({
-  onLongPress,
-  onMoveExceedThreshold,
-  delayMs = 500,
-  moveThresholdPx = 8,
+	onLongPress,
+	onMoveExceedThreshold,
+	delayMs = 500,
+	moveThresholdPx = 8,
 }: Options) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const start = useRef<{ x: number; y: number } | null>(null)
-  const fired = useRef(false)
+	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const start = useRef<{ x: number; y: number } | null>(null);
+	const fired = useRef(false);
 
-  const cancel = useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = null
-    }
-    start.current = null
-    fired.current = false
-  }, [])
+	const cancel = useCallback(() => {
+		if (timer.current) {
+			clearTimeout(timer.current);
+			timer.current = null;
+		}
+		start.current = null;
+		fired.current = false;
+	}, []);
 
-  useEffect(() => cancel, [cancel])
+	useEffect(() => cancel, [cancel]);
 
-  return {
-    onPointerDown(e: React.PointerEvent) {
-      cancel()
-      // Long-press is a touch/pen affordance only. Mouse uses right-click
-      // (onContextMenu) for the same actions; arming a timer for the mouse
-      // makes a click-and-drag trip the action drawer — and once a native
-      // mouse drag starts the browser stops emitting pointermove, so the
-      // move-threshold can't cancel it. pointerType is the mouse/touch signal.
-      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
-      start.current = { x: e.clientX, y: e.clientY }
-      timer.current = setTimeout(() => {
-        fired.current = true
-        onLongPress()
-      }, delayMs)
-    },
-    onPointerMove(e: React.PointerEvent) {
-      if (!start.current) return
-      const dx = e.clientX - start.current.x
-      const dy = e.clientY - start.current.y
-      if (dx * dx + dy * dy > moveThresholdPx * moveThresholdPx) {
-        if (fired.current) {
-          onMoveExceedThreshold?.()
-        }
-        cancel()
-      }
-    },
-    onPointerUp(_e: React.PointerEvent) {
-      cancel()
-    },
-    onPointerCancel(_e: React.PointerEvent) {
-      cancel()
-    },
-  }
+	return {
+		onPointerDown(e: React.PointerEvent) {
+			cancel();
+			// Long-press is a touch/pen affordance only. Mouse uses right-click
+			// (onContextMenu) for the same actions; arming a timer for the mouse
+			// makes a click-and-drag trip the action drawer — and once a native
+			// mouse drag starts the browser stops emitting pointermove, so the
+			// move-threshold can't cancel it. pointerType is the mouse/touch signal.
+			if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+			start.current = { x: e.clientX, y: e.clientY };
+			timer.current = setTimeout(() => {
+				fired.current = true;
+				onLongPress();
+			}, delayMs);
+		},
+		onPointerMove(e: React.PointerEvent) {
+			if (!start.current) return;
+			const dx = e.clientX - start.current.x;
+			const dy = e.clientY - start.current.y;
+			if (dx * dx + dy * dy > moveThresholdPx * moveThresholdPx) {
+				if (fired.current) {
+					onMoveExceedThreshold?.();
+				}
+				cancel();
+			}
+		},
+		onPointerUp(_e: React.PointerEvent) {
+			cancel();
+		},
+		onPointerCancel(_e: React.PointerEvent) {
+			cancel();
+		},
+	};
 }

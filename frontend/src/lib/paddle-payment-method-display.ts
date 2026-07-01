@@ -1,84 +1,84 @@
 export type PaddlePaymentMethodType =
-  | "alipay"
-  | "apple_pay"
-  | "bancontact"
-  | "blik"
-  | "card"
-  | "google_pay"
-  | "ideal"
-  | "kakao_pay"
-  | "south_korea_local_card"
-  | "mb_way"
-  | "naver_pay"
-  | "offline"
-  | "payco"
-  | "paypal"
-  | "pix"
-  | "samsung_pay"
-  | "unknown"
-  | "upi"
-  | "wechat_pay"
-  | "wire_transfer"
-  /** @deprecated Returned on historical transactions but replaced by `south_korea_local_card` in newer transactions */
-  | "korea_local"
-  | (string & {})
+	| "alipay"
+	| "apple_pay"
+	| "bancontact"
+	| "blik"
+	| "card"
+	| "google_pay"
+	| "ideal"
+	| "kakao_pay"
+	| "south_korea_local_card"
+	| "mb_way"
+	| "naver_pay"
+	| "offline"
+	| "payco"
+	| "paypal"
+	| "pix"
+	| "samsung_pay"
+	| "unknown"
+	| "upi"
+	| "wechat_pay"
+	| "wire_transfer"
+	/** @deprecated Returned on historical transactions but replaced by `south_korea_local_card` in newer transactions */
+	| "korea_local"
+	| (string & {});
 
 /** All Paddle card brand types from `transaction.payments[0].method_details.card.type` */
 export type PaddleCardType =
-  | "american_express"
-  | "diners_club"
-  | "discover"
-  | "jcb"
-  | "mada"
-  | "maestro"
-  | "mastercard"
-  | "union_pay"
-  | "unknown"
-  | "visa"
-  | (string & {})
+	| "american_express"
+	| "diners_club"
+	| "discover"
+	| "jcb"
+	| "mada"
+	| "maestro"
+	| "mastercard"
+	| "union_pay"
+	| "unknown"
+	| "visa"
+	| (string & {});
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
-  alipay: "Alipay",
-  apple_pay: "Apple Pay",
-  bancontact: "Bancontact",
-  blik: "BLIK",
-  card: "Card",
-  google_pay: "Google Pay",
-  ideal: "iDEAL",
-  kakao_pay: "Kakao Pay",
-  south_korea_local_card: "Korea local card",
-  mb_way: "MB WAY",
-  naver_pay: "Naver Pay",
-  offline: "Offline",
-  payco: "PAYCO",
-  paypal: "PayPal",
-  pix: "Pix",
-  samsung_pay: "Samsung Pay",
-  unknown: "Payment method",
-  upi: "UPI",
-  wechat_pay: "WeChat Pay",
-  wire_transfer: "Wire transfer",
-  korea_local: "Korean payment methods",
-}
+	alipay: "Alipay",
+	apple_pay: "Apple Pay",
+	bancontact: "Bancontact",
+	blik: "BLIK",
+	card: "Card",
+	google_pay: "Google Pay",
+	ideal: "iDEAL",
+	kakao_pay: "Kakao Pay",
+	south_korea_local_card: "Korea local card",
+	mb_way: "MB WAY",
+	naver_pay: "Naver Pay",
+	offline: "Offline",
+	payco: "PAYCO",
+	paypal: "PayPal",
+	pix: "Pix",
+	samsung_pay: "Samsung Pay",
+	unknown: "Payment method",
+	upi: "UPI",
+	wechat_pay: "WeChat Pay",
+	wire_transfer: "Wire transfer",
+	korea_local: "Korean payment methods",
+};
 
 const CARD_BRAND_LABELS: Record<string, string> = {
-  american_express: "American Express",
-  diners_club: "Diners Club",
-  discover: "Discover",
-  jcb: "JCB",
-  mada: "Mada",
-  maestro: "Maestro",
-  mastercard: "Mastercard",
-  union_pay: "UnionPay",
-  unknown: "Card",
-  visa: "Visa",
-}
+	american_express: "American Express",
+	diners_club: "Diners Club",
+	discover: "Discover",
+	jcb: "JCB",
+	mada: "Mada",
+	maestro: "Maestro",
+	mastercard: "Mastercard",
+	union_pay: "UnionPay",
+	unknown: "Card",
+	visa: "Visa",
+};
 
 function formatUnknownType(type: string): string {
-  return type
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ")
+	return type
+		.split("_")
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(" ");
 }
 
 /**
@@ -101,15 +101,15 @@ function formatUnknownType(type: string): string {
  * getPaymentMethodDisplay("apple_pay")                // "Apple Pay"
  */
 export function getPaymentMethodDisplay(
-  type: PaddlePaymentMethodType,
-  cardBrand?: PaddleCardType,
-  last4?: string
+	type: PaddlePaymentMethodType,
+	cardBrand?: PaddleCardType,
+	last4?: string,
 ): string {
-  if (type === "card") {
-    const brand = cardBrand
-      ? (CARD_BRAND_LABELS[cardBrand] ?? formatUnknownType(cardBrand))
-      : "Card"
-    return last4 ? `${brand} ending ${last4}` : brand
-  }
-  return PAYMENT_METHOD_LABELS[type] ?? formatUnknownType(type)
+	if (type === "card") {
+		const brand = cardBrand
+			? (CARD_BRAND_LABELS[cardBrand] ?? formatUnknownType(cardBrand))
+			: "Card";
+		return last4 ? `${brand} ending ${last4}` : brand;
+	}
+	return PAYMENT_METHOD_LABELS[type] ?? formatUnknownType(type);
 }

@@ -1,28 +1,28 @@
-import type { EngramConfig } from '../config'
+import type { EngramConfig } from "../config";
 
 export interface SettingsSection {
-  to: string
-  label: string
+	to: string;
+	label: string;
 }
 
 export function buildSettingsSections(
-  authProvider: EngramConfig['authProvider'],
-  billingEnabled: boolean,
-  isAdmin = false,
+	authProvider: EngramConfig["authProvider"],
+	billingEnabled: boolean,
+	isAdmin = false,
 ): SettingsSection[] {
-  const sections: SettingsSection[] = [
-    { to: 'account', label: 'Account' },
-    { to: 'vaults', label: 'Vaults' },
-    { to: 'connections', label: 'Connections' },
-  ]
+	const sections: SettingsSection[] = [
+		{ to: "account", label: "Account" },
+		{ to: "vaults", label: "Vaults" },
+		{ to: "connections", label: "Connections" },
+	];
 
-  if (billingEnabled) {
-    sections.push({ to: 'billing', label: 'Billing' })
-  }
+	if (billingEnabled) {
+		sections.push({ to: "billing", label: "Billing" });
+	}
 
-  if (authProvider === 'local' && isAdmin) {
-    sections.push({ to: 'admin', label: 'Administration' })
-  }
+	if (authProvider === "local" && isAdmin) {
+		sections.push({ to: "admin", label: "Administration" });
+	}
 
-  return sections
+	return sections;
 }

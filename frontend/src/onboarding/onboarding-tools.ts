@@ -4,31 +4,31 @@
 // a flat `tools: string[]`.
 
 export interface ToolOption {
-  slug: string
-  label: string
-  hint?: string
+	slug: string;
+	label: string;
+	hint?: string;
 }
 
 export const TOOL_ASSISTANTS: ToolOption[] = [
-  { slug: 'claude', label: 'Claude' },
-  { slug: 'chatgpt', label: 'ChatGPT' },
-  { slug: 'grok', label: 'Grok' },
-  { slug: 'mistral', label: 'Mistral' },
-  { slug: 'open_webui', label: 'Open WebUI' },
-  { slug: 'lobechat', label: 'LobeChat' },
-]
+	{ slug: "claude", label: "Claude" },
+	{ slug: "chatgpt", label: "ChatGPT" },
+	{ slug: "grok", label: "Grok" },
+	{ slug: "mistral", label: "Mistral" },
+	{ slug: "open_webui", label: "Open WebUI" },
+	{ slug: "lobechat", label: "LobeChat" },
+];
 
 export const TOOL_CODING: ToolOption[] = [
-  { slug: 'claude_code', label: 'Claude Code' },
-  { slug: 'cursor', label: 'Cursor' },
-  { slug: 'windsurf', label: 'Windsurf' },
-  { slug: 'cline', label: 'Cline' },
-  { slug: 'continue', label: 'Continue' },
-  { slug: 'opencode', label: 'OpenCode' },
-  { slug: 'github_copilot', label: 'GitHub Copilot' },
-]
+	{ slug: "claude_code", label: "Claude Code" },
+	{ slug: "cursor", label: "Cursor" },
+	{ slug: "windsurf", label: "Windsurf" },
+	{ slug: "cline", label: "Cline" },
+	{ slug: "continue", label: "Continue" },
+	{ slug: "opencode", label: "OpenCode" },
+	{ slug: "github_copilot", label: "GitHub Copilot" },
+];
 
 export const TOOL_OTHER: ToolOption[] = [
-  { slug: 'web_only', label: 'Just the web app' },
-  { slug: 'other_mcp', label: 'Other connection' },
-]
+	{ slug: "web_only", label: "Just the web app" },
+	{ slug: "other_mcp", label: "Other connection" },
+];

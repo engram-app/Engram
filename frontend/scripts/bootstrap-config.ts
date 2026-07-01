@@ -8,36 +8,36 @@
 // Keep this the ONLY place the saas env→config mapping lives.
 
 export interface BootstrapConfig {
-  authProvider: string
-  clerkPublishableKey: string
-  billingEnabled: boolean
-  clerkWaitlistMode: boolean
-  apiBase: string
-  wsBase: string
+	authProvider: string;
+	clerkPublishableKey: string;
+	billingEnabled: boolean;
+	clerkWaitlistMode: boolean;
+	apiBase: string;
+	wsBase: string;
 }
 
-type Env = Record<string, string | undefined>
+type Env = Record<string, string | undefined>;
 
 export function bootstrapConfigFromEnv(env: Env): {
-  config: BootstrapConfig
-  errors: string[]
+	config: BootstrapConfig;
+	errors: string[];
 } {
-  const config: BootstrapConfig = {
-    authProvider: env.VITE_AUTH_PROVIDER ?? 'clerk',
-    clerkPublishableKey: env.VITE_CLERK_PUBLISHABLE_KEY ?? '',
-    billingEnabled: env.VITE_BILLING_ENABLED === 'true',
-    clerkWaitlistMode: env.VITE_CLERK_WAITLIST_MODE === 'true',
-    apiBase: env.VITE_API_BASE ?? '',
-    wsBase: env.VITE_WS_BASE ?? '',
-  }
+	const config: BootstrapConfig = {
+		authProvider: env.VITE_AUTH_PROVIDER ?? "clerk",
+		clerkPublishableKey: env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
+		billingEnabled: env.VITE_BILLING_ENABLED === "true",
+		clerkWaitlistMode: env.VITE_CLERK_WAITLIST_MODE === "true",
+		apiBase: env.VITE_API_BASE ?? "",
+		wsBase: env.VITE_WS_BASE ?? "",
+	};
 
-  const errors: string[] = []
-  if (!config.clerkPublishableKey) {
-    errors.push('VITE_CLERK_PUBLISHABLE_KEY required for saas build')
-  }
-  if (!config.apiBase || !config.wsBase) {
-    errors.push('VITE_API_BASE and VITE_WS_BASE required for saas build')
-  }
+	const errors: string[] = [];
+	if (!config.clerkPublishableKey) {
+		errors.push("VITE_CLERK_PUBLISHABLE_KEY required for saas build");
+	}
+	if (!config.apiBase || !config.wsBase) {
+		errors.push("VITE_API_BASE and VITE_WS_BASE required for saas build");
+	}
 
-  return { config, errors }
+	return { config, errors };
 }

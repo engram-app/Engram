@@ -1,40 +1,52 @@
 {
-  "vault": { "id": "demo-vault", "name": "Demo Vault" },
-  "folders": [
-    { "id": "f-welcome",   "name": "Welcome",   "path": "Welcome" },
-    { "id": "f-examples",  "name": "Examples",  "path": "Examples" },
-    { "id": "f-reference", "name": "Reference", "path": "Reference" }
-  ],
-  "notes": [
-    {
-      "id": "n-1", "folder_id": "f-welcome", "path": "Welcome/Start here.md",
-      "title": "Start here",
-      "content": "# Welcome to Engram\n\nThis is a demo vault. Click around — nothing here is saved.\n\nSee [[Markdown features]] for what the editor supports."
-    },
-    {
-      "id": "n-2", "folder_id": "f-welcome", "path": "Welcome/Markdown features.md",
-      "title": "Markdown features",
-      "content": "# Markdown features\n\n> [!tip]\n> Callouts work.\n\n```python\nprint('code blocks too')\n```\n\nInline math: $E = mc^2$"
-    },
-    {
-      "id": "n-3", "folder_id": "f-examples", "path": "Examples/Meeting notes.md",
-      "title": "Meeting notes",
-      "content": "# Meeting notes — 2026-05-30\n\n- Topic 1\n- Topic 2\n\nLinks back to [[Start here]]."
-    },
-    {
-      "id": "n-4", "folder_id": "f-examples", "path": "Examples/Reading list.md",
-      "title": "Reading list",
-      "content": "# Reading list\n\n- A book\n- Another book\n- A third book"
-    },
-    {
-      "id": "n-5", "folder_id": "f-reference", "path": "Reference/Cheatsheet.md",
-      "title": "Cheatsheet",
-      "content": "# Cheatsheet\n\n| Key | Action |\n|-----|--------|\n| ⌘K | Search |\n| ⌘N | New note |"
-    },
-    {
-      "id": "n-6", "folder_id": "f-reference", "path": "Reference/Diagram.md",
-      "title": "Diagram",
-      "content": "# Diagram\n\n```mermaid\ngraph LR\n  Note --> Vault --> Engram\n```"
-    }
-  ]
+	"vault": { "id": "demo-vault", "name": "Demo Vault" },
+	"folders": [
+		{ "id": "f-welcome", "name": "Welcome", "path": "Welcome" },
+		{ "id": "f-examples", "name": "Examples", "path": "Examples" },
+		{ "id": "f-reference", "name": "Reference", "path": "Reference" }
+	],
+	"notes": [
+		{
+			"id": "n-1",
+			"folder_id": "f-welcome",
+			"path": "Welcome/Start here.md",
+			"title": "Start here",
+			"content": "# Welcome to Engram\n\nThis is a demo vault. Click around — nothing here is saved.\n\nSee [[Markdown features]] for what the editor supports."
+		},
+		{
+			"id": "n-2",
+			"folder_id": "f-welcome",
+			"path": "Welcome/Markdown features.md",
+			"title": "Markdown features",
+			"content": "# Markdown features\n\n> [!tip]\n> Callouts work.\n\n```python\nprint('code blocks too')\n```\n\nInline math: $E = mc^2$"
+		},
+		{
+			"id": "n-3",
+			"folder_id": "f-examples",
+			"path": "Examples/Meeting notes.md",
+			"title": "Meeting notes",
+			"content": "# Meeting notes — 2026-05-30\n\n- Topic 1\n- Topic 2\n\nLinks back to [[Start here]]."
+		},
+		{
+			"id": "n-4",
+			"folder_id": "f-examples",
+			"path": "Examples/Reading list.md",
+			"title": "Reading list",
+			"content": "# Reading list\n\n- A book\n- Another book\n- A third book"
+		},
+		{
+			"id": "n-5",
+			"folder_id": "f-reference",
+			"path": "Reference/Cheatsheet.md",
+			"title": "Cheatsheet",
+			"content": "# Cheatsheet\n\n| Key | Action |\n|-----|--------|\n| ⌘K | Search |\n| ⌘N | New note |"
+		},
+		{
+			"id": "n-6",
+			"folder_id": "f-reference",
+			"path": "Reference/Diagram.md",
+			"title": "Diagram",
+			"content": "# Diagram\n\n```mermaid\ngraph LR\n  Note --> Vault --> Engram\n```"
+		}
+	]
 }

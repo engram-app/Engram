@@ -16,9 +16,7 @@
 	// reverting is just removing this route + redeploying. The TF-managed
 	// app_engram_page CNAME stays (the route needs a proxied record to exist).
 	// The deploy token carries Zone → Workers Routes:Edit on engram.page.
-	"routes": [
-		{ "pattern": "app.engram.page/*", "zone_name": "engram.page" }
-	],
+	"routes": [{ "pattern": "app.engram.page/*", "zone_name": "engram.page" }],
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS",

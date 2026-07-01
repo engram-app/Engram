@@ -15,27 +15,27 @@
 const NEW_MCP_ENDPOINT = "https://mcp.engram.page/api/mcp";
 
 interface Env {
-  ASSETS: { fetch: (request: Request) => Promise<Response> };
+	ASSETS: { fetch: (request: Request) => Promise<Response> };
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
+	async fetch(request: Request, env: Env): Promise<Response> {
+		const { pathname } = new URL(request.url);
 
-    if (pathname === "/api/mcp" || pathname.startsWith("/api/mcp/")) {
-      return Response.json(
-        {
-          error: "gone",
-          message: `The MCP endpoint moved to ${NEW_MCP_ENDPOINT}. Re-pair your client against the new host.`,
-          endpoint: NEW_MCP_ENDPOINT,
-        },
-        { status: 410, headers: { "cache-control": "no-store" } },
-      );
-    }
+		if (pathname === "/api/mcp" || pathname.startsWith("/api/mcp/")) {
+			return Response.json(
+				{
+					error: "gone",
+					message: `The MCP endpoint moved to ${NEW_MCP_ENDPOINT}. Re-pair your client against the new host.`,
+					endpoint: NEW_MCP_ENDPOINT,
+				},
+				{ status: 410, headers: { "cache-control": "no-store" } },
+			);
+		}
 
-    // Defensive fallthrough: anything else that reaches the Worker is served
-    // from static assets. With the scoped `run_worker_first` this is only hit
-    // if the route list ever widens.
-    return env.ASSETS.fetch(request);
-  },
+		// Defensive fallthrough: anything else that reaches the Worker is served
+		// from static assets. With the scoped `run_worker_first` this is only hit
+		// if the route list ever widens.
+		return env.ASSETS.fetch(request);
+	},
 };

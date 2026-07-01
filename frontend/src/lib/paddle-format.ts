@@ -1,16 +1,16 @@
 export function formatDate(isoString: string, locale: string = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(isoString))
+	return new Intl.DateTimeFormat(locale, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	}).format(new Date(isoString));
 }
 
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
 type TimePeriodLike = {
-  frequency: number
-  interval: string
-}
+	frequency: number;
+	interval: string;
+};
 
 /**
  * Formats a billing cycle for display.
@@ -22,14 +22,14 @@ type TimePeriodLike = {
  * formatBillingCycle({ frequency: 3, interval: "month" }) // "3 months"
  */
 export function formatBillingCycle(
-  billingCycle: TimePeriodLike | null | undefined
+	billingCycle: TimePeriodLike | null | undefined,
 ): string | undefined {
-  if (!billingCycle) {
-    return undefined
-  }
+	if (!billingCycle) {
+		return undefined;
+	}
 
-  const { frequency, interval } = billingCycle
-  return frequency === 1 ? interval : `${frequency} ${interval}s`
+	const { frequency, interval } = billingCycle;
+	return frequency === 1 ? interval : `${frequency} ${interval}s`;
 }
 
 /**
@@ -42,9 +42,9 @@ export function formatBillingCycle(
  * formatTrialPeriod({ frequency: 1, interval: "month" }) // "1 month"
  */
 export function formatTrialPeriod(trialPeriod: TimePeriodLike): string {
-  const interval = trialPeriod.frequency === 1 ? trialPeriod.interval : `${trialPeriod.interval}s`
+	const interval = trialPeriod.frequency === 1 ? trialPeriod.interval : `${trialPeriod.interval}s`;
 
-  return `${trialPeriod.frequency} ${interval}`
+	return `${trialPeriod.frequency} ${interval}`;
 }
 
 /**
@@ -61,19 +61,19 @@ export function formatTrialPeriod(trialPeriod: TimePeriodLike): string {
  * formatMoney(12, "GBP", "en-GB") // "£12.00"
  */
 export function formatMoney(
-  amount: number,
-  currencyCode: string,
-  locale: string = "en-US"
+	amount: number,
+	currencyCode: string,
+	locale: string = "en-US",
 ): string {
-  return new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: currencyCode,
-  }).format(amount)
+	return new Intl.NumberFormat(locale, {
+		style: "currency",
+		currency: currencyCode,
+	}).format(amount);
 }
 
 // Paddle-supported zero-decimal currencies — amounts are already whole units.
 // https://developer.paddle.com/concepts/payment-methods/currencies
-const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"])
+const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
 
 /**
  * Parses a Paddle API monetary amount string (lowest denomination, e.g. "1500")
@@ -93,11 +93,11 @@ const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"])
  * parseAmount("1500", "JPY") // 1500
  */
 export function parseAmount(raw: string, currencyCode: string): number {
-  const value = parseInt(raw, 10)
-  if (ZERO_DECIMAL_CURRENCIES.has(currencyCode.toUpperCase())) {
-    return value
-  }
-  return value / 100
+	const value = parseInt(raw, 10);
+	if (ZERO_DECIMAL_CURRENCIES.has(currencyCode.toUpperCase())) {
+		return value;
+	}
+	return value / 100;
 }
 
 /**
@@ -111,22 +111,22 @@ export function parseAmount(raw: string, currencyCode: string): number {
  * formatProrationMode("full_next_billing_period") // "Full charge at next billing"
  */
 export function formatProrationMode(mode: string): string {
-  const labels: Record<string, string> = {
-    prorated_immediately: "Charge prorated amount now",
-    full_immediately: "Charge full amount now",
-    prorated_next_billing_period: "Prorated at next billing",
-    full_next_billing_period: "Full charge at next billing",
-    do_not_bill: "No charge",
-  }
-  return labels[mode] ?? mode
+	const labels: Record<string, string> = {
+		prorated_immediately: "Charge prorated amount now",
+		full_immediately: "Charge full amount now",
+		prorated_next_billing_period: "Prorated at next billing",
+		full_next_billing_period: "Full charge at next billing",
+		do_not_bill: "No charge",
+	};
+	return labels[mode] ?? mode;
 }
 
 const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
-  day: { noun: "Daily", adjective: "daily" },
-  week: { noun: "Weekly", adjective: "weekly" },
-  month: { noun: "Monthly", adjective: "monthly" },
-  year: { noun: "Annually", adjective: "annual" },
-}
+	day: { noun: "Daily", adjective: "daily" },
+	week: { noun: "Weekly", adjective: "weekly" },
+	month: { noun: "Monthly", adjective: "monthly" },
+	year: { noun: "Annually", adjective: "annual" },
+};
 
 /**
  * Returns a human-readable label for a Paddle billing interval.
@@ -141,10 +141,10 @@ const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
  * formatIntervalLabel("month", "noun")     // "Monthly"
  */
 export function formatIntervalLabel(
-  interval: string,
-  style: "noun" | "adjective" = "noun"
+	interval: string,
+	style: "noun" | "adjective" = "noun",
 ): string {
-  const entry = INTERVAL_LABELS[interval]
-  if (entry) return entry[style]
-  return interval.charAt(0).toUpperCase() + interval.slice(1)
+	const entry = INTERVAL_LABELS[interval];
+	if (entry) return entry[style];
+	return interval.charAt(0).toUpperCase() + interval.slice(1);
 }

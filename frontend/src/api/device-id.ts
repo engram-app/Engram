@@ -1,22 +1,22 @@
-const STORAGE_KEY = 'engram.deviceId'
+const STORAGE_KEY = "engram.deviceId";
 
-let deviceId: string | null = null
+let deviceId: string | null = null;
 
 function readStored(): string | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw && raw.length > 0 ? raw : null
-  } catch {
-    return null
-  }
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		return raw && raw.length > 0 ? raw : null;
+	} catch {
+		return null;
+	}
 }
 
 function writeStored(id: string): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, id)
-  } catch {
-    // ignore — private browsing, storage disabled, etc.
-  }
+	try {
+		localStorage.setItem(STORAGE_KEY, id);
+	} catch {
+		// ignore — private browsing, storage disabled, etc.
+	}
 }
 
 /**
@@ -26,13 +26,13 @@ function writeStored(id: string): void {
  * id → one clean re-bootstrap (safe by design — the web has no local mirror).
  */
 export function getDeviceId(): string {
-  if (deviceId) return deviceId
-  deviceId = readStored() ?? crypto.randomUUID()
-  writeStored(deviceId)
-  return deviceId
+	if (deviceId) return deviceId;
+	deviceId = readStored() ?? crypto.randomUUID();
+	writeStored(deviceId);
+	return deviceId;
 }
 
 /** Test hook: drop the in-memory cache so the next read re-reads storage. */
 export function __resetDeviceIdCache(): void {
-  deviceId = null
+	deviceId = null;
 }

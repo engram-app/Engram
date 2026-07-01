@@ -1,18 +1,18 @@
-import { useEffect } from 'react'
-import { Socket } from 'phoenix'
-import { useAuthAdapter } from '../auth/use-auth-adapter'
-import { getWsBase, joinWsUrl } from '../api/base'
+import { useEffect } from "react";
+import { Socket } from "phoenix";
+import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { getWsBase, joinWsUrl } from "../api/base";
 
 export interface SubscriptionActivatedPayload {
-  tier: string
-  status: string
-  subscription_id: string
+	tier: string;
+	status: string;
+	subscription_id: string;
 }
 
 interface Options {
-  userId: string | null | undefined
-  enabled: boolean
-  onActivated: (payload: SubscriptionActivatedPayload) => void
+	userId: string | null | undefined;
+	enabled: boolean;
+	onActivated: (payload: SubscriptionActivatedPayload) => void;
 }
 
 /**
@@ -24,47 +24,43 @@ interface Options {
  * Mirrors `useVaultReadyEvents` — same channel topic, same socket
  * lifecycle, same auth pattern.
  */
-export function useSubscriptionActivatedEvents({
-  userId,
-  enabled,
-  onActivated,
-}: Options): void {
-  const { getToken } = useAuthAdapter()
+export function useSubscriptionActivatedEvents({ userId, enabled, onActivated }: Options): void {
+	const { getToken } = useAuthAdapter();
 
-  useEffect(() => {
-    if (!enabled || userId == null) return
+	useEffect(() => {
+		if (!enabled || userId == null) return;
 
-    let socket: Socket | null = null
-    let cancelled = false
+		let socket: Socket | null = null;
+		let cancelled = false;
 
-    async function connect() {
-      const token = await getToken()
-      if (cancelled || !token) return
+		async function connect() {
+			const token = await getToken();
+			if (cancelled || !token) return;
 
-      socket = new Socket(joinWsUrl(getWsBase(), '/socket'), { params: { token } })
-      socket.connect()
+			socket = new Socket(joinWsUrl(getWsBase(), "/socket"), { params: { token } });
+			socket.connect();
 
-      const channel = socket.channel(`user:${userId}`)
+			const channel = socket.channel(`user:${userId}`);
 
-      channel.on('subscription_activated', (payload: SubscriptionActivatedPayload) => {
-        onActivated(payload)
-      })
+			channel.on("subscription_activated", (payload: SubscriptionActivatedPayload) => {
+				onActivated(payload);
+			});
 
-      channel.join().receive('error', (resp) => {
-        console.error('user channel join failed (subscription activation listener)', resp)
-      })
-    }
+			channel.join().receive("error", (resp) => {
+				console.error("user channel join failed (subscription activation listener)", resp);
+			});
+		}
 
-    // Never let the fire-and-forget promise dangle: a rejecting getToken()
-    // would otherwise escape as an unhandled rejection. Swallow + log,
-    // mirroring the channel-join error path.
-    connect().catch((err) => {
-      console.error('user channel connect failed (subscription activation listener)', err)
-    })
+		// Never let the fire-and-forget promise dangle: a rejecting getToken()
+		// would otherwise escape as an unhandled rejection. Swallow + log,
+		// mirroring the channel-join error path.
+		connect().catch((err) => {
+			console.error("user channel connect failed (subscription activation listener)", err);
+		});
 
-    return () => {
-      cancelled = true
-      if (socket) socket.disconnect()
-    }
-  }, [userId, enabled, getToken, onActivated])
+		return () => {
+			cancelled = true;
+			if (socket) socket.disconnect();
+		};
+	}, [userId, enabled, getToken, onActivated]);
 }
