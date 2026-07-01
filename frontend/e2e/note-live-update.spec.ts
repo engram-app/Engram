@@ -1,20 +1,17 @@
 import { test, expect, type Page } from '@playwright/test'
 
 /**
- * #277 — Two-session live-update behavior for the web SPA note viewer.
+ * #277 — Two-session live-update behavior for the web SPA note editor.
  *
- * Both tests bootstrap a user + vault + note via the REST API, open the note
- * in a browser, then mutate the note via a second REST call (simulating
- * another client — plugin push, MCP write, or another browser tab). The
- * Phoenix channel must propagate `note_changed` so the open note reflects the
- * change without a manual reload.
+ * Tests bootstrap a user + vault + note via the REST API, open the note
+ * in a browser, then assert that live changes propagate without a reload.
  *
- * The note view defaults to the editor (plain markdown source). A remote
- * update is applied into the live CodeMirror doc via a 3-way merge, so an
- * in-progress local draft is preserved rather than clobbered. A CLEAN merge is
- * silent; a TRUE conflict (line-level overlap) does NOT write markers silently
- * — it surfaces a non-blocking ConflictBar (Keep mine / Take theirs / View
- * merge) and keeps the draft until the user chooses.
+ * The editor binds CodeMirror 6 to a Yjs Y.Text via yCollab. Remote changes
+ * from other CRDT clients converge through the Phoenix CRDT channel with no
+ * client-side 3-way merge and no ConflictBar. A REST upsert from an external
+ * client (plugin push, MCP write) is broadcast as an authoritative
+ * note_changed event that re-seeds the Y.Doc; true concurrent in-browser edits
+ * converge via the CRDT protocol.
  */
 
 const PASS = 'E2eTestPass!99'
@@ -106,7 +103,7 @@ async function signInForNote(
   vaultId: number,
   noteId: number,
 ): Promise<void> {
-  // Hitting /note/:id unauth → AuthGuard redirects to /sign-in?return_to=…
+  // Hitting /note/:id unauth -> AuthGuard redirects to /sign-in?return_to=...
   await page.goto(`/note/${noteId}`)
   await expect(page).toHaveURL(/\/sign-in/, { timeout: 10_000 })
 
@@ -159,92 +156,62 @@ test.describe('SPA viewer live-update (#277)', () => {
     await ctx.close()
   })
 
-  test('an edited line + an adjacent remote insertion merges silently (no conflict bar)', async ({
+  test('concurrent edits in two tabs converge in both editors (CRDT, no conflict bar)', async ({
     browser,
     baseURL,
   }) => {
-    const email = `e2e-live-edit-${Date.now()}@test.com`
+    const email = `e2e-live-crdt-${Date.now()}@test.com`
     const token = await registerAndLogin(baseURL!, email)
-    const vault = await createVault(baseURL!, token, `liveedit-${Date.now()}`)
-    const path = 'live-edit.md'
+    const vault = await createVault(baseURL!, token, `livecrdt-${Date.now()}`)
+    const path = 'live-crdt.md'
     const { id: noteId } = await upsertNote(
       baseURL!,
       token,
       vault.id,
       path,
-      '# Initial\n\noriginal text.',
+      '# Initial\n\nbase line.',
     )
 
-    const ctx = await browser.newContext()
-    const page = await ctx.newPage()
-    await signInForNote(page, email, vault.id, noteId)
+    const ctxA = await browser.newContext()
+    const pageA = await ctxA.newPage()
+    const ctxB = await browser.newContext()
+    const pageB = await ctxB.newPage()
 
-    // Editor is the default mode; type a local unsaved edit at the END of the
-    // last line.
-    const editor = page.locator('.cm-content')
-    await expect(editor).toContainText('original text.', { timeout: 10_000 })
-    await editor.click()
-    await page.keyboard.press('Control+End')
-    await page.keyboard.type(' draft-edit')
+    await signInForNote(pageA, email, vault.id, noteId)
+    await signInForNote(pageB, email, vault.id, noteId)
 
-    // Remote APPENDS a new paragraph right after the line the user just edited.
-    // node-diff3 flags this as a "conflict" (adjacent hunks), but the base lines
-    // don't actually overlap — the true-conflict gate merges it silently and
-    // keeps the draft. No bar.
-    await upsertNote(
-      baseURL!,
-      token,
-      vault.id,
-      path,
-      '# Initial\n\noriginal text.\n\nremote-added-line',
-    )
+    const edA = pageA.locator('.cm-content')
+    const edB = pageB.locator('.cm-content')
 
-    await expect(editor).toContainText('remote-added-line', { timeout: 5_000 })
-    await expect(editor).toContainText('draft-edit')
-    await expect(page.getByTestId('conflict-bar')).toBeHidden()
+    await expect(edA).toContainText('base line.', { timeout: 10_000 })
+    await expect(edB).toContainText('base line.', { timeout: 10_000 })
 
-    await ctx.close()
-  })
+    // Distinct concurrent edits, one per tab (appending at end-of-doc means
+    // the two inserts land at the same anchor as concurrent CRDT ops; the
+    // CRDT orders them deterministically by client id so both substrings are
+    // always present regardless of order).
+    await edA.click()
+    await pageA.keyboard.press('Control+End')
+    await pageA.keyboard.type(' AAA-from-tab-a')
 
-  test('a true conflict surfaces a non-blocking bar and keeps the draft until resolved', async ({
-    browser,
-    baseURL,
-  }) => {
-    const email = `e2e-live-conflict-${Date.now()}@test.com`
-    const token = await registerAndLogin(baseURL!, email)
-    const vault = await createVault(baseURL!, token, `liveconflict-${Date.now()}`)
-    const path = 'live-conflict.md'
-    // Single line so the local + remote edits provably land on the same line
-    // (a line-level overlap is what makes node-diff3 report a conflict).
-    const { id: noteId } = await upsertNote(baseURL!, token, vault.id, path, 'shared line')
+    await edB.click()
+    await pageB.keyboard.press('Control+End')
+    await pageB.keyboard.type(' BBB-from-tab-b')
 
-    const ctx = await browser.newContext()
-    const page = await ctx.newPage()
-    await signInForNote(page, email, vault.id, noteId)
+    // Both edits must converge in BOTH editors via the CRDT channel.
+    // If either assertion times out here, that is a real CRDT convergence bug
+    // — do NOT weaken the timeout or assertion to make the test pass.
+    for (const ed of [edA, edB]) {
+      await expect(ed).toContainText('AAA-from-tab-a', { timeout: 10_000 })
+      await expect(ed).toContainText('BBB-from-tab-b', { timeout: 10_000 })
+    }
 
-    const editor = page.locator('.cm-content')
-    await expect(editor).toContainText('shared line', { timeout: 10_000 })
+    // The ConflictBar UI was intentionally removed with the CRDT migration.
+    // Neither tab should ever render it.
+    await expect(pageA.getByTestId('conflict-bar')).toHaveCount(0)
+    await expect(pageB.getByTestId('conflict-bar')).toHaveCount(0)
 
-    // Local draft: append to the shared line (do NOT save).
-    await editor.click()
-    await page.keyboard.press('Control+End')
-    await page.keyboard.type(' MINE')
-
-    // Remote client changes the SAME line — a true conflict.
-    await upsertNote(baseURL!, token, vault.id, path, 'shared line REMOTE')
-
-    // The non-blocking bar appears; the draft is NOT silently overwritten.
-    const bar = page.getByTestId('conflict-bar')
-    await expect(bar).toBeVisible({ timeout: 5_000 })
-    await expect(editor).toContainText('MINE')
-    await expect(editor).not.toContainText('REMOTE')
-
-    // Resolve with "Take theirs": the editor adopts the remote and the bar closes.
-    await bar.getByRole('button', { name: 'Take theirs' }).click()
-    await expect(bar).toBeHidden()
-    await expect(editor).toContainText('shared line REMOTE')
-    await expect(editor).not.toContainText('MINE')
-
-    await ctx.close()
+    await ctxA.close()
+    await ctxB.close()
   })
 })
