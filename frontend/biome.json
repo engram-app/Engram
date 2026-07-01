@@ -70,7 +70,6 @@
 							"level": "error",
 							"options": { "inputComponents": ["Checkbox"] }
 						},
-						"noNoninteractiveElementToInteractiveRole": "off",
 						"useAriaPropsForRole": "off",
 						"useAriaPropsSupportedByRole": "off",
 						"useSemanticElements": "off"

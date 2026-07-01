@@ -67,10 +67,10 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 				placeholder={placeholder}
 				className="w-full border-gray-200 border-b bg-transparent p-3 text-sm outline-none dark:border-gray-700"
 			/>
-			<ul role="listbox" className="max-h-72 overflow-y-auto py-1">
+			<div role="listbox" className="max-h-72 overflow-y-auto py-1">
 				{candidates.map((name, i) => (
 					// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in a combobox-controlled listbox; options are intentionally not individually focusable and keyboard activation is handled on the input above
-					<li
+					<div
 						key={name || "__root__"}
 						role="option"
 						aria-selected={i === active}
@@ -80,9 +80,9 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 						}`}
 					>
 						{name === "" ? "/ (root)" : name}
-					</li>
+					</div>
 				))}
-			</ul>
+			</div>
 		</dialog>
 	);
 }
