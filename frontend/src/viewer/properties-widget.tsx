@@ -40,7 +40,7 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
         {rows.map((row) => {
           const type = effectiveType(row.value, row.typeOverride)
           return (
-            <div key={row.key} className="contents">
+            <div key={row.key} className="contents" data-testid={`property-row-${row.key}`}>
               <dt className="font-medium text-muted-foreground">{row.key}</dt>
               <PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
               <dd>
