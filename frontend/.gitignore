@@ -3,3 +3,4 @@ dist
 .env.local
 playwright-report
 test-results
+e2e/.auth-state.json

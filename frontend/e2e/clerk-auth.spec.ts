@@ -3,7 +3,7 @@ import path from "node:path";
 import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
 import { expect, type Page } from "@playwright/test";
 
-const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");
+const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 
 function loadAuthState(): {
 	email: string;

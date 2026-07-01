@@ -4,7 +4,7 @@ import path from "node:path";
 import { clerkSetup } from "@clerk/testing/playwright";
 import { cleanupTestUsers } from "./db-cleanup";
 
-const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");
+const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
 
 export default async function globalSetup() {

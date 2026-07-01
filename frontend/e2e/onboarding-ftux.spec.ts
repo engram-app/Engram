@@ -8,7 +8,7 @@ import { expect, type Page } from "@playwright/test";
 // spec stays the canonical example for new authors. If a third Clerk spec lands,
 // promote both copies into e2e/clerk-helpers.ts.
 
-const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");
+const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 
 function loadAuthState(): {
 	email: string;
