@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock the phoenix Socket/Channel so we can assert the crdt: topic join +
 // inbound event routing without a real WS.
 const channels = new Map<string, any>()
-function mkChannel(topic: string) {
+const channelParams = new Map<string, any>()
+function mkChannel(topic: string, params?: any) {
   const handlers = new Map<string, (p: any) => void>()
   const ch = {
     topic,
@@ -14,6 +15,7 @@ function mkChannel(topic: string) {
     __emit: (ev: string, p: any) => handlers.get(ev)?.(p),
   }
   channels.set(topic, ch)
+  channelParams.set(topic, params)
   return ch
 }
 vi.mock('phoenix', () => ({
@@ -22,8 +24,8 @@ vi.mock('phoenix', () => ({
     connect() {}
     disconnect() {}
     onOpen(_cb: () => void) {}
-    channel(topic: string) {
-      return mkChannel(topic)
+    channel(topic: string, params?: any) {
+      return mkChannel(topic, params)
     }
   },
   Channel: class {},
@@ -44,6 +46,7 @@ import { connectChannel, disconnectChannel } from './channel'
 describe('crdt channel wiring', () => {
   beforeEach(() => {
     channels.clear()
+    channelParams.clear()
     vi.clearAllMocks()
     disconnectChannel()
   })
@@ -73,5 +76,15 @@ describe('crdt channel wiring', () => {
     ch.__emit('crdt_doc_ready', { doc_id: 'v1/a.md' })
     expect(sessionMock.handleFrame).toHaveBeenCalledWith('a.md', 'Zm9v')
     expect(sessionMock.enroll).toHaveBeenCalledWith('a.md')
+  })
+
+  it('joins the CRDT channel with crdt_proto: 2', async () => {
+    await connectChannel({
+      userId: 'u1',
+      vaultId: 'v1',
+      getToken: async () => 'tok',
+      queryClient: {} as any,
+    })
+    expect(channelParams.get('crdt:u1:v1')).toEqual({ crdt_proto: 2 })
   })
 })

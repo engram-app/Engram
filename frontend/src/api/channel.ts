@@ -277,7 +277,7 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient, o
     },
   })
   const crdtTopic = `crdt:${userId}:${vaultId}`
-  crdtChannel = socket.channel(crdtTopic)
+  crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 })
   crdtChannel.on('crdt_msg', (p: { doc_id: string; b64: string }) => {
     void crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64)
   })
