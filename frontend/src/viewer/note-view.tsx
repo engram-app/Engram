@@ -24,7 +24,7 @@ interface NoteViewProps {
 const ATTACHMENT_SCHEME = "engram-attachment:";
 
 function rewriteEmbeds(raw: string): string {
-	return raw.replace(/!\[\[([^\]]+)\]\]/gu, (_match, inner: string) => {
+	return raw.replace(/!\[\[(?<inner>[^\]]+)\]\]/gu, (_match, inner: string) => {
 		const [path, alias] = inner.split("|").map((s) => s.trim());
 		return `![${alias ?? path}](${ATTACHMENT_SCHEME}${path})`;
 	});
@@ -55,7 +55,7 @@ const rehypePlugins = [
 
 // Attachment file extensions are anything OTHER than markdown / canvas — those
 // are first-class note types that should still link normally on Free.
-const TEXT_EMBED = /\.(md|canvas)$/iu;
+const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 
 // memo: NotePage re-renders on every editor keystroke (draft state) while
 // the preview stays force-mounted with identical props; react-markdown has
@@ -99,7 +99,7 @@ function NoteView({ content, tags }: NoteViewProps) {
 					}
 					components={{
 						code({ className, children, ...rest }) {
-							const lang = /language-(\w+)/u.exec(className ?? "")?.[1];
+							const lang = /language-(?<lang>\w+)/u.exec(className ?? "")?.[1];
 							const code = String(children).replace(/\n$/u, "");
 							if (lang === "mermaid") {
 								return <MermaidBlock code={code} />;

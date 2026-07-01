@@ -29,7 +29,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 		: undefined;
 
 	const data = instance.getItemData();
-	const item = data.item;
+	const { item } = data;
 	const depth = instance.getItemMeta()?.level ?? 0;
 	const folderPad = depth * 12 + 4;
 	const notePad = folderPad + 20; // align note label under folder name (chevron 16px + gap 4px)

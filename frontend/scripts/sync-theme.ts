@@ -99,8 +99,11 @@ function blockBody(css: string, selector: string, mustContain: string): string {
 
 function parseVars(body: string): Map<string, string> {
 	const out = new Map<string, string>();
-	for (const m of body.matchAll(/--([\w-]+):\s*([^;]+);/gu)) {
-		out.set(m[1], m[2].trim());
+	for (const m of body.matchAll(/--(?<name>[\w-]+):\s*(?<value>[^;]+);/gu)) {
+		const { name, value } = m.groups ?? {};
+		if (name && value !== undefined) {
+			out.set(name, value.trim());
+		}
 	}
 	return out;
 }

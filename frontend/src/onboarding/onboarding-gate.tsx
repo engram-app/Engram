@@ -12,7 +12,7 @@ export default function OnboardingGate() {
 		return <LoadingScreen />;
 	}
 
-	const onboarding = data.onboarding;
+	const { onboarding } = data;
 
 	if (!onboarding.enabled || onboarding.next_step === "done") {
 		return <Outlet />;

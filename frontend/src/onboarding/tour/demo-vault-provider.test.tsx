@@ -25,8 +25,7 @@ describe("DemoVaultProvider", () => {
 	it("inactive by default, active after activate()", async () => {
 		let activate!: () => Promise<void>;
 		function Capture() {
-			const ctx = useDemoVault();
-			activate = ctx.activate;
+			({ activate } = useDemoVault());
 			return null;
 		}
 		render(

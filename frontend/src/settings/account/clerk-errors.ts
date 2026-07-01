@@ -5,7 +5,7 @@ import { isClerkAPIResponseError } from "@clerk/react/errors";
 // which field the instance rejected); without this they get swallowed.
 export function clerkErrorMessage(e: unknown, fallback: string): string {
 	if (isClerkAPIResponseError(e)) {
-		const first = e.errors[0];
+		const [first] = e.errors;
 		return first?.longMessage ?? first?.message ?? fallback;
 	}
 	return fallback;

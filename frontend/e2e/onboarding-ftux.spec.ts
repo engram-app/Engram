@@ -62,7 +62,7 @@ test.describe("FTUX happy path", () => {
 		// a prior run (or backend seed). If we land outside `/`, skip with a clear
 		// signal so the rest of the suite still runs.
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
+		if (!new URL(page.url()).pathname.match(/^\/(?:note|search)?\/?$/u)) {
 			test.skip(
 				true,
 				`Onboarding wizard not pre-completed for test user (landed on ${new URL(page.url()).pathname}). ` +
@@ -110,7 +110,7 @@ test.describe("FTUX happy path", () => {
 	test("checklist widget mounts on the dashboard after vault creation", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
+		if (!new URL(page.url()).pathname.match(/^\/(?:note|search)?\/?$/u)) {
 			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
@@ -134,7 +134,7 @@ test.describe("FTUX happy path", () => {
 	}) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
+		if (!new URL(page.url()).pathname.match(/^\/(?:note|search)?\/?$/u)) {
 			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
@@ -160,7 +160,7 @@ test.describe("FTUX happy path", () => {
 	test("completed flow does not re-fire modals after reload", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
+		if (!new URL(page.url()).pathname.match(/^\/(?:note|search)?\/?$/u)) {
 			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
@@ -201,7 +201,7 @@ test.describe("FTUX happy path", () => {
 	test("user with existing vault sees no vault modal", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
-		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
+		if (!new URL(page.url()).pathname.match(/^\/(?:note|search)?\/?$/u)) {
 			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}

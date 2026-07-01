@@ -202,7 +202,7 @@ export function SubscriptionStatusCard({
 	} = subscription;
 
 	const isSingleItem = items.length === 1;
-	const primaryItem = items[0];
+	const [primaryItem] = items;
 	const isPastDue = status === "past_due";
 
 	const effectiveScheduledChange = getValidScheduledChange(status, scheduledChange);
