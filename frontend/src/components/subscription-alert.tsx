@@ -60,6 +60,7 @@ export function SubscriptionAlert({ subscription, onDismiss, className }: Subscr
 				</span>
 				{onDismiss && (
 					<button
+						type="button"
 						onClick={onDismiss}
 						aria-label="Dismiss alert"
 						className="shrink-0 rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"

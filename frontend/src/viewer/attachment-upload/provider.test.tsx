@@ -19,7 +19,11 @@ vi.mock("../../onboarding/tour/demo-vault-provider", () => ({
 
 function TriggerButton() {
 	const { openUpload } = useAttachmentUpload();
-	return <button onClick={() => openUpload([new File(["x"], "fromButton.txt")])}>open</button>;
+	return (
+		<button type="button" onClick={() => openUpload([new File(["x"], "fromButton.txt")])}>
+			open
+		</button>
+	);
 }
 
 function fileDragEvent(type: string, withFiles: boolean) {

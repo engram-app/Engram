@@ -85,6 +85,7 @@ export function CadenceToggle({
 		<div role="radiogroup" aria-label="Billing cadence" className="flex justify-center">
 			<div className="inline-flex rounded-full border border-border bg-muted p-1 text-sm">
 				<button
+					type="button"
 					role="radio"
 					aria-checked={cadence === "monthly"}
 					onClick={() => onChange("monthly")}
@@ -98,6 +99,7 @@ export function CadenceToggle({
 					Monthly
 				</button>
 				<button
+					type="button"
 					role="radio"
 					aria-checked={cadence === "annual"}
 					onClick={() => onChange("annual")}
@@ -216,6 +218,7 @@ export function PlanCard({
 				) : (
 					<>
 						<button
+							type="button"
 							onClick={() => onAction(tier)}
 							disabled={disabled}
 							className={cn(

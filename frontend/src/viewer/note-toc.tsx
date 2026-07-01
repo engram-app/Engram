@@ -39,7 +39,7 @@ export default function NoteToc({ content }: { content: string }) {
 					On this page
 				</p>
 			</header>
-			<ul role="list" className="space-y-px py-2">
+			<ul className="space-y-px py-2">
 				{headings.map((h, i) => (
 					<li key={`${h.id}-${i}`}>
 						<a

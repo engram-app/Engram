@@ -6,7 +6,9 @@ const DEMO_VAULT_ID = "01923a4b-cdef-7000-89ab-cdef01234567";
 
 vi.mock("../components/vault-create-form", () => ({
 	VaultCreateForm: ({ onCreated }: { onCreated: (id: string) => void }) => (
-		<button onClick={() => onCreated(DEMO_VAULT_ID)}>fake-create</button>
+		<button type="button" onClick={() => onCreated(DEMO_VAULT_ID)}>
+			fake-create
+		</button>
 	),
 }));
 

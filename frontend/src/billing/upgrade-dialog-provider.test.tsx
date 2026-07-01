@@ -6,7 +6,11 @@ import { UpgradeDialogProvider, useUpgradeDialog } from "./upgrade-dialog-provid
 
 function Trigger() {
 	const { showUpgrade } = useUpgradeDialog();
-	return <button onClick={() => showUpgrade("notes_cap_exceeded")}>show</button>;
+	return (
+		<button type="button" onClick={() => showUpgrade("notes_cap_exceeded")}>
+			show
+		</button>
+	);
 }
 
 function renderWithRouter(ui: React.ReactNode) {

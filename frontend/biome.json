@@ -10,6 +10,7 @@
 			"**",
 			"!**/dist",
 			"!**/node_modules",
+			"!public",
 			"!**/playwright-report",
 			"!**/test-results",
 			"!bun.lock"
@@ -68,12 +69,9 @@
 						"noLabelWithoutControl": "off",
 						"noNoninteractiveElementInteractions": "off",
 						"noNoninteractiveElementToInteractiveRole": "off",
-						"noRedundantRoles": "off",
 						"noStaticElementInteractions": "off",
-						"noSvgWithoutTitle": "off",
 						"useAriaPropsForRole": "off",
 						"useAriaPropsSupportedByRole": "off",
-						"useButtonType": "off",
 						"useFocusableInteractive": "off",
 						"useKeyWithClickEvents": "off",
 						"useSemanticElements": "off"
