@@ -25,7 +25,7 @@ interface SortSection {
 	options: ReadonlyArray<{ value: SortKey; label: string }>;
 }
 
-const SORT_SECTIONS: ReadonlyArray<SortSection> = [
+const SORT_SECTIONS: readonly SortSection[] = [
 	{
 		label: "File name",
 		options: [

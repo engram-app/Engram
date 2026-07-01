@@ -403,7 +403,7 @@ describe("useDeleteFolder", () => {
 
 function seedFolderNotes(
 	folder: string,
-	notes: Array<Partial<{ id: string; path: string; title: string }>>,
+	notes: Partial<{ id: string; path: string; title: string }>[],
 ) {
 	qc.setQueryData(["folderNotes", "42", folder], {
 		notes: notes.map((n, i) => ({

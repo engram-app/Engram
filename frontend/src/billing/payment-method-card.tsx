@@ -33,7 +33,7 @@ export default function PaymentMethodCard({
 			{paymentMethod?.last4 ? (
 				<p className="text-muted-foreground text-sm">
 					<span className="font-medium text-foreground capitalize">{paymentMethod.card_brand}</span>
-					{" •••• "}
+					••••
 					{paymentMethod.last4}
 					{expiry && <span> · expires {expiry}</span>}
 				</p>
