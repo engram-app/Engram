@@ -103,7 +103,7 @@ export function DangerZoneSectionLocal() {
 							/>
 							I understand this is irreversible
 						</label>
-						{error && <p className="text-destructive text-sm">{error}</p>}
+						{Boolean(error) && <p className="text-destructive text-sm">{error}</p>}
 					</fieldset>
 					<DialogFooter>
 						<DialogClose asChild>

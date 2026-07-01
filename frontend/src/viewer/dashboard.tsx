@@ -24,7 +24,7 @@ function NoteRow({ note }: NoteRowProps) {
 				</h3>
 			</Link>
 			<footer className="mt-1 flex flex-wrap items-center gap-3 text-gray-500 text-xs dark:text-gray-400">
-				{note.folder && <span>{note.folder}</span>}
+				{Boolean(note.folder) && <span>{note.folder}</span>}
 				{note.tags.length > 0 && (
 					<ul className="flex gap-1" aria-label="Tags">
 						{note.tags.map((tag) => (

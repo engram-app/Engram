@@ -44,7 +44,7 @@ export function SubscriptionAlert({ subscription, onDismiss, className }: Subscr
 			<AlertDescription className="flex items-center justify-between gap-4 text-inherit">
 				<span>
 					{alert.message}
-					{alert.actionUrl && alert.actionLabel && (
+					{Boolean(alert.actionUrl && alert.actionLabel) && (
 						<>
 							{" "}
 							<a
@@ -58,7 +58,7 @@ export function SubscriptionAlert({ subscription, onDismiss, className }: Subscr
 						</>
 					)}
 				</span>
-				{onDismiss && (
+				{Boolean(onDismiss) && (
 					<button
 						type="button"
 						onClick={onDismiss}

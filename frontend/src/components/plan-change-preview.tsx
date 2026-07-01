@@ -176,7 +176,7 @@ export function PlanChangePreview({
 						</Badge>
 					</div>
 
-					{prorationLabel && (
+					{Boolean(prorationLabel) && (
 						<div className="flex items-center justify-between text-sm">
 							<span className="text-muted-foreground">Billing</span>
 							<span className="text-right">{prorationLabel}</span>
@@ -190,19 +190,19 @@ export function PlanChangePreview({
 						</div>
 					)}
 
-					{discount && (
+					{discount ? (
 						<div className="flex items-center justify-between text-sm">
 							<span className="text-muted-foreground">Discount</span>
 							<span className="text-right">
 								<span className="text-success-foreground">{discount.description}</span>
-								{discount.endsAt && (
+								{discount.endsAt ? (
 									<span className="block text-muted-foreground text-xs">
 										until {formatDate(discount.endsAt)}
 									</span>
-								)}
+								) : null}
 							</span>
 						</div>
-					)}
+					) : null}
 				</div>
 
 				<Separator />
@@ -258,12 +258,12 @@ export function PlanChangePreview({
 				)}
 
 				{/* Contextual notes derived from subscription state */}
-				{isTrialing && isNeutral && (
+				{Boolean(isTrialing && isNeutral) && (
 					<p className="text-muted-foreground text-xs">
 						No charges during your trial. Billing begins when your trial ends.
 					</p>
 				)}
-				{isManual && isCharge && (
+				{Boolean(isManual && isCharge) && (
 					<p className="text-muted-foreground text-xs">
 						An invoice will be created for this amount.
 					</p>

@@ -138,7 +138,7 @@ export default function LocalSignUp() {
 					</h1>
 				</div>
 
-				{bootstrap?.bootstrap_pending && (
+				{Boolean(bootstrap?.bootstrap_pending) && (
 					<>
 						<aside
 							className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm"
@@ -178,9 +178,8 @@ export default function LocalSignUp() {
 					</>
 				)}
 
-				{invite &&
-					invitePreview &&
-					(invitePreview.valid ? (
+				{invite && invitePreview ? (
+					invitePreview.valid ? (
 						<p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm">
 							You've been invited{invitePreview.label ? ` (${invitePreview.label})` : ""} — finish
 							below to join.
@@ -192,9 +191,10 @@ export default function LocalSignUp() {
 						>
 							This invite link is invalid, expired, or already used.
 						</p>
-					))}
+					)
+				) : null}
 
-				{error && (
+				{Boolean(error) && (
 					<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
 						{error}
 					</p>

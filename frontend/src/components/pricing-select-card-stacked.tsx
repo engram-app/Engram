@@ -47,7 +47,7 @@ export function PricingSelectCardStacked({
 				<Skeleton className="mb-2 h-4 w-24" />
 				<Skeleton className="mb-1 h-8 w-32" />
 				<Skeleton className="h-3 w-16" />
-				{icon && <Skeleton className="absolute top-6 right-6 h-12 w-12 rounded-lg" />}
+				{Boolean(icon) && <Skeleton className="absolute top-6 right-6 h-12 w-12 rounded-lg" />}
 			</Card>
 		);
 	}
@@ -62,7 +62,7 @@ export function PricingSelectCardStacked({
 					className,
 				)}
 			>
-				{showBadges && (
+				{Boolean(showBadges) && (
 					<div
 						className={cn(
 							"absolute -top-3 z-10 flex gap-1.5",
@@ -71,27 +71,29 @@ export function PricingSelectCardStacked({
 							badgePosition === "right" && "right-4",
 						)}
 					>
-						{badge && <Badge className="bg-primary text-primary-foreground">{badge}</Badge>}
-						{isCurrent && <Badge variant="secondary">{currentPlanLabel}</Badge>}
+						{Boolean(badge) && (
+							<Badge className="bg-primary text-primary-foreground">{badge}</Badge>
+						)}
+						{Boolean(isCurrent) && <Badge variant="secondary">{currentPlanLabel}</Badge>}
 					</div>
 				)}
 
 				<div className="flex items-start justify-between">
 					<CardHeader className="p-0">
 						<div className="mb-1 text-muted-foreground text-sm">{description || name}</div>
-						{originalTotal && (
+						{Boolean(originalTotal) && (
 							<div className="text-muted-foreground text-sm line-through">{originalTotal}</div>
 						)}
 						<CardTitle className="font-bold text-3xl">{total}</CardTitle>
-						{showInterval && interval && (
+						{Boolean(showInterval && interval) && (
 							<div className="text-muted-foreground text-sm">per {interval}</div>
 						)}
-						{trialPeriod && (
+						{Boolean(trialPeriod) && (
 							<div className="mt-1 text-muted-foreground text-xs">{trialPeriod} free trial</div>
 						)}
 					</CardHeader>
 
-					{icon && <div className="h-12 w-12 shrink-0 rounded-lg">{icon}</div>}
+					{Boolean(icon) && <div className="h-12 w-12 shrink-0 rounded-lg">{icon}</div>}
 				</div>
 			</Card>
 		</RadioGroupPrimitive.Item>

@@ -249,7 +249,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 										</a>
 									</Button>
 								) : null}
-								{i.dismissible && (
+								{Boolean(i.dismissible) && (
 									<button
 										type="button"
 										aria-label={`Dismiss ${i.label}`}

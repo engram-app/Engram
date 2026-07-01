@@ -52,7 +52,9 @@ export default function VaultSwitcher() {
 							Vault
 						</span>
 						<span className="flex items-center gap-1.5 truncate font-medium text-foreground text-sm">
-							{active.encrypted && <Lock className="size-3 shrink-0 text-muted-foreground" />}
+							{Boolean(active.encrypted) && (
+								<Lock className="size-3 shrink-0 text-muted-foreground" />
+							)}
 							{active.name}
 						</span>
 					</span>
@@ -82,7 +84,7 @@ export default function VaultSwitcher() {
 					>
 						{vaults.map((v) => (
 							<DropdownMenuRadioItem key={v.id} value={v.id}>
-								{v.encrypted && <Lock className="mr-1 size-3 text-muted-foreground" />}
+								{Boolean(v.encrypted) && <Lock className="mr-1 size-3 text-muted-foreground" />}
 								<span className="truncate">{v.name}</span>
 							</DropdownMenuRadioItem>
 						))}
@@ -98,7 +100,7 @@ function VaultLabel({ vault }: { vault: Vault }) {
 		<section className="border-border border-t px-3 py-2">
 			<p className="font-medium text-[10px] text-muted-foreground uppercase tracking-wide">Vault</p>
 			<p className="flex items-center gap-1.5 truncate font-medium text-foreground text-sm">
-				{vault.encrypted && <Lock className="size-3 shrink-0 text-muted-foreground" />}
+				{Boolean(vault.encrypted) && <Lock className="size-3 shrink-0 text-muted-foreground" />}
 				{vault.name}
 			</p>
 		</section>

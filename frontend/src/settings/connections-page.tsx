@@ -180,14 +180,14 @@ export default function ConnectionsPage() {
 				}
 			/>
 
-			{pendingRevoke && (
+			{pendingRevoke ? (
 				<ConfirmRevokeModal
 					name={pendingRevoke.name}
 					description={pendingRevoke.description}
 					onConfirm={pendingRevoke.onConfirm}
 					onClose={() => setPendingRevoke(null)}
 				/>
-			)}
+			) : null}
 		</article>
 	);
 }
@@ -242,25 +242,25 @@ function ConnectionCard({
 					</div>
 				</summary>
 				<dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-muted-foreground text-xs [&_dt]:font-semibold">
-					{connection.software_version && (
+					{Boolean(connection.software_version) && (
 						<>
 							<dt>Version:</dt>
 							<dd>{connection.software_version}</dd>
 						</>
 					)}
-					{connection.connected_at && (
+					{connection.connected_at ? (
 						<>
 							<dt>Connected:</dt>
 							<dd>{new Date(connection.connected_at).toLocaleString()}</dd>
 						</>
-					)}
-					{connection.last_used_at && (
+					) : null}
+					{connection.last_used_at ? (
 						<>
 							<dt>Last active:</dt>
 							<dd>{new Date(connection.last_used_at).toLocaleString()}</dd>
 						</>
-					)}
-					{connection.scope && (
+					) : null}
+					{Boolean(connection.scope) && (
 						<>
 							<dt>Scopes:</dt>
 							<dd>{connection.scope}</dd>
@@ -268,13 +268,13 @@ function ConnectionCard({
 					)}
 					<dt>Identifier:</dt>
 					<dd className="break-all font-mono">{connection.client_id ?? connection.key_id}</dd>
-					{connection.first_ip && (
+					{Boolean(connection.first_ip) && (
 						<>
 							<dt>First IP:</dt>
 							<dd>{connection.first_ip}</dd>
 						</>
 					)}
-					{connection.first_user_agent && (
+					{Boolean(connection.first_user_agent) && (
 						<>
 							<dt>User agent:</dt>
 							<dd className="break-all">{connection.first_user_agent}</dd>
@@ -391,7 +391,7 @@ function PatSection({
 				</section>
 			)}
 
-			{showCreate && (
+			{Boolean(showCreate) && (
 				<CreatePatModal
 					onClose={() => setShowCreate(false)}
 					onCreated={(k) => {
@@ -401,7 +401,7 @@ function PatSection({
 				/>
 			)}
 
-			{newKey && <RevealKeyModal createdKey={newKey} onClose={() => setNewKey(null)} />}
+			{newKey ? <RevealKeyModal createdKey={newKey} onClose={() => setNewKey(null)} /> : null}
 		</SettingsSectionCard>
 	);
 }
@@ -450,7 +450,7 @@ function CreatePatModal({
 					</span>
 				</label>
 
-				{create.error && (
+				{Boolean(create.error) && (
 					<p className="text-destructive text-sm" role="alert">
 						{create.error instanceof ApiError
 							? create.error.message
@@ -661,7 +661,7 @@ function ConfirmRevokeModal({
 					<DialogTitle>Revoke "{name}"?</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>
 				</DialogHeader>
-				{error && (
+				{Boolean(error) && (
 					<p
 						className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm"
 						role="alert"

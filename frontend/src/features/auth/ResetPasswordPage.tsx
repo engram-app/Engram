@@ -82,7 +82,7 @@ export default function ResetPasswordPage() {
 							</p>
 						</div>
 
-						{error && (
+						{Boolean(error) && (
 							<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
 								{error}
 							</p>

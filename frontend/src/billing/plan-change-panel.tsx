@@ -174,7 +174,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 					onClick={onConfirm}
 					disabled={!(selectedTier && targetPriceId) || preview.isFetching || confirm.isPending}
 				>
-					{confirm.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
+					{Boolean(confirm.isPending) && <Loader2 aria-hidden className="size-4 animate-spin" />}
 					{confirm.isPending ? "Applying…" : "Confirm change"}
 				</Button>
 				<Button variant="ghost" onClick={onClose} disabled={confirm.isPending}>

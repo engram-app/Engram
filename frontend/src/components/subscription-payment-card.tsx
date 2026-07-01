@@ -79,16 +79,18 @@ export function SubscriptionPaymentCard({
 					)}
 				</PaymentInfoRow>
 
-				{displayLabel && (
+				{Boolean(displayLabel) && (
 					<>
 						<Separator />
 						<div className="flex items-center justify-between gap-4">
 							<PaymentInfoRow icon={PaymentMethodIcon} label="Payment method">
 								<div className="truncate font-medium text-sm">{displayLabel}</div>
-								{expiryLabel && <div className="text-muted-foreground text-xs">{expiryLabel}</div>}
+								{Boolean(expiryLabel) && (
+									<div className="text-muted-foreground text-xs">{expiryLabel}</div>
+								)}
 							</PaymentInfoRow>
 
-							{updatePaymentMethodUrl && (
+							{Boolean(updatePaymentMethodUrl) && (
 								<a
 									href={updatePaymentMethodUrl}
 									target="_blank"

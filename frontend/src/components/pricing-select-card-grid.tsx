@@ -57,7 +57,7 @@ export function PricingSelectCardGrid({
 					className,
 				)}
 			>
-				{showBadges && (
+				{Boolean(showBadges) && (
 					<div
 						className={cn(
 							"absolute -top-3 z-10 flex gap-1.5",
@@ -66,22 +66,26 @@ export function PricingSelectCardGrid({
 							badgePosition === "right" && "right-4",
 						)}
 					>
-						{badge && <Badge className="bg-primary text-primary-foreground">{badge}</Badge>}
-						{isCurrent && <Badge variant="secondary">{currentPlanLabel}</Badge>}
+						{Boolean(badge) && (
+							<Badge className="bg-primary text-primary-foreground">{badge}</Badge>
+						)}
+						{Boolean(isCurrent) && <Badge variant="secondary">{currentPlanLabel}</Badge>}
 					</div>
 				)}
 
 				<CardHeader className="flex flex-1 flex-col items-center justify-center p-0 text-center">
 					<CardTitle className="font-medium text-base">{name}</CardTitle>
-					{description && <div className="mt-0.5 text-muted-foreground text-xs">{description}</div>}
-					{originalTotal && (
+					{Boolean(description) && (
+						<div className="mt-0.5 text-muted-foreground text-xs">{description}</div>
+					)}
+					{Boolean(originalTotal) && (
 						<div className="mt-2 text-muted-foreground text-sm line-through">{originalTotal}</div>
 					)}
 					<div className="mt-2 font-bold text-2xl">{total}</div>
-					{showInterval && interval && (
+					{Boolean(showInterval && interval) && (
 						<div className="text-muted-foreground text-xs">per {interval}</div>
 					)}
-					{trialPeriod && (
+					{Boolean(trialPeriod) && (
 						<div className="mt-1 text-muted-foreground text-xs">{trialPeriod} free trial</div>
 					)}
 				</CardHeader>

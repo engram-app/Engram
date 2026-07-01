@@ -143,7 +143,6 @@
 					},
 					"suspicious": {
 						"noReactSpecificProps": "off",
-						"noLeakedRender": "off",
 						"noAlert": "off",
 						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
 						"noEmptyBlockStatements": "off",

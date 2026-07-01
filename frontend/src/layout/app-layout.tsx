@@ -82,7 +82,7 @@ function DesktopLayout() {
 							className="grid-overlay pointer-events-none absolute inset-0 z-0 opacity-30"
 						/>
 						<TrialBanner />
-						{hasRight && rightCollapsed && (
+						{Boolean(hasRight && rightCollapsed) && (
 							<Button
 								variant="ghost"
 								size="icon-sm"

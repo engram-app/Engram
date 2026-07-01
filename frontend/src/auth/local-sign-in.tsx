@@ -75,7 +75,7 @@ export default function LocalSignIn() {
 					<h1 className={heading}>Sign in to Engram</h1>
 				</div>
 
-				{error && (
+				{Boolean(error) && (
 					<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
 						{error}
 					</p>

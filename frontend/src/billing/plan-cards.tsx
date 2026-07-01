@@ -201,7 +201,7 @@ export function PlanCard({
 				state === "current" && "border-primary/60 shadow-sm ring-1 ring-primary/30",
 			)}
 		>
-			{badgeText && (
+			{Boolean(badgeText) && (
 				<span className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 font-semibold text-primary-foreground text-xs uppercase tracking-wide">
 					{badgeText}
 				</span>
@@ -239,7 +239,7 @@ export function PlanCard({
 						>
 							{ctaLabel}
 						</button>
-						{selected && ctaSubLabel && (
+						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
 						)}
 					</>
@@ -300,7 +300,7 @@ export function PlanAccordionRow({
 				<span className="flex min-w-0 flex-col gap-1">
 					<span className="flex flex-wrap items-center gap-x-2 font-semibold text-foreground text-sm">
 						<span>{name}</span>
-						{recommended && (
+						{Boolean(recommended) && (
 							<span className="inline-flex items-center rounded-full bg-primary px-2 pt-[4px] pb-[2px] font-semibold text-[10px] text-primary-foreground uppercase leading-none tracking-wide">
 								Popular
 							</span>
@@ -344,7 +344,7 @@ export function PlanAccordionRow({
 						>
 							{ctaLabel}
 						</button>
-						{ctaNote && (
+						{Boolean(ctaNote) && (
 							<p className="mt-1.5 text-center text-muted-foreground text-xs">{ctaNote}</p>
 						)}
 					</div>

@@ -13,9 +13,11 @@ export function SettingsSectionCard({ title, description, headerAction, children
 			<header className="mb-4 flex items-start justify-between gap-3">
 				<div>
 					<h2 className="font-semibold text-base text-foreground">{title}</h2>
-					{description && <p className="mt-1 text-muted-foreground text-sm">{description}</p>}
+					{Boolean(description) && (
+						<p className="mt-1 text-muted-foreground text-sm">{description}</p>
+					)}
 				</div>
-				{headerAction && <div className="shrink-0">{headerAction}</div>}
+				{Boolean(headerAction) && <div className="shrink-0">{headerAction}</div>}
 			</header>
 			{children}
 		</section>

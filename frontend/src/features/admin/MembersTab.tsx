@@ -39,7 +39,7 @@ function ActionButton({
 					: "border-border bg-background hover:bg-accent disabled:hover:bg-background",
 			)}
 		>
-			{busy && <Loader2 aria-hidden className="size-3 animate-spin" />}
+			{Boolean(busy) && <Loader2 aria-hidden className="size-3 animate-spin" />}
 			{children}
 		</button>
 	);

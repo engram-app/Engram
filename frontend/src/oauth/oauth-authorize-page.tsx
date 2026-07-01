@@ -240,7 +240,7 @@ export default function OAuthAuthorizePage() {
 					<p className="text-muted-foreground text-sm">Loading…</p>
 				) : (
 					<>
-						{capCheck.atCap && existingPeer && (
+						{capCheck.atCap && existingPeer ? (
 							<div
 								role="status"
 								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
@@ -261,7 +261,7 @@ export default function OAuthAuthorizePage() {
 								</a>{" "}
 								to keep both connected.
 							</div>
-						)}
+						) : null}
 						<fieldset className="flex flex-col gap-2">
 							<legend className="mb-1 font-medium text-foreground text-sm">Which vault?</legend>
 							{vaultsQuery.data?.map((v) => {
@@ -294,7 +294,7 @@ export default function OAuthAuthorizePage() {
 							</label>
 						</fieldset>
 
-						{submitError && (
+						{Boolean(submitError) && (
 							<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
 								{submitError}
 							</p>

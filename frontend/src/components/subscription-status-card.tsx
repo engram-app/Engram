@@ -244,19 +244,19 @@ export function SubscriptionStatusCard({
 							<CardTitle className="truncate">{cardTitle}</CardTitle>
 							{statusBadgePosition === "inline" && <StatusBadge status={status} />}
 						</div>
-						{isSingleItem && primaryItem?.priceName && (
+						{isSingleItem && primaryItem?.priceName ? (
 							<CardDescription>{primaryItem.priceName}</CardDescription>
-						)}
+						) : null}
 					</div>
 					<div className="flex shrink-0 items-center gap-2">
 						{statusBadgePosition === "end" && <StatusBadge status={status} />}
-						{isSingleItem && primaryItem?.productImageUrl && (
+						{isSingleItem && primaryItem?.productImageUrl ? (
 							<img
 								src={primaryItem.productImageUrl}
 								alt={primaryItem.productName}
 								className="size-12 rounded-md object-cover"
 							/>
-						)}
+						) : null}
 					</div>
 				</div>
 			</CardHeader>
@@ -276,7 +276,7 @@ export function SubscriptionStatusCard({
 					</Alert>
 				)}
 
-				{scheduledChangeNote && (
+				{Boolean(scheduledChangeNote) && (
 					<Alert>
 						<Clock className="size-4" />
 						<AlertTitle>Scheduled change</AlertTitle>
@@ -320,26 +320,26 @@ export function SubscriptionStatusCard({
 				<Separator />
 
 				<div className="space-y-1.5">
-					{discount && (
+					{discount ? (
 						<div className="flex items-center justify-between text-success-foreground">
 							<span className="flex items-center gap-1.5 text-sm">
 								Discount
-								{discount.code && (
+								{Boolean(discount.code) && (
 									<span className="rounded bg-success/10 px-1.5 py-0.5 text-xs">
 										{discount.code}
 									</span>
 								)}
-								{discount.endsAt && (
+								{discount.endsAt ? (
 									<span className="text-muted-foreground text-xs">
 										until {formatDate(discount.endsAt)}
 									</span>
-								)}
+								) : null}
 							</span>
 							<span className="text-sm tabular-nums">
 								{discount.description ?? `\u2212${formatMoney(discount.savingsAmount, currency)}`}
 							</span>
 						</div>
-					)}
+					) : null}
 
 					<div className="flex items-center justify-between font-medium">
 						<span className="text-sm">Total</span>
@@ -353,14 +353,14 @@ export function SubscriptionStatusCard({
 				<Separator />
 
 				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground text-sm">
-					{nextBilledAt && nextBillingLabel && (
+					{nextBilledAt && nextBillingLabel ? (
 						<div className="flex items-center gap-1.5">
 							<CalendarIcon className="size-3.5" />
 							<span>
 								{nextBillingLabel} {formatDate(nextBilledAt)}
 							</span>
 						</div>
-					)}
+					) : null}
 					{collectionMode && !effectiveScheduledChange && status !== "past_due" && (
 						<div className="flex items-center gap-1.5">
 							{collectionMode === "automatic" ? (
@@ -376,21 +376,21 @@ export function SubscriptionStatusCard({
 							)}
 						</div>
 					)}
-					{canceledAt && (
+					{canceledAt ? (
 						<div className="flex items-center gap-1.5">
 							<span>Canceled {formatDate(canceledAt)}</span>
 						</div>
-					)}
+					) : null}
 				</div>
 
-				{hasActions && (
+				{Boolean(hasActions) && (
 					<div className="flex flex-wrap gap-2 pt-1">
-						{showChangePlan && (
+						{Boolean(showChangePlan) && (
 							<Button onClick={onChangePlan} size="sm">
 								Change plan
 							</Button>
 						)}
-						{showUpdatePayment && (
+						{Boolean(showUpdatePayment) && (
 							<Button
 								variant={isPastDue ? "default" : "outline"}
 								size="sm"

@@ -68,9 +68,9 @@ export function VaultCreateForm({
 			</label>
 			<div className="mt-3 flex gap-2">
 				<Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-					{create.isPending ? "Creating…" : submitLabel}
+					{create.isPending ? "Creating…" : `${submitLabel}`}
 				</Button>
-				{showCancel && (
+				{Boolean(showCancel) && (
 					<Button type="button" variant="ghost" size="sm" onClick={onCancel}>
 						Cancel
 					</Button>

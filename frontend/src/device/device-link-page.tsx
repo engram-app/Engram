@@ -296,7 +296,7 @@ export default function DeviceLinkPage() {
 							onCustomChange={setCustomName}
 							atVaultCap={atVaultCap}
 						/>
-						{atVaultCap && (
+						{Boolean(atVaultCap) && (
 							<p className="text-muted-foreground text-xs">
 								Your Free plan includes 1 vault — link into the existing one above, or{" "}
 								<a
@@ -328,7 +328,7 @@ export default function DeviceLinkPage() {
 					<SuccessStep linkedVaultId={linkedVaultId} onForward={() => navigate("/")} />
 				)}
 
-				{error && (
+				{Boolean(error) && (
 					<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
 						{error}
 					</p>

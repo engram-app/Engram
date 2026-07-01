@@ -227,7 +227,7 @@ export function InlineCheckout({
 				className,
 			)}
 		>
-			{summaryFirst && (
+			{Boolean(summaryFirst) && (
 				<div className={cn("w-full", isHorizontal && "lg:w-72 lg:shrink-0")}>
 					<CheckoutSummary summary={summaryData} policyUrl={policyUrl} policyLabel={policyLabel} />
 				</div>

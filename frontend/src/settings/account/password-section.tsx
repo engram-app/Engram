@@ -48,7 +48,7 @@ export function PasswordSection() {
 					submit();
 				}}
 			>
-				{hasPassword && (
+				{Boolean(hasPassword) && (
 					<label className="block font-medium text-foreground text-sm">
 						Current password
 						<input

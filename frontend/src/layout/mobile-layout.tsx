@@ -84,7 +84,7 @@ export default function MobileLayout() {
 				</section>
 				<nav className="flex items-center gap-1" aria-label="Main navigation">
 					<UserMenu />
-					{rightContent && (
+					{Boolean(rightContent) && (
 						<Sheet open={rightOpen} onOpenChange={setRightOpen}>
 							<SheetTrigger asChild>
 								<Button variant="ghost" size="icon" aria-label="Open outline" className="h-11 w-11">

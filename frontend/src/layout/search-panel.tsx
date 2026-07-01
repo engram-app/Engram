@@ -72,12 +72,12 @@ export default function SearchPanel() {
 				{!deferred && recent.length > 0 && (
 					<RecentList recent={recent} onPick={(q) => setInput(q)} />
 				)}
-				{deferred && isLoading && (
+				{Boolean(deferred && isLoading) && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">Searching…</p>
 				)}
-				{error && (
+				{error ? (
 					<p className="px-3 py-2 text-destructive text-xs">Search failed: {error.message}</p>
-				)}
+				) : null}
 				{deferred && results && results.length === 0 && !isLoading && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">No results for "{deferred}"</p>
 				)}
@@ -133,7 +133,7 @@ function ResultRow({ result }: { result: SearchResult }) {
 			{result.heading_path && result.heading_path !== result.title && (
 				<p className="text-muted-foreground text-xs">↳ {result.heading_path}</p>
 			)}
-			{result.snippet && (
+			{Boolean(result.snippet) && (
 				<p className="mt-1 line-clamp-2 text-muted-foreground text-xs">{result.snippet}</p>
 			)}
 		</Link>

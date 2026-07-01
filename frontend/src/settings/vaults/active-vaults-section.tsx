@@ -34,7 +34,7 @@ export function ActiveVaultsSection() {
 				)
 			}
 		>
-			{atCap && (
+			{Boolean(atCap) && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
 					<p className="text-foreground text-sm">
 						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
@@ -57,7 +57,7 @@ export function ActiveVaultsSection() {
 					/>
 				</section>
 			)}
-			{isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
+			{Boolean(isLoading) && <p className="text-muted-foreground text-sm">Loading…</p>}
 			<table className="w-full text-sm">
 				<thead>
 					<tr className="border-border border-b text-left text-muted-foreground text-xs">
@@ -81,13 +81,13 @@ export function ActiveVaultsSection() {
 				</tbody>
 			</table>
 
-			{deleteTarget && (
+			{deleteTarget ? (
 				<DeleteVaultDialog
 					vault={deleteTarget}
 					open={deleteTarget !== null}
 					onOpenChange={(open) => !open && setDeleteTarget(null)}
 				/>
-			)}
+			) : null}
 		</SettingsSectionCard>
 	);
 }
@@ -122,7 +122,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 				) : (
 					<span className="flex items-center gap-2">
 						<span className="font-medium text-foreground">{vault.name}</span>
-						{vault.is_default && (
+						{Boolean(vault.is_default) && (
 							<span className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-xs">
 								Default
 							</span>
