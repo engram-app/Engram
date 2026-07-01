@@ -27,7 +27,7 @@ export function takePendingSignupUser(): string | null {
 		if (!raw) return null;
 		sessionStorage.removeItem(KEY);
 		const { id, ts } = JSON.parse(raw) as { id?: string; ts?: number };
-		if (!id || !ts || Date.now() - ts > WINDOW_MS) return null;
+		if (!(id && ts) || Date.now() - ts > WINDOW_MS) return null;
 		return id;
 	} catch {
 		return null;

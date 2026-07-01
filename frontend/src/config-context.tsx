@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, type ReactNode, useContext } from "react";
 import type { EngramConfig } from "./config";
 
 // Exported so non-component utilities (or test helpers) can read the raw

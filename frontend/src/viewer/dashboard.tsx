@@ -1,7 +1,7 @@
 import { Link, useSearchParams } from "react-router";
-import { useFolderNotes, useVaults, type NoteSummary } from "../api/queries";
-import { EmptyVaultState } from "../layout/empty-vault-state";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
+import { EmptyVaultState } from "../layout/empty-vault-state";
 
 function formatDate(iso: string): string {
 	return new Date(iso).toLocaleDateString(undefined, {

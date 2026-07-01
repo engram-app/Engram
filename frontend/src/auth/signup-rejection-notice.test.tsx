@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SignupRejectionNotice from "./signup-rejection-notice";
 
 const KEY = "engram:pending-signup";
@@ -26,7 +26,7 @@ describe("SignupRejectionNotice", () => {
 
 		render(<SignupRejectionNotice />);
 
-		expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/i);
+		expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/iu);
 	});
 
 	it("renders nothing when there is no pending sign-up", async () => {

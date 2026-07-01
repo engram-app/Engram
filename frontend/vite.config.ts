@@ -1,12 +1,13 @@
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import type { HtmlTagDescriptor, Plugin } from "vite";
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { bootstrapConfigFromEnv } from "./scripts/bootstrap-config";
+
 /// <reference types="vitest" />
 
 const apiTarget = process.env.VITE_API_TARGET ?? "http://localhost:4000";

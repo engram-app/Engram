@@ -3,9 +3,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { formatBillingCycle, formatMoney } from "@/lib/paddle-format";
 import type { CheckoutSummaryData } from "@/lib/paddle-types";
-import { formatMoney, formatBillingCycle } from "@/lib/paddle-format";
+import { cn } from "@/lib/utils";
 
 /** Props for the `CheckoutSummary` component. */
 export type CheckoutSummaryProps = {

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
 vi.mock("../api/queries", () => ({

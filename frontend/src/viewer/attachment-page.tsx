@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
-import { api, ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { useAttachments } from "../api/queries";
 import LoadingPane from "./loading-pane";
 import PreviewColumn from "./preview-column";

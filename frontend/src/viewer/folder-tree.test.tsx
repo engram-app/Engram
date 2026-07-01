@@ -1,9 +1,9 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import FolderTree from "./folder-tree";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
+import FolderTree from "./folder-tree";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
 // primitives (loader, useEngramTree, TreeRow, dialogs). These integration
@@ -203,7 +203,7 @@ describe("FolderTree (HT)", () => {
 		// QueryClient that hasn't resolved — but our mock returns synchronously.
 		// We just smoke that the loading branch isn't visible in the happy path.
 		renderTree();
-		expect(screen.queryByText(/Loading/i)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Loading/iu)).not.toBeInTheDocument();
 	});
 
 	it("does not crash on loading→loaded transition (hook-count regression)", async () => {

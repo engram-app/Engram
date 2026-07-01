@@ -1,7 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { useReverseCancel, type SubscriptionDetail } from "../api/queries";
+import { type SubscriptionDetail, useReverseCancel } from "../api/queries";
 
 const ACTION_LABELS: Record<string, string> = {
 	cancel: "Your plan cancels",

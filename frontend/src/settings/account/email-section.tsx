@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useUser, useReverification } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { clerkErrorMessage } from "./clerk-errors";
@@ -23,7 +23,7 @@ export function EmailSection() {
 		user!.createEmailAddress({ email: address }),
 	);
 
-	if (!isLoaded || !user) return null;
+	if (!(isLoaded && user)) return null;
 
 	async function add() {
 		try {

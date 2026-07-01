@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from "react";
-import { ConfigContext } from "../config-context";
 import { getApiBase, joinApiUrl } from "../api/base";
+import { ConfigContext } from "../config-context";
 
 export interface Bootstrap {
 	bootstrap_pending: boolean;
@@ -17,7 +17,7 @@ export type BootstrapState = Bootstrap | null | undefined;
 // Module-level cache so concurrent hook callers share one fetch + result.
 // Seeded from config.bootstrap on first hook invocation (the seed is
 // stable per page load — config is resolved once during Suspense gate).
-let cached: Bootstrap | null | undefined = undefined;
+let cached: Bootstrap | null | undefined;
 let seeded = false;
 let inflight: Promise<Bootstrap | null> | null = null;
 

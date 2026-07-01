@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	RECONNECT_JITTER_DEFAULT_MS,
-	RECONNECT_JITTER_MAX_MS,
-	clampReconnectJitter,
-	computeReconnectMs,
-	captureServerJitter,
 	__getServerJitterMs,
 	__resetServerJitterMs,
+	captureServerJitter,
+	clampReconnectJitter,
+	computeReconnectMs,
+	RECONNECT_JITTER_DEFAULT_MS,
+	RECONNECT_JITTER_MAX_MS,
 } from "./channel";
 
 afterEach(() => __resetServerJitterMs());
@@ -19,8 +19,8 @@ describe("clampReconnectJitter", () => {
 	it("rejects zero (coalesces to default, not no-jitter)", () =>
 		expect(clampReconnectJitter(0)).toBeNull());
 	it("rejects NaN/Infinity", () => {
-		expect(clampReconnectJitter(NaN)).toBeNull();
-		expect(clampReconnectJitter(Infinity)).toBeNull();
+		expect(clampReconnectJitter(Number.NaN)).toBeNull();
+		expect(clampReconnectJitter(Number.POSITIVE_INFINITY)).toBeNull();
 	});
 	it("rejects non-numbers", () => expect(clampReconnectJitter("5000")).toBeNull());
 });

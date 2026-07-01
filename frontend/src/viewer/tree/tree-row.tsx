@@ -1,12 +1,12 @@
-import type React from "react";
-import { ChevronRight, File, FileText, Image } from "lucide-react";
-import { Link } from "react-router";
 import type { ItemInstance } from "@headless-tree/core";
-import type { LoaderItem } from "./loader";
-import type { TreeItem } from "./types";
+import { ChevronRight, File, FileText, Image } from "lucide-react";
+import type React from "react";
+import { Link } from "react-router";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
+import type { LoaderItem } from "./loader";
 import { isSyntheticFolderId } from "./synthesize-folders";
+import type { TreeItem } from "./types";
 
 interface Props {
 	instance: ItemInstance<LoaderItem>;

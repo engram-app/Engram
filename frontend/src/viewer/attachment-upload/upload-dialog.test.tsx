@@ -1,7 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { AttachmentUploadDialog } from "./upload-dialog";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, LimitExceededError } from "@/api/client";
+import { AttachmentUploadDialog } from "./upload-dialog";
 
 const mutateAsync = vi.fn();
 vi.mock("@/api/queries", () => ({
@@ -31,7 +31,7 @@ describe("AttachmentUploadDialog", () => {
 
 		// pick folder "docs"
 		fireEvent.click(screen.getByRole("option", { name: "docs" }));
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
 
 		await waitFor(() =>
 			expect(mutateAsync).toHaveBeenCalledWith(
@@ -45,7 +45,7 @@ describe("AttachmentUploadDialog", () => {
 		render(
 			<AttachmentUploadDialog initialFiles={[file("a.txt")]} folders={[]} onClose={() => {}} />,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
 		await waitFor(() =>
 			expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: "a.txt" })),
 		);
@@ -62,7 +62,7 @@ describe("AttachmentUploadDialog", () => {
 			/>,
 		);
 		// No folder interaction — defaultFolder drives the path.
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
 		await waitFor(() =>
 			expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: "docs/a.txt" })),
 		);
@@ -79,7 +79,7 @@ describe("AttachmentUploadDialog", () => {
 		);
 		// Starts at root (index 0); ArrowDown moves selection to 'docs' (index 1).
 		fireEvent.keyDown(screen.getByRole("listbox"), { key: "ArrowDown" });
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
 		await waitFor(() =>
 			expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: "docs/a.txt" })),
 		);
@@ -96,8 +96,8 @@ describe("AttachmentUploadDialog", () => {
 				onClose={() => {}}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
-		await waitFor(() => expect(screen.getByText(/not allowed/i)).toBeInTheDocument());
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
+		await waitFor(() => expect(screen.getByText(/not allowed/iu)).toBeInTheDocument());
 		expect(mutateAsync).toHaveBeenCalledTimes(2);
 	});
 
@@ -108,7 +108,7 @@ describe("AttachmentUploadDialog", () => {
 		render(
 			<AttachmentUploadDialog initialFiles={[file("a.txt")]} folders={[]} onClose={() => {}} />,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /^upload$/i }));
-		await waitFor(() => expect(screen.getByText(/upgrade to upload/i)).toBeInTheDocument());
+		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
+		await waitFor(() => expect(screen.getByText(/upgrade to upload/iu)).toBeInTheDocument());
 	});
 });

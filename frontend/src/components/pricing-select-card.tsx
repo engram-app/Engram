@@ -1,12 +1,12 @@
-export {
-	PricingSelectCardStacked,
-	type PricingSelectCardStackedProps,
-} from "./pricing-select-card-stacked";
 export { PricingSelectCardGrid, type PricingSelectCardGridProps } from "./pricing-select-card-grid";
 export {
 	PricingSelectCardGroup,
 	type PricingSelectCardGroupProps,
 } from "./pricing-select-card-group";
+export {
+	PricingSelectCardStacked,
+	type PricingSelectCardStackedProps,
+} from "./pricing-select-card-stacked";
 
 /**
  * Plan configuration for use with PricingSelectCardGroup and ExpressCheckout.

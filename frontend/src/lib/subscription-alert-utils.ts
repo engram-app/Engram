@@ -1,5 +1,5 @@
-import type { SubscriptionAlertData } from "@/lib/paddle-types";
 import { formatDate } from "@/lib/paddle-format";
+import type { SubscriptionAlertData } from "@/lib/paddle-types";
 
 export type AlertVariant = "destructive" | "warning" | "info";
 

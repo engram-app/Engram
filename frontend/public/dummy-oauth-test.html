@@ -35,7 +35,7 @@
 
 <pre id="log">Ready. Click a Connect button to start the flow.</pre>
 
-<script>
+<script>"use strict";
 const BACKEND = ''; // same-origin (Vite proxies /api and /oauth to Phoenix)
 const REDIRECT_URI = window.location.origin + '/dummy-oauth-test.html';
 
@@ -50,7 +50,7 @@ function log(msg, cls) {
 
 function b64url(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    .replace(/\+/gu,'-').replace(/\//gu,'_').replace(/[=]+$/u,'');
 }
 async function pkcePair() {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -108,7 +108,7 @@ async function handleRedirect() {
   const error = params.get('error');
   const errorDesc = params.get('error_description');
 
-  if (!code && !error) return; // fresh page load
+  if (!(code || error)) return; // fresh page load
 
   // Strip params from URL so a refresh doesn't replay
   window.history.replaceState({}, '', '/dummy-oauth-test.html');
@@ -147,7 +147,7 @@ async function handleRedirect() {
   }
   const token = await tokenRes.json();
   log(`✓ ${label} connected. access_token=${token.access_token.slice(0,20)}…`, 'ok');
-  log(`Connection registered server-side. Go to /settings/connections to see it.`, 'ok');
+  log("Connection registered server-side. Go to /settings/connections to see it.", 'ok');
 }
 
 document.getElementById('connect-a').addEventListener('click', () => startConnect('Dummy Client A'));

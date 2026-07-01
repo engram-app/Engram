@@ -1,5 +1,5 @@
-import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, createBrowserRouter } from "react-router";
+import { lazy, type ReactNode, Suspense } from "react";
+import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import AuthGuard from "./auth/auth-guard";
 import CatchAllRoute from "./auth/catch-all-route";
 import SignInPage from "./auth/sign-in";
@@ -8,14 +8,13 @@ import WaitlistPage from "./auth/waitlist";
 import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import AppLayout from "./layout/app-layout";
-import LoadingPane from "./viewer/loading-pane";
-import SettingsLayout from "./settings/settings-layout";
-import { ROUTES } from "./routes";
-import OnboardingGate from "./onboarding/onboarding-gate";
 import OnboardLayout from "./onboarding/onboard-layout";
 import OnboardRedirect from "./onboarding/onboard-redirect";
+import OnboardingGate from "./onboarding/onboarding-gate";
 import { OnboardingShell } from "./onboarding/onboarding-shell";
-import { Outlet } from "react-router";
+import { ROUTES } from "./routes";
+import SettingsLayout from "./settings/settings-layout";
+import LoadingPane from "./viewer/loading-pane";
 
 // Route-level code splitting. The viewer stack alone (remark/rehype +
 // KaTeX wiring + CodeMirror behind NotePage) dominated a 1.78 MB main

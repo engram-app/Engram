@@ -1,10 +1,10 @@
-import { useState } from "react";
 import { Pencil, Star, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
+import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { SettingsSectionCard } from "@/settings/account/section-card";
-import { useVaults, useUpdateVault, useBillingStatus, type Vault } from "@/api/queries";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
 
 const inputClass =
@@ -19,18 +19,18 @@ export function ActiveVaultsSection() {
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const vaultCount = vaults?.length ?? 0;
 	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
-	const titleSuffix = vaultsCap != null ? ` (${vaultCount} / ${vaultsCap})` : "";
+	const titleSuffix = vaultsCap == null ? "" : ` (${vaultCount} / ${vaultsCap})`;
 
 	return (
 		<SettingsSectionCard
 			title={`Vaults${titleSuffix}`}
 			description="Rename, set a default, or delete your vaults."
 			headerAction={
-				!atCap ? (
+				atCap ? undefined : (
 					<Button onClick={() => setCreateOpen((o) => !o)}>
 						{createOpen ? "Cancel" : "New vault"}
 					</Button>
-				) : undefined
+				)
 			}
 		>
 			{atCap && (

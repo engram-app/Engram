@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import OAuthAuthorizePage from "./oauth-authorize-page";
 
 const { fetchOAuthClient, postOAuthConsent } = vi.hoisted(() => ({
@@ -118,21 +118,21 @@ describe("OAuthAuthorizePage", () => {
 			kind: "mcp",
 		});
 		renderAt(VALID_QS);
-		expect(await screen.findByText(/Claude Desktop/)).toBeInTheDocument();
-		expect(screen.getByText(/signed in as todd@example.com/i)).toBeInTheDocument();
+		expect(await screen.findByText(/Claude Desktop/u)).toBeInTheDocument();
+		expect(screen.getByText(/signed in as todd@example.com/iu)).toBeInTheDocument();
 	});
 
 	it("shows the invalid-request alert when a required param is missing", () => {
 		renderAt("?client_id=cli");
 		expect(
-			screen.getByRole("heading", { name: /invalid authorization request/i }),
+			screen.getByRole("heading", { name: /invalid authorization request/iu }),
 		).toBeInTheDocument();
 	});
 
 	it("shows the unknown-client alert when the client lookup fails", async () => {
 		fetchOAuthClient.mockRejectedValue(new Error("oauth client lookup failed: 404"));
 		renderAt(VALID_QS);
-		expect(await screen.findByText(/unknown oauth client/i)).toBeInTheDocument();
+		expect(await screen.findByText(/unknown oauth client/iu)).toBeInTheDocument();
 	});
 
 	it("submits consent with the chosen vault and redirects", async () => {
@@ -145,8 +145,8 @@ describe("OAuthAuthorizePage", () => {
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt(VALID_QS);
-		fireEvent.click(await screen.findByRole("radio", { name: /work/i }));
-		fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+		fireEvent.click(await screen.findByRole("radio", { name: /work/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /approve/iu }));
 
 		await waitFor(() =>
 			expect(postOAuthConsent).toHaveBeenCalledWith(
@@ -177,18 +177,18 @@ describe("OAuthAuthorizePage", () => {
 
 		renderAt(VALID_QS);
 		// Banner names the existing connection + warns it'll be disconnected.
-		expect(await screen.findByText(/Approving will disconnect/i)).toBeInTheDocument();
-		expect(screen.getByText(/Claude Desktop \(old\)/)).toBeInTheDocument();
+		expect(await screen.findByText(/Approving will disconnect/iu)).toBeInTheDocument();
+		expect(screen.getByText(/Claude Desktop \(old\)/u)).toBeInTheDocument();
 		// Picker + Approve are still rendered (NOT replaced).
-		expect(screen.getByRole("radio", { name: /work/i })).toBeInTheDocument();
-		const approve = screen.getByRole("button", { name: /approve/i });
+		expect(screen.getByRole("radio", { name: /work/iu })).toBeInTheDocument();
+		const approve = screen.getByRole("button", { name: /approve/iu });
 		expect(approve).toBeInTheDocument();
 
 		fireEvent.click(approve);
 
 		// Approve opens a confirm modal first; click the confirm button there.
 		const confirm = await screen.findByRole("button", {
-			name: /disconnect & connect Claude Desktop/i,
+			name: /disconnect & connect Claude Desktop/iu,
 		});
 		fireEvent.click(confirm);
 
@@ -214,7 +214,7 @@ describe("OAuthAuthorizePage", () => {
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt(VALID_QS);
-		fireEvent.click(await screen.findByRole("button", { name: /cancel/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /cancel/iu }));
 
 		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
 	});

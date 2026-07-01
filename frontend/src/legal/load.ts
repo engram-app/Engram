@@ -1,4 +1,4 @@
-import manifest from "./versions/legal-manifest.json";
+import manifest from "./versions/legal-manifest.json" with { type: "json" };
 
 const mds = import.meta.glob("./versions/*.md", {
 	query: "?raw",

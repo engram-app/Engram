@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { Socket } from "phoenix";
-import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { useEffect } from "react";
 import { getWsBase, joinWsUrl } from "../api/base";
+import { useAuthAdapter } from "../auth/use-auth-adapter";
 
 export interface SubscriptionActivatedPayload {
 	tier: string;

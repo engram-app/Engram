@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock("../api/client", () => ({
@@ -9,8 +9,8 @@ vi.mock("../api/client", () => ({
 	setTokenGetter: vi.fn(),
 }));
 
-import PlanChangePanel from "./plan-change-panel";
 import type { BillingStatus } from "../api/queries";
+import PlanChangePanel from "./plan-change-panel";
 
 let qc: QueryClient;
 
@@ -72,8 +72,8 @@ describe("PlanChangePanel", () => {
 			wrapper: Wrapper,
 		});
 		// Starter is current → 'Your plan' badge + inert "You're on this plan" status
-		expect(screen.getAllByText(/your plan/i).length).toBeGreaterThan(0);
-		expect(screen.getByRole("status", { name: /your current plan/i })).toBeInTheDocument();
+		expect(screen.getAllByText(/your plan/iu).length).toBeGreaterThan(0);
+		expect(screen.getByRole("status", { name: /your current plan/iu })).toBeInTheDocument();
 	});
 
 	it("fetches preview when a target is selected and shows proration", async () => {
@@ -87,14 +87,14 @@ describe("PlanChangePanel", () => {
 		render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		fireEvent.click(screen.getByRole("button", { name: /^select$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^select$/iu }));
 
 		await waitFor(() =>
 			expect(post).toHaveBeenCalledWith("/billing/plan-change/preview", {
 				target_price_id: "pri_p_m",
 			}),
 		);
-		expect(await screen.findByText(/charged \$3\.50 today/i)).toBeInTheDocument();
+		expect(await screen.findByText(/charged \$3\.50 today/iu)).toBeInTheDocument();
 	});
 
 	it("confirm fires the mutation and onClose on success", async () => {
@@ -111,9 +111,9 @@ describe("PlanChangePanel", () => {
 		render(<PlanChangePanel billing={billing()} onClose={onClose} onSwitchToCancel={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		fireEvent.click(screen.getByRole("button", { name: /^select$/i }));
-		await screen.findByText(/charged \$3\.50 today/i);
-		fireEvent.click(screen.getByRole("button", { name: /confirm change/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^select$/iu }));
+		await screen.findByText(/charged \$3\.50 today/iu);
+		fireEvent.click(screen.getByRole("button", { name: /confirm change/iu }));
 
 		await waitFor(() =>
 			expect(post).toHaveBeenCalledWith("/billing/plan-change/confirm", {
@@ -134,10 +134,10 @@ describe("PlanChangePanel", () => {
 		render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		fireEvent.click(screen.getByRole("button", { name: /^select$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^select$/iu }));
 
-		expect(await screen.findByText(/could not load proration/i)).toBeInTheDocument();
-		const confirmBtn = screen.getByRole("button", { name: /confirm change/i });
+		expect(await screen.findByText(/could not load proration/iu)).toBeInTheDocument();
+		const confirmBtn = screen.getByRole("button", { name: /confirm change/iu });
 		await waitFor(() => expect(confirmBtn).not.toBeDisabled());
 	});
 
@@ -152,9 +152,9 @@ describe("PlanChangePanel", () => {
 		render(<PlanChangePanel billing={billing()} onClose={vi.fn()} onSwitchToCancel={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		fireEvent.click(screen.getByRole("button", { name: /^select$/i }));
-		expect(await screen.findByText(/no charge today/i)).toBeInTheDocument();
-		expect(screen.queryByText(/credited \$0\.00/i)).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /^select$/iu }));
+		expect(await screen.findByText(/no charge today/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/credited \$0\.00/iu)).not.toBeInTheDocument();
 	});
 
 	it("Cancel button closes without firing a mutation", () => {
@@ -162,7 +162,7 @@ describe("PlanChangePanel", () => {
 		render(<PlanChangePanel billing={billing()} onClose={onClose} onSwitchToCancel={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /^cancel$/iu }));
 		expect(post).not.toHaveBeenCalled();
 		expect(onClose).toHaveBeenCalled();
 	});
@@ -182,9 +182,9 @@ describe("PlanChangePanel", () => {
 			wrapper: Wrapper,
 		});
 
-		expect(screen.getByText(/payment processor.*doesn't allow plan changes/i)).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /cancel free trial/i })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^select$/i })).not.toBeInTheDocument();
+		expect(screen.getByText(/payment processor.*doesn't allow plan changes/iu)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /cancel free trial/iu })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^select$/iu })).not.toBeInTheDocument();
 		expect(post).not.toHaveBeenCalled();
 	});
 
@@ -199,7 +199,7 @@ describe("PlanChangePanel", () => {
 			<PlanChangePanel billing={trial} onClose={vi.fn()} onSwitchToCancel={onSwitchToCancel} />,
 			{ wrapper: Wrapper },
 		);
-		fireEvent.click(screen.getByRole("button", { name: /cancel free trial/i }));
+		fireEvent.click(screen.getByRole("button", { name: /cancel free trial/iu }));
 
 		expect(onSwitchToCancel).toHaveBeenCalledOnce();
 	});
@@ -226,9 +226,9 @@ describe("PlanChangePanel", () => {
 			wrapper: Wrapper,
 		});
 
-		expect(screen.getByText(/already scheduled to cancel/i)).toBeInTheDocument();
-		expect(screen.getByText(/Keep my subscription/i)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /cancel free trial/i })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /close/i })).toBeInTheDocument();
+		expect(screen.getByText(/already scheduled to cancel/iu)).toBeInTheDocument();
+		expect(screen.getByText(/Keep my subscription/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /cancel free trial/iu })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /close/iu })).toBeInTheDocument();
 	});
 });

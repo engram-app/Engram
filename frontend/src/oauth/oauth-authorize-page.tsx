@@ -1,11 +1,6 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchOAuthClient, postOAuthConsent, type OAuthConsentParams } from "../api/oauth";
-import { useVaults, useMe, useConnections, type Connection } from "../api/queries";
-import { api } from "../api/client";
-import AuthShell from "../layout/auth-shell";
-import AuthPanel from "../layout/auth-panel";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -15,10 +10,15 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
-import { heading, destructiveAlert, selectableRow } from "@/lib/ui-classes";
-import { useConnectionCap } from "../billing/use-connection-cap";
+import { api } from "../api/client";
+import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
+import { type Connection, useConnections, useMe, useVaults } from "../api/queries";
 import { connectionId as oauthConnectionId } from "../billing/existing-connections-panel";
+import { useConnectionCap } from "../billing/use-connection-cap";
+import AuthPanel from "../layout/auth-panel";
+import AuthShell from "../layout/auth-shell";
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -42,10 +42,10 @@ function readParams(search: URLSearchParams): {
 
 	for (const key of REQUIRED_PARAMS) {
 		const v = search.get(key);
-		if (!v) {
-			missing.push(key);
-		} else {
+		if (v) {
 			values[key] = v;
+		} else {
+			missing.push(key);
 		}
 	}
 

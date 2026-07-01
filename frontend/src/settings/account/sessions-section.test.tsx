@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const current = {
 	id: "sess_current",
@@ -25,13 +25,13 @@ describe("SessionsSection", () => {
 
 	it("marks the current session and hides its revoke button", () => {
 		render(<SessionsSection />);
-		expect(screen.getByText(/current/i)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /revoke sess_current/i })).not.toBeInTheDocument();
+		expect(screen.getByText(/current/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /revoke sess_current/iu })).not.toBeInTheDocument();
 	});
 
 	it("revokes another session", async () => {
 		render(<SessionsSection />);
-		fireEvent.click(screen.getByRole("button", { name: /revoke .*iphone/i }));
+		fireEvent.click(screen.getByRole("button", { name: /revoke .*iphone/iu }));
 		await waitFor(() => expect(other.revoke).toHaveBeenCalled());
 	});
 });

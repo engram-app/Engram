@@ -1,7 +1,7 @@
-import type { VirtualItem } from "@tanstack/react-virtual";
 import type { ItemInstance } from "@headless-tree/core";
-import { TreeRow } from "./tree-row";
+import type { VirtualItem } from "@tanstack/react-virtual";
 import type { LoaderItem } from "./loader";
+import { TreeRow } from "./tree-row";
 
 interface Props {
 	virtualItem: VirtualItem;

@@ -1,12 +1,12 @@
 "use client";
 
-import * as React from "react";
 import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import type * as React from "react";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import type { PriceData } from "@/lib/paddle-types";
+import { cn } from "@/lib/utils";
 
 export type PricingSelectCardStackedProps = {
 	priceId: string;

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { buildLoader, type SortKey } from "./loader";
+import { describe, expect, it, vi } from "vitest";
 import type { AttachmentSummary, Folder, NoteSummary } from "../../api/queries";
+import { buildLoader, type SortKey } from "./loader";
 
 const folders: Folder[] = [
 	{ id: "1", parent_id: null, name: "Projects", count: 2 },

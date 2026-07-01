@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AttachmentUploadProvider, useAttachmentUpload } from "./provider";
 
 vi.mock("@/api/queries", () => ({
@@ -61,12 +61,12 @@ describe("AttachmentUploadProvider", () => {
 		act(() => {
 			window.dispatchEvent(fileDragEvent("dragenter", false));
 		});
-		expect(screen.queryByText(/drop files to upload/i)).toBeNull();
+		expect(screen.queryByText(/drop files to upload/iu)).toBeNull();
 		// external Files drag — overlay shows
 		act(() => {
 			window.dispatchEvent(fileDragEvent("dragenter", true));
 		});
-		expect(screen.getByText(/drop files to upload/i)).toBeInTheDocument();
+		expect(screen.getByText(/drop files to upload/iu)).toBeInTheDocument();
 	});
 
 	it("opens the dialog with dropped files", async () => {
@@ -93,7 +93,7 @@ describe("AttachmentUploadProvider", () => {
 		act(() => {
 			window.dispatchEvent(fileDragEvent("dragenter", true));
 		});
-		expect(screen.queryByText(/drop files to upload/i)).toBeNull();
+		expect(screen.queryByText(/drop files to upload/iu)).toBeNull();
 		act(() => {
 			window.dispatchEvent(fileDragEvent("drop", true));
 		});

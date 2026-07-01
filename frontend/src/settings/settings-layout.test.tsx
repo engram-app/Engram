@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import SettingsLayout from "./settings-layout";
-import { ThemeProvider } from "../theme/theme-provider";
-import { ConfigProvider } from "../config-context";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "../config";
+import { ConfigProvider } from "../config-context";
+import { ThemeProvider } from "../theme/theme-provider";
+import SettingsLayout from "./settings-layout";
 
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
@@ -43,13 +43,11 @@ function renderAt(path: string) {
 
 describe("SettingsLayout", () => {
 	beforeEach(() => {
-		window.matchMedia = vi
-			.fn()
-			.mockReturnValue({
-				matches: true,
-				addEventListener: vi.fn(),
-				removeEventListener: vi.fn(),
-			}) as any;
+		window.matchMedia = vi.fn().mockReturnValue({
+			matches: true,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+		}) as any;
 	});
 
 	it("renders as a dialog with the settings nav + routed section", () => {

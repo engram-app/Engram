@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const deleteMutate = vi.fn();
 vi.mock("@/api/queries", () => ({
@@ -31,16 +31,16 @@ describe("DeleteVaultDialog", () => {
 
 	it("educates about the 30-day window and remote-only scope", () => {
 		render(<DeleteVaultDialog vault={vault} open onOpenChange={() => {}} />);
-		expect(screen.getByText(/30 days/i)).toBeInTheDocument();
-		expect(screen.getByText(/synced to your devices/i)).toBeInTheDocument();
-		expect(screen.getByText(/142/)).toBeInTheDocument();
+		expect(screen.getByText(/30 days/iu)).toBeInTheDocument();
+		expect(screen.getByText(/synced to your devices/iu)).toBeInTheDocument();
+		expect(screen.getByText(/142/u)).toBeInTheDocument();
 	});
 
 	it("keeps the delete button disabled until the name is typed", async () => {
 		render(<DeleteVaultDialog vault={vault} open onOpenChange={() => {}} />);
-		const confirmBtn = screen.getByRole("button", { name: /delete vault/i });
+		const confirmBtn = screen.getByRole("button", { name: /delete vault/iu });
 		expect(confirmBtn).toBeDisabled();
-		fireEvent.change(screen.getByLabelText(/type .*work.* to confirm/i), {
+		fireEvent.change(screen.getByLabelText(/type .*work.* to confirm/iu), {
 			target: { value: "Work" },
 		});
 		expect(confirmBtn).toBeEnabled();

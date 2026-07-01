@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { ACTIONS, EVENTS, type EventData, Joyride, STATUS, type Step } from "react-joyride";
 import { useNavigate } from "react-router";
-import { Joyride, type EventData, type Step, STATUS, EVENTS, ACTIONS } from "react-joyride";
-import { tourSteps, GATED_STEPS } from "./steps";
+import { GATED_STEPS, tourSteps } from "./steps";
 
 interface Props {
 	active: boolean;

@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import SearchPanel from "./search-panel";
 import { RailViewProvider, useRailView } from "./rail-view-context";
+import SearchPanel from "./search-panel";
 
 vi.mock("../api/queries", () => ({
 	useSearch: (q: string) => ({
@@ -53,7 +53,7 @@ describe("SearchPanel", () => {
 	it('renders header "Search" and an [x] return-to-files control', () => {
 		renderPanel();
 		expect(screen.getByRole("heading", { name: "Search", level: 2 })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /close search/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /close search/iu })).toBeInTheDocument();
 	});
 
 	it('shows "Recent" empty-state when query is blank and recents exist', () => {
@@ -65,20 +65,20 @@ describe("SearchPanel", () => {
 
 	it("types into the input and renders a result row", async () => {
 		renderPanel();
-		const input = screen.getByPlaceholderText(/search your notes/i) as HTMLInputElement;
+		const input = screen.getByPlaceholderText(/search your notes/iu) as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "hello" } });
 		expect(await screen.findByText("Note")).toBeInTheDocument();
 	});
 
 	it("[x] returns to Files view", () => {
 		renderPanel();
-		fireEvent.click(screen.getByRole("button", { name: /close search/i }));
+		fireEvent.click(screen.getByRole("button", { name: /close search/iu }));
 		expect(screen.getByTestId("view").textContent).toBe("files");
 	});
 
 	it("Esc in the input returns to Files view", () => {
 		renderPanel();
-		const input = screen.getByPlaceholderText(/search your notes/i);
+		const input = screen.getByPlaceholderText(/search your notes/iu);
 		fireEvent.keyDown(input, { key: "Escape" });
 		expect(screen.getByTestId("view").textContent).toBe("files");
 	});

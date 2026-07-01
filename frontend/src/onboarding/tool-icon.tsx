@@ -1,34 +1,32 @@
-import { Globe, Workflow, Box } from "lucide-react";
-
 // Brand marks — color variant where the brand publishes one (Claude, Mistral,
 // Claude Code), otherwise the currentColor mono mark. Wordmark SVGs always
 // ship in currentColor, so they inherit row state (muted default / foreground
 // on selected) the same way plain text would.
 import claudeColor from "@lobehub/icons-static-svg/icons/claude-color.svg?raw";
-import openaiMark from "@lobehub/icons-static-svg/icons/openai.svg?raw";
-import grokMark from "@lobehub/icons-static-svg/icons/grok.svg?raw";
-import mistralColor from "@lobehub/icons-static-svg/icons/mistral-color.svg?raw";
-import openWebUIMark from "@lobehub/icons-static-svg/icons/openwebui.svg?raw";
-import lobeChatColor from "@lobehub/icons-static-svg/icons/lobehub-color.svg?raw";
-import claudeCodeColor from "@lobehub/icons-static-svg/icons/claudecode-color.svg?raw";
-import cursorMark from "@lobehub/icons-static-svg/icons/cursor.svg?raw";
-import windsurfMark from "@lobehub/icons-static-svg/icons/windsurf.svg?raw";
-import clineMark from "@lobehub/icons-static-svg/icons/cline.svg?raw";
-import openCodeMark from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
-import githubCopilotMark from "@lobehub/icons-static-svg/icons/githubcopilot.svg?raw";
-import mcpMark from "@lobehub/icons-static-svg/icons/mcp.svg?raw";
-
 import claudeText from "@lobehub/icons-static-svg/icons/claude-text.svg?raw";
-import openaiText from "@lobehub/icons-static-svg/icons/openai-text.svg?raw";
-import grokText from "@lobehub/icons-static-svg/icons/grok-text.svg?raw";
-import mistralText from "@lobehub/icons-static-svg/icons/mistral-text.svg?raw";
-import openWebUIText from "@lobehub/icons-static-svg/icons/openwebui-text.svg?raw";
-import lobeChatText from "@lobehub/icons-static-svg/icons/lobehub-text.svg?raw";
-import cursorText from "@lobehub/icons-static-svg/icons/cursor-text.svg?raw";
-import windsurfText from "@lobehub/icons-static-svg/icons/windsurf-text.svg?raw";
+import claudeCodeColor from "@lobehub/icons-static-svg/icons/claudecode-color.svg?raw";
+import clineMark from "@lobehub/icons-static-svg/icons/cline.svg?raw";
 import clineText from "@lobehub/icons-static-svg/icons/cline-text.svg?raw";
-import openCodeText from "@lobehub/icons-static-svg/icons/opencode-text.svg?raw";
+import cursorMark from "@lobehub/icons-static-svg/icons/cursor.svg?raw";
+import cursorText from "@lobehub/icons-static-svg/icons/cursor-text.svg?raw";
+import githubCopilotMark from "@lobehub/icons-static-svg/icons/githubcopilot.svg?raw";
 import githubCopilotText from "@lobehub/icons-static-svg/icons/githubcopilot-text.svg?raw";
+import grokMark from "@lobehub/icons-static-svg/icons/grok.svg?raw";
+import grokText from "@lobehub/icons-static-svg/icons/grok-text.svg?raw";
+import lobeChatColor from "@lobehub/icons-static-svg/icons/lobehub-color.svg?raw";
+import lobeChatText from "@lobehub/icons-static-svg/icons/lobehub-text.svg?raw";
+import mcpMark from "@lobehub/icons-static-svg/icons/mcp.svg?raw";
+import mistralColor from "@lobehub/icons-static-svg/icons/mistral-color.svg?raw";
+import mistralText from "@lobehub/icons-static-svg/icons/mistral-text.svg?raw";
+import openaiMark from "@lobehub/icons-static-svg/icons/openai.svg?raw";
+import openaiText from "@lobehub/icons-static-svg/icons/openai-text.svg?raw";
+import openCodeMark from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
+import openCodeText from "@lobehub/icons-static-svg/icons/opencode-text.svg?raw";
+import openWebUIMark from "@lobehub/icons-static-svg/icons/openwebui.svg?raw";
+import openWebUIText from "@lobehub/icons-static-svg/icons/openwebui-text.svg?raw";
+import windsurfMark from "@lobehub/icons-static-svg/icons/windsurf.svg?raw";
+import windsurfText from "@lobehub/icons-static-svg/icons/windsurf-text.svg?raw";
+import { Box, Globe, Workflow } from "lucide-react";
 
 interface Brand {
 	mark: string;

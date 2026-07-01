@@ -1,17 +1,17 @@
-import { Socket, Channel } from "phoenix";
 import type { QueryClient } from "@tanstack/react-query";
-import { getWsBase, joinWsUrl } from "./base";
-import { ROOT_FOLDER_ID } from "./queries";
+import { type Channel, Socket } from "phoenix";
 import {
+	enroll as crdtEnroll,
+	handleFrame as crdtHandleFrame,
+	docPathFromDocId,
+	notifyCrdtChannelError,
+	notifyCrdtChannelJoined,
+	resyncOpenDocs,
 	startCrdtSession,
 	stopCrdtSession,
-	handleFrame as crdtHandleFrame,
-	enroll as crdtEnroll,
-	resyncOpenDocs,
-	docPathFromDocId,
-	notifyCrdtChannelJoined,
-	notifyCrdtChannelError,
 } from "../crdt/session";
+import { getWsBase, joinWsUrl } from "./base";
+import { ROOT_FOLDER_ID } from "./queries";
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
 export const RECONNECT_JITTER_MAX_MS = 60_000;

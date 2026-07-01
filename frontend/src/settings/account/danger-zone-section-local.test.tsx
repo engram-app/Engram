@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logout, deleteMutate, navigate } = vi.hoisted(() => ({
 	logout: vi.fn(),
@@ -28,12 +28,12 @@ describe("DangerZoneSectionLocal", () => {
 		deleteMutate.mockResolvedValueOnce(undefined);
 		render(<DangerZoneSectionLocal />);
 
-		fireEvent.click(screen.getByRole("button", { name: /delete account/i }));
-		fireEvent.change(await screen.findByLabelText(/password/i), {
+		fireEvent.click(screen.getByRole("button", { name: /delete account/iu }));
+		fireEvent.change(await screen.findByLabelText(/password/iu), {
 			target: { value: "password123" },
 		});
-		fireEvent.click(screen.getByLabelText(/i understand/i));
-		fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+		fireEvent.click(screen.getByLabelText(/i understand/iu));
+		fireEvent.click(screen.getByRole("button", { name: /^delete$/iu }));
 
 		await waitFor(() => expect(deleteMutate).toHaveBeenCalledWith({ password: "password123" }));
 		await waitFor(() => expect(logout).toHaveBeenCalled());
@@ -44,14 +44,14 @@ describe("DangerZoneSectionLocal", () => {
 		deleteMutate.mockRejectedValueOnce(new Error("last_admin"));
 		render(<DangerZoneSectionLocal />);
 
-		fireEvent.click(screen.getByRole("button", { name: /delete account/i }));
-		fireEvent.change(await screen.findByLabelText(/password/i), {
+		fireEvent.click(screen.getByRole("button", { name: /delete account/iu }));
+		fireEvent.change(await screen.findByLabelText(/password/iu), {
 			target: { value: "password123" },
 		});
-		fireEvent.click(screen.getByLabelText(/i understand/i));
-		fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+		fireEvent.click(screen.getByLabelText(/i understand/iu));
+		fireEvent.click(screen.getByRole("button", { name: /^delete$/iu }));
 
-		expect(await screen.findByText(/only admin/i)).toBeInTheDocument();
+		expect(await screen.findByText(/only admin/iu)).toBeInTheDocument();
 		expect(logout).not.toHaveBeenCalled();
 	});
 
@@ -59,14 +59,14 @@ describe("DangerZoneSectionLocal", () => {
 		deleteMutate.mockRejectedValueOnce(new Error("invalid_password"));
 		render(<DangerZoneSectionLocal />);
 
-		fireEvent.click(screen.getByRole("button", { name: /delete account/i }));
-		fireEvent.change(await screen.findByLabelText(/password/i), {
+		fireEvent.click(screen.getByRole("button", { name: /delete account/iu }));
+		fireEvent.change(await screen.findByLabelText(/password/iu), {
 			target: { value: "wrong" },
 		});
-		fireEvent.click(screen.getByLabelText(/i understand/i));
-		fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+		fireEvent.click(screen.getByLabelText(/i understand/iu));
+		fireEvent.click(screen.getByRole("button", { name: /^delete$/iu }));
 
-		expect(await screen.findByText(/incorrect password/i)).toBeInTheDocument();
+		expect(await screen.findByText(/incorrect password/iu)).toBeInTheDocument();
 		expect(logout).not.toHaveBeenCalled();
 	});
 });

@@ -1,7 +1,7 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { toast } from "sonner";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUser } from "./section-test-helpers";
 
 const signOut = vi.fn().mockResolvedValue({});
@@ -28,9 +28,9 @@ describe("DangerZoneSection", () => {
 
 	it("keeps delete disabled until the confirmation phrase matches", () => {
 		render(<DangerZoneSection />);
-		const btn = screen.getByRole("button", { name: /delete my account/i });
+		const btn = screen.getByRole("button", { name: /delete my account/iu });
 		expect(btn).toBeDisabled();
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/i), {
+		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
 			target: { value: "delete my account" },
 		});
 		expect(btn).toBeEnabled();
@@ -38,10 +38,10 @@ describe("DangerZoneSection", () => {
 
 	it("calls user.delete then signs out when confirmed", async () => {
 		render(<DangerZoneSection />);
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/i), {
+		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
 			target: { value: "delete my account" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /delete my account/i }));
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 		await waitFor(() => expect(signOut).toHaveBeenCalledWith({ redirectUrl: "/sign-in" }));
 	});
@@ -50,10 +50,10 @@ describe("DangerZoneSection", () => {
 		user = makeUser({ delete: vi.fn().mockRejectedValue(new Error("cancelled")) });
 		vi.mocked(isReverificationCancelledError).mockReturnValue(true);
 		render(<DangerZoneSection />);
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/i), {
+		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
 			target: { value: "delete my account" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /delete my account/i }));
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 		expect(toast.error).not.toHaveBeenCalled();
 		expect(signOut).not.toHaveBeenCalled();

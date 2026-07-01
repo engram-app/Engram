@@ -1,6 +1,6 @@
 "use client";
 
-import * as React from "react";
+import type * as React from "react";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 

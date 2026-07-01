@@ -1,9 +1,9 @@
-import * as React from "react";
 import { AlertCircle, Info, TriangleAlert, X } from "lucide-react";
+import type * as React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { cn } from "@/lib/utils";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
-import { deriveSubscriptionAlert, type AlertVariant } from "@/lib/subscription-alert-utils";
+import { type AlertVariant, deriveSubscriptionAlert } from "@/lib/subscription-alert-utils";
+import { cn } from "@/lib/utils";
 
 /** Props for the `SubscriptionAlert` component. */
 export type SubscriptionAlertProps = {

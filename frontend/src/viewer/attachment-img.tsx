@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
 
 // 'missing' only for a real 404; a transient 5xx/network failure must NOT claim
 // the file is missing (the file exists, storage is just unreachable).

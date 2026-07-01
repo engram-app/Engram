@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { cleanupTestUsers } from "./db-cleanup";
 
-const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
+const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
 
 export default async function globalTeardown() {
@@ -24,7 +25,7 @@ async function cleanupClerkUser() {
 	}
 
 	const secretKey = process.env.E2E_CLERK_SECRET_KEY;
-	if (!secretKey || !state.clerk_user_id) {
+	if (!(secretKey && state.clerk_user_id)) {
 		fs.unlinkSync(AUTH_STATE_PATH);
 		return;
 	}

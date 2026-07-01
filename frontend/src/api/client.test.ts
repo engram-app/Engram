@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { api, setUpgradeHandler, LimitExceededError, ApiError } from "./client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError, api, LimitExceededError, setUpgradeHandler } from "./client";
 
 describe("api client 402 handling", () => {
 	beforeEach(() => {
@@ -17,8 +17,8 @@ describe("api client 402 handling", () => {
 					error: "limit_exceeded",
 					reason: "notes_cap_exceeded",
 					limit_key: "notes_cap",
-					limit: 10000,
-					current: 10000,
+					limit: 10_000,
+					current: 10_000,
 					upgrade_url: "https://app.engram.page/settings/billing",
 				}),
 				{ status: 402, headers: { "Content-Type": "application/json" } },
@@ -29,8 +29,8 @@ describe("api client 402 handling", () => {
 			name: "LimitExceededError",
 			reason: "notes_cap_exceeded",
 			limitKey: "notes_cap",
-			limit: 10000,
-			current: 10000,
+			limit: 10_000,
+			current: 10_000,
 			upgradeUrl: "https://app.engram.page/settings/billing",
 		});
 		expect(handler).toHaveBeenCalledWith("notes_cap_exceeded");
@@ -85,6 +85,6 @@ describe("api client 402 handling", () => {
 
 		const init = fetchMock.mock.calls[0]![1] as RequestInit;
 		const headers = init.headers as Headers;
-		expect(headers.get("X-Device-Id")).toMatch(/^[0-9a-f-]{36}$/);
+		expect(headers.get("X-Device-Id")).toMatch(/^[0-9a-f-]{36}$/u);
 	});
 });

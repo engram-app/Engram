@@ -1,18 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	startCrdtSession,
-	openDoc,
 	closeDoc,
-	enroll,
-	handleFrame,
-	stopCrdtSession,
-	resyncOpenDocs,
-	installCrdtResyncTriggers,
 	docPathFromDocId,
+	enroll,
 	getCrdtSyncStatus,
-	subscribeToCrdtSyncStatus,
-	notifyCrdtChannelJoined,
+	handleFrame,
+	installCrdtResyncTriggers,
 	notifyCrdtChannelError,
+	notifyCrdtChannelJoined,
+	openDoc,
+	resyncOpenDocs,
+	startCrdtSession,
+	stopCrdtSession,
+	subscribeToCrdtSyncStatus,
 } from "./session";
 
 const VAULT = "vault-xyz";

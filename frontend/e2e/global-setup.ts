@@ -1,10 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+import process from "node:process";
 import { clerkSetup } from "@clerk/testing/playwright";
 import { cleanupTestUsers } from "./db-cleanup";
 
-const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
+const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
 
 export default async function globalSetup() {
@@ -163,7 +164,7 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
 
 const SIGN_IN_READY_MAX_WAIT_MS = 60_000;
 const SIGN_IN_READY_INITIAL_BACKOFF_MS = 500;
-const SIGN_IN_READY_MAX_BACKOFF_MS = 8_000;
+const SIGN_IN_READY_MAX_BACKOFF_MS = 8000;
 
 /**
  * Block until Clerk's POST /sign_in_tokens stops 404'ing the given user.

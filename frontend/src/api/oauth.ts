@@ -1,5 +1,5 @@
-import { api } from "./client";
 import { getApiBase, joinApiUrl } from "./base";
+import { api } from "./client";
 
 export interface OAuthClientMetadata {
 	client_id: string;

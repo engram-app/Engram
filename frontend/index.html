@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Engram</title>
-    <script>
-      (function () {
+    <script>"use strict";
+      (() => {
         try {
           var stored = window.localStorage.getItem('engram:theme');
           var valid = stored === 'light' || stored === 'dark' || stored === 'system';

@@ -1,5 +1,6 @@
 import { ArrowUpDown, FilePlus, FolderPlus, FoldVertical, Upload } from "lucide-react";
 import { Fragment } from "react";
+import { useCreateFolder, useCreateNote } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -11,10 +12,9 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useCreateFolder, useCreateNote } from "@/api/queries";
 import { useActiveFolder } from "@/lib/active-folder";
-import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
+import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 
 const ICON = "size-5";

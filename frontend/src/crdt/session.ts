@@ -88,7 +88,7 @@ export function stopCrdtSession(): void {
 export async function openDoc(
 	path: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness } | null> {
-	if (!session || !path.endsWith(".md")) return null;
+	if (!(session && path.endsWith(".md"))) return null;
 	session.openPaths.add(path);
 	const ytext = await session.manager.getSharedText(path);
 	let awareness = session.awareness.get(path);

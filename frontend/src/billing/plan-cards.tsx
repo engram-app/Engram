@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
+import { cn } from "@/lib/utils";
 import type { BillingCadence } from "../api/queries";
 
 export type PlanTier = "starter" | "pro";

@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 import OnboardingGate from "./onboarding-gate";
 
 vi.mock("../api/queries", () => ({
@@ -40,7 +40,7 @@ function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
 describe("OnboardingGate", () => {
 	it("renders loading state while bootstrap query is pending", () => {
 		renderWith(null, { isLoading: true });
-		expect(screen.getByText(/loading/i)).toBeInTheDocument();
+		expect(screen.getByText(/loading/iu)).toBeInTheDocument();
 	});
 
 	it("renders children when next_step is done", () => {

@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const deleteMutate = vi.fn();
 const updateMutate = vi.fn();
@@ -67,10 +67,10 @@ describe("ActiveVaultsSection", () => {
 	it("opens the delete dialog and deletes after typing the name", async () => {
 		render(<ActiveVaultsSection />);
 		const workRow = within(screen.getByText("Work").closest("tr") as HTMLElement);
-		fireEvent.click(workRow.getByRole("button", { name: /delete .*work/i }));
-		const confirmBtn = screen.getByRole("button", { name: /delete vault/i });
+		fireEvent.click(workRow.getByRole("button", { name: /delete .*work/iu }));
+		const confirmBtn = screen.getByRole("button", { name: /delete vault/iu });
 		expect(confirmBtn).toBeDisabled();
-		fireEvent.change(screen.getByLabelText(/type .*work.* to confirm/i), {
+		fireEvent.change(screen.getByLabelText(/type .*work.* to confirm/iu), {
 			target: { value: "Work" },
 		});
 		fireEvent.click(confirmBtn);
@@ -79,7 +79,7 @@ describe("ActiveVaultsSection", () => {
 
 	it("sets a non-default vault as default", () => {
 		render(<ActiveVaultsSection />);
-		fireEvent.click(screen.getByRole("button", { name: /set .*personal.* as default/i }));
+		fireEvent.click(screen.getByRole("button", { name: /set .*personal.* as default/iu }));
 		expect(updateMutate).toHaveBeenCalledWith({ id: 2, is_default: true }, expect.anything());
 	});
 
@@ -87,18 +87,18 @@ describe("ActiveVaultsSection", () => {
 		// 2 vaults in setup; pin Free cap=1 so we're over.
 		billingState.current = { caps: { vaults: 1 } };
 		render(<ActiveVaultsSection />);
-		expect(screen.queryByRole("button", { name: /new vault/i })).not.toBeInTheDocument();
-		expect(screen.getByText(/Free plan allows 1 vault/i)).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: /upgrade/i })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /new vault/iu })).not.toBeInTheDocument();
+		expect(screen.getByText(/Free plan allows 1 vault/iu)).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /upgrade/iu })).toBeInTheDocument();
 		// Counter in the section title surfaces N / cap.
-		expect(screen.getByText(/Vaults \(2 \/ 1\)/i)).toBeInTheDocument();
+		expect(screen.getByText(/Vaults \(2 \/ 1\)/iu)).toBeInTheDocument();
 	});
 
 	it("keeps New vault enabled when below cap", () => {
 		billingState.current = { caps: { vaults: 5 } };
 		render(<ActiveVaultsSection />);
-		expect(screen.getByRole("button", { name: /new vault/i })).toBeInTheDocument();
-		expect(screen.queryByText(/Free plan allows/i)).not.toBeInTheDocument();
-		expect(screen.getByText(/Vaults \(2 \/ 5\)/i)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /new vault/iu })).toBeInTheDocument();
+		expect(screen.queryByText(/Free plan allows/iu)).not.toBeInTheDocument();
+		expect(screen.getByText(/Vaults \(2 \/ 5\)/iu)).toBeInTheDocument();
 	});
 });

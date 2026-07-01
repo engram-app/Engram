@@ -1,5 +1,5 @@
-import * as React from "react";
-import type { PaddlePaymentMethodType, PaddleCardType } from "./paddle-payment-method-display";
+import type * as React from "react";
+import type { PaddleCardType, PaddlePaymentMethodType } from "./paddle-payment-method-display";
 
 // --- Brand icon components ---
 

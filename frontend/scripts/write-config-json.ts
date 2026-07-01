@@ -7,7 +7,7 @@
 // engram-inline-bootstrap plugin in vite.config.ts), so the SPA normally
 // resolves config synchronously and never fetches this. Kept as a belt-and-
 // suspenders fallback and for use-bootstrap.ts.
-import { writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { bootstrapConfigFromEnv } from "./bootstrap-config";
 

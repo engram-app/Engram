@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import React from "react";
-import { AuthContext, type AuthAdapter } from "../auth/auth-context";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 
 const {
 	channelHandlers,

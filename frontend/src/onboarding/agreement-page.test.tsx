@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import AgreementPage from "./agreement-page";
 
 const { mutate, statusRef } = vi.hoisted(() => ({
@@ -40,17 +40,17 @@ function renderPage() {
 describe("AgreementPage", () => {
 	it("disables Continue until the agreement checkbox is checked", () => {
 		renderPage();
-		const button = screen.getByRole("button", { name: /continue/i });
+		const button = screen.getByRole("button", { name: /continue/iu });
 		expect(button).toBeDisabled();
 
-		fireEvent.click(screen.getByRole("checkbox", { name: /agree/i }));
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
 		expect(button).not.toBeDisabled();
 	});
 
 	it("submits the new version+hash object shape on continue", async () => {
 		renderPage();
-		fireEvent.click(screen.getByRole("checkbox", { name: /agree/i }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith(
@@ -67,16 +67,16 @@ describe("AgreementPage", () => {
 		// The vendored ToS markdown renders its own "# Terms of Service" heading
 		// inline; assert against that heading specifically (the prose body repeats
 		// the phrase in paragraphs, so an unscoped getByText would multi-match).
-		expect(screen.getByRole("heading", { name: /Terms of Service/i })).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("checkbox", { name: /agree/i }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+		expect(screen.getByRole("heading", { name: /Terms of Service/iu })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith(
 				expect.objectContaining({
 					tos_version: "2026-05-19",
 					privacy_version: "2026-06-20",
-					tos_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
-					privacy_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+					tos_hash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+					privacy_hash: expect.stringMatching(/^[0-9a-f]{64}$/u),
 				}),
 			),
 		);
@@ -89,7 +89,7 @@ describe("AgreementPage", () => {
 			current_privacy_version: "2026-05-15",
 		};
 		renderPage();
-		expect(screen.getByRole("alert")).toHaveTextContent(/isn.t available/i);
-		expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+		expect(screen.getByRole("alert")).toHaveTextContent(/isn.t available/iu);
+		expect(screen.queryByRole("button", { name: /continue/iu })).toBeNull();
 	});
 });

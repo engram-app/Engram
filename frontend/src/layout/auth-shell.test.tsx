@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import AuthShell from "./auth-shell";
 
 vi.mock("../theme/theme-toggle", () => ({
@@ -14,7 +14,7 @@ describe("AuthShell", () => {
 			</AuthShell>,
 		);
 		expect(screen.getByText("Engram")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /theme/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /theme/iu })).toBeInTheDocument();
 		expect(screen.getByText("panel body")).toBeInTheDocument();
 	});
 
@@ -24,6 +24,6 @@ describe("AuthShell", () => {
 				<p>body</p>
 			</AuthShell>,
 		);
-		expect(screen.getByText(/step 1 of 2/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 1 of 2/iu)).toBeInTheDocument();
 	});
 });

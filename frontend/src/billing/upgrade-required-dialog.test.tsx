@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { describe, expect, it } from "vitest";
 import { UpgradeRequiredDialog } from "./upgrade-required-dialog";
 
 function renderWithRouter(ui: React.ReactNode) {
@@ -19,14 +19,14 @@ describe("UpgradeRequiredDialog", () => {
 		renderWithRouter(
 			<UpgradeRequiredDialog reason="attachments_disabled" open={true} onOpenChange={() => {}} />,
 		);
-		expect(screen.getByText(/pro feature/i)).toBeInTheDocument();
+		expect(screen.getByText(/pro feature/iu)).toBeInTheDocument();
 	});
 
 	it("Upgrade button navigates to /settings/billing", async () => {
 		renderWithRouter(
 			<UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={() => {}} />,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /upgrade/i }));
+		fireEvent.click(screen.getByRole("button", { name: /upgrade/iu }));
 		expect(await screen.findByTestId("billing-page")).toBeInTheDocument();
 	});
 
@@ -34,6 +34,6 @@ describe("UpgradeRequiredDialog", () => {
 		renderWithRouter(
 			<UpgradeRequiredDialog reason="notes_cap_exceeded" open={true} onOpenChange={() => {}} />,
 		);
-		expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /dismiss/iu })).not.toBeInTheDocument();
 	});
 });

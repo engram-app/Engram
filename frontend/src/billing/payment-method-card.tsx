@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import type { PaymentMethod } from "../api/queries";
 
 function formatExpiry(month: number | null, year: number | null): string | null {
-	if (!month || !year) return null;
+	if (!(month && year)) return null;
 	return `${String(month).padStart(2, "0")}/${year}`;
 }
 

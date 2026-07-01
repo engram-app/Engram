@@ -1,15 +1,15 @@
 "use client";
 
-import * as React from "react";
-import { CreditCard, Calendar, ExternalLink } from "lucide-react";
+import { Calendar, CreditCard, ExternalLink } from "lucide-react";
+import type * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
-import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
+import { Skeleton } from "@/components/ui/skeleton";
+import { formatDate, formatMoney } from "@/lib/paddle-format";
 import { getPaymentMethodDisplay } from "@/lib/paddle-payment-method-display";
+import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 import { getPaymentMethodIcon } from "@/lib/payment-method-icons";
-import { formatMoney, formatDate } from "@/lib/paddle-format";
+import { cn } from "@/lib/utils";
 
 export type SubscriptionPaymentCardProps = {
 	/**

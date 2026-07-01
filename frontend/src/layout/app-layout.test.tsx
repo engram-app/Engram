@@ -1,11 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import AppLayout from "./app-layout";
-import { ThemeProvider } from "../theme/theme-provider";
-import { ConfigProvider } from "../config-context";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "../config";
+import { ConfigProvider } from "../config-context";
+import { ThemeProvider } from "../theme/theme-provider";
+import AppLayout from "./app-layout";
 
 // AppSidebarPanel reads the billing flag via useIsFreeTier() -> useConfig();
 // the layout tree won't mount without a ConfigProvider above it.
@@ -56,13 +56,11 @@ function renderLayout() {
 
 describe("AppLayout", () => {
 	beforeEach(() => {
-		window.matchMedia = vi
-			.fn()
-			.mockReturnValue({
-				matches: true,
-				addEventListener: vi.fn(),
-				removeEventListener: vi.fn(),
-			}) as any;
+		window.matchMedia = vi.fn().mockReturnValue({
+			matches: true,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+		}) as any;
 	});
 
 	it("does NOT render the old top header", () => {

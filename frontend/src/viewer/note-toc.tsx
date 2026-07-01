@@ -11,8 +11,8 @@ function extractHeadings(markdown: string): Heading[] {
 	const slugger = new GithubSlugger();
 	const headings: Heading[] = [];
 	// Strip fenced code blocks so `# foo` inside them isn't picked up.
-	const stripped = markdown.replace(/```[\s\S]*?```/g, "");
-	const re = /^(#{1,6})\s+(.+?)\s*#*\s*$/gm;
+	const stripped = markdown.replace(/```[\s\S]*?```/gu, "");
+	const re = /^(#{1,6})\s+(.+?)\s*#*\s*$/gmu;
 	let match: RegExpExecArray | null;
 	while ((match = re.exec(stripped)) !== null) {
 		const hashes = match[1] ?? "";

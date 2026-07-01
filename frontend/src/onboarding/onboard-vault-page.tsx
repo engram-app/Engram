@@ -1,9 +1,10 @@
+import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw";
+import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { FilePlus2 } from "lucide-react";
-import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw";
+import AuthPanel from "@/layout/auth-panel";
+import { heading } from "@/lib/ui-classes";
 import { setActiveVaultId } from "../api/active-vault";
-import { useConfig } from "../config-context";
 import {
 	useCreateVault,
 	useMe,
@@ -11,9 +12,8 @@ import {
 	useSetOnboardingProfile,
 	useUpdateNote,
 } from "../api/queries";
-import AuthPanel from "@/layout/auth-panel";
+import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
-import { heading } from "@/lib/ui-classes";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
 import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from "./welcome-note";

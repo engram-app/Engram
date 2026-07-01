@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { applyThemeClass, getSystemPreference, type ResolvedTheme, resolveTheme } from "./resolve";
 import { getStoredTheme, setStoredTheme, type ThemeChoice } from "./storage";
-import { applyThemeClass, getSystemPreference, resolveTheme, type ResolvedTheme } from "./resolve";
 
 interface ThemeContextValue {
 	theme: ThemeChoice;

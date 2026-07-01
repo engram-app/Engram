@@ -22,21 +22,17 @@ export function makeUser(overrides: Record<string, unknown> = {}) {
 		update: vi.fn().mockResolvedValue({}),
 		setProfileImage: vi.fn().mockResolvedValue({}),
 		updatePassword: vi.fn().mockResolvedValue({}),
-		createEmailAddress: vi
-			.fn()
-			.mockResolvedValue({
-				id: "eml_2",
-				emailAddress: "new@example.com",
-				prepareVerification: vi.fn().mockResolvedValue({}),
-				attemptVerification: vi.fn().mockResolvedValue({}),
-			}),
-		createExternalAccount: vi
-			.fn()
-			.mockResolvedValue({
-				verification: {
-					externalVerificationRedirectURL: new URL("https://accounts.example.com/oauth"),
-				},
-			}),
+		createEmailAddress: vi.fn().mockResolvedValue({
+			id: "eml_2",
+			emailAddress: "new@example.com",
+			prepareVerification: vi.fn().mockResolvedValue({}),
+			attemptVerification: vi.fn().mockResolvedValue({}),
+		}),
+		createExternalAccount: vi.fn().mockResolvedValue({
+			verification: {
+				externalVerificationRedirectURL: new URL("https://accounts.example.com/oauth"),
+			},
+		}),
 		delete: vi.fn().mockResolvedValue({}),
 		reload: vi.fn().mockResolvedValue({}),
 		...overrides,

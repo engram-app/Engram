@@ -1,5 +1,5 @@
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
 import { CreateFirstVaultModal } from "./create-first-vault-modal";
 
 const DEMO_VAULT_ID = "01923a4b-cdef-7000-89ab-cdef01234567";
@@ -15,10 +15,10 @@ describe("CreateFirstVaultModal", () => {
 		const onCreated = vi.fn();
 		render(<CreateFirstVaultModal onCreated={onCreated} />);
 
-		expect(screen.getByRole("heading", { name: /first vault/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /first vault/iu })).toBeInTheDocument();
 
 		fireEvent.keyDown(document, { key: "Escape" });
-		expect(screen.getByRole("heading", { name: /first vault/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /first vault/iu })).toBeInTheDocument();
 
 		fireEvent.click(screen.getByText("fake-create"));
 		expect(onCreated).toHaveBeenCalledWith(DEMO_VAULT_ID);

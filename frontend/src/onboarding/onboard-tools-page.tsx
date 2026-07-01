@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
-import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
-import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Checkbox } from "@/components/ui/checkbox";
 import AuthPanel from "@/layout/auth-panel";
-import LoadingScreen from "../layout/loading-screen";
 import { heading, selectableRow } from "@/lib/ui-classes";
+import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
+import { useIsFreeTier } from "../billing/use-is-free-tier";
+import LoadingScreen from "../layout/loading-screen";
 import { TOOL_ASSISTANTS, TOOL_CODING, TOOL_OTHER, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
 

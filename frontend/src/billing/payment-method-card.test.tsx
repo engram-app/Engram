@@ -16,20 +16,20 @@ describe("PaymentMethodCard", () => {
 				onUpdate={() => {}}
 			/>,
 		);
-		expect(screen.getByText(/visa/i)).toBeInTheDocument();
-		expect(screen.getByText(/4242/)).toBeInTheDocument();
-		expect(screen.getByText(/03\/2027/)).toBeInTheDocument();
+		expect(screen.getByText(/visa/iu)).toBeInTheDocument();
+		expect(screen.getByText(/4242/u)).toBeInTheDocument();
+		expect(screen.getByText(/03\/2027/u)).toBeInTheDocument();
 	});
 
 	it("shows an empty state when no method is on file", () => {
 		render(<PaymentMethodCard paymentMethod={null} onUpdate={() => {}} />);
-		expect(screen.getByText(/no payment method/i)).toBeInTheDocument();
+		expect(screen.getByText(/no payment method/iu)).toBeInTheDocument();
 	});
 
 	it("calls onUpdate when the Update button is clicked", async () => {
 		const onUpdate = vi.fn();
 		render(<PaymentMethodCard paymentMethod={null} onUpdate={onUpdate} />);
-		fireEvent.click(screen.getByRole("button", { name: /update/i }));
+		fireEvent.click(screen.getByRole("button", { name: /update/iu }));
 		expect(onUpdate).toHaveBeenCalledOnce();
 	});
 });

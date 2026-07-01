@@ -1,7 +1,7 @@
 import {
+	getUpdatePaymentMethodUrl,
 	mapSubscriptionToNextPayment,
 	mapTransactionToPaymentMethod,
-	getUpdatePaymentMethodUrl,
 } from "@/lib/subscription-payment-card-utils";
 import {
 	SubscriptionPaymentCard,

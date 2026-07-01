@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
 import { Sparkles } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { BillingStatus } from "../api/queries";
 

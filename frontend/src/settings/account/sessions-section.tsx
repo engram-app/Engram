@@ -1,4 +1,4 @@
-import { useSessionList, useSession } from "@clerk/react";
+import { useSession, useSessionList } from "@clerk/react";
 import type { SessionWithActivitiesResource } from "@clerk/shared/types";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";

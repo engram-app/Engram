@@ -1,20 +1,21 @@
 import * as React from "react";
+
 ("use client");
 
 import { CheckoutSummary } from "@/components/checkout-summary";
 import { useCheckout } from "@/hooks/use-checkout";
-import { addPaddleEventListener } from "@/lib/paddle-instance";
 import { mapCheckoutEventsToSummary } from "@/lib/checkout-summary-utils";
-import { cn } from "@/lib/utils";
+import { addPaddleEventListener } from "@/lib/paddle-instance";
 import {
-	CheckoutEventNames,
-	type Environments,
 	type CheckoutCustomer,
+	CheckoutEventNames,
 	type CheckoutEventsData,
-	type PaddleEventData,
 	type CheckoutOpenLineItem,
+	type Environments,
+	type PaddleEventData,
 } from "@/lib/paddle-sdk-types";
 import type { CheckoutCompleteData, CheckoutSummaryData } from "@/lib/paddle-types";
+import { cn } from "@/lib/utils";
 
 const INLINE_CHECKOUT_FRAME_TARGET = "paddle-inline-checkout-frame";
 
@@ -167,7 +168,7 @@ export function InlineCheckout({
 
 	// Update items reactively after mount
 	React.useEffect(() => {
-		if (!isReady || !isOpenRef.current) return;
+		if (!(isReady && isOpenRef.current)) return;
 
 		// First run after openCheckout — record the baseline key and skip the call.
 		// openCheckout already applied these items; calling updateItems immediately

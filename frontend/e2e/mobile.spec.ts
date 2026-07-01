@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 
@@ -40,14 +40,14 @@ async function signIn(page: import("@playwright/test").Page, email: string) {
 	await page.goto("/sign-in/");
 	await page.getByLabel("Email").fill(email);
 	await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-	await page.getByRole("button", { name: /sign in/i }).click();
+	await page.getByRole("button", { name: /sign in/iu }).click();
 	await expect(page).toHaveURL("/");
 }
 
-test.describe("Mobile layout", () => {
-	test.use({ viewport: { width: 390, height: 844 } });
+it.describe("Mobile layout", () => {
+	it.use({ viewport: { width: 390, height: 844 } });
 
-	test("header shows hamburger; tapping opens files drawer", async ({ page, baseURL }) => {
+	it("header shows hamburger; tapping opens files drawer", async ({ page, baseURL }) => {
 		const email = testEmail("files");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);
@@ -59,7 +59,7 @@ test.describe("Mobile layout", () => {
 		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
 	});
 
-	test("desktop resize handles are not rendered on mobile", async ({ page, baseURL }) => {
+	it("desktop resize handles are not rendered on mobile", async ({ page, baseURL }) => {
 		const email = testEmail("handles");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);
@@ -67,7 +67,7 @@ test.describe("Mobile layout", () => {
 		await expect(page.locator("[data-panel-resize-handle-id]")).toHaveCount(0);
 	});
 
-	test("drawers start closed on every navigation", async ({ page, baseURL }) => {
+	it("drawers start closed on every navigation", async ({ page, baseURL }) => {
 		const email = testEmail("reset");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);

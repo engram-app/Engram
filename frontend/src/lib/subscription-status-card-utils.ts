@@ -1,5 +1,5 @@
-import type { SubscriptionStatusData } from "@/lib/paddle-types";
 import { parseAmount } from "@/lib/paddle-format";
+import type { SubscriptionStatusData } from "@/lib/paddle-types";
 
 // ---
 // Input shapes — minimal types matching the Paddle Node SDK / API response.

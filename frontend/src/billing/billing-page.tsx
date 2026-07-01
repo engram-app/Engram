@@ -1,37 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { CheckoutEventNames, initializePaddle, type Paddle } from "@paddle/paddle-js";
-import { toast } from "sonner";
-import {
-	useBillingStatus,
-	useBillingConfig,
-	useBillingSubscriptionDetail,
-	useBillingHistory,
-	useMe,
-	invalidateBillingState,
-	type BillingCadence,
-	type OnboardingStatus,
-} from "../api/queries";
-import { api } from "../api/client";
-import { useTheme } from "../theme/theme-provider";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-	CadenceToggle,
-	PLAN_CATALOG,
-	PlanCard,
-	PlanAccordionRow,
-	formatPlanPrice,
-	FREE_TIER,
-} from "./plan-cards";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { api } from "../api/client";
+import {
+	type BillingCadence,
+	invalidateBillingState,
+	type OnboardingStatus,
+	useBillingConfig,
+	useBillingHistory,
+	useBillingStatus,
+	useBillingSubscriptionDetail,
+	useMe,
+} from "../api/queries";
+import { useTheme } from "../theme/theme-provider";
+import BillingHistoryTable from "./billing-history-table";
+import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
 import PaymentMethodCard from "./payment-method-card";
-import BillingHistoryTable from "./billing-history-table";
 import PendingChangeBanner from "./pending-change-banner";
-import CancelPanel from "./cancel-panel";
+import {
+	CadenceToggle,
+	FREE_TIER,
+	formatPlanPrice,
+	PLAN_CATALOG,
+	PlanAccordionRow,
+	PlanCard,
+} from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
 import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
@@ -292,7 +292,7 @@ export default function BillingPage({
 				setCheckingOut(true);
 				return;
 			}
-			if (!paddle || !config) return;
+			if (!(paddle && config)) return;
 			if (isInline) setCheckingOut(true);
 			// Paddle finds the .paddle-checkout div by class — the div is rendered
 			// synchronously by the same render cycle as the setCheckingOut update.

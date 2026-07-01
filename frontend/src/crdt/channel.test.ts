@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { CrdtManager } from "./manager";
+import { describe, expect, it, vi } from "vitest";
 import { CrdtChannel } from "./channel";
+import { CrdtManager } from "./manager";
 
 function mkManager() {
 	return new CrdtManager({

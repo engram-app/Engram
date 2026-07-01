@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock factories run at the top of the file — declare their fakes
 // via vi.hoisted so the references resolve when the mock executes.
@@ -23,8 +23,8 @@ describe("VaultCreateForm onError", () => {
 	function submitWithError(err: Error) {
 		mutate.mockImplementation((_attrs, opts) => opts?.onError?.(err));
 		render(<VaultCreateForm />);
-		fireEvent.change(screen.getByLabelText(/vault name/i), { target: { value: "A" } });
-		fireEvent.click(screen.getByRole("button", { name: /create/i }));
+		fireEvent.change(screen.getByLabelText(/vault name/iu), { target: { value: "A" } });
+		fireEvent.click(screen.getByRole("button", { name: /create/iu }));
 	}
 
 	it("shows a toast on a generic failure", async () => {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { diffManifests, manifestFromMarkdown, type Manifest } from "./check-cross-repo-legal";
+import { diffManifests, type Manifest, manifestFromMarkdown } from "./check-cross-repo-legal";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 

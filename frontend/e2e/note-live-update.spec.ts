@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /**
  * #277 — Two-session live-update behavior for the web SPA note editor.
@@ -105,7 +105,7 @@ async function signInForNote(
 ): Promise<void> {
 	// Hitting /note/:id unauth -> AuthGuard redirects to /sign-in?return_to=...
 	await page.goto(`/note/${noteId}`);
-	await expect(page).toHaveURL(/\/sign-in/, { timeout: 10_000 });
+	await expect(page).toHaveURL(/\/sign-in/u, { timeout: 10_000 });
 
 	// Seed active vault before sign-in completes so the post-redirect render
 	// already has it (vault-switcher's auto-select wouldn't pick our new vault
@@ -116,13 +116,13 @@ async function signInForNote(
 
 	await page.getByLabel("Email").fill(email);
 	await page.getByLabel("Password", { exact: true }).fill(PASS);
-	await page.getByRole("button", { name: /sign in/i }).click();
+	await page.getByRole("button", { name: /sign in/iu }).click();
 
 	await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 });
 }
 
-test.describe("SPA viewer live-update (#277)", () => {
-	test("viewer re-renders when a remote client upserts the open note", async ({
+it.describe("SPA viewer live-update (#277)", () => {
+	it("viewer re-renders when a remote client upserts the open note", async ({
 		browser,
 		baseURL,
 	}) => {
@@ -150,13 +150,13 @@ test.describe("SPA viewer live-update (#277)", () => {
 		await upsertNote(baseURL!, token, vault.id, path, "# Initial\n\nSecond body remote.");
 
 		// The channel propagates the change into the open editor — no reload.
-		await expect(editor).toContainText("Second body remote.", { timeout: 5_000 });
+		await expect(editor).toContainText("Second body remote.", { timeout: 5000 });
 		await expect(editor).not.toContainText("First body.");
 
 		await ctx.close();
 	});
 
-	test("concurrent edits in two tabs converge in both editors (CRDT, no conflict bar)", async ({
+	it("concurrent edits in two tabs converge in both editors (CRDT, no conflict bar)", async ({
 		browser,
 		baseURL,
 	}) => {

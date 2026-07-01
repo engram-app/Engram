@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useLocation } from "react-router";
+import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
-import { useOnboardingStatus, type OnboardingStep } from "../api/queries";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 

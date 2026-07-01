@@ -1,12 +1,12 @@
-import { useState } from "react";
-import { Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Waypoints } from "lucide-react";
-import { useOnboardingActions } from "./use-onboarding-actions";
-import { useConnections, useOnboardingStatus, type OnboardingStatus } from "../api/queries";
+import { useState } from "react";
+import { Link } from "react-router";
+import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Button } from "../components/ui/button";
 import { Shimmer } from "../components/ui/shimmer";
+import { useOnboardingActions } from "./use-onboarding-actions";
 
 interface Props {
 	onStartTour: () => void;
@@ -130,8 +130,9 @@ export function ChecklistWidget({ onStartTour }: Props) {
 					} as Item,
 				]
 			: []),
-		...(!isMobile && !ob.has("tour_completed")
-			? [
+		...(isMobile || ob.has("tour_completed")
+			? []
+			: [
 					{
 						key: "tour",
 						label: "Take the tour",
@@ -142,8 +143,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 						startTour: onStartTour,
 						dismissible: true,
 					} as Item,
-				]
-			: []),
+				]),
 		...tools.map(
 			(slug): Item => ({
 				key: slug,
@@ -160,7 +160,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 	// stay visible — struck through — so progress is felt, not silently erased.
 	// The whole widget retires only once nothing is left to act on.
 	const visible = items.filter((i) => !i.dismissed);
-	const hasActionable = items.some((i) => !i.done && !i.dismissed);
+	const hasActionable = items.some((i) => !(i.done || i.dismissed));
 
 	if (!hasActionable) return null;
 

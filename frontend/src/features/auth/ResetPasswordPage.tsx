@@ -1,12 +1,12 @@
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import AuthShell from "@/layout/auth-shell";
-import AuthPanel from "@/layout/auth-panel";
+import { getApiBase, joinApiUrl } from "@/api/base";
 import { Button } from "@/components/ui/button";
-import { heading, fieldInput, destructiveAlert } from "@/lib/ui-classes";
+import AuthPanel from "@/layout/auth-panel";
+import AuthShell from "@/layout/auth-shell";
+import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/routes";
-import { getApiBase, joinApiUrl } from "@/api/base";
 
 export default function ResetPasswordPage() {
 	const [params] = useSearchParams();

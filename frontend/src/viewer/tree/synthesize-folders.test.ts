@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { isSyntheticFolderId, synthesizeFolders } from "./synthesize-folders";
+import { describe, expect, it } from "vitest";
 import type { AttachmentSummary, Folder } from "../../api/queries";
+import { isSyntheticFolderId, synthesizeFolders } from "./synthesize-folders";
 
 const att = (path: string): AttachmentSummary => ({
 	id: `att:${path}`,

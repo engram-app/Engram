@@ -1,10 +1,10 @@
-import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import React from "react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider } from "../theme/theme-provider";
-import { AuthContext, type AuthAdapter } from "../auth/auth-context";
 
 // Capture the Paddle eventCallback so the test can drive it (or refuse to).
 let capturedEventCallback: ((event: { name: string; data?: unknown }) => void) | undefined;
@@ -206,7 +206,7 @@ describe("OnboardBillingPage — push activation", () => {
 
 		// Plan picker visible — both "Start free trial" buttons present.
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/i }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -256,7 +256,7 @@ describe("OnboardBillingPage — push activation", () => {
 		renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/i }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -347,7 +347,7 @@ describe("OnboardBillingPage — push activation", () => {
 		const { container } = renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/i }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -355,7 +355,7 @@ describe("OnboardBillingPage — push activation", () => {
 
 		// Click "Start free trial" — inline mount target replaces plan cards.
 		await act(async () => {
-			screen.getAllByRole("button", { name: /start free trial/i })[0]!.click();
+			screen.getAllByRole("button", { name: /start free trial/iu })[0]!.click();
 			await Promise.resolve();
 		});
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
@@ -366,7 +366,7 @@ describe("OnboardBillingPage — push activation", () => {
 		});
 
 		await waitFor(() => expect(container.querySelector(".paddle-checkout")).toBeNull());
-		expect(screen.getAllByRole("button", { name: /start free trial/i }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(0);
 	});
 });
 
@@ -396,9 +396,9 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 	it("renders 'Continue with Free' button with subtitle", async () => {
 		renderOnboardBilling();
 
-		const btn = await screen.findByRole("button", { name: /continue with free/i });
+		const btn = await screen.findByRole("button", { name: /continue with free/iu });
 		expect(btn).toBeInTheDocument();
-		expect(screen.getByText(/10k notes · 1 vault · markdown only/i)).toBeInTheDocument();
+		expect(screen.getByText(/10k notes · 1 vault · markdown only/iu)).toBeInTheDocument();
 	});
 
 	it("calls POST /api/onboarding/accept_free_tier and navigates to /onboard/vault", async () => {
@@ -411,7 +411,7 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 
 		renderOnboardBilling();
 
-		const btn = await screen.findByRole("button", { name: /continue with free/i });
+		const btn = await screen.findByRole("button", { name: /continue with free/iu });
 		await act(async () => {
 			btn.click();
 			await Promise.resolve();

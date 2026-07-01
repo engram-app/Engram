@@ -1,17 +1,17 @@
-import { StrictMode, lazy, Suspense, use, useMemo } from "react";
+import * as Sentry from "@sentry/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { lazy, StrictMode, Suspense, use, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
-import { QueryClientProvider } from "@tanstack/react-query";
-import * as Sentry from "@sentry/react";
 import { Toaster } from "@/components/ui/sonner";
-import { createAppRouter, installAppRouter } from "./router";
-import { queryClient } from "./api/query-client";
 import { setApiBase, setWsBase } from "./api/base";
+import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
-import { ThemeProvider } from "./theme/theme-provider";
-import LoadingScreen from "./layout/loading-screen";
 import ErrorFallback from "./error-fallback";
+import LoadingScreen from "./layout/loading-screen";
+import { createAppRouter, installAppRouter } from "./router";
+import { ThemeProvider } from "./theme/theme-provider";
 import "./main.css";
 
 // Sentry — opt-in via VITE_SENTRY_DSN at build time. No-op (zero

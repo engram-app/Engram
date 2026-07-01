@@ -9,7 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
-import { type Vault, useVaults } from "../api/queries";
+import { useVaults, type Vault } from "../api/queries";
 
 export default function VaultSwitcher() {
 	const { data: vaults, isLoading } = useVaults();

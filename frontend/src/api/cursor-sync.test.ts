@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./client", () => ({
 	api: { get: vi.fn() },
@@ -21,10 +21,10 @@ vi.mock("./active-vault", () => ({
 	getActiveVaultId: () => activeVaultRef.current,
 }));
 
-import { api, ApiError } from "./client";
 import { __resetNoteChangeBatch } from "./channel";
-import { getCursor, setCursor, encodeCursor, MAX_UUID } from "./cursor";
-import { runCursorSync, __resetCursorSyncInflight, installCursorSyncTriggers } from "./cursor-sync";
+import { ApiError, api } from "./client";
+import { encodeCursor, getCursor, MAX_UUID, setCursor } from "./cursor";
+import { __resetCursorSyncInflight, installCursorSyncTriggers, runCursorSync } from "./cursor-sync";
 
 const get = api.get as unknown as ReturnType<typeof vi.fn>;
 

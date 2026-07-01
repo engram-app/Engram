@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DeleteConfirm } from "./delete-confirm";
 
@@ -11,7 +11,7 @@ describe("DeleteConfirm", () => {
 				onCancel={() => {}}
 			/>,
 		);
-		expect(screen.getByText(/Delete a\.md\?/)).toBeInTheDocument();
+		expect(screen.getByText(/Delete a\.md\?/u)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 	});
@@ -24,7 +24,7 @@ describe("DeleteConfirm", () => {
 				onCancel={() => {}}
 			/>,
 		);
-		expect(screen.getByText(/Delete src\/ and 4 items\?/)).toBeInTheDocument();
+		expect(screen.getByText(/Delete src\/ and 4 items\?/u)).toBeInTheDocument();
 	});
 
 	it("Delete button calls onConfirm", () => {
@@ -60,7 +60,7 @@ describe("DeleteConfirm", () => {
 			{ kind: "file" as const, path: "c.md" },
 		];
 		render(<DeleteConfirm nodes={nodes} onConfirm={vi.fn()} onCancel={vi.fn()} />);
-		expect(screen.getByText(/Delete 3 items\?/i)).toBeInTheDocument();
+		expect(screen.getByText(/Delete 3 items\?/iu)).toBeInTheDocument();
 	});
 
 	it('shows "Delete 2 items?" for mixed file + folder N>1', () => {
@@ -69,6 +69,6 @@ describe("DeleteConfirm", () => {
 			{ kind: "folder" as const, path: "src", childCount: 4 },
 		];
 		render(<DeleteConfirm nodes={nodes} onConfirm={vi.fn()} onCancel={vi.fn()} />);
-		expect(screen.getByText(/Delete 2 items\?/i)).toBeInTheDocument();
+		expect(screen.getByText(/Delete 2 items\?/iu)).toBeInTheDocument();
 	});
 });

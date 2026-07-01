@@ -35,7 +35,7 @@ export function bootstrapConfigFromEnv(env: Env): {
 	if (!config.clerkPublishableKey) {
 		errors.push("VITE_CLERK_PUBLISHABLE_KEY required for saas build");
 	}
-	if (!config.apiBase || !config.wsBase) {
+	if (!(config.apiBase && config.wsBase)) {
 		errors.push("VITE_API_BASE and VITE_WS_BASE required for saas build");
 	}
 

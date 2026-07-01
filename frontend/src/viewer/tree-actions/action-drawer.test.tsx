@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ActionDrawer } from "./action-drawer";
 import { actionsFor } from "./action-list";
@@ -58,12 +58,12 @@ describe("ActionDrawer", () => {
 				onSelectMore={onSelectMore}
 			/>,
 		);
-		await fireEvent.click(screen.getByRole("button", { name: /Select more/i }));
+		await fireEvent.click(screen.getByRole("button", { name: /Select more/iu }));
 		expect(onSelectMore).toHaveBeenCalled();
 	});
 
 	it("omits Select-more entry when callback absent (backwards compatible)", () => {
 		render(<ActionDrawer title="Some folder" actions={[]} onPick={vi.fn()} onClose={vi.fn()} />);
-		expect(screen.queryByRole("button", { name: /Select more/i })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Select more/iu })).not.toBeInTheDocument();
 	});
 });

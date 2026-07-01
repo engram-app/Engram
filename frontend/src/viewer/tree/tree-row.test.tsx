@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import { describe, expect, it, vi } from "vitest";
+import type { LoaderItem } from "./loader";
 import { TreeRow } from "./tree-row";
 import type { TreeItem } from "./types";
-import type { LoaderItem } from "./loader";
 
 const folderItem: TreeItem = {
 	kind: "folder",
@@ -123,7 +123,7 @@ describe("TreeRow", () => {
 		);
 		const badge = screen.getByText("org");
 		expect(badge).toBeInTheDocument();
-		expect(badge.className).toMatch(/uppercase/);
+		expect(badge.className).toMatch(/uppercase/u);
 	});
 
 	it("omits ext badge for md notes", () => {

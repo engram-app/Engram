@@ -1,7 +1,7 @@
-import { beforeAll, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, expect, it, vi } from "vitest";
+import { ApiError, api } from "../api/client";
 import AttachmentImg from "./attachment-img";
-import { api, ApiError } from "../api/client";
 
 beforeAll(() => {
 	// jsdom lacks createObjectURL/revokeObjectURL
@@ -21,12 +21,12 @@ it("fetches the attachment with ?raw=1 and renders an img", async () => {
 it('says "Missing attachment" only on a real 404', async () => {
 	vi.spyOn(api, "getBlob").mockRejectedValueOnce(new ApiError(404, "not found"));
 	render(<AttachmentImg path="img/a.png" />);
-	await waitFor(() => expect(screen.getByText(/missing attachment/i)).toBeInTheDocument());
+	await waitFor(() => expect(screen.getByText(/missing attachment/iu)).toBeInTheDocument());
 });
 
 it('does NOT claim "missing" on a transient 5xx — says temporarily unavailable', async () => {
 	vi.spyOn(api, "getBlob").mockRejectedValueOnce(new ApiError(502, "storage down"));
 	render(<AttachmentImg path="img/a.png" />);
-	await waitFor(() => expect(screen.getByText(/temporarily unavailable/i)).toBeInTheDocument());
-	expect(screen.queryByText(/missing attachment/i)).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.getByText(/temporarily unavailable/iu)).toBeInTheDocument());
+	expect(screen.queryByText(/missing attachment/iu)).not.toBeInTheDocument();
 });

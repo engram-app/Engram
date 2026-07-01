@@ -8,11 +8,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
+import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
 import { RailViewProvider } from "./rail-view-context";
 import { RightSidebarProvider, useRightSidebar } from "./right-sidebar-context";
-import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 
 const LAYOUT_PANEL_IDS = ["sidebar", "main", "right-sidebar"];
 

@@ -2,8 +2,8 @@ import { Link } from "react-router";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import FilesPanel from "./files-panel";
 import Rail from "./rail";
-import SearchPanel from "./search-panel";
 import { useRailView } from "./rail-view-context";
+import SearchPanel from "./search-panel";
 
 export default function AppSidebarPanel() {
 	const { view } = useRailView();

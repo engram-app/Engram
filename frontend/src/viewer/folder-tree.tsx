@@ -1,40 +1,40 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useActiveVaultId } from "../api/active-vault";
 import {
 	type AttachmentSummary,
-	type Folder,
 	FOLDER_NOTES_STALE_MS,
+	type Folder,
 	fetchNotesForFolderId,
 	type Note,
 	ROOT_FOLDER_ID,
 	useAttachments,
-	useFolders,
-	useFolderNotesById,
-	useBatchDeleteNotes,
-	useBatchMoveNotes,
-	useBatchDeleteFolders,
-	useBatchMoveFolders,
-	useRenameNote,
-	useRenameFolder,
-	useDuplicateNote,
-	useRenameAttachment,
-	useBatchMoveAttachments,
 	useBatchDeleteAttachments,
+	useBatchDeleteFolders,
+	useBatchDeleteNotes,
+	useBatchMoveAttachments,
+	useBatchMoveFolders,
+	useBatchMoveNotes,
+	useDuplicateNote,
+	useFolderNotesById,
+	useFolders,
+	useRenameAttachment,
+	useRenameFolder,
+	useRenameNote,
 } from "../api/queries";
-import { isSyntheticFolderId, synthesizeFolders } from "./tree/synthesize-folders";
-import { useActiveVaultId } from "../api/active-vault";
 import { useFolderTreeState } from "../layout/folder-tree-context";
-import { useEngramTree } from "./tree/use-engram-tree";
+import { isSyntheticFolderId, synthesizeFolders } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId } from "./tree/types";
-import { DeleteConfirm } from "./tree-actions/delete-confirm";
-import { MoveDialog } from "./tree-actions/move-dialog";
-import { ContextMenu } from "./tree-actions/context-menu";
+import { useEngramTree } from "./tree/use-engram-tree";
 import { ActionDrawer } from "./tree-actions/action-drawer";
-import { actionsFor, type ActionId } from "./tree-actions/action-list";
+import { type ActionId, actionsFor } from "./tree-actions/action-list";
+import { ContextMenu } from "./tree-actions/context-menu";
+import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
+import { MoveDialog } from "./tree-actions/move-dialog";
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =

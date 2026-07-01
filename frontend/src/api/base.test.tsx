@@ -1,8 +1,8 @@
 import { render } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
-import { ConfigProvider } from "@/config-context";
-import { useApiUrl, useWsUrl, joinApiUrl, joinWsUrl } from "./base";
+import { describe, expect, it } from "vitest";
 import type { EngramConfig } from "@/config";
+import { ConfigProvider } from "@/config-context";
+import { joinApiUrl, joinWsUrl, useApiUrl, useWsUrl } from "./base";
 
 function makeConfig(apiBase: string, wsBase = ""): EngramConfig {
 	return {

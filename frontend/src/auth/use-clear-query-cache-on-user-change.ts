@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
 import type { QueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 // Wipe the React Query cache whenever the signed-in user changes. The cache is
 // a module singleton (api/query-client.ts) and survives Clerk sign-out, so

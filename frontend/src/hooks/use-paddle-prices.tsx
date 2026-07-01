@@ -1,12 +1,12 @@
 "use client";
 
-import {
-	type Environments,
-	type Paddle,
-	type PricePreviewParams,
-	type PricePreviewResponse,
+import type {
+	Environments,
+	Paddle,
+	PricePreviewParams,
+	PricePreviewResponse,
 } from "@paddle/paddle-js";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatBillingCycle, formatTrialPeriod } from "@/lib/paddle-format";
 import { getOrCreatePaddle } from "@/lib/paddle-instance";
 import type { PriceData } from "@/lib/paddle-types";

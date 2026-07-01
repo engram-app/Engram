@@ -1,6 +1,6 @@
 import {
-	initializePaddle,
 	type Environments,
+	initializePaddle,
 	type Paddle,
 	type PaddleEventData,
 } from "@paddle/paddle-js";

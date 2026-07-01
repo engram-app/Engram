@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
-import { UpgradeDialogProvider, useUpgradeDialog } from "./upgrade-dialog-provider";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setUpgradeHandler } from "@/api/client";
+import { UpgradeDialogProvider, useUpgradeDialog } from "./upgrade-dialog-provider";
 
 function Trigger() {
 	const { showUpgrade } = useUpgradeDialog();
@@ -32,7 +32,7 @@ describe("UpgradeDialogProvider", () => {
 			</UpgradeDialogProvider>,
 		);
 		fireEvent.click(screen.getByText("show"));
-		await waitFor(() => expect(screen.getByText(/note limit/i)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/note limit/iu)).toBeInTheDocument());
 	});
 
 	it("dialog closes when onOpenChange(false) fires", async () => {
@@ -43,9 +43,9 @@ describe("UpgradeDialogProvider", () => {
 		);
 		fireEvent.click(screen.getByText("show"));
 		// Radix Dialog provides only an X (sr-only "Close") to dismiss.
-		const dismiss = await screen.findByRole("button", { name: /close/i });
+		const dismiss = await screen.findByRole("button", { name: /close/iu });
 		fireEvent.click(dismiss);
-		await waitFor(() => expect(screen.queryByText(/note limit/i)).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText(/note limit/iu)).not.toBeInTheDocument());
 	});
 
 	it("useUpgradeDialog throws outside provider", () => {
@@ -56,7 +56,7 @@ describe("UpgradeDialogProvider", () => {
 		// Suppress the React error log for the expected throw
 		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 		try {
-			expect(() => render(<Probe />)).toThrow(/outside UpgradeDialogProvider/i);
+			expect(() => render(<Probe />)).toThrow(/outside UpgradeDialogProvider/iu);
 		} finally {
 			spy.mockRestore();
 		}

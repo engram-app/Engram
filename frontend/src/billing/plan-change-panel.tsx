@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
+	type BillingCadence,
+	type BillingStatus,
+	type SubscriptionDetail,
 	useBillingConfig,
 	useBillingSubscriptionDetail,
 	useConfirmPlanChange,
 	usePlanChangePreview,
-	type BillingCadence,
-	type BillingStatus,
-	type SubscriptionDetail,
 } from "../api/queries";
 import { CadenceToggle, PLAN_CATALOG, PlanCard, type PlanTier } from "./plan-cards";
 
@@ -166,7 +166,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 			<div className="flex gap-2">
 				<Button
 					onClick={onConfirm}
-					disabled={!selectedTier || !targetPriceId || preview.isFetching || confirm.isPending}
+					disabled={!(selectedTier && targetPriceId) || preview.isFetching || confirm.isPending}
 				>
 					{confirm.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
 					{confirm.isPending ? "Applying…" : "Confirm change"}

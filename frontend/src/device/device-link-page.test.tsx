@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import DeviceLinkPage from "./device-link-page";
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
@@ -102,14 +102,14 @@ describe("DeviceLinkPage", () => {
 	it("shows a sign-in prompt when signed out", () => {
 		authState.current = { isSignedIn: false };
 		renderPage();
-		expect(screen.getByText(/sign in to link/i)).toBeInTheDocument();
+		expect(screen.getByText(/sign in to link/iu)).toBeInTheDocument();
 	});
 
 	it("rejects a code that is not 8 characters", () => {
 		renderPage();
-		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/i), { target: { value: "ABC" } });
-		fireEvent.click(screen.getByRole("button", { name: /verify/i }));
-		expect(screen.getByRole("alert")).toHaveTextContent(/8 characters/i);
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ABC" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		expect(screen.getByRole("alert")).toHaveTextContent(/8 characters/iu);
 		expect(get).not.toHaveBeenCalled();
 	});
 
@@ -118,11 +118,11 @@ describe("DeviceLinkPage", () => {
 		post.mockResolvedValue({ ok: true, vault_id: 7 });
 		renderPage();
 
-		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/i), { target: { value: "ENGR7X4K" } });
-		fireEvent.click(screen.getByRole("button", { name: /verify/i }));
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 
-		fireEvent.click(await screen.findByRole("radio", { name: /personal/i }));
-		fireEvent.click(screen.getByRole("button", { name: /^sync$/i }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
 		await waitFor(() =>
 			expect(post).toHaveBeenCalledWith(
@@ -130,7 +130,7 @@ describe("DeviceLinkPage", () => {
 				expect.objectContaining({ user_code: "ENGR-7X4K", vault_id: 7 }),
 			),
 		);
-		expect(await screen.findByText(/vault linked/i)).toBeInTheDocument();
+		expect(await screen.findByText(/vault linked/iu)).toBeInTheDocument();
 	});
 
 	it("forwards to the linked vault (sets it active) after authorizing", async () => {
@@ -143,11 +143,11 @@ describe("DeviceLinkPage", () => {
 		post.mockResolvedValue({ ok: true, vault_id: 9 });
 		renderPage();
 
-		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/i), { target: { value: "ENGR7X4K" } });
-		fireEvent.click(screen.getByRole("button", { name: /verify/i }));
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 
-		fireEvent.click(await screen.findByRole("radio", { name: /work/i }));
-		fireEvent.click(screen.getByRole("button", { name: /^sync$/i }));
+		fireEvent.click(await screen.findByRole("radio", { name: /work/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
 		await waitFor(() => expect(setActiveVaultId).toHaveBeenCalledWith(9));
 	});
@@ -162,9 +162,9 @@ describe("DeviceLinkPage", () => {
 			device_swap_cooldown_remaining_hours: null,
 		};
 		renderPage();
-		expect(screen.getByRole("status")).toHaveTextContent(/heads up/i);
-		expect(screen.getByRole("status")).toHaveTextContent(/will disconnect/i);
-		expect(screen.getByPlaceholderText(/XXXX-XXXX/i)).toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent(/heads up/iu);
+		expect(screen.getByRole("status")).toHaveTextContent(/will disconnect/iu);
+		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
 	});
 
 	it("shows a cooldown banner and disables Sync when atCap and a swap cooldown is active", async () => {
@@ -181,16 +181,16 @@ describe("DeviceLinkPage", () => {
 		renderPage();
 
 		const alert = screen.getByRole("alert");
-		expect(alert).toHaveTextContent(/recently swapped devices/i);
-		expect(alert).toHaveTextContent(/swap again in 17h/i);
+		expect(alert).toHaveTextContent(/recently swapped devices/iu);
+		expect(alert).toHaveTextContent(/swap again in 17h/iu);
 		// The normal "linking will disconnect" heads-up should NOT render when the
 		// cooldown banner is up.
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
 		// Walk through to the pick-vault step so the Sync button is on screen.
-		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/i), { target: { value: "ENGR7X4K" } });
-		fireEvent.click(screen.getByRole("button", { name: /verify/i }));
-		const sync = await screen.findByRole("button", { name: /^sync$/i });
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		const sync = await screen.findByRole("button", { name: /^sync$/iu });
 		expect(sync).toBeDisabled();
 	});
 });

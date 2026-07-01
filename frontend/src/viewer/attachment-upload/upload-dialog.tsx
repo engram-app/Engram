@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { ApiError, LimitExceededError } from "@/api/client";
 import { useUploadAttachment } from "@/api/queries";
+import { Button } from "@/components/ui/button";
 import { fileToBase64 } from "./file-to-base64";
 
 type RowStatus = "pending" | "uploading" | "done" | "error";

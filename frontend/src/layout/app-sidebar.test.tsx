@@ -1,11 +1,11 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BillingStatus } from "../api/queries";
+import { ThemeProvider } from "../theme/theme-provider";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import { RailViewProvider } from "./rail-view-context";
-import { ThemeProvider } from "../theme/theme-provider";
-import type { BillingStatus } from "../api/queries";
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
@@ -90,8 +90,8 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.getByText(/free tier.*1 connection/i)).toBeInTheDocument();
-		const link = screen.getByRole("link", { name: /upgrade/i });
+		expect(screen.getByText(/free tier.*1 connection/iu)).toBeInTheDocument();
+		const link = screen.getByRole("link", { name: /upgrade/iu });
 		expect(link).toHaveAttribute("href", "/settings/billing");
 	});
 
@@ -102,16 +102,16 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/i)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/i })).toBeNull();
+		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
 	it("does not render the footer while billing status is loading", () => {
 		billingStatusValue = { data: undefined, isLoading: true };
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/i)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/i })).toBeNull();
+		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
 	it("does not render the footer on self-host (billing disabled) even when tier=free", () => {
@@ -122,7 +122,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/i)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/i })).toBeNull();
+		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 });

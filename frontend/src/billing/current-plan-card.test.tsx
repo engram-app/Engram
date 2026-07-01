@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import CurrentPlanCard from "./current-plan-card";
 import type { BillingStatus } from "../api/queries";
+import CurrentPlanCard from "./current-plan-card";
 
 function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
 	return {
@@ -25,13 +25,13 @@ describe("CurrentPlanCard", () => {
 	it("shows the tier label and active status", () => {
 		render(<CurrentPlanCard billing={status()} />);
 		expect(screen.getByText("Starter")).toBeInTheDocument();
-		expect(screen.getByText(/active/i)).toBeInTheDocument();
+		expect(screen.getByText(/active/iu)).toBeInTheDocument();
 	});
 
 	it("labels the period-end date as a renewal when the subscription is active", () => {
 		render(<CurrentPlanCard billing={status()} />);
-		expect(screen.getByText(/renews on/i)).toBeInTheDocument();
-		expect(screen.getByText(/2026/)).toBeInTheDocument();
+		expect(screen.getByText(/renews on/iu)).toBeInTheDocument();
+		expect(screen.getByText(/2026/u)).toBeInTheDocument();
 	});
 
 	it("labels the period-end date as access-ending when canceled", () => {
@@ -47,8 +47,8 @@ describe("CurrentPlanCard", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText(/access ends on/i)).toBeInTheDocument();
-		expect(screen.queryByText(/renews on/i)).not.toBeInTheDocument();
+		expect(screen.getByText(/access ends on/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/renews on/iu)).not.toBeInTheDocument();
 	});
 
 	it("surfaces remaining trial days while trialing", () => {
@@ -65,6 +65,6 @@ describe("CurrentPlanCard", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText(/5 days/i)).toBeInTheDocument();
+		expect(screen.getByText(/5 days/iu)).toBeInTheDocument();
 	});
 });

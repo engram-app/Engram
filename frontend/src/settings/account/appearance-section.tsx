@@ -1,7 +1,7 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useTheme } from "@/theme/theme-provider";
 import type { ThemeChoice } from "@/theme/storage";
+import { useTheme } from "@/theme/theme-provider";
 import { SettingsSectionCard } from "./section-card";
 
 const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [

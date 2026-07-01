@@ -1,13 +1,13 @@
 "use client";
 
-import { TrendingDown, TrendingUp, Minus } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { formatDate, formatMoney } from "@/lib/paddle-format";
 import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "@/lib/paddle-types";
-import { formatMoney, formatDate } from "@/lib/paddle-format";
+import { cn } from "@/lib/utils";
 
 /** Props for the `PlanChangeBreakdown` component. */
 export type PlanChangeBreakdownProps = {

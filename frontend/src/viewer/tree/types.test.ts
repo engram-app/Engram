@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { formatItemId, parseItemId, ROOT_ID } from "./types";
 
 describe("item id helpers", () => {

@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("../api/client", () => ({
@@ -36,8 +36,8 @@ describe("PendingChangeBanner", () => {
 			/>,
 			{ wrapper: Wrapper },
 		);
-		expect(screen.getByText(/cancels/i)).toBeInTheDocument();
-		expect(screen.getByText(/2026/)).toBeInTheDocument();
+		expect(screen.getByText(/cancels/iu)).toBeInTheDocument();
+		expect(screen.getByText(/2026/u)).toBeInTheDocument();
 	});
 
 	it("renders nothing when there is no scheduled change", () => {
@@ -56,7 +56,7 @@ describe("PendingChangeBanner", () => {
 			/>,
 			{ wrapper: Wrapper },
 		);
-		fireEvent.click(screen.getByRole("button", { name: /keep my subscription/i }));
+		fireEvent.click(screen.getByRole("button", { name: /keep my subscription/iu }));
 
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/billing/reverse-cancel"));
 	});
@@ -68,6 +68,8 @@ describe("PendingChangeBanner", () => {
 			/>,
 			{ wrapper: Wrapper },
 		);
-		expect(screen.queryByRole("button", { name: /keep my subscription/i })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /keep my subscription/iu }),
+		).not.toBeInTheDocument();
 	});
 });

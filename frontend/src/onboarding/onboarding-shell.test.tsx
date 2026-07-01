@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingShell } from "./onboarding-shell";
 
 function renderShell(ui: ReactElement) {
@@ -49,7 +49,7 @@ describe("OnboardingShell", () => {
 				<p>dashboard</p>
 			</OnboardingShell>,
 		);
-		expect(screen.getByRole("heading", { name: /first vault/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /first vault/iu })).toBeInTheDocument();
 	});
 
 	it("mounts the checklist widget alongside dashboard content", () => {

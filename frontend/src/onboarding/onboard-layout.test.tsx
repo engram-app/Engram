@@ -1,6 +1,6 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
 import OnboardLayout from "./onboard-layout";
 
 const logout = vi.fn();
@@ -62,38 +62,38 @@ describe("OnboardLayout", () => {
 				</Routes>
 			</MemoryRouter>,
 		);
-		expect(screen.getByText(/loading/i)).toBeInTheDocument();
+		expect(screen.getByText(/loading/iu)).toBeInTheDocument();
 	});
 
 	it("numbers hosted agreement step 1 of 4", () => {
 		renderAt("/onboard/agreement", SAAS);
-		expect(screen.getByText(/step 1 of 4/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 1 of 4/iu)).toBeInTheDocument();
 	});
 
 	it("shows step 2 of 4 on billing (hosted)", () => {
 		renderAt("/onboard/billing", SAAS);
-		expect(screen.getByText(/step 2 of 4/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 2 of 4/iu)).toBeInTheDocument();
 		expect(screen.getByText("billing step")).toBeInTheDocument();
 	});
 
 	it("shows step 3 of 4 on tools (hosted)", () => {
 		renderAt("/onboard/tools", SAAS);
-		expect(screen.getByText(/step 3 of 4/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 3 of 4/iu)).toBeInTheDocument();
 	});
 
 	it("shows step 4 of 4 on vault (hosted)", () => {
 		renderAt("/onboard/vault", SAAS);
-		expect(screen.getByText(/step 4 of 4/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 4 of 4/iu)).toBeInTheDocument();
 	});
 
 	it("shows step 1 of 2 on tools (self-host)", () => {
 		renderAt("/onboard/tools", SELF);
-		expect(screen.getByText(/step 1 of 2/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 1 of 2/iu)).toBeInTheDocument();
 	});
 
 	it("shows step 2 of 2 on vault (self-host)", () => {
 		renderAt("/onboard/vault", SELF);
-		expect(screen.getByText(/step 2 of 2/i)).toBeInTheDocument();
+		expect(screen.getByText(/step 2 of 2/iu)).toBeInTheDocument();
 	});
 
 	it("redirects /onboard/agreement to /onboard when self-host chain skips it", () => {
@@ -108,7 +108,7 @@ describe("OnboardLayout", () => {
 
 	it("signs the user out mid-flow", () => {
 		renderAt("/onboard/tools", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+		fireEvent.click(screen.getByRole("button", { name: /sign out/iu }));
 		expect(logout).toHaveBeenCalled();
 	});
 });

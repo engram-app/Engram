@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import * as Y from "yjs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
+import * as Y from "yjs";
 
 const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
 	openDoc: vi.fn(),

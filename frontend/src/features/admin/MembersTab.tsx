@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/utils";
-import { adminApi, type AdminUser } from "./api";
+import { type AdminUser, adminApi } from "./api";
 
 // Stable button surface for the row's actions: instant active feedback
 // (active:scale-[0.97]), an inline spinner while the request is in flight,

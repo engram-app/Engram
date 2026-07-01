@@ -24,6 +24,6 @@ describe("collideBump", () => {
 		const huge = new Set(
 			Array.from({ length: 1001 }, (_, i) => (i === 0 ? "Untitled.md" : `Untitled ${i}.md`)),
 		);
-		expect(() => collideBump(huge, "Untitled.md", { cap: 1000 })).toThrow(/too many collisions/i);
+		expect(() => collideBump(huge, "Untitled.md", { cap: 1000 })).toThrow(/too many collisions/iu);
 	});
 });

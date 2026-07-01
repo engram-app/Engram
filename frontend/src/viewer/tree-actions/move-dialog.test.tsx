@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MoveDialog } from "./move-dialog";
 
@@ -84,7 +84,7 @@ describe("MoveDialog", () => {
 				onCancel={() => {}}
 			/>,
 		);
-		expect(screen.getByText(/Move 3 items/i)).toBeInTheDocument();
+		expect(screen.getByText(/Move 3 items/iu)).toBeInTheDocument();
 	});
 
 	it("intersects valid drop targets across all nodes when N>1", () => {

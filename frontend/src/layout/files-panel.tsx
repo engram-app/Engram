@@ -1,8 +1,8 @@
-import { FolderTreeProvider } from "./folder-tree-context";
-import FolderActions from "./folder-actions";
-import VaultSwitcher from "./vault-switcher";
-import FolderTree from "../viewer/folder-tree";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
+import FolderTree from "../viewer/folder-tree";
+import FolderActions from "./folder-actions";
+import { FolderTreeProvider } from "./folder-tree-context";
+import VaultSwitcher from "./vault-switcher";
 
 export default function FilesPanel() {
 	const demoActive = useDemoVaultOptional()?.active === true;

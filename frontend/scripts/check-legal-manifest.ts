@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
 const dir = join(import.meta.dir, "..", "src", "legal", "versions");
 const manifest = JSON.parse(readFileSync(join(dir, "legal-manifest.json"), "utf8"));
 const docPrefix: Record<string, string> = { terms_of_service: "terms", privacy_policy: "privacy" };

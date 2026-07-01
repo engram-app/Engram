@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_UUID, encodeCursor, getCursor, setCursor } from "./cursor";
+import { encodeCursor, getCursor, MAX_UUID, setCursor } from "./cursor";
 
 function decodeUrlB64(tok: string): string {
-	return atob(tok.replace(/-/g, "+").replace(/_/g, "/"));
+	return atob(tok.replace(/-/gu, "+").replace(/_/gu, "/"));
 }
 
 describe("encodeCursor", () => {
 	it('matches the backend codec: url-safe base64 of "<seq>:<id>", no padding', () => {
 		const tok = encodeCursor(42, MAX_UUID);
 		expect(decodeUrlB64(tok)).toBe(`42:${MAX_UUID}`);
-		expect(tok).not.toMatch(/[+/=]/);
+		expect(tok).not.toMatch(/[+/=]/u);
 	});
 
 	it("uses an all-f UUID sentinel for the head cursor", () => {

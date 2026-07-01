@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
-import { useEngramTree, treeStructureKey } from "./use-engram-tree";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { Folder, NoteSummary } from "../../api/queries";
+import { treeStructureKey, useEngramTree } from "./use-engram-tree";
 
 describe("treeStructureKey", () => {
 	it("changes when a folder count changes (so a move rebuilds the tree)", () => {

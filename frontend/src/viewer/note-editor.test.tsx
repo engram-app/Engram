@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
-import * as Y from "yjs";
-import { Awareness } from "y-protocols/awareness";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { historyField } from "@codemirror/commands";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { afterEach, describe, expect, it } from "vitest";
+import { Awareness } from "y-protocols/awareness";
+import * as Y from "yjs";
 import { buildEditorState } from "./note-editor";
 
 // happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).

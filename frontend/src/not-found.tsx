@@ -1,9 +1,9 @@
 import { Link } from "react-router";
-import { ROUTES } from "./routes";
-import AuthShell from "./layout/auth-shell";
-import AuthPanel from "./layout/auth-panel";
 import { Button } from "@/components/ui/button";
 import { heading } from "@/lib/ui-classes";
+import AuthPanel from "./layout/auth-panel";
+import AuthShell from "./layout/auth-shell";
+import { ROUTES } from "./routes";
 
 export default function NotFoundPage() {
 	return (

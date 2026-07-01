@@ -1,12 +1,12 @@
-import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { Plug } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 
 import { api } from "../api/client";
-import { useConnections, type Connection } from "../api/queries";
+import { type Connection, useConnections } from "../api/queries";
 
 /**
  * Lists the user's existing connections of `kind` with a per-row Disconnect

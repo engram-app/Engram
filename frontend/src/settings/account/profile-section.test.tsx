@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUser } from "./section-test-helpers";
 
 const user = makeUser();
@@ -21,7 +21,7 @@ describe("ProfileSection", () => {
 	it("uploads an avatar via setProfileImage", async () => {
 		render(<ProfileSection />);
 		const file = new File(["x"], "a.png", { type: "image/png" });
-		fireEvent.change(screen.getByLabelText(/profile image/i), { target: { files: [file] } });
+		fireEvent.change(screen.getByLabelText(/profile image/iu), { target: { files: [file] } });
 		await waitFor(() => expect(user.setProfileImage).toHaveBeenCalledWith({ file }));
 	});
 });

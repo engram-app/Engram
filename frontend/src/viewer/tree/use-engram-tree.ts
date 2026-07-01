@@ -1,27 +1,27 @@
-import { useEffect, useMemo, useRef } from "react";
-import { useTree } from "@headless-tree/react";
 import {
-	syncDataLoaderFeature,
-	selectionFeature,
-	hotkeysCoreFeature,
+	type DragTarget,
 	dragAndDropFeature,
+	expandAllFeature,
+	hotkeysCoreFeature,
+	type ItemInstance,
 	renamingFeature,
 	searchFeature,
-	expandAllFeature,
-	type ItemInstance,
-	type DragTarget,
+	selectionFeature,
+	syncDataLoaderFeature,
 } from "@headless-tree/core";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useTree } from "@headless-tree/react";
 import type { QueryClient } from "@tanstack/react-query";
-import { buildLoader, type SortKey, type LoaderItem } from "./loader";
-import { ROOT_ID } from "./types";
-import { resolveDropMove } from "./drop-redirect";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef } from "react";
 import {
-	ROOT_FOLDER_ID,
+	type AttachmentSummary,
 	type Folder,
 	type NoteSummary,
-	type AttachmentSummary,
+	ROOT_FOLDER_ID,
 } from "../../api/queries";
+import { resolveDropMove } from "./drop-redirect";
+import { buildLoader, type LoaderItem, type SortKey } from "./loader";
+import { ROOT_ID } from "./types";
 
 interface Deps {
 	folders: Folder[];

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logout, apiPost, navigate } = vi.hoisted(() => ({
 	logout: vi.fn().mockResolvedValue(undefined),
@@ -28,27 +28,27 @@ beforeEach(() => {
 describe("PasswordSectionLocal", () => {
 	it("blocks submit when new + confirm mismatch", async () => {
 		render(<PasswordSectionLocal />);
-		fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: "old" } });
-		fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: "newpass12" } });
-		fireEvent.change(screen.getByLabelText(/confirm new password/i), {
+		fireEvent.change(screen.getByLabelText(/current password/iu), { target: { value: "old" } });
+		fireEvent.change(screen.getByLabelText(/^new password$/iu), { target: { value: "newpass12" } });
+		fireEvent.change(screen.getByLabelText(/confirm new password/iu), {
 			target: { value: "different" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /change password/i }));
+		fireEvent.click(screen.getByRole("button", { name: /change password/iu }));
 
-		expect(await screen.findByText(/passwords do not match/i)).toBeInTheDocument();
+		expect(await screen.findByText(/passwords do not match/iu)).toBeInTheDocument();
 		expect(apiPost).not.toHaveBeenCalled();
 	});
 
 	it("submits, logs out, and redirects on success", async () => {
 		render(<PasswordSectionLocal />);
-		fireEvent.change(screen.getByLabelText(/current password/i), {
+		fireEvent.change(screen.getByLabelText(/current password/iu), {
 			target: { value: "oldpass12" },
 		});
-		fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: "newpass12" } });
-		fireEvent.change(screen.getByLabelText(/confirm new password/i), {
+		fireEvent.change(screen.getByLabelText(/^new password$/iu), { target: { value: "newpass12" } });
+		fireEvent.change(screen.getByLabelText(/confirm new password/iu), {
 			target: { value: "newpass12" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /change password/i }));
+		fireEvent.click(screen.getByRole("button", { name: /change password/iu }));
 
 		await waitFor(() =>
 			expect(apiPost).toHaveBeenCalledWith("/auth/password/change", {
@@ -63,16 +63,16 @@ describe("PasswordSectionLocal", () => {
 	it("surfaces backend error and does not sign out", async () => {
 		apiPost.mockReset().mockRejectedValueOnce(new Error("invalid_password"));
 		render(<PasswordSectionLocal />);
-		fireEvent.change(screen.getByLabelText(/current password/i), {
+		fireEvent.change(screen.getByLabelText(/current password/iu), {
 			target: { value: "wrongpass" },
 		});
-		fireEvent.change(screen.getByLabelText(/^new password$/i), { target: { value: "newpass12" } });
-		fireEvent.change(screen.getByLabelText(/confirm new password/i), {
+		fireEvent.change(screen.getByLabelText(/^new password$/iu), { target: { value: "newpass12" } });
+		fireEvent.change(screen.getByLabelText(/confirm new password/iu), {
 			target: { value: "newpass12" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /change password/i }));
+		fireEvent.click(screen.getByRole("button", { name: /change password/iu }));
 
-		expect(await screen.findByText(/invalid_password/i)).toBeInTheDocument();
+		expect(await screen.findByText(/invalid_password/iu)).toBeInTheDocument();
 		expect(logout).not.toHaveBeenCalled();
 		expect(navigate).not.toHaveBeenCalled();
 	});

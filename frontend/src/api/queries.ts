@@ -7,15 +7,15 @@ import {
 } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
-import { api, ApiError } from "./client";
+import { collideBump } from "@/lib/collide-bump";
+import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
 	isSyntheticFolderId,
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
 import { useActiveVaultId } from "./active-vault";
-import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
-import { collideBump } from "@/lib/collide-bump";
+import { ApiError, api } from "./client";
 
 // Encode each path segment but preserve slashes so Phoenix's splat
 // routes match. encodeURIComponent on a full path produces %2F, which
@@ -86,7 +86,7 @@ export interface User {
 const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
 	data.folders
 		.filter((f) => f.name !== "")
-		.map((f) => (f.id != null ? (f as Folder) : { ...f, id: syntheticFolderId(f.name) }));
+		.map((f) => (f.id == null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
 
 export function useFolders() {
 	const vaultId = useActiveVaultId();
@@ -404,13 +404,13 @@ export function useCreateNote() {
 		onMutate: async ({ folder }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
-			if (folderId == null) return undefined;
+			if (folderId == null) return;
 			const key = ["folder-notes-by-id", vaultId, folderId] as const;
 			await qc.cancelQueries({ queryKey: key });
 
 			const snapshot = qc.getQueryData<NoteSummary[]>(key);
 			// Not cached (e.g. an unexpanded subfolder) — skip; it surfaces on expand.
-			if (snapshot === undefined) return undefined;
+			if (snapshot === undefined) return;
 
 			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
@@ -419,7 +419,7 @@ export function useCreateNote() {
 			const placeholder: NoteSummary = {
 				id: placeholderId,
 				path,
-				title: name.replace(/\.md$/, ""),
+				title: name.replace(/\.md$/u, ""),
 				folder,
 				tags: [],
 				version: 1,
@@ -438,7 +438,7 @@ export function useCreateNote() {
 				patchRowInList(qc, ctx.key, ctx.placeholderId, {
 					id,
 					path,
-					title: filename.replace(/\.md$/, ""),
+					title: filename.replace(/\.md$/u, ""),
 				});
 				// Only the target folder's list changed — no need to stale the whole
 				// prefix (which would force every folder to refetch on next expand).
@@ -625,7 +625,7 @@ export function useBillingConfig() {
 	return useQuery({
 		queryKey: ["billing", "config"],
 		queryFn: () => api.get<BillingConfig>("/billing/config"),
-		staleTime: Infinity,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
 }
 
@@ -735,7 +735,7 @@ export function useOnboardingStatus() {
 	return useQuery({
 		queryKey: ["onboarding", "status"],
 		queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
-		staleTime: Infinity,
+		staleTime: Number.POSITIVE_INFINITY,
 		refetchOnWindowFocus: true,
 	});
 }
@@ -781,7 +781,7 @@ export function useCapabilities() {
 		// Infinity → no fetch). The queryFn is a fallback for any consumer that
 		// mounts before the gate's bootstrap seed lands.
 		queryFn: () => api.get<BootstrapPayload>("/bootstrap").then((b) => b.capabilities),
-		staleTime: Infinity,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
 }
 
@@ -804,7 +804,7 @@ export function useAppBootstrap() {
 			if (data.billing) qc.setQueryData(["billing", "status"], data.billing);
 			return data;
 		},
-		staleTime: Infinity,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
 }
 
@@ -1320,7 +1320,7 @@ export function useRenameNote() {
 			// Remove from old list (by id when we have it, by path otherwise).
 			if (oldFolderNotes) {
 				updateCachedList<NoteSummary>(qc, oldListKey, (prev) => ({
-					notes: prev.notes.filter((n) => (noteId != null ? n.id !== noteId : n.path !== old_path)),
+					notes: prev.notes.filter((n) => (noteId == null ? n.path !== old_path : n.id !== noteId)),
 				}));
 			}
 
@@ -1328,7 +1328,7 @@ export function useRenameNote() {
 			if (renamedSummary && newFolderNotes) {
 				updateCachedList<NoteSummary>(qc, newListKey, (prev) => ({
 					notes: [
-						...prev.notes.filter((n) => (noteId != null ? n.id !== noteId : n.path !== new_path)),
+						...prev.notes.filter((n) => (noteId == null ? n.path !== new_path : n.id !== noteId)),
 						renamedSummary,
 					],
 				}));
@@ -1344,7 +1344,10 @@ export function useRenameNote() {
 					const hasNewEntry = next.some((f) => f.name === newFolder);
 					if (hasNewEntry) {
 						next = next.map((f) => (f.name === newFolder ? { ...f, count: f.count + 1 } : f));
-					} else if (newFolder !== "") {
+					} else if (newFolder === "") {
+						// Root files don't get a synthetic '' entry — folders() filters
+						// those out anyway; the note shows up via RootFiles.
+					} else {
 						// Optimistic placeholder — real backend id + parent_id land
 						// when `onSettled` refetches the folders list. The `optimistic-`
 						// sentinel id won't collide with real uuids; the null parent_id
@@ -1359,9 +1362,6 @@ export function useRenameNote() {
 								count: 1,
 							},
 						];
-					} else {
-						// Root files don't get a synthetic '' entry — folders() filters
-						// those out anyway; the note shows up via RootFiles.
 					}
 					return { folders: next };
 				});
@@ -1910,13 +1910,13 @@ export function useBatchMoveNotes() {
 				// the raw folders cache by name (root sentinel → '', syn:<path> → path,
 				// real id → its cached name).
 				const srcName =
-					typeof folderId !== "string"
-						? null
-						: folderId === ROOT_FOLDER_ID
+					typeof folderId === "string"
+						? folderId === ROOT_FOLDER_ID
 							? ""
 							: isSyntheticFolderId(folderId)
 								? syntheticFolderPath(folderId)
-								: (foldersCache?.folders.find((ff) => ff.id === folderId)?.name ?? null);
+								: (foldersCache?.folders.find((ff) => ff.id === folderId)?.name ?? null)
+						: null;
 				const keep: NoteSummary[] = [];
 				for (const n of data) {
 					if (idSet.has(n.id) && folderId !== targetCacheId) {

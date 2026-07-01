@@ -1,7 +1,7 @@
 import { FolderTree, Search, Settings } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router";
+import { type RailView, useRailView } from "./rail-view-context";
 import UserMenu from "./user-menu";
-import { useRailView, type RailView } from "./rail-view-context";
 
 function ViewButton({
 	id,

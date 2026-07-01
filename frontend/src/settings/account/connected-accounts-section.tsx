@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
-import { useUser, useReverification } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import type { OAuthStrategy } from "@clerk/shared/types";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SettingsSectionCard } from "./section-card";
@@ -46,8 +46,8 @@ const PROVIDERS: Record<string, { name: string; icon: ReactNode }> = {
 };
 
 function meta(raw: string) {
-	const key = raw.replace(/^oauth_/, "");
-	return PROVIDERS[key] ?? { name: key.replace(/^\w/, (c) => c.toUpperCase()), icon: null };
+	const key = raw.replace(/^oauth_/u, "");
+	return PROVIDERS[key] ?? { name: key.replace(/^\w/u, (c) => c.toUpperCase()), icon: null };
 }
 
 export function ConnectedAccountsSection({ providers }: { providers: OAuthStrategy[] }) {
@@ -61,7 +61,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			user!.createExternalAccount(params),
 	);
 
-	if (!isLoaded || !user) return null;
+	if (!(isLoaded && user)) return null;
 	const connected = new Set(user.externalAccounts.map((a) => `oauth_${a.provider}`));
 
 	async function onDisconnect(destroy: () => Promise<unknown>) {

@@ -1,19 +1,19 @@
-import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { api } from "../api/client";
-import { setActiveVaultId } from "../api/active-vault";
-import AuthShell from "../layout/auth-shell";
-import AuthPanel from "../layout/auth-panel";
 import { Button } from "@/components/ui/button";
+import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
-import { heading, fieldInput, destructiveAlert, selectableRow } from "@/lib/ui-classes";
-import { useBillingStatus, useConnections, useMe, type Connection } from "../api/queries";
+import { setActiveVaultId } from "../api/active-vault";
+import { api } from "../api/client";
+import { type Connection, useBillingStatus, useConnections, useMe } from "../api/queries";
+import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { connectionId as obsidianConnectionId } from "../billing/existing-connections-panel";
+import { useConnectionCap } from "../billing/use-connection-cap";
+import AuthPanel from "../layout/auth-panel";
+import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
-import { useConnectionCap } from "../billing/use-connection-cap";
-import { connectionId as obsidianConnectionId } from "../billing/existing-connections-panel";
 
 type Vault = { id: string; name: string; note_count: number };
 
@@ -31,7 +31,7 @@ export default function DeviceLinkPage() {
 		const raw = new URLSearchParams(window.location.search).get("code") ?? "";
 		const clean = raw
 			.toUpperCase()
-			.replace(/[^A-Z2-9]/g, "")
+			.replace(/[^A-Z2-9]/gu, "")
 			.slice(0, 8);
 		return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
 	});
@@ -76,7 +76,7 @@ export default function DeviceLinkPage() {
 	}
 
 	async function handleVerifyCode() {
-		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/g, "");
+		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
 			setError("Code must be 8 characters (e.g., ENGR-7X4K)");
 			return;
@@ -103,7 +103,9 @@ export default function DeviceLinkPage() {
 			// If the user is at the Free vault cap, default to the first existing
 			// vault (create-new rows are about to be disabled below).
 			const fallbackExisting =
-				(data.vaults ?? []).length >= (vaultsCap ?? Infinity) ? (data.vaults?.[0] ?? null) : null;
+				(data.vaults ?? []).length >= (vaultsCap ?? Number.POSITIVE_INFINITY)
+					? (data.vaults?.[0] ?? null)
+					: null;
 			setSelection(
 				existing
 					? existing.id
@@ -168,7 +170,7 @@ export default function DeviceLinkPage() {
 					// connections instead of 1. Make that visible.
 					setError(
 						`Disconnected '${swappedFromName}' but linking the new device failed. ` +
-							`Re-link from Obsidian — no devices are currently synced.`,
+							"Re-link from Obsidian — no devices are currently synced.",
 					);
 					return;
 				}
@@ -516,11 +518,11 @@ function describeObsidianDevice(c: Connection): string {
 
 function parseUserAgentOs(ua: string | null): string | null {
 	if (!ua) return null;
-	if (/iphone|ipad|ipod/i.test(ua)) return "iOS";
-	if (/android/i.test(ua)) return "Android";
-	if (/mac os|macintosh/i.test(ua)) return "macOS";
-	if (/windows/i.test(ua)) return "Windows";
-	if (/linux/i.test(ua)) return "Linux";
+	if (/iphone|ipad|ipod/iu.test(ua)) return "iOS";
+	if (/android/iu.test(ua)) return "Android";
+	if (/mac os|macintosh/iu.test(ua)) return "macOS";
+	if (/windows/iu.test(ua)) return "Windows";
+	if (/linux/iu.test(ua)) return "Linux";
 	return null;
 }
 

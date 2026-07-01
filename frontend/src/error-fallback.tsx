@@ -1,8 +1,8 @@
 import * as Sentry from "@sentry/react";
-import AuthBackdrop from "./layout/auth-backdrop";
-import AuthPanel from "./layout/auth-panel";
 import { Button } from "@/components/ui/button";
 import { heading } from "@/lib/ui-classes";
+import AuthBackdrop from "./layout/auth-backdrop";
+import AuthPanel from "./layout/auth-panel";
 
 // Top-level crash page rendered by `<Sentry.ErrorBoundary>` in main.tsx.
 //

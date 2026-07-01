@@ -1,13 +1,13 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
+import { Button } from "@/components/ui/button";
+import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
+import { cn } from "@/lib/utils";
 import { ROUTES } from "../routes";
+import AuthLayout from "./auth-layout";
 import { safeReturnTo } from "./safe-return-to";
 import { useAuthAdapter } from "./use-auth-adapter";
-import { useBootstrap, type BootstrapState } from "./use-bootstrap";
-import AuthLayout from "./auth-layout";
-import { Button } from "@/components/ui/button";
-import { heading, fieldInput, destructiveAlert } from "@/lib/ui-classes";
-import { cn } from "@/lib/utils";
+import { type BootstrapState, useBootstrap } from "./use-bootstrap";
 
 function loginErrorMessage(code: string): string {
 	switch (code) {

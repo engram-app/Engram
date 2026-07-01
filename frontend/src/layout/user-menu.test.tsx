@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import UserMenu from "./user-menu";
+import { describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../theme/theme-provider";
+import UserMenu from "./user-menu";
 
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
@@ -21,7 +21,7 @@ function renderUserMenu() {
 // Radix DropdownMenu opens on keyDown Enter/Space against its trigger; happy-dom
 // doesn't fully model pointer events, so we drive the menu via keyboard.
 function openMenu() {
-	fireEvent.keyDown(screen.getByRole("button", { name: /user menu/i }), { key: "Enter" });
+	fireEvent.keyDown(screen.getByRole("button", { name: /user menu/iu }), { key: "Enter" });
 }
 
 describe("UserMenu", () => {

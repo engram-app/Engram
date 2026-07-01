@@ -1,7 +1,7 @@
 import {
+	type OnboardingAction,
 	useOnboardingStatus,
 	useRecordOnboardingAction,
-	type OnboardingAction,
 } from "../api/queries";
 
 export function useOnboardingActions() {

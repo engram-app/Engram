@@ -1,7 +1,7 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const restoreMutate = vi.fn();
 const purgeMutate = vi.fn();
@@ -49,19 +49,19 @@ describe("DeletedVaultsSection", () => {
 		const row = within(screen.getByText("Old").closest("tr") as HTMLElement);
 		expect(row.getByText("5")).toBeInTheDocument();
 		expect(row.getByText("2")).toBeInTheDocument();
-		expect(screen.getByText(/purges/i)).toBeInTheDocument();
+		expect(screen.getByText(/purges/iu)).toBeInTheDocument();
 	});
 
 	it("disables restore when at the cap", () => {
 		activeCount = 1;
 		renderWithRouter(<DeletedVaultsSection />);
-		expect(screen.getByRole("button", { name: /restore/i })).toBeDisabled();
+		expect(screen.getByRole("button", { name: /restore/iu })).toBeDisabled();
 	});
 
 	it("restores when under cap", async () => {
 		activeCount = 0;
 		renderWithRouter(<DeletedVaultsSection />);
-		const btn = screen.getByRole("button", { name: /restore/i });
+		const btn = screen.getByRole("button", { name: /restore/iu });
 		expect(btn).toBeEnabled();
 		fireEvent.click(btn);
 		await waitFor(() => expect(restoreMutate).toHaveBeenCalledWith(5, expect.anything()));
@@ -70,14 +70,14 @@ describe("DeletedVaultsSection", () => {
 	it("purges permanently when confirmed", async () => {
 		window.confirm = vi.fn().mockReturnValue(true);
 		renderWithRouter(<DeletedVaultsSection />);
-		fireEvent.click(screen.getByRole("button", { name: /permanently delete .*old/i }));
+		fireEvent.click(screen.getByRole("button", { name: /permanently delete .*old/iu }));
 		await waitFor(() => expect(purgeMutate).toHaveBeenCalledWith(5, expect.anything()));
 	});
 
 	it("does not purge when confirmation is dismissed", () => {
 		window.confirm = vi.fn().mockReturnValue(false);
 		renderWithRouter(<DeletedVaultsSection />);
-		fireEvent.click(screen.getByRole("button", { name: /permanently delete .*old/i }));
+		fireEvent.click(screen.getByRole("button", { name: /permanently delete .*old/iu }));
 		expect(purgeMutate).not.toHaveBeenCalled();
 	});
 

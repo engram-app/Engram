@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { type SearchResult, useSearch } from "../api/queries";
-import { pushRecent, readRecent } from "./recent-searches";
 import { useRailView } from "./rail-view-context";
+import { pushRecent, readRecent } from "./recent-searches";
 
 export default function SearchPanel() {
 	const { setView } = useRailView();
@@ -137,5 +137,5 @@ function ResultRow({ result }: { result: SearchResult }) {
 }
 
 function lastSegment(path: string): string {
-	return (path.split("/").pop() ?? path).replace(/\.md$/, "");
+	return (path.split("/").pop() ?? path).replace(/\.md$/u, "");
 }

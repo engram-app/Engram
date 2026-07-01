@@ -1,6 +1,6 @@
-import { useRef } from "react";
-import { useUser, useReverification } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { clerkErrorMessage } from "./clerk-errors";
@@ -12,7 +12,7 @@ export function ProfileSection() {
 	// Changing the avatar is reverification-protected — raw calls return 403.
 	const setProfileImage = useReverification((file: File) => user!.setProfileImage({ file }));
 
-	if (!isLoaded || !user) return null;
+	if (!(isLoaded && user)) return null;
 
 	async function onImage(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0];

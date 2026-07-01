@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getDeviceId, __resetDeviceIdCache } from "./device-id";
+import { __resetDeviceIdCache, getDeviceId } from "./device-id";
 
 describe("getDeviceId", () => {
 	beforeEach(() => {
@@ -13,7 +13,7 @@ describe("getDeviceId", () => {
 
 	it("mints a UUID and persists it to localStorage", () => {
 		const id = getDeviceId();
-		expect(id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(id).toMatch(/^[0-9a-f-]{36}$/u);
 		expect(localStorage.getItem("engram.deviceId")).toBe(id);
 	});
 

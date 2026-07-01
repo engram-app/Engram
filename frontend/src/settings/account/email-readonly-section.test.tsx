@@ -1,5 +1,5 @@
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
 
 const meData = { id: 1, email: "me@example.com", role: "member", display_name: null };
 vi.mock("../../api/queries", () => ({ useMe: () => ({ data: meData }) }));
@@ -14,7 +14,7 @@ describe("EmailReadonlySection", () => {
 
 	it("mentions contacting an admin", () => {
 		render(<EmailReadonlySection />);
-		expect(screen.getByText(/contact your admin/i)).toBeInTheDocument();
+		expect(screen.getByText(/contact your admin/iu)).toBeInTheDocument();
 	});
 
 	it("copy button writes to clipboard", async () => {
@@ -26,7 +26,7 @@ describe("EmailReadonlySection", () => {
 		});
 
 		render(<EmailReadonlySection />);
-		fireEvent.click(screen.getByRole("button", { name: /copy email/i }));
+		fireEvent.click(screen.getByRole("button", { name: /copy email/iu }));
 
 		expect(writeText).toHaveBeenCalledWith("me@example.com");
 	});

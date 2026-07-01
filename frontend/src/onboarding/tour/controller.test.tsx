@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import { describe, expect, it, vi } from "vitest";
 import { TourController } from "./controller";
 
 function renderWithRouter(ui: React.ReactElement) {

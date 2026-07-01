@@ -7,7 +7,7 @@ export const MAX_UUID = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 /** Mirror of backend `Engram.Sync.encode_cursor/2`: url-safe base64 of
  *  "<seq>:<id>" with padding stripped. seq+uuid are ASCII, so btoa is safe. */
 export function encodeCursor(seq: number, id: string): string {
-	return btoa(`${seq}:${id}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+	return btoa(`${seq}:${id}`).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/[=]+$/u, "");
 }
 
 // Per-vault: `seq` is vault-scoped, so each vault tracks its own cursor.

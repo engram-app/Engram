@@ -2,18 +2,18 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
-import { useNote } from "../api/queries";
-import {
-	closeDoc,
-	enroll,
-	openDoc,
-	getCrdtSyncStatus,
-	subscribeToCrdtSyncStatus,
-	type CrdtSyncStatus,
-} from "../crdt/session";
-import { useRightSidebar } from "../layout/right-sidebar-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useNote } from "../api/queries";
+import {
+	type CrdtSyncStatus,
+	closeDoc,
+	enroll,
+	getCrdtSyncStatus,
+	openDoc,
+	subscribeToCrdtSyncStatus,
+} from "../crdt/session";
+import { useRightSidebar } from "../layout/right-sidebar-context";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";

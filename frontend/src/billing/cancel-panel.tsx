@@ -1,8 +1,8 @@
 import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useCancelSubscription, type BillingStatus } from "../api/queries";
-import type { SubscriptionDetail } from "../api/queries";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import type { SubscriptionDetail } from "../api/queries";
+import { type BillingStatus, useCancelSubscription } from "../api/queries";
 
 const TIER_LABELS: Partial<Record<BillingStatus["tier"], string>> = {
 	starter: "Starter",

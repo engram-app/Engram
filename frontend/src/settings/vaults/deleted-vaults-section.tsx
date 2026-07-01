@@ -1,16 +1,16 @@
-import { toast } from "sonner";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router";
-import { Button } from "@/components/ui/button";
-import { SettingsSectionCard } from "@/settings/account/section-card";
+import { toast } from "sonner";
 import {
-	useDeletedVaults,
-	useVaults,
-	useRestoreVault,
-	usePurgeVault,
 	useBillingConfig,
+	useDeletedVaults,
+	usePurgeVault,
+	useRestoreVault,
+	useVaults,
 	type Vault,
 } from "@/api/queries";
+import { Button } from "@/components/ui/button";
+import { SettingsSectionCard } from "@/settings/account/section-card";
 
 export function DeletedVaultsSection() {
 	const { data: deleted } = useDeletedVaults();
@@ -47,7 +47,7 @@ function DeletedRow({ vault }: { vault: Vault }) {
 	const restore = useRestoreVault();
 	const purge = usePurgeVault();
 
-	const cap = billing?.vaults_cap ?? Infinity;
+	const cap = billing?.vaults_cap ?? Number.POSITIVE_INFINITY;
 	const activeCount = active?.length ?? 0;
 	const overCap = activeCount >= cap;
 	const purgeDate = vault.purge_at ? new Date(vault.purge_at).toLocaleDateString() : "—";

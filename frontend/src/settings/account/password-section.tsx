@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useUser, useReverification } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SettingsSectionCard } from "./section-card";
@@ -17,7 +17,7 @@ export function PasswordSection() {
 			user!.updatePassword(params),
 	);
 
-	if (!isLoaded || !user) return null;
+	if (!(isLoaded && user)) return null;
 	const hasPassword = user.passwordEnabled;
 
 	async function submit() {

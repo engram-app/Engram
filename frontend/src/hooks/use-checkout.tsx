@@ -1,12 +1,12 @@
-import { type Environments, type Theme, type Paddle } from "@paddle/paddle-js";
-import { useEffect, useState, useCallback, useRef } from "react";
+import type { Environments, Paddle, Theme } from "@paddle/paddle-js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { addPaddleEventListener, getOrCreatePaddle } from "@/lib/paddle-instance";
 import {
 	CheckoutEventNames,
-	type OpenCheckoutOptions,
 	type CheckoutSettings,
+	type OpenCheckoutOptions,
 } from "@/lib/paddle-sdk-types";
 import type { CheckoutCompleteData } from "@/lib/paddle-types";
-import { getOrCreatePaddle, addPaddleEventListener } from "@/lib/paddle-instance";
 
 export type UseCheckoutArgs = {
 	clientToken: string;
@@ -80,7 +80,7 @@ export function useCheckout(args: UseCheckoutArgs) {
 
 	const openCheckout = useCallback(
 		(options: OpenCheckoutOptions) => {
-			if (!paddle || !isReady) {
+			if (!(paddle && isReady)) {
 				console.warn("Paddle not initialized yet");
 				return;
 			}
@@ -131,7 +131,7 @@ export function useCheckout(args: UseCheckoutArgs) {
 
 	const updateItems = useCallback(
 		(items: Array<{ priceId: string; quantity: number }>) => {
-			if (!paddle || !isReady) {
+			if (!(paddle && isReady)) {
 				console.warn("Paddle not initialized yet");
 				return;
 			}

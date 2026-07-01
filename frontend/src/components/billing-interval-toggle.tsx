@@ -1,8 +1,8 @@
 "use client";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
 import { formatIntervalLabel } from "@/lib/paddle-format";
+import { cn } from "@/lib/utils";
 
 export type BillingIntervalToggleProps = {
 	intervals: string[];

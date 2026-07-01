@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 
@@ -40,12 +40,12 @@ async function signIn(page: import("@playwright/test").Page, email: string) {
 	await page.goto("/sign-in/");
 	await page.getByLabel("Email").fill(email);
 	await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-	await page.getByRole("button", { name: /sign in/i }).click();
+	await page.getByRole("button", { name: /sign in/iu }).click();
 	await expect(page).toHaveURL("/");
 }
 
-test.describe("Dark mode", () => {
-	test("account menu hosts the theme picker — Light / Dark / System", async ({ page, baseURL }) => {
+it.describe("Dark mode", () => {
+	it("account menu hosts the theme picker — Light / Dark / System", async ({ page, baseURL }) => {
 		const email = testEmail("menu");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);
@@ -54,14 +54,14 @@ test.describe("Dark mode", () => {
 		// Trigger = avatar button labelled "User menu". The three theme options
 		// are radio rows (role=menuitemradio) inside the dropdown.
 		const userMenu = page.getByRole("button", { name: "User menu" });
-		await expect(page.locator("html")).not.toHaveClass(/dark/);
+		await expect(page.locator("html")).not.toHaveClass(/dark/u);
 
 		// Open menu → pick Dark
 		await userMenu.click();
 		const darkRow = page.getByRole("menuitemradio", { name: "Dark" });
 		await expect(darkRow).toBeVisible();
 		await darkRow.click();
-		await expect(page.locator("html")).toHaveClass(/dark/);
+		await expect(page.locator("html")).toHaveClass(/dark/u);
 
 		// Reopen → Dark row is now aria-checked
 		await userMenu.click();
@@ -72,7 +72,7 @@ test.describe("Dark mode", () => {
 
 		// Pick Light → html class drops
 		await page.getByRole("menuitemradio", { name: "Light" }).click();
-		await expect(page.locator("html")).not.toHaveClass(/dark/);
+		await expect(page.locator("html")).not.toHaveClass(/dark/u);
 
 		// Pick System; localStorage persists the choice
 		await userMenu.click();
@@ -87,7 +87,7 @@ test.describe("Dark mode", () => {
 		await expect(page.getByRole("menuitemradio", { name: "System" })).toBeHidden();
 	});
 
-	test("System mode tracks prefers-color-scheme", async ({ browser, baseURL }) => {
+	it("System mode tracks prefers-color-scheme", async ({ browser, baseURL }) => {
 		const email = testEmail("system");
 		await registerUser(baseURL!, email);
 
@@ -96,11 +96,11 @@ test.describe("Dark mode", () => {
 		await signIn(page, email);
 
 		// First-paint check: with empty storage (system) + colorScheme dark, html should have .dark.
-		await expect(page.locator("html")).toHaveClass(/dark/);
+		await expect(page.locator("html")).toHaveClass(/dark/u);
 		await ctx.close();
 	});
 
-	test("FOUC-free: pre-seeded localStorage applies class before React mounts", async ({
+	it("FOUC-free: pre-seeded localStorage applies class before React mounts", async ({
 		browser,
 		baseURL,
 	}) => {
@@ -115,7 +115,7 @@ test.describe("Dark mode", () => {
 		await page.goto(baseURL! + "/sign-in/");
 		// At domcontentloaded the inline boot script has already run.
 		await page.waitForLoadState("domcontentloaded");
-		await expect(page.locator("html")).toHaveClass(/dark/);
+		await expect(page.locator("html")).toHaveClass(/dark/u);
 		await ctx.close();
 	});
 });

@@ -1,19 +1,19 @@
 "use client";
 
-import { ArrowRight, AlertCircle } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
+import { AlertCircle, ArrowRight } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { cn } from "@/lib/utils";
-import type { PlanChangePreviewData } from "@/lib/paddle-types";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
-	formatMoney,
-	formatDate,
 	formatBillingCycle,
+	formatDate,
+	formatMoney,
 	formatProrationMode,
 } from "@/lib/paddle-format";
+import type { PlanChangePreviewData } from "@/lib/paddle-types";
+import { cn } from "@/lib/utils";
 
 /** Props for the `PlanChangePreview` component. */
 export type PlanChangePreviewProps = {
@@ -76,8 +76,8 @@ export function PlanChangePreview({
 	const effectiveDate = resolveEffectiveDate();
 
 	function resolveScheduledChangeMessage(): string | undefined {
-		if (!scheduledChange) return undefined;
-		if (scheduledChange.action === "resume") return undefined;
+		if (!scheduledChange) return;
+		if (scheduledChange.action === "resume") return;
 		const actionLabel = scheduledChange.action === "cancel" ? "Cancellation" : "Pause";
 		return `${actionLabel} scheduled for ${formatDate(scheduledChange.effectiveAt)}. Billing options may be restricted.`;
 	}
@@ -91,9 +91,9 @@ export function PlanChangePreview({
 			? "No charge"
 			: isManual
 				? "Invoice amount"
-				: costImpact.immediateAmount !== undefined
-					? "Amount due now"
-					: "Amount at next billing";
+				: costImpact.immediateAmount === undefined
+					? "Amount at next billing"
+					: "Amount due now";
 
 	const currentIntervalLabel =
 		formatBillingCycle({

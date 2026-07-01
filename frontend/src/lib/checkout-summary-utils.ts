@@ -1,5 +1,5 @@
-import type { CheckoutSummaryData } from "@/lib/paddle-types";
 import { formatTrialPeriod } from "@/lib/paddle-format";
+import type { CheckoutSummaryData } from "@/lib/paddle-types";
 
 // ---
 // Input shapes — minimal types matching the Paddle.js CheckoutEventsData shape.

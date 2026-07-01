@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
+import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 
 type Props = { userId: string | undefined };

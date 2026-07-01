@@ -1,3 +1,4 @@
+import process from "node:process";
 import pg from "pg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -51,7 +52,7 @@ export async function cleanupTestUsers(phase: "setup" | "teardown"): Promise<voi
 
 	const client = new pg.Client({
 		connectionString: dbUrl,
-		connectionTimeoutMillis: 5_000,
+		connectionTimeoutMillis: 5000,
 		statement_timeout: 10_000,
 	});
 

@@ -1,7 +1,7 @@
-import React from "react";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type React from "react";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("sonner", () => ({
 	toast: {
@@ -785,7 +785,7 @@ describe("useFolders", () => {
 //      so the server is the eventual source of truth (and so any
 //      server-side cascade we don't model client-side gets reconciled).
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 function seedFolderNotesById(
 	folderId: string,
@@ -941,7 +941,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 				"root",
 			]);
 			expect(root).toHaveLength(1);
-			expect(root?.[0]?.id).toMatch(/^optimistic-/);
+			expect(root?.[0]?.id).toMatch(/^optimistic-/u);
 			expect(root?.[0]?.title).toBe("Untitled");
 		});
 
@@ -970,7 +970,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		await waitFor(() => {
 			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
 			expect(byId).toHaveLength(1);
-			expect(byId?.[0]?.id).toMatch(/^optimistic-/);
+			expect(byId?.[0]?.id).toMatch(/^optimistic-/u);
 		});
 
 		resolvePost({ note: { id: "real-2" } });
@@ -1593,7 +1593,7 @@ describe("useUploadAttachment", () => {
 				path: "pic.png",
 				mime_type: "image/png",
 				content_base64: "AAAA",
-				mtime: 1718000000,
+				mtime: 1_718_000_000,
 			});
 		});
 
@@ -1601,7 +1601,7 @@ describe("useUploadAttachment", () => {
 			path: "pic.png",
 			mime_type: "image/png",
 			content_base64: "AAAA",
-			mtime: 1718000000,
+			mtime: 1_718_000_000,
 		});
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });

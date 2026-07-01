@@ -1,8 +1,8 @@
-import { ProfileSectionLocal } from "./account/profile-section-local";
 import { AppearanceSection } from "./account/appearance-section";
+import { DangerZoneSectionLocal } from "./account/danger-zone-section-local";
 import { EmailReadonlySection } from "./account/email-readonly-section";
 import { PasswordSectionLocal } from "./account/password-section-local";
-import { DangerZoneSectionLocal } from "./account/danger-zone-section-local";
+import { ProfileSectionLocal } from "./account/profile-section-local";
 
 export default function AccountPageLocal() {
 	return (

@@ -1,13 +1,13 @@
-import { QueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import {
-	FOLDER_NOTES_STALE_MS,
-	ROOT_FOLDER_ID,
 	type AttachmentSummary,
+	FOLDER_NOTES_STALE_MS,
 	type Folder,
 	type NoteSummary,
+	ROOT_FOLDER_ID,
 } from "../../api/queries";
 import type { TreeItem } from "./types";
-import { ROOT_ID, formatItemId, parseItemId } from "./types";
+import { formatItemId, parseItemId, ROOT_ID } from "./types";
 
 export type SortKey =
 	| "name-asc"
@@ -36,9 +36,9 @@ export interface LoaderItem {
 export function buildLoader(deps: LoaderDeps) {
 	return {
 		getItem(itemId: string): LoaderItem | undefined {
-			if (itemId === ROOT_ID) return undefined;
+			if (itemId === ROOT_ID) return;
 			const p = parseItemId(itemId);
-			if (p.kind === "root") return undefined;
+			if (p.kind === "root") return;
 			if (p.kind === "folder") return folderLoaderItem(deps, p.id);
 			if (p.kind === "note") return noteLoaderItem(deps, p.id);
 			return attachmentLoaderItem(deps, p.path);
@@ -55,7 +55,7 @@ export function buildLoader(deps: LoaderDeps) {
 
 function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
 	const f = deps.folders.find((x) => x.id === id);
-	if (!f) return undefined;
+	if (!f) return;
 	return {
 		itemId: formatItemId({ kind: "folder", id: f.id }),
 		item: {
@@ -83,7 +83,6 @@ function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
 				isFolder: false,
 			};
 	}
-	return undefined;
 }
 
 function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderItem[] {
@@ -150,7 +149,7 @@ function attachmentToTreeItem(a: AttachmentSummary): Extract<TreeItem, { kind: "
 // but it keeps getItem total over the whole TreeItem union.
 function attachmentLoaderItem(deps: LoaderDeps, path: string): LoaderItem | undefined {
 	const a = (deps.attachments ?? []).find((x) => x.path === path);
-	if (!a) return undefined;
+	if (!a) return;
 	return {
 		itemId: formatItemId({ kind: "attachment", path }),
 		item: attachmentToTreeItem(a),

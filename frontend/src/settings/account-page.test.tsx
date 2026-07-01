@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeUser } from "./account/section-test-helpers";
 
 vi.mock("@clerk/react", () => ({
@@ -27,6 +27,6 @@ describe("AccountPage", () => {
 		expect(screen.getByRole("heading", { name: "Profile photo" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Password" })).toBeInTheDocument();
-		expect(screen.getByRole("heading", { name: /danger zone/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /danger zone/iu })).toBeInTheDocument();
 	});
 });

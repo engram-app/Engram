@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { describe, expect, it, vi } from "vitest";
+import { ThemeProvider } from "../theme/theme-provider";
 import Rail from "./rail";
 import { RailViewProvider, useRailView } from "./rail-view-context";
-import { ThemeProvider } from "../theme/theme-provider";
 
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
@@ -42,7 +42,7 @@ describe("Rail", () => {
 				<Rail />
 			</Wrap>,
 		);
-		expect(screen.getByRole("link", { name: /home/i })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /home/iu })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");

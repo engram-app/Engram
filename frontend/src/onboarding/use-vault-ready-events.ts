@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
 import { Socket } from "phoenix";
-import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { useEffect, useState } from "react";
 import { getWsBase, joinWsUrl } from "../api/base";
+import { useAuthAdapter } from "../auth/use-auth-adapter";
 
 interface State {
 	vaultCreated: boolean;

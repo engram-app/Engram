@@ -60,6 +60,6 @@ describe("RenameInput", () => {
 				error="A file with that name already exists"
 			/>,
 		);
-		expect(screen.getByText(/already exists/)).toBeInTheDocument();
+		expect(screen.getByText(/already exists/u)).toBeInTheDocument();
 	});
 });

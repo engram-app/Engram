@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-
-import NoteView from "./note-view";
-import { ConfigProvider } from "../config-context";
+import { describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "../config";
+import { ConfigProvider } from "../config-context";
+import NoteView from "./note-view";
 
 // NoteView reads useIsFreeTier() -> useConfig(); mount a minimal config.
 const testConfig: EngramConfig = {

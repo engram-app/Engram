@@ -1,17 +1,5 @@
-import { useRef, useState } from "react";
 import { Plug } from "lucide-react";
-import {
-	type Connection,
-	type CreatedApiKey,
-	useBillingStatus,
-	useConnections,
-	useCreatePat,
-	useRevokeDeviceConnection,
-	useRevokeOauthConnection,
-	useRevokePat,
-} from "../api/queries";
-import { ApiError } from "../api/client";
-import { useIsFreeTier } from "../billing/use-is-free-tier";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -22,6 +10,18 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { SettingsSectionCard } from "@/settings/account/section-card";
+import { ApiError } from "../api/client";
+import {
+	type Connection,
+	type CreatedApiKey,
+	useBillingStatus,
+	useConnections,
+	useCreatePat,
+	useRevokeDeviceConnection,
+	useRevokeOauthConnection,
+	useRevokePat,
+} from "../api/queries";
+import { useIsFreeTier } from "../billing/use-is-free-tier";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -73,8 +73,8 @@ export default function ConnectionsPage() {
 	const pats = list.filter((c) => c.kind === "pat");
 
 	const obsCount =
-		caps.obsidianCap != null ? `${obs.length} / ${caps.obsidianCap}` : `${obs.length}`;
-	const mcpCount = caps.mcpCap != null ? `${mcp.length} / ${caps.mcpCap}` : `${mcp.length}`;
+		caps.obsidianCap == null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
+	const mcpCount = caps.mcpCap == null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
 
 	return (
 		<article className="space-y-8">
@@ -644,7 +644,7 @@ function ConfirmRevokeModal({
 			onOpenChange={(open) => {
 				// Esc + outside-click route through here; ignore while the mutation
 				// is in flight so the user can't accidentally close mid-request.
-				if (!open && !submitting) onClose();
+				if (!(open || submitting)) onClose();
 			}}
 		>
 			<DialogContent>

@@ -1,8 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "./client";
 import { getActiveVaultId } from "./active-vault";
 import { handleNoteChanged, type NoteChangedPayload } from "./channel";
-import { encodeCursor, getCursor, setCursor, MAX_UUID } from "./cursor";
+import { ApiError, api } from "./client";
+import { encodeCursor, getCursor, MAX_UUID, setCursor } from "./cursor";
 
 interface ChangeRow {
 	type: "note" | "attachment";

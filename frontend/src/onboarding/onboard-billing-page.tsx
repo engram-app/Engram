@@ -1,9 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "../api/client";
-import { useOnboardingStatus, type OnboardingStatus } from "../api/queries";
+import { type OnboardingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
 import { FREE_TIER } from "../billing/plan-cards";
 

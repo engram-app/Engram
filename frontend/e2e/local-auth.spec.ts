@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 
@@ -44,17 +44,17 @@ function testEmail(label: string) {
 	return `e2e-local-${Date.now()}-${label}@test.com`;
 }
 
-test.describe("Local auth provider", () => {
-	test("redirects unauthenticated users to sign-in", async ({ page }) => {
+it.describe("Local auth provider", () => {
+	it("redirects unauthenticated users to sign-in", async ({ page }) => {
 		await page.goto("/");
 		// Wait for auth provider to finish loading before checking redirect
 		await page.getByText("Loading...").waitFor({ state: "hidden", timeout: 15_000 });
-		await expect(page).toHaveURL(/\/sign-in/);
+		await expect(page).toHaveURL(/\/sign-in/u);
 		await expect(page.getByRole("heading", { name: "Sign in to Engram" })).toBeVisible();
 		await expect(page.locator(".cl-signIn")).toHaveCount(0);
 	});
 
-	test("register first user → redirects to onboarding", async ({ page }) => {
+	it("register first user → redirects to onboarding", async ({ page }) => {
 		const email = testEmail("register");
 		await page.goto("/sign-up/");
 		await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
@@ -66,10 +66,10 @@ test.describe("Local auth provider", () => {
 
 		// OnboardingGate sends fresh accounts through the wizard; tools is the
 		// first universal step in self-host mode (billing/agreement auto-pass).
-		await expect(page).toHaveURL(/\/onboard\/tools/, { timeout: 10_000 });
+		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
 	});
 
-	test("sign out → redirects to sign-in", async ({ page, baseURL }) => {
+	it("sign out → redirects to sign-in", async ({ page, baseURL }) => {
 		const email = testEmail("signout");
 		await registerUser(baseURL!, email);
 
@@ -77,15 +77,15 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Email").fill(email);
 		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Sign in" }).click();
-		await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
+		await expect(page).toHaveURL(/\/$/u, { timeout: 10_000 });
 
 		await page.getByLabel("User menu").click();
 		await page.getByRole("menuitem", { name: "Sign out" }).click();
 
-		await expect(page).toHaveURL(/\/sign-in/);
+		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 
-	test("sign in with existing credentials → dashboard", async ({ page, baseURL }) => {
+	it("sign in with existing credentials → dashboard", async ({ page, baseURL }) => {
 		const email = testEmail("signin");
 		await registerUser(baseURL!, email);
 
@@ -94,10 +94,10 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Sign in" }).click();
 
-		await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
+		await expect(page).toHaveURL(/\/$/u, { timeout: 10_000 });
 	});
 
-	test("wrong password shows error", async ({ page, baseURL }) => {
+	it("wrong password shows error", async ({ page, baseURL }) => {
 		const email = testEmail("wrongpw");
 		await registerUser(baseURL!, email);
 
@@ -107,10 +107,10 @@ test.describe("Local auth provider", () => {
 		await page.getByRole("button", { name: "Sign in" }).click();
 
 		await expect(page.getByRole("alert")).toBeVisible();
-		await expect(page).toHaveURL(/\/sign-in/);
+		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 
-	test("second user registration works", async ({ page }) => {
+	it("second user registration works", async ({ page }) => {
 		const email = testEmail("register2");
 		await page.goto("/sign-up/");
 		await page.getByLabel("Email").fill(email);
@@ -118,6 +118,6 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Create account" }).click();
 
-		await expect(page).toHaveURL(/\/onboard\/tools/, { timeout: 10_000 });
+		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
 	});
 });

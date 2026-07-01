@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the phoenix Socket/Channel so we can assert the crdt: topic join +
 // inbound event routing without a real WS.

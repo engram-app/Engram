@@ -1,4 +1,4 @@
-export function formatDate(isoString: string, locale: string = "en-US"): string {
+export function formatDate(isoString: string, locale = "en-US"): string {
 	return new Intl.DateTimeFormat(locale, {
 		year: "numeric",
 		month: "short",
@@ -25,7 +25,7 @@ export function formatBillingCycle(
 	billingCycle: TimePeriodLike | null | undefined,
 ): string | undefined {
 	if (!billingCycle) {
-		return undefined;
+		return;
 	}
 
 	const { frequency, interval } = billingCycle;
@@ -60,11 +60,7 @@ export function formatTrialPeriod(trialPeriod: TimePeriodLike): string {
  * formatMoney(29.99, "USD") // "$29.99"
  * formatMoney(12, "GBP", "en-GB") // "£12.00"
  */
-export function formatMoney(
-	amount: number,
-	currencyCode: string,
-	locale: string = "en-US",
-): string {
+export function formatMoney(amount: number, currencyCode: string, locale = "en-US"): string {
 	return new Intl.NumberFormat(locale, {
 		style: "currency",
 		currency: currencyCode,
@@ -93,7 +89,7 @@ const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
  * parseAmount("1500", "JPY") // 1500
  */
 export function parseAmount(raw: string, currencyCode: string): number {
-	const value = parseInt(raw, 10);
+	const value = Number.parseInt(raw, 10);
 	if (ZERO_DECIMAL_CURRENCIES.has(currencyCode.toUpperCase())) {
 		return value;
 	}

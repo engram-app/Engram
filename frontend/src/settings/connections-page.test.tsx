@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import { describe, expect, it, vi } from "vitest";
 import ConnectionsPage from "./connections-page";
 
 // ── Controllable mock state ───────────────────────────────────
@@ -9,7 +9,7 @@ import ConnectionsPage from "./connections-page";
 // the data returned per test without re-importing.
 
 const mockConnections: import("../api/queries").Connection[] = [];
-let mockTier: string = "starter";
+let mockTier = "starter";
 const mockRevokeDevice = vi.fn().mockResolvedValue(undefined);
 const mockRevokeOauth = vi.fn().mockResolvedValue(undefined);
 const mockRevokePat = vi.fn().mockResolvedValue(undefined);
@@ -127,24 +127,24 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByRole("heading", { name: /Obsidian plugins/i })).toBeInTheDocument();
-		expect(screen.getByRole("heading", { name: /AI tools/i })).toBeInTheDocument();
-		expect(screen.getByRole("heading", { name: /API keys/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /Obsidian plugins/iu })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /AI tools/iu })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /API keys/iu })).toBeInTheDocument();
 	});
 
 	it("shows the obsidian connection name and omits the unverified badge", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByText(/Obsidian Vault Sync/i)).toBeInTheDocument();
-		expect(screen.queryByText(/unverified/i)).not.toBeInTheDocument();
+		expect(screen.getByText(/Obsidian Vault Sync/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/unverified/iu)).not.toBeInTheDocument();
 	});
 
 	it("shows the PAT in the api-keys section", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByText(/ci-bot/i)).toBeInTheDocument();
+		expect(screen.getByText(/ci-bot/iu)).toBeInTheDocument();
 	});
 
 	it("shows MCP empty state when no mcp connections", () => {
@@ -152,7 +152,7 @@ describe("ConnectionsPage", () => {
 		mockTier = "starter";
 		renderPage();
 		expect(
-			screen.getByText(/Connect Claude Desktop, Cursor, or another MCP client/i),
+			screen.getByText(/Connect Claude Desktop, Cursor, or another MCP client/iu),
 		).toBeInTheDocument();
 	});
 
@@ -160,15 +160,15 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByRole("button", { name: /\+ New Key/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
 	});
 
 	it("shows upgrade CTA when tier is free", () => {
 		mockConnections.splice(0, mockConnections.length, basePat);
 		mockTier = "free";
 		renderPage();
-		expect(screen.getByText(/Upgrade to Starter to create API keys/i)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /\+ New Key/i })).not.toBeInTheDocument();
+		expect(screen.getByText(/Upgrade to Starter to create API keys/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
 	});
 
 	it("shows unverified badge for MCP connection with verified=false", () => {
@@ -177,9 +177,9 @@ describe("ConnectionsPage", () => {
 		renderPage();
 		// "Claude Desktop" also appears in the header docs blurb, so scope to
 		// the AI-tools section.
-		const section = screen.getByRole("region", { name: /AI tools/i });
-		expect(within(section).getByText(/unverified/i)).toBeInTheDocument();
-		expect(within(section).getByText(/Claude Desktop/i)).toBeInTheDocument();
+		const section = screen.getByRole("region", { name: /AI tools/iu });
+		expect(within(section).getByText(/unverified/iu)).toBeInTheDocument();
+		expect(within(section).getByText(/Claude Desktop/iu)).toBeInTheDocument();
 	});
 
 	it('uses singular "Vault:" for obsidian and plural "Vaults:" for mcp cards', () => {
@@ -194,10 +194,10 @@ describe("ConnectionsPage", () => {
 		mockTier = "starter";
 		renderPage();
 		expect(screen.getByText("Vault:")).toBeInTheDocument();
-		expect(screen.getByText(/Personal/)).toBeInTheDocument();
+		expect(screen.getByText(/Personal/u)).toBeInTheDocument();
 		// MCP card: plural + "All vaults" since baseMcp.vault_id is null
 		expect(screen.getByText("Vaults:")).toBeInTheDocument();
-		expect(screen.getByText(/All vaults/)).toBeInTheDocument();
+		expect(screen.getByText(/All vaults/u)).toBeInTheDocument();
 	});
 
 	it("falls back to #<id> when vault_name is missing", () => {
@@ -208,7 +208,7 @@ describe("ConnectionsPage", () => {
 		});
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByText(/#42/)).toBeInTheDocument();
+		expect(screen.getByText(/#42/u)).toBeInTheDocument();
 	});
 
 	it("opens the revoke modal and calls mutateAsync on confirm", async () => {
@@ -217,14 +217,14 @@ describe("ConnectionsPage", () => {
 		mockTier = "starter";
 		renderPage();
 		// Click the revoke button in the obsidian card summary.
-		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/ })[0]!);
+		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/u })[0]!);
 		// Modal renders with the connection name in the title.
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
-		expect(screen.getByText(/Revoke "Obsidian Vault Sync"\?/)).toBeInTheDocument();
+		expect(screen.getByText(/Revoke "Obsidian Vault Sync"\?/u)).toBeInTheDocument();
 		// Confirm button = the second one (first is the in-card trigger that
 		// opened this modal, now hidden behind the dialog).
 		const confirmButton = screen
-			.getAllByRole("button", { name: /^Revoke$/ })
+			.getAllByRole("button", { name: /^Revoke$/u })
 			.find((b) => b.closest('[role="dialog"]'))!;
 		fireEvent.click(confirmButton);
 		await waitFor(() => expect(mockRevokeDevice).toHaveBeenCalledWith("family-1"));
@@ -237,9 +237,9 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(0, mockConnections.length, baseMcp);
 		mockTier = "starter";
 		renderPage();
-		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/ })[0]!);
+		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/u })[0]!);
 		const confirmButton = screen
-			.getAllByRole("button", { name: /^Revoke$/ })
+			.getAllByRole("button", { name: /^Revoke$/u })
 			.find((b) => b.closest('[role="dialog"]'))!;
 		fireEvent.click(confirmButton);
 		await waitFor(() => expect(screen.getByText("Boom")).toBeInTheDocument());
@@ -252,9 +252,9 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(0, mockConnections.length, basePat);
 		mockTier = "starter";
 		renderPage();
-		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/ })[0]!);
+		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/u })[0]!);
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Cancel$/u }));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(mockRevokePat).not.toHaveBeenCalled();
 	});

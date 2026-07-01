@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useAcceptTerms, useOnboardingStatus } from "../api/queries";
-import { loadVersion, sha256Hex } from "../legal/load";
-import { LegalDoc } from "../legal/legal-doc";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import AuthPanel from "@/layout/auth-panel";
-import { heading, destructiveAlert, selectableRow } from "@/lib/ui-classes";
+import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
+import { useAcceptTerms, useOnboardingStatus } from "../api/queries";
+import { LegalDoc } from "../legal/legal-doc";
+import { loadVersion, sha256Hex } from "../legal/load";
 
 const PRIVACY_URL = "https://engram.page/privacy";
 
@@ -15,12 +15,11 @@ const PRIVACY_URL = "https://engram.page/privacy";
 // log loudly and degrade to an error panel with Continue disabled, so a user can
 // never accept text we can't display, but onboarding doesn't white-screen.
 function tryLoadVersion(doc: "terms" | "privacy", version: string | undefined): string | undefined {
-	if (!version) return undefined;
+	if (!version) return;
 	try {
 		return loadVersion(doc, version);
 	} catch (err) {
 		console.error(err);
-		return undefined;
 	}
 }
 
@@ -42,7 +41,7 @@ export default function AgreementPage() {
 	const ready = Boolean(tosV && privV && tosText && privText);
 
 	async function submit() {
-		if (!tosV || !privV || !tosText || !privText) return;
+		if (!(tosV && privV && tosText && privText)) return;
 		const [tos_hash, privacy_hash] = await Promise.all([sha256Hex(tosText), sha256Hex(privText)]);
 		await mutateAsync({
 			tos_version: tosV,

@@ -1,8 +1,8 @@
-import { useEffect } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, Navigate, useLocation } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
+import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock("../api/client", () => ({
@@ -17,8 +17,8 @@ vi.mock("../legal/load", () => ({
 	sha256Hex: async () => "a".repeat(64),
 }));
 
-import AgreementPage from "./agreement-page";
 import { useOnboardingStatus } from "../api/queries";
+import AgreementPage from "./agreement-page";
 
 function LocationProbe() {
 	const loc = useLocation();
@@ -98,8 +98,8 @@ describe("AgreementPage accept-then-redirect flow", () => {
 			</QueryClientProvider>,
 		);
 
-		fireEvent.click(await screen.findByRole("checkbox", { name: /agree/i }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+		fireEvent.click(await screen.findByRole("checkbox", { name: /agree/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		// With the fix, the mutation only resolves after the cache is refreshed,
 		// so OnboardRedirect reads STATUS_AFTER and routes to /onboard/billing.

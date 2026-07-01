@@ -1,15 +1,15 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { AuthContext, type AuthAdapter } from "./auth-context";
-import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
-import { setTokenGetter } from "../api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getApiBase, joinApiUrl } from "../api/base";
+import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
+import { type AuthAdapter, AuthContext } from "./auth-context";
+import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
 	try {
 		const base64 = token.split(".")[1];
 		if (!base64) return null;
-		const json = atob(base64.replace(/-/g, "+").replace(/_/g, "/"));
+		const json = atob(base64.replace(/-/gu, "+").replace(/_/gu, "/"));
 		return JSON.parse(json);
 	} catch {
 		return null;

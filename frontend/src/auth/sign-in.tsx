@@ -2,8 +2,8 @@ import { lazy, Suspense } from "react";
 import { useSearchParams } from "react-router";
 import { useConfig } from "../config-context";
 import AuthLayout from "./auth-layout";
-import SignupRejectionNotice from "./signup-rejection-notice";
 import { safeReturnTo } from "./safe-return-to";
+import SignupRejectionNotice from "./signup-rejection-notice";
 
 // Both lazy refs are declared at module scope so React preserves the lazy
 // component identity across renders. Only one is actually rendered per

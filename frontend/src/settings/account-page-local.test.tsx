@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./account/profile-section-local", () => ({
 	ProfileSectionLocal: () => <div data-testid="profile" />,
@@ -22,7 +22,7 @@ import AccountPageLocal from "./account-page-local";
 describe("AccountPageLocal", () => {
 	it("renders every section in order", () => {
 		render(<AccountPageLocal />);
-		expect(screen.getByRole("heading", { name: /account/i })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /account/iu })).toBeInTheDocument();
 		for (const id of ["profile", "appearance", "email", "password", "danger"]) {
 			expect(screen.getByTestId(id)).toBeInTheDocument();
 		}

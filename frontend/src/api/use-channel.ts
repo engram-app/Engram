@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
-import { connectChannel, disconnectChannel } from "./channel";
 import { installCrdtResyncTriggers } from "../crdt/session";
-import { runCursorSync, installCursorSyncTriggers } from "./cursor-sync";
-import { queryClient } from "./query-client";
-import { useMe } from "./queries";
 import { useActiveVaultId } from "./active-vault";
+import { connectChannel, disconnectChannel } from "./channel";
+import { installCursorSyncTriggers, runCursorSync } from "./cursor-sync";
+import { useMe } from "./queries";
+import { queryClient } from "./query-client";
 
 export function useChannel() {
 	const { getToken } = useAuthAdapter();

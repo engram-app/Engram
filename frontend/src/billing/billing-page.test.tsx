@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider } from "../theme/theme-provider";
-import { AuthContext, type AuthAdapter } from "../auth/auth-context";
 
 const initializePaddleMock = vi.fn();
 vi.mock("@paddle/paddle-js", () => ({
@@ -297,7 +297,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() =>
 			expect(
-				screen.queryByText(/Payment received\. We're finishing your activation/i),
+				screen.queryByText(/Payment received\. We're finishing your activation/iu),
 			).toBeInTheDocument(),
 		);
 	});
@@ -534,14 +534,14 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const cancelButton = await screen.findByRole("button", { name: /cancel subscription/i });
+		const cancelButton = await screen.findByRole("button", { name: /cancel subscription/iu });
 		await act(async () => {
 			cancelButton.click();
 		});
 
 		// CancelPanel header is visible; button row collapses.
-		await screen.findByRole("region", { name: /cancel subscription/i });
-		expect(screen.getByRole("button", { name: /cancel at period end/i })).toBeInTheDocument();
+		await screen.findByRole("region", { name: /cancel subscription/iu });
+		expect(screen.getByRole("button", { name: /cancel at period end/iu })).toBeInTheDocument();
 	});
 
 	it("subscribed flow: Change plan button opens PlanChangePanel inline", async () => {
@@ -581,11 +581,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		renderBilling({ inline: false });
 
-		const changeButton = await screen.findByRole("button", { name: /change plan/i });
+		const changeButton = await screen.findByRole("button", { name: /change plan/iu });
 		await act(async () => {
 			changeButton.click();
 		});
 
-		await screen.findByRole("region", { name: /change plan/i });
+		await screen.findByRole("region", { name: /change plan/iu });
 	});
 });

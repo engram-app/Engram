@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 import { useCreateVault } from "../api/queries";
-import { useOnboardingActions } from "./use-onboarding-actions";
-import { CreateFirstVaultModal } from "./create-first-vault-modal";
 import { ChecklistWidget } from "./checklist-widget";
-import { DemoVaultProvider, useDemoVault } from "./tour/demo-vault-provider";
+import { CreateFirstVaultModal } from "./create-first-vault-modal";
 import { TourController } from "./tour/controller";
+import { DemoVaultProvider, useDemoVault } from "./tour/demo-vault-provider";
+import { useOnboardingActions } from "./use-onboarding-actions";
 
 function ShellInner({ children }: { children: ReactNode }) {
 	const ob = useOnboardingActions();

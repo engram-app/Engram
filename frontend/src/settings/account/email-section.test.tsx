@@ -1,6 +1,6 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUser } from "./section-test-helpers";
 
 const newEmail = {
@@ -58,8 +58,10 @@ describe("EmailSection", () => {
 
 	it("adds an email and prepares verification", async () => {
 		render(<EmailSection />);
-		fireEvent.change(screen.getByLabelText(/add email/i), { target: { value: "new@example.com" } });
-		fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+		fireEvent.change(screen.getByLabelText(/add email/iu), {
+			target: { value: "new@example.com" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /^add$/iu }));
 		await waitFor(() =>
 			expect(user.createEmailAddress).toHaveBeenCalledWith({ email: "new@example.com" }),
 		);
@@ -70,11 +72,13 @@ describe("EmailSection", () => {
 
 	it("verifies the new email with a code", async () => {
 		render(<EmailSection />);
-		fireEvent.change(screen.getByLabelText(/add email/i), { target: { value: "new@example.com" } });
-		fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
-		await screen.findByLabelText(/verification code/i);
-		fireEvent.change(screen.getByLabelText(/verification code/i), { target: { value: "123456" } });
-		fireEvent.click(screen.getByRole("button", { name: /verify/i }));
+		fireEvent.change(screen.getByLabelText(/add email/iu), {
+			target: { value: "new@example.com" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /^add$/iu }));
+		await screen.findByLabelText(/verification code/iu);
+		fireEvent.change(screen.getByLabelText(/verification code/iu), { target: { value: "123456" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 		await waitFor(() =>
 			expect(newEmail.attemptVerification).toHaveBeenCalledWith({ code: "123456" }),
 		);
@@ -82,7 +86,7 @@ describe("EmailSection", () => {
 
 	it("removes an email via destroy and reloads the user", async () => {
 		render(<EmailSection />);
-		fireEvent.click(screen.getByRole("button", { name: /remove ada@example.com/i }));
+		fireEvent.click(screen.getByRole("button", { name: /remove ada@example.com/iu }));
 		await waitFor(() => expect(user.emailAddresses[0]!.destroy).toHaveBeenCalled());
 		await waitFor(() => expect(user.reload).toHaveBeenCalled());
 	});
@@ -99,6 +103,6 @@ describe("EmailSection", () => {
 			],
 		});
 		render(<EmailSection />);
-		expect(screen.getByRole("button", { name: /remove ada@example.com/i })).toBeDisabled();
+		expect(screen.getByRole("button", { name: /remove ada@example.com/iu })).toBeDisabled();
 	});
 });

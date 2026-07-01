@@ -1,5 +1,5 @@
-import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 import { parseAmount } from "@/lib/paddle-format";
+import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 
 // ---
 // Input shapes — minimal types matching the Paddle Node SDK / API response.
@@ -59,7 +59,7 @@ export function mapSubscriptionToNextPayment(
 	subscription: PaddleSubscription,
 	nextTransaction?: PaddleTransaction | null,
 ): NextPaymentData | undefined {
-	if (!subscription.nextBilledAt) return undefined;
+	if (!subscription.nextBilledAt) return;
 
 	const amount = nextTransaction?.details?.totals?.grandTotal
 		? parseAmount(nextTransaction.details.totals.grandTotal, subscription.currencyCode)
@@ -95,7 +95,7 @@ export function mapTransactionToPaymentMethod(
 	transaction?: PaddleTransaction | null,
 ): PaymentMethodData | undefined {
 	const methodDetails = transaction?.payments?.[0]?.methodDetails;
-	if (!methodDetails) return undefined;
+	if (!methodDetails) return;
 
 	return {
 		type: methodDetails.type,

@@ -1,10 +1,10 @@
+import { parseAmount } from "@/lib/paddle-format";
 import type {
 	PlanChangeBreakdownData,
 	PlanChangeLineItemData,
 	PlanChangeTransactionSectionData,
 	PlanChangeTransactionTotalsData,
 } from "@/lib/paddle-types";
-import { parseAmount } from "@/lib/paddle-format";
 
 // ---
 // Input shapes — matching Paddle Node SDK / API response structures.
@@ -89,7 +89,7 @@ function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineIt
 		let prorationPeriod: string | undefined;
 
 		if (hasProration && item.proration) {
-			const rate = parseFloat(item.proration.rate);
+			const rate = Number.parseFloat(item.proration.rate);
 			if (!isNaN(rate) && rate > 0 && rate < 1) {
 				const start = new Date(item.proration.billingPeriod.startsAt);
 				const end = new Date(item.proration.billingPeriod.endsAt);

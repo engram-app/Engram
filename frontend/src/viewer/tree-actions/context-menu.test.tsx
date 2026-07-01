@@ -1,7 +1,7 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ContextMenu } from "./context-menu";
 import { actionsFor } from "./action-list";
+import { ContextMenu } from "./context-menu";
 
 describe("ContextMenu", () => {
 	it("renders one button per action with destructive styling for delete", () => {
@@ -15,7 +15,7 @@ describe("ContextMenu", () => {
 		);
 		expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
 		const del = screen.getByRole("menuitem", { name: "Delete" });
-		expect(del.className).toMatch(/text-red/);
+		expect(del.className).toMatch(/text-red/u);
 	});
 
 	it("click on item calls onPick with action id and closes", () => {

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useUser, useReverification, useClerk } from "@clerk/react";
+import { useClerk, useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/routes";
@@ -15,7 +15,7 @@ export function DangerZoneSection() {
 	const [phrase, setPhrase] = useState("");
 	const remove = useReverification(() => user!.delete());
 
-	if (!isLoaded || !user) return null;
+	if (!(isLoaded && user)) return null;
 
 	async function onDelete() {
 		try {

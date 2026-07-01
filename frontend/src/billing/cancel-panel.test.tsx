@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("../api/client", () => ({
@@ -9,8 +9,8 @@ vi.mock("../api/client", () => ({
 	setTokenGetter: vi.fn(),
 }));
 
-import CancelPanel from "./cancel-panel";
 import type { SubscriptionDetail } from "../api/queries";
+import CancelPanel from "./cancel-panel";
 
 let qc: QueryClient;
 
@@ -41,16 +41,16 @@ function detail(overrides: Partial<SubscriptionDetail> = {}): SubscriptionDetail
 describe("CancelPanel", () => {
 	it("renders Pro tier copy for a pro subscriber", () => {
 		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
-		expect(screen.getByText(/keep your pro plan/i)).toBeInTheDocument();
-		expect(screen.getByText(/2026/)).toBeInTheDocument();
+		expect(screen.getByText(/keep your pro plan/iu)).toBeInTheDocument();
+		expect(screen.getByText(/2026/u)).toBeInTheDocument();
 	});
 
 	it("renders Starter tier copy for a starter subscriber (no Pro mislabel)", () => {
 		render(<CancelPanel detail={detail()} tier="starter" onClose={vi.fn()} />, {
 			wrapper: Wrapper,
 		});
-		expect(screen.getByText(/keep your starter plan/i)).toBeInTheDocument();
-		expect(screen.queryByText(/keep your pro plan/i)).not.toBeInTheDocument();
+		expect(screen.getByText(/keep your starter plan/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/keep your pro plan/iu)).not.toBeInTheDocument();
 	});
 
 	it("confirm calls cancel mutation and onClose on success", async () => {
@@ -58,7 +58,7 @@ describe("CancelPanel", () => {
 		const onClose = vi.fn();
 
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
-		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/i }));
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
@@ -68,7 +68,7 @@ describe("CancelPanel", () => {
 		const onClose = vi.fn();
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 
-		fireEvent.click(screen.getByRole("button", { name: /keep my subscription/i }));
+		fireEvent.click(screen.getByRole("button", { name: /keep my subscription/iu }));
 
 		expect(post).not.toHaveBeenCalled();
 		expect(onClose).toHaveBeenCalled();
@@ -79,7 +79,7 @@ describe("CancelPanel", () => {
 			wrapper: Wrapper,
 		});
 		expect(
-			screen.getByText(/keep paid access through the end of your current billing period/i),
+			screen.getByText(/keep paid access through the end of your current billing period/iu),
 		).toBeInTheDocument();
 	});
 });

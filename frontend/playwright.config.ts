@@ -31,14 +31,14 @@ export default defineConfig({
 	projects: [
 		{
 			name: "local",
-			testMatch: /\/(local-auth|dark-mode|mobile|note-live-update)\.spec\.ts$/,
+			testMatch: /\/(local-auth|dark-mode|mobile|note-live-update)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},
 		},
 		{
 			name: "clerk",
-			testMatch: /\/(clerk-auth|onboarding-ftux)\.spec\.ts$/,
+			testMatch: /\/(clerk-auth|onboarding-ftux)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${CLERK_VITE_PORT}`,
 			},

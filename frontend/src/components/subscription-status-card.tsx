@@ -1,26 +1,26 @@
 "use client";
 
-import * as React from "react";
 import {
+	AlertCircle,
+	CalendarIcon,
 	CheckCircle2,
 	Clock,
-	AlertCircle,
-	PauseCircle,
-	MinusCircle,
-	Sparkles,
-	CalendarIcon,
 	CreditCardIcon,
 	FileTextIcon,
+	MinusCircle,
+	PauseCircle,
+	Sparkles,
 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import type * as React from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
-import { formatMoney, formatDate, formatBillingCycle } from "@/lib/paddle-format";
+import { cn } from "@/lib/utils";
 
 export type SubscriptionStatusCardProps = {
 	subscription?: SubscriptionStatusData;
@@ -89,7 +89,7 @@ const STATUS_CONFIG: Record<
 
 function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	const config = STATUS_CONFIG[status] ?? {
-		label: status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+		label: status.replace(/_/gu, " ").replace(/\b\w/gu, (c) => c.toUpperCase()),
 		icon: AlertCircle,
 		className: "bg-muted text-muted-foreground border-border",
 	};
@@ -114,10 +114,10 @@ function getValidScheduledChange(
 	status: SubscriptionStatus,
 	scheduledChange?: SubscriptionStatusData["scheduledChange"],
 ): SubscriptionStatusData["scheduledChange"] | undefined {
-	if (!scheduledChange) return undefined;
+	if (!scheduledChange) return;
 	switch (status) {
 		case "canceled":
-			return undefined;
+			return;
 		case "paused":
 			return scheduledChange.action === "resume" ? scheduledChange : undefined;
 		default:
@@ -132,7 +132,7 @@ function getNextBillingLabel(
 	scheduledChange?: SubscriptionStatusData["scheduledChange"],
 ): string | undefined {
 	if (scheduledChange?.action === "cancel" || scheduledChange?.action === "pause") {
-		return undefined;
+		return;
 	}
 	switch (status) {
 		case "trialing":
@@ -142,7 +142,7 @@ function getNextBillingLabel(
 		case "active":
 			return "Next billing";
 		default:
-			return undefined;
+			return;
 	}
 }
 

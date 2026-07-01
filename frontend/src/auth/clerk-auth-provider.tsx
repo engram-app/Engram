@@ -1,16 +1,16 @@
 import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
-import { useCallback, useEffect, useMemo } from "react";
 import posthog from "posthog-js";
-import { AuthContext, type AuthAdapter } from "./auth-context";
-import { rememberSignupUser } from "./signup-rejection";
-import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
+import { useCallback, useEffect, useMemo } from "react";
 import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
 import { useConfig } from "../config-context";
 import { getAppRouter } from "../router";
 import { ROUTES } from "../routes";
 import { useTheme } from "../theme/theme-provider";
+import { type AuthAdapter, AuthContext } from "./auth-context";
+import { rememberSignupUser } from "./signup-rejection";
+import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 
 // Clerk passes the post-auth redirect target as an ABSOLUTE URL when it crosses
 // (or might cross) origins — including the in-origin case after an OAuth

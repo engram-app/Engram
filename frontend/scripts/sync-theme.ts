@@ -13,10 +13,10 @@
  * which lands in the app's --brand-purple. The app's own --secondary is a neutral
  * shadcn surface and is intentionally never touched here.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse, formatHex } from "culori";
+import { formatHex, parse } from "culori";
 
 /* marketing var -> app var. Several app vars derive from one marketing var
  * (--input mirrors --border, --ring mirrors marketing --ring). App-only tokens
@@ -78,7 +78,7 @@ function die(msg: string): never {
  * include `mustContain`. These are flat declaration blocks (no nested braces),
  * so the first closing brace ends the block. */
 function blockBody(css: string, selector: string, mustContain: string): string {
-	const re = new RegExp(`${selector.replace(".", "\\.")}\\s*\\{`, "g");
+	const re = new RegExp(`${selector.replace(".", "\\.")}\\s*\\{`, "gu");
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(css))) {
 		const start = m.index + m[0].length;
@@ -92,7 +92,7 @@ function blockBody(css: string, selector: string, mustContain: string): string {
 
 function parseVars(body: string): Map<string, string> {
 	const out = new Map<string, string>();
-	for (const m of body.matchAll(/--([\w-]+):\s*([^;]+);/g)) {
+	for (const m of body.matchAll(/--([\w-]+):\s*([^;]+);/gu)) {
 		out.set(m[1], m[2].trim());
 	}
 	return out;
@@ -192,15 +192,15 @@ function oklchToHex(oklch: string): string {
 
 function emailTokensElixir(light: Map<string, string>): string {
 	const lines: string[] = [];
-	lines.push(`defmodule Engram.Email.Tokens do`);
+	lines.push("defmodule Engram.Email.Tokens do");
 	lines.push(`  @moduledoc """`);
-	lines.push(`  Generated from engram-marketing/src/styles/global.css :root block by`);
-	lines.push(`  \`bun scripts/sync-theme.ts\`. Do not edit by hand.`);
-	lines.push(``);
-	lines.push(`  Email clients support neither oklch() nor CSS custom properties, so the`);
-	lines.push(`  marketing oklch values are resolved to sRGB hex at sync time.`);
+	lines.push("  Generated from engram-marketing/src/styles/global.css :root block by");
+	lines.push("  `bun scripts/sync-theme.ts`. Do not edit by hand.");
+	lines.push("");
+	lines.push("  Email clients support neither oklch() nor CSS custom properties, so the");
+	lines.push("  marketing oklch values are resolved to sRGB hex at sync time.");
 	lines.push(`  """`);
-	lines.push(``);
+	lines.push("");
 	for (const [mktVar, elixirFn] of EMAIL_TOKEN_MAP) {
 		const oklch = light.get(mktVar);
 		if (!oklch) die(`marketing token missing: --${mktVar}`);
@@ -208,8 +208,8 @@ function emailTokensElixir(light: Map<string, string>): string {
 		lines.push(`  def ${elixirFn}, do: "${hex}"`);
 	}
 	lines.push(`  def surface_page, do: "${SURFACE_PAGE_HEX}"`);
-	lines.push(`end`);
-	lines.push(``);
+	lines.push("end");
+	lines.push("");
 	return lines.join("\n");
 }
 
@@ -279,14 +279,14 @@ function main() {
 		return;
 	}
 	const emailTokenCount = tokensAction ? 1 : 0;
-	if (!dryRun) {
+	if (dryRun) {
+		console.log(
+			`sync-theme: ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s), ${emailTokenCount} email-token file(s) pending`,
+		);
+	} else {
 		writeFileSync(appCssPath, appCss);
 		console.log(
 			`sync-theme: wrote ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s), ${emailTokenCount} email-token file(s)`,
-		);
-	} else {
-		console.log(
-			`sync-theme: ${changes.length} token change(s), ${assetActions.length} asset(s), ${legalActions.length} legal file(s), ${emailTokenCount} email-token file(s) pending`,
 		);
 	}
 }

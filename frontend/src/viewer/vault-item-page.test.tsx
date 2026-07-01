@@ -43,7 +43,7 @@ function renderAt(id: string) {
 async function renderAndAwaitChild(id: string) {
 	renderAt(id);
 	// Let the lazy child resolve.
-	await screen.findByTestId(/page$/);
+	await screen.findByTestId(/page$/u);
 }
 
 it("renders the attachment viewer when the id is in the attachments list", async () => {

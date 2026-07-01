@@ -1,5 +1,5 @@
-import { useTheme } from "./theme-provider";
 import type { ThemeChoice } from "./storage";
+import { useTheme } from "./theme-provider";
 
 const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
 	{ value: "light", label: "Light" },

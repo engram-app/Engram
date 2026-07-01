@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { fetchSignupRejection, takePendingSignupUser } from "./signup-rejection";
 import { destructiveAlert } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { fetchSignupRejection, takePendingSignupUser } from "./signup-rejection";
 
 // Shown on the sign-in page after a sign-up was rejected server-side by the
 // multi-account block. Self-contained: renders nothing unless a recent pending

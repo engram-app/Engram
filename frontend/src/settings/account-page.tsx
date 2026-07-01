@@ -1,10 +1,10 @@
-import { ProfileSection } from "./account/profile-section";
 import { AppearanceSection } from "./account/appearance-section";
+import { ConnectedAccountsSection } from "./account/connected-accounts-section";
+import { DangerZoneSection } from "./account/danger-zone-section";
 import { EmailSection } from "./account/email-section";
 import { PasswordSection } from "./account/password-section";
-import { ConnectedAccountsSection } from "./account/connected-accounts-section";
+import { ProfileSection } from "./account/profile-section";
 import { SessionsSection } from "./account/sessions-section";
-import { DangerZoneSection } from "./account/danger-zone-section";
 
 // OAuth providers enabled on this Clerk instance. Confirm against the instance
 // before adjusting (see note below).

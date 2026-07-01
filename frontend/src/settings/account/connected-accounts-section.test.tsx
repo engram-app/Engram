@@ -1,6 +1,6 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isReverificationCancelledError } from "@clerk/react/errors";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUser } from "./section-test-helpers";
 
 const googleAcct = {
@@ -32,8 +32,8 @@ describe("ConnectedAccountsSection", () => {
 
 	it("lists connected accounts and disconnects via destroy", async () => {
 		render(<ConnectedAccountsSection providers={["oauth_google", "oauth_github"]} />);
-		expect(screen.getByText(/ada@gmail.com/i)).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: /disconnect google/i }));
+		expect(screen.getByText(/ada@gmail.com/iu)).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /disconnect google/iu }));
 		await waitFor(() => expect(googleAcct.destroy).toHaveBeenCalled());
 		await waitFor(() => expect(user.reload).toHaveBeenCalled());
 	});
@@ -50,12 +50,12 @@ describe("ConnectedAccountsSection", () => {
 		render(<ConnectedAccountsSection providers={["oauth_github"]} />);
 		expect(screen.getByText("GitHub")).toBeInTheDocument();
 		expect(screen.getByText("Connected")).toBeInTheDocument();
-		expect(screen.queryByText(/—/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/—/u)).not.toBeInTheDocument();
 	});
 
 	it("connects a new provider via createExternalAccount", async () => {
 		render(<ConnectedAccountsSection providers={["oauth_github"]} />);
-		fireEvent.click(screen.getByRole("button", { name: /connect github/i }));
+		fireEvent.click(screen.getByRole("button", { name: /connect github/iu }));
 		await waitFor(() =>
 			expect(user.createExternalAccount).toHaveBeenCalledWith(
 				expect.objectContaining({ strategy: "oauth_github" }),
