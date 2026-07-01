@@ -1588,7 +1588,7 @@ export function useDeleteNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
-		{ deleted: boolean } | void,
+		{ deleted: boolean } | undefined,
 		ApiError,
 		{ id: string; path: string },
 		DeleteNoteContext
@@ -1664,7 +1664,12 @@ interface DeleteFolderContext {
 export function useDeleteFolder() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
-	return useMutation<{ deleted: boolean } | void, ApiError, { path: string }, DeleteFolderContext>({
+	return useMutation<
+		{ deleted: boolean } | undefined,
+		ApiError,
+		{ path: string },
+		DeleteFolderContext
+	>({
 		mutationFn: ({ path }) => api.del<{ deleted: boolean }>(`/folders/${encodePathSegments(path)}`),
 		onMutate: async ({ path }) => {
 			// Coarse: drop the folder entry + its own folderNotes cache. We

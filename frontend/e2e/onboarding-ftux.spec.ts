@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 // Mirrors clerk-auth.spec.ts — same auth-state file, same sign-in retry pattern.
 // Kept in this file (not extracted) so the FTUX spec stands alone and the auth

@@ -404,6 +404,8 @@ export default function FolderTree() {
 					.catch(() => toast.error("Copy failed"));
 				break;
 			}
+			default:
+				break;
 		}
 	}
 

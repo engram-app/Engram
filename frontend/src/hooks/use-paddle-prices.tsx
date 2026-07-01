@@ -22,7 +22,7 @@ export interface UsePaddlePricesArgs {
 type PaddlePrices = Record<string, PriceData>;
 
 function getPriceAmounts(prices: PricePreviewResponse): PaddlePrices {
-	return prices.data.details.lineItems.reduce((acc, item) => {
+	return prices.data.details.lineItems.reduce<PaddlePrices>((acc, item) => {
 		const hasDiscount = item.discounts.length > 0;
 		acc[item.price.id] = {
 			total: item.formattedTotals.total,
@@ -31,7 +31,7 @@ function getPriceAmounts(prices: PricePreviewResponse): PaddlePrices {
 			trialPeriod: item.price.trialPeriod ? formatTrialPeriod(item.price.trialPeriod) : undefined,
 		};
 		return acc;
-	}, {} as PaddlePrices);
+	}, {});
 }
 
 export function usePaddlePrices(args: UsePaddlePricesArgs): {

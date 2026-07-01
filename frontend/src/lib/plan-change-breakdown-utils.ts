@@ -90,7 +90,7 @@ function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineIt
 
 		if (hasProration && item.proration) {
 			const rate = Number.parseFloat(item.proration.rate);
-			if (!isNaN(rate) && rate > 0 && rate < 1) {
+			if (!Number.isNaN(rate) && rate > 0 && rate < 1) {
 				const start = new Date(item.proration.billingPeriod.startsAt);
 				const end = new Date(item.proration.billingPeriod.endsAt);
 				const totalDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));

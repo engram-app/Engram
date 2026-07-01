@@ -116,7 +116,7 @@ async function handleRedirect() {
 
   if (error) {
     log(`Authorize returned error=${error}${errorDesc ? ` — ${errorDesc}` : ''}`, 'err');
-    if (errorDesc && errorDesc.includes('mcp_connections')) {
+    if (errorDesc?.includes('mcp_connections')) {
       log('⛔ This is the Free-tier MCP connection cap hitting. Upgrade to add more.', 'err');
     }
     return;

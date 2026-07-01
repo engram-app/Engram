@@ -20,7 +20,6 @@ function mkChannel(topic: string, params?: any) {
 }
 vi.mock("phoenix", () => ({
 	Socket: class {
-		constructor(_url: string, _opts: any) {}
 		connect() {}
 		disconnect() {}
 		onOpen(_cb: () => void) {}

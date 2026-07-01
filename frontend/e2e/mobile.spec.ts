@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 

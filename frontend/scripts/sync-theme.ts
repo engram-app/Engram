@@ -83,8 +83,7 @@ function die(msg: string): never {
  * so the first closing brace ends the block. */
 function blockBody(css: string, selector: string, mustContain: string): string {
 	const re = new RegExp(`${selector.replace(".", "\\.")}\\s*\\{`, "gu");
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(css))) {
+	for (let m = re.exec(css); m !== null; m = re.exec(css)) {
 		const start = m.index + m[0].length;
 		const end = css.indexOf("}", start);
 		if (end === -1) {
@@ -117,7 +116,7 @@ interface Change {
  * Only existing declarations are touched; unmapped lines pass through verbatim. */
 function rewriteBlock(
 	fullCss: string,
-	selector: string,
+	_selector: string,
 	appBody: string,
 	marketingVars: Map<string, string>,
 	scope: string,

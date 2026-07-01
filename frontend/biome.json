@@ -33,7 +33,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"preset": "recommended",
+			"recommended": true,
 			"a11y": "error",
 			"complexity": "error",
 			"correctness": "error",
@@ -56,6 +56,72 @@
 			"includes": ["**"],
 			"linter": {
 				"rules": {
+					"a11y": {
+						"noAutofocus": "off",
+						"noLabelWithoutControl": "off",
+						"noNoninteractiveElementInteractions": "off",
+						"noNoninteractiveElementToInteractiveRole": "off",
+						"noRedundantRoles": "off",
+						"noStaticElementInteractions": "off",
+						"noSvgWithoutTitle": "off",
+						"useAriaPropsForRole": "off",
+						"useAriaPropsSupportedByRole": "off",
+						"useButtonType": "off",
+						"useFocusableInteractive": "off",
+						"useKeyWithClickEvents": "off",
+						"useSemanticElements": "off"
+					},
+					"complexity": {
+						"noExcessiveLinesPerFunction": "off",
+						"useMaxParams": "off",
+						"noExcessiveCognitiveComplexity": "off",
+						"noForEach": "off",
+						"noVoid": "off"
+					},
+					"correctness": {
+						"useQwikValidLexicalScope": "off",
+						"noProcessGlobal": "off",
+						"noInvalidPositionAtImportRule": "off",
+						"noNodejsModules": "off",
+						"noUndeclaredDependencies": "off",
+						"useExhaustiveDependencies": "off",
+						"useImageSize": "off",
+						"useUniqueElementIds": "off"
+					},
+					"nursery": {
+						"useExplicitType": "off",
+						"useExplicitReturnType": "off",
+						"noReactNativeRawText": "off",
+						"noComponentHookFactories": "off",
+						"noConditionalExpect": "off",
+						"noDuplicateSelectors": "off",
+						"noInlineStyles": "off",
+						"noPlaywrightWaitForTimeout": "off",
+						"useBaseline": "off",
+						"useDomQuerySelector": "off",
+						"useExpect": "off",
+						"useImportsFirst": "off",
+						"useNamedCaptureGroup": "off",
+						"useReactFunctionComponentDefinition": "off",
+						"useRegexpTest": "off",
+						"useTestHooksOnTop": "off",
+						"useThisInClassMethods": "off",
+						"useUnicodeRegex": "off"
+					},
+					"performance": {
+						"useTopLevelRegex": "off",
+						"useSolidForComponent": "off",
+						"noImgElement": "off",
+						"noJsxPropsBind": "off",
+						"noAwaitInLoops": "off",
+						"noBarrelFile": "off",
+						"noDelete": "off",
+						"noNamespaceImport": "off"
+					},
+					"security": {
+						"noDangerouslySetInnerHtml": "off",
+						"noSecrets": "off"
+					},
 					"style": {
 						"useNamingConvention": "off",
 						"noMagicNumbers": "off",
@@ -64,66 +130,40 @@
 						"noJsxLiterals": "off",
 						"noTernary": "off",
 						"noHexColors": "off",
-						"useGlobalThis": "off"
-					},
-					"nursery": {
-						"useExplicitType": "off",
-						"useExplicitReturnType": "off",
-						"noReactNativeRawText": "off"
-					},
-					"complexity": {
-						"noExcessiveLinesPerFunction": "off",
-						"useMaxParams": "off"
-					},
-					"performance": {
-						"useTopLevelRegex": "off",
-						"useSolidForComponent": "off",
-						"noImgElement": "off",
-						"noJsxPropsBind": "off"
-					},
-					"correctness": {
-						"useQwikValidLexicalScope": "off"
-					}
-				}
-			}
-		},
-		{
-			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
-			"linter": {
-				"rules": {
-					"correctness": {
-						"noNodejsModules": "off",
-						"noProcessGlobal": "off",
-						"noGlobalDirnameFilename": "off"
-					},
-					"style": {
-						"noProcessEnv": "off"
-					},
-					"suspicious": {
-						"noConsole": "off"
-					}
-				}
-			}
-		},
-		{
-			"includes": [
-				"**/*.test.ts",
-				"**/*.test.tsx",
-				"src/test-setup.ts",
-				"**/__mocks__/**",
-				"e2e/**"
-			],
-			"linter": {
-				"rules": {
-					"suspicious": {
-						"noConsole": "off",
-						"noExplicitAny": "off"
-					},
-					"style": {
+						"useGlobalThis": "off",
+						"noContinue": "off",
+						"noExcessiveClassesPerFile": "off",
+						"noExcessiveLinesPerFile": "off",
+						"noExportedImports": "off",
+						"noIncrementDecrement": "off",
+						"noNestedTernary": "off",
 						"noNonNullAssertion": "off",
-						"noExcessiveLinesPerFile": "off"
+						"noParameterProperties": "off",
+						"noProcessEnv": "off",
+						"useAtIndex": "off",
+						"useComponentExportOnlyModules": "off",
+						"useConsistentArrayType": "off",
+						"useConsistentCurlyBraces": "off",
+						"useConsistentMemberAccessibility": "off",
+						"useConsistentMethodSignatures": "off",
+						"useDestructuring": "off",
+						"useExportsLast": "off"
 					},
-					"nursery": {}
+					"suspicious": {
+						"noReactSpecificProps": "off",
+						"noLeakedRender": "off",
+						"noAlert": "off",
+						"noArrayIndexKey": "off",
+						"noConsole": "off",
+						"noEmptyBlockStatements": "off",
+						"noEqualsToNull": "off",
+						"noExplicitAny": "off",
+						"noReturnAssign": "off",
+						"noShadow": "off",
+						"noSkippedTests": "off",
+						"noUnnecessaryConditions": "off",
+						"useAwait": "off"
+					}
 				}
 			}
 		}

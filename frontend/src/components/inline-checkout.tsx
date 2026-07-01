@@ -1,7 +1,5 @@
 import * as React from "react";
 
-("use client");
-
 import { CheckoutSummary } from "@/components/checkout-summary";
 import { useCheckout } from "@/hooks/use-checkout";
 import { mapCheckoutEventsToSummary } from "@/lib/checkout-summary-utils";

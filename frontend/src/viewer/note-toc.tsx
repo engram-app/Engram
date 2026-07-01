@@ -13,14 +13,15 @@ function extractHeadings(markdown: string): Heading[] {
 	// Strip fenced code blocks so `# foo` inside them isn't picked up.
 	const stripped = markdown.replace(/```[\s\S]*?```/gu, "");
 	const re = /^(#{1,6})\s+(.+?)\s*#*\s*$/gmu;
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(stripped)) !== null) {
+	let match = re.exec(stripped);
+	while (match !== null) {
 		const hashes = match[1] ?? "";
 		const text = (match[2] ?? "").trim();
 		const depth = hashes.length;
 		if (depth <= 4 && text) {
 			headings.push({ depth, text, id: slugger.slug(text) });
 		}
+		match = re.exec(stripped);
 	}
 	return headings;
 }

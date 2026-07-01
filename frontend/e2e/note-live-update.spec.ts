@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /**
  * #277 — Two-session live-update behavior for the web SPA note editor.

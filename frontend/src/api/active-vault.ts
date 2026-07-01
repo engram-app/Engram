@@ -39,7 +39,9 @@ export function setActiveVaultId(id: string | null) {
 	}
 	activeVaultId = id;
 	writeStored(id);
-	listeners.forEach((l) => l());
+	listeners.forEach((l) => {
+		l();
+	});
 }
 
 function subscribe(listener: () => void): () => void {

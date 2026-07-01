@@ -9,16 +9,16 @@
     <script>"use strict";
       (() => {
         try {
-          var stored = window.localStorage.getItem('engram:theme');
-          var valid = stored === 'light' || stored === 'dark' || stored === 'system';
-          var choice = valid ? stored : 'system';
-          var prefersDark =
-            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-          var resolved = choice === 'system' ? (prefersDark ? 'dark' : 'light') : choice;
+          const stored = window.localStorage.getItem('engram:theme');
+          const valid = stored === 'light' || stored === 'dark' || stored === 'system';
+          const choice = valid ? stored : 'system';
+          const prefersDark =
+            window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+          const resolved = choice === 'system' ? (prefersDark ? 'dark' : 'light') : choice;
           if (resolved === 'dark') {
             document.documentElement.classList.add('dark');
           }
-        } catch (_) {
+        } catch {
           /* fall back to default (light) */
         }
       })();

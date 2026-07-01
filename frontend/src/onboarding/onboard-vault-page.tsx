@@ -99,7 +99,7 @@ function VaultStep({
 			try {
 				await setProfile.mutateAsync({ uses_obsidian: true });
 				setObsidianCommitted(true);
-			} catch (_e) {
+			} catch {
 				// Error is also reflected on setProfile.isError so the panel can
 				// surface it; swallowing here just prevents a console unhandled
 				// rejection. The user sees the inline error message below.

@@ -29,7 +29,9 @@ export function getOrCreatePaddle(
 		token,
 		environment,
 		eventCallback: (event) => {
-			eventListeners.forEach((listener) => listener(event));
+			eventListeners.forEach((listener) => {
+				listener(event);
+			});
 		},
 	});
 
