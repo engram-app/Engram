@@ -53,15 +53,26 @@ export class CrdtChannel {
   }
 
   async handleFrame(path: string, b64: string): Promise<void> {
+    let bytes: Uint8Array
+    try {
+      bytes = fromB64(b64)
+    } catch (err) {
+      console.warn('CRDT handleFrame: malformed base64 frame (dropped)', err)
+      return
+    }
     const doc = await this.mgr.getDoc(path)
-    const decoder = decoding.createDecoder(fromB64(b64))
-    const messageType = decoding.readVarUint(decoder)
-    if (messageType !== MESSAGE_SYNC) return
-    const replyEncoder = encoding.createEncoder()
-    encoding.writeVarUint(replyEncoder, MESSAGE_SYNC)
-    syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN)
-    if (encoding.length(replyEncoder) > 1) {
-      this.transport(this.mgr.docId(path), toB64(encoding.toUint8Array(replyEncoder)))
+    try {
+      const decoder = decoding.createDecoder(bytes)
+      const messageType = decoding.readVarUint(decoder)
+      if (messageType !== MESSAGE_SYNC) return
+      const replyEncoder = encoding.createEncoder()
+      encoding.writeVarUint(replyEncoder, MESSAGE_SYNC)
+      syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN)
+      if (encoding.length(replyEncoder) > 1) {
+        this.transport(this.mgr.docId(path), toB64(encoding.toUint8Array(replyEncoder)))
+      }
+    } catch (err) {
+      console.warn('CRDT handleFrame: bad frame content (dropped)', err)
     }
   }
 }

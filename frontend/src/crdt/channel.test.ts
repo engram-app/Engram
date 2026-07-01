@@ -60,4 +60,18 @@ describe('CrdtChannel', () => {
     tmp.sendUpdateRaw(other.docId('n.md'), update)
     expect(send).not.toHaveBeenCalled() // an UPDATE frame produces an empty reply
   })
+
+  // Finding 3: malformed / truncated frames must be dropped, not throw
+  it('drops a malformed base64 frame without throwing', async () => {
+    const ch = new CrdtChannel({ manager: mkManager(), send: vi.fn() })
+    // Invalid base64 -- atob will throw; handleFrame must swallow it.
+    await expect(ch.handleFrame('n.md', '!!!not-base64!!!')).resolves.toBeUndefined()
+  })
+
+  it('drops a truncated (valid base64, bad content) frame without throwing', async () => {
+    const ch = new CrdtChannel({ manager: mkManager(), send: vi.fn() })
+    // Valid base64 but only 1 byte -- readVarUint will throw on underrun.
+    const truncated = btoa(String.fromCharCode(0x00))
+    await expect(ch.handleFrame('n.md', truncated)).resolves.toBeUndefined()
+  })
 })

@@ -3,7 +3,7 @@ import { useParams } from 'react-router'
 import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { useNote } from '../api/queries'
-import { closeDoc, enroll, openDoc } from '../crdt/session'
+import { closeDoc, enroll, openDoc, getCrdtSyncStatus, subscribeToCrdtSyncStatus, type CrdtSyncStatus } from '../crdt/session'
 import { useRightSidebar } from '../layout/right-sidebar-context'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -26,6 +26,7 @@ export default function NotePage() {
 
   const [mode, setMode] = useState<Mode>('live')
   const [handle, setHandle] = useState<DocHandle | null>(null)
+  const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus)
 
   const path = note?.path ?? null
 
@@ -46,6 +47,9 @@ export default function NotePage() {
       closeDoc(path)
     }
   }, [path])
+
+  // Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
+  useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), [])
 
   // Signal the onboarding tour that the user opened a note.
   useEffect(() => {
@@ -74,6 +78,11 @@ export default function NotePage() {
 
   return (
     <section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-x border-border bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
+      {syncStatus === 'error' && (
+        <p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-xs text-destructive">
+          Not syncing - reconnecting...
+        </p>
+      )}
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
         <h2 className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
           {note.folder && (

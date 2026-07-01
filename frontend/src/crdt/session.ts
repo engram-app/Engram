@@ -10,9 +10,33 @@ interface Session {
   channel: CrdtChannel
   enrollment: CrdtEnrollment
   awareness: Map<string, Awareness>
+  /** Paths currently open in the editor (via openDoc / closeDoc). Used to
+   *  guard flattenIfBloated so a live editor doc is never destroyed. */
+  openPaths: Set<string>
 }
 
 let session: Session | null = null
+
+// ── Sync status ────────────────────────────────────────────────────────────
+export type CrdtSyncStatus = 'connecting' | 'synced' | 'error'
+
+let syncStatus: CrdtSyncStatus = 'connecting'
+const syncStatusListeners = new Set<(s: CrdtSyncStatus) => void>()
+
+export function getCrdtSyncStatus(): CrdtSyncStatus {
+  return syncStatus
+}
+
+export function subscribeToCrdtSyncStatus(cb: (s: CrdtSyncStatus) => void): () => void {
+  syncStatusListeners.add(cb)
+  return () => syncStatusListeners.delete(cb)
+}
+
+function setCrdtSyncStatus(s: CrdtSyncStatus): void {
+  if (syncStatus === s) return
+  syncStatus = s
+  for (const cb of syncStatusListeners) cb(s)
+}
 
 export interface StartSessionOpts {
   vaultId: string
@@ -23,6 +47,7 @@ export interface StartSessionOpts {
 
 export function startCrdtSession(opts: StartSessionOpts): void {
   stopCrdtSession()
+  setCrdtSyncStatus('connecting')
   // Declare channel first so the onUpdate closure can reference it.
   // channel is assigned before any update tick fires.
   let channel: CrdtChannel
@@ -32,12 +57,18 @@ export function startCrdtSession(opts: StartSessionOpts): void {
     onPersistError: opts.onPersistError,
   })
   channel = new CrdtChannel({ manager, send: opts.push })
+  const openPaths = new Set<string>()
   const enrollment = new CrdtEnrollment({
     startSync: (p) => channel.startSync(p),
     resetSync: (p) => channel.resetSync(p),
-    onAfterEnroll: (p) => manager.flattenIfBloated(p).then(() => undefined),
+    onAfterEnroll: (p) => {
+      // Skip flatten while the doc is open in an editor -- destroying and
+      // rebuilding the Y.Doc would leave the editor bound to a dead doc.
+      if (openPaths.has(p)) return Promise.resolve()
+      return manager.flattenIfBloated(p).then(() => undefined)
+    },
   })
-  session = { vaultId: opts.vaultId, manager, channel, enrollment, awareness: new Map() }
+  session = { vaultId: opts.vaultId, manager, channel, enrollment, awareness: new Map(), openPaths }
 }
 
 export function stopCrdtSession(): void {
@@ -51,6 +82,7 @@ export async function openDoc(
   path: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness } | null> {
   if (!session || !path.endsWith('.md')) return null
+  session.openPaths.add(path)
   const ytext = await session.manager.getSharedText(path)
   let awareness = session.awareness.get(path)
   if (!awareness) {
@@ -62,6 +94,7 @@ export async function openDoc(
 
 export function closeDoc(path: string): void {
   if (!session) return
+  session.openPaths.delete(path)
   const a = session.awareness.get(path)
   if (a) {
     a.destroy()
@@ -92,14 +125,10 @@ export function resyncOpenDocs(): void {
   }
 }
 
-export function resetAll(): void {
-  session?.enrollment.resetAll()
-}
-
 /**
  * Wire tab focus + visibility triggers to re-handshake open CRDT docs.
  *
- * A backgrounded/throttled tab can miss live `crdt_msg` pushes — the browser
+ * A backgrounded/throttled tab can miss live `crdt_msg` pushes -- the browser
  * may idle-drop frames or keep the socket half-connected so the reconnect path
  * (`resyncOpenDocs` on socket `onOpen`) never fires, leaving the editor diverged
  * with no catch-up signal. On the tab becoming visible/focused we re-run STEP1
@@ -111,12 +140,23 @@ export function installCrdtResyncTriggers(): () => void {
   const onVisible = () => {
     if (document.visibilityState === 'visible') resyncOpenDocs()
   }
-  window.addEventListener('visibilitychange', onVisible)
+  // visibilitychange targets document, not window (does not bubble).
+  document.addEventListener('visibilitychange', onVisible)
   window.addEventListener('focus', resyncOpenDocs)
   return () => {
-    window.removeEventListener('visibilitychange', onVisible)
+    document.removeEventListener('visibilitychange', onVisible)
     window.removeEventListener('focus', resyncOpenDocs)
   }
+}
+
+/** Called by the transport layer when the CRDT Phoenix channel joins OK. */
+export function notifyCrdtChannelJoined(): void {
+  setCrdtSyncStatus('synced')
+}
+
+/** Called by the transport layer when the CRDT Phoenix channel join fails. */
+export function notifyCrdtChannelError(): void {
+  setCrdtSyncStatus('error')
 }
 
 export function docPathFromDocId(docId: string): string {

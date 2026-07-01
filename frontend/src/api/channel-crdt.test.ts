@@ -34,10 +34,12 @@ vi.mock('phoenix', () => ({
 const sessionMock = vi.hoisted(() => ({
   startCrdtSession: vi.fn(),
   stopCrdtSession: vi.fn(),
-  handleFrame: vi.fn(),
+  handleFrame: vi.fn().mockResolvedValue(undefined),
   enroll: vi.fn(),
-  resetAll: vi.fn(),
+  notifyCrdtChannelJoined: vi.fn(),
+  notifyCrdtChannelError: vi.fn(),
   docPathFromDocId: (id: string) => id.slice(id.indexOf('/') + 1),
+  resyncOpenDocs: vi.fn(),
 }))
 vi.mock('../crdt/session', () => sessionMock)
 

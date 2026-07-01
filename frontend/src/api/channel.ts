@@ -9,6 +9,8 @@ import {
   enroll as crdtEnroll,
   resyncOpenDocs,
   docPathFromDocId,
+  notifyCrdtChannelJoined,
+  notifyCrdtChannelError,
 } from '../crdt/session'
 
 export const RECONNECT_JITTER_DEFAULT_MS = 5000
@@ -83,13 +85,6 @@ export interface NoteChangedPayload {
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void
 const listeners = new Set<NoteChangedListener>()
-
-export function subscribeToNoteChanges(listener: NoteChangedListener): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
 
 // ── Coalesced list invalidation ───────────────────────────────────────────
 // A plugin sync burst delivers one note_changed per note (hundreds in a
@@ -279,15 +274,23 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient, o
   const crdtTopic = `crdt:${userId}:${vaultId}`
   crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 })
   crdtChannel.on('crdt_msg', (p: { doc_id: string; b64: string }) => {
-    void crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64)
+    void crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64).catch((err) =>
+      console.warn('CRDT frame handling error (dropped)', err),
+    )
   })
   crdtChannel.on('crdt_doc_ready', (p: { doc_id: string }) => {
     crdtEnroll(docPathFromDocId(p.doc_id))
   })
   crdtChannel
     .join()
-    .receive('ok', () => console.log(`Joined ${crdtTopic}`))
-    .receive('error', (resp) => console.error('CRDT channel join failed', resp))
+    .receive('ok', () => {
+      notifyCrdtChannelJoined()
+      console.log(`Joined ${crdtTopic}`)
+    })
+    .receive('error', (resp) => {
+      notifyCrdtChannelError()
+      console.error('CRDT channel join failed', resp)
+    })
 }
 
 export function disconnectChannel() {
