@@ -1,34 +1,24 @@
+import { defaultKeymap } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { Prec } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
-import CodeMirror from '@uiw/react-codemirror'
-import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react'
+import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { EditorState, Prec } from '@codemirror/state'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { drawSelection, EditorView, keymap } from '@codemirror/view'
+import { useEffect, useRef } from 'react'
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
+import type { Awareness } from 'y-protocols/awareness'
+import type * as Y from 'yjs'
 import { useTheme } from '../theme/theme-provider'
-import { computeReplacement } from './merge'
 
-export interface NoteEditorHandle {
-  // Apply server/remote text into the live doc as a minimal change so the
-  // caret survives. No-op when the doc already matches.
-  applyRemote: (nextText: string) => void
-  getDoc: () => string
+export interface NoteEditorProps {
+  ytext: Y.Text
+  awareness: Awareness
 }
 
-interface NoteEditorProps {
-  value: string
-  onChange: (next: string) => void
-}
-
-// Fill the parent so the editor spans the full pane height — clicking anywhere
-// (including the empty space below the text) lands the caret at the doc end.
-// 16px on .cm-content prevents iOS Safari from auto-zooming when the soft
-// keyboard opens. lineWrapping stays on.
+// Fill the parent so the editor spans the full pane height. 16px on .cm-content
+// prevents iOS Safari auto-zoom. Transparent background so the card shows through.
 const editorTheme = EditorView.theme({
-  // Transparent so the card (bg-card) shows through — the editor background
-  // matches its container instead of the @uiw theme's own surface color.
   '&': { height: '100%', backgroundColor: 'transparent' },
-  // Scrollbar mirrors the reading view's Radix ScrollArea: a 10px gutter with a
-  // ~8px rounded bg-border thumb over a transparent track. Firefox uses
-  // scrollbar-color; WebKit/Blink uses the ::-webkit-scrollbar pseudos below.
   '.cm-scroller': {
     fontFamily: 'inherit',
     overflow: 'auto',
@@ -45,84 +35,66 @@ const editorTheme = EditorView.theme({
     backgroundClip: 'padding-box',
   },
   '.cm-gutters': { backgroundColor: 'transparent', border: 'none' },
-  // 20px side gutters live here (not the wrapper) so .cm-scroller spans the full
-  // width and its scrollbar sits at the card edge like the reading view. The
-  // large bottom padding keeps the space below the text clickable (caret-to-end).
   '.cm-content': { fontSize: '16px', padding: '20px 20px 30vh' },
 })
 
-// Module scope: react-codemirror reconfigures the editor whenever the
-// extensions prop identity changes — an inline array would re-instantiate the
-// markdown language package on every keystroke. `markdownLanguage` base turns
-// on GFM (strikethrough/tables/tasklists) for richer source highlighting.
-const extensions = [
-  markdown({ base: markdownLanguage }),
-  EditorView.lineWrapping,
-  // Prec.highest so our transparent background + layout beat the @uiw theme's
-  // own surface color (otherwise the editor keeps the theme's background).
-  Prec.highest(editorTheme),
-]
-
-const basicSetup = {
-  lineNumbers: false,
-  foldGutter: false,
-  highlightActiveLine: false,
-  highlightActiveLineGutter: false,
-  autocompletion: false,
+/**
+ * Build the initial EditorState for a CRDT-bound editor.
+ *
+ * CRITICAL: `doc` MUST be seeded with `ytext.toString()`. y-codemirror.next's
+ * ySync plugin only forwards INCREMENTAL Y.Text deltas into the view — it does
+ * not insert content that already exists in the Y.Text when the binding
+ * attaches. So an editor created with an empty doc against a non-empty Y.Text
+ * (loaded from IndexedDB, or a STEP2 that landed before mount) renders blank
+ * forever. Seeding the doc to the current Y.Text content is the canonical
+ * yCollab setup and the fix for the "editor is empty but the note has content"
+ * bug. Exported so it can be unit-tested without a DOM (EditorState is pure).
+ */
+export function buildEditorState(
+  ytext: Y.Text,
+  awareness: Awareness,
+  dark: boolean,
+): EditorState {
+  return EditorState.create({
+    doc: ytext.toString(),
+    extensions: [
+      drawSelection(),
+      EditorView.lineWrapping,
+      Prec.highest(keymap.of(yUndoManagerKeymap)),
+      keymap.of(defaultKeymap),
+      markdown({ base: markdownLanguage }),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      ...(dark ? [oneDark] : []),
+      // Prec.highest so the transparent background + layout beat any theme's
+      // own surface color (oneDark sets its own background otherwise).
+      Prec.highest(editorTheme),
+      // yCollab keeps the view and Y.Text in sync AFTER this initial seed and
+      // wires local edits back into the Y.Text (→ CRDT channel).
+      yCollab(ytext, awareness),
+    ],
+  })
 }
 
-const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEditor(
-  { value, onChange },
-  ref,
-) {
+// Uncontrolled raw EditorView: yCollab owns the document. We do NOT use
+// @uiw/react-codemirror here — it is a controlled wrapper that re-dispatches a
+// doc replace whenever its `value` prop differs from the editor content, which
+// fights yCollab and clobbers concurrent edits. A directly-managed view sidesteps
+// that entirely.
+export default function NoteEditor({ ytext, awareness }: NoteEditorProps) {
   const { resolved } = useTheme()
-  const viewRef = useRef<EditorView | null>(null)
-  // True while applyRemote is dispatching, so the resulting (synchronous)
-  // onChange isn't echoed back as a local edit — which would schedule a
-  // redundant autosave of the just-merged text at a stale version (409 loop).
-  const applyingRemote = useRef(false)
+  const hostRef = useRef<HTMLDivElement>(null)
 
-  const handleChange = useCallback(
-    (next: string) => {
-      if (applyingRemote.current) return
-      onChange(next)
-    },
-    [onChange],
-  )
+  useEffect(() => {
+    const parent = hostRef.current
+    if (!parent) return
+    const view = new EditorView({
+      state: buildEditorState(ytext, awareness, resolved === 'dark'),
+      parent,
+    })
+    return () => view.destroy()
+    // Recreate the view when the bound doc (note switch) or theme changes; the
+    // new state re-seeds from ytext.toString() so content is never lost.
+  }, [ytext, awareness, resolved])
 
-  useImperativeHandle(ref, () => ({
-    applyRemote(nextText: string) {
-      const view = viewRef.current
-      if (!view) return
-      const cur = view.state.doc.toString()
-      if (cur === nextText) return
-      const { from, to, insert } = computeReplacement(cur, nextText)
-      applyingRemote.current = true
-      try {
-        view.dispatch({ changes: { from, to, insert } })
-      } finally {
-        applyingRemote.current = false
-      }
-    },
-    getDoc() {
-      return viewRef.current?.state.doc.toString() ?? value
-    },
-  }))
-
-  return (
-    <CodeMirror
-      value={value}
-      onChange={handleChange}
-      onCreateEditor={(view) => {
-        viewRef.current = view
-      }}
-      theme={resolved}
-      extensions={extensions}
-      basicSetup={basicSetup}
-      height="100%"
-      className="h-full"
-    />
-  )
-})
-
-export default NoteEditor
+  return <div ref={hostRef} className="h-full" />
+}

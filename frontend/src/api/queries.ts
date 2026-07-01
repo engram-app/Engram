@@ -292,8 +292,7 @@ export function useNote(id: string | null) {
   })
 }
 
-// Single source for the by-id note fetch — shared by useNote's queryFn and the
-// 409-rebase path (useFetchNoteFresh) so the endpoint lives in one place.
+// Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {
   return api.get<Note>(`/notes/by-id/${id}`)
 }
@@ -318,47 +317,6 @@ export function useUpdateNote() {
       qc.invalidateQueries({ queryKey: ['folderNotes', vaultId] })
     },
   })
-}
-
-// Imperative content save for autosave. Returns the NEW version; throws
-// ApiError (status 409 on a version conflict) so callers can 3-way merge.
-//
-// Unlike useUpdateNote (shared with onboarding) this does NOT invalidate the
-// note or folder listings: a content save can't change a note's tree position
-// or title (title derives from the filename), so refetching the note + folder
-// lists on every debounced keystroke is pure waste. Instead it patches the
-// note cache in place so a later note-switch round-trip still reads fresh
-// content. Tree tag/mtime staleness reconciles on the next navigation.
-export function useSaveNoteContent() {
-  const qc = useQueryClient()
-  const vaultId = useActiveVaultId()
-  return async (path: string, content: string, version: number): Promise<number> => {
-    const { note } = await api.post<{ note: Note }>('/notes', {
-      path,
-      content,
-      version,
-      mtime: Date.now() / 1000,
-    })
-    if (note?.id) {
-      qc.setQueryData<Note>(['note', vaultId, note.id], (prev) =>
-        prev
-          ? {
-              ...prev,
-              content,
-              version: note.version,
-              mtime: note.mtime ?? prev.mtime,
-              updated_at: note.updated_at ?? prev.updated_at,
-            }
-          : prev,
-      )
-    }
-    return note.version
-  }
-}
-
-// Fetch the freshest server copy of a note by id (used to rebase on a 409).
-export function useFetchNoteFresh() {
-  return fetchNoteById
 }
 
 interface CreateNoteContext {

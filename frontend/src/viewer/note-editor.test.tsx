@@ -1,98 +1,124 @@
-import { createRef } from 'react'
-import { describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, afterEach } from 'vitest'
+import * as Y from 'yjs'
+import { Awareness } from 'y-protocols/awareness'
+import { EditorView, runScopeHandlers } from '@codemirror/view'
+import { historyField } from '@codemirror/commands'
+import { buildEditorState } from './note-editor'
 
-import NoteEditor, { type NoteEditorHandle } from './note-editor'
+// happy-dom CAN render a real CodeMirror EditorView (verified 2026-06-29).
+// The earlier comment was a cautious assumption; the DOM stubs in test-setup.ts
+// are sufficient for CodeMirror's layout queries.
+describe('buildEditorState', () => {
+  it('seeds the editor document from the Y.Text content', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    ytext.insert(0, '# Seeded heading\n\nbody text')
+    const awareness = new Awareness(doc)
 
-// Captures the extensions prop identity per render + the onCreateEditor cb.
-// @uiw/react-codemirror watches the extensions prop and reconfigures the
-// editor whenever its identity changes — a fresh array per keystroke
-// reconfigures continuously while typing.
-const capturedExtensions: unknown[] = []
-let lastDispatch: ReturnType<typeof vi.fn>
-let lastOnChange: ((value: string) => void) | undefined
+    const state = buildEditorState(ytext, awareness, false)
 
-vi.mock('@uiw/react-codemirror', () => ({
-  default: (props: {
-    extensions: unknown
-    value: string
-    onChange?: (value: string) => void
-    onCreateEditor?: (view: unknown) => void
-  }) => {
-    capturedExtensions.push(props.extensions)
-    lastOnChange = props.onChange
-    // Real @uiw fires onChange synchronously from the update listener on every
-    // dispatch (unless the txn carries its ExternalChange annotation). Mirror
-    // that so we can prove applyRemote's echo is suppressed.
-    lastDispatch = vi.fn(() => props.onChange?.('echoed-from-dispatch'))
-    const fakeView = {
-      state: { doc: { toString: () => props.value } },
-      dispatch: lastDispatch,
-    }
-    props.onCreateEditor?.(fakeView)
-    return <div data-testid="cm" />
-  },
-}))
+    expect(state.doc.toString()).toBe('# Seeded heading\n\nbody text')
+  })
 
-vi.mock('../theme/theme-provider', () => ({
-  useTheme: () => ({ resolved: 'light' }),
-}))
+  it('produces an empty document when the Y.Text is empty', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
 
-describe('NoteEditor extensions stability', () => {
-  it('passes a referentially stable extensions array across re-renders', () => {
-    capturedExtensions.length = 0
-    const onChange = () => {}
+    const state = buildEditorState(ytext, awareness, true)
 
-    const { rerender } = render(<NoteEditor value="a" onChange={onChange} />)
-    rerender(<NoteEditor value="ab" onChange={onChange} />)
-    rerender(<NoteEditor value="abc" onChange={onChange} />)
+    expect(state.doc.toString()).toBe('')
+  })
 
-    expect(capturedExtensions).toHaveLength(3)
-    expect(capturedExtensions[1]).toBe(capturedExtensions[0])
-    expect(capturedExtensions[2]).toBe(capturedExtensions[0])
+  it('reflects all Y.Text content at build time (seed is current, not stale)', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
+    ytext.insert(0, 'first')
+    ytext.insert(ytext.length, ' second')
+
+    const state = buildEditorState(ytext, awareness, false)
+
+    expect(state.doc.toString()).toBe('first second')
+  })
+
+  // RED with buggy code (history() installs historyField); GREEN after fix.
+  it('does not install the native history field', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
+
+    const state = buildEditorState(ytext, awareness, false)
+
+    // historyField is the StateField that @codemirror/commands history() adds.
+    // When present it means Ctrl+Z routes to the offset-based native undo, which
+    // reverts remote peers' edits and causes CRDT divergence.
+    // state.field(field, false) returns undefined when the field is not installed.
+    expect(state.field(historyField, false)).toBeUndefined()
   })
 })
 
-describe('NoteEditor imperative applyRemote', () => {
-  it('dispatches a minimal replacement, not a full reset', () => {
-    const ref = createRef<NoteEditorHandle>()
-    render(<NoteEditor ref={ref} value="abcXYZdef" onChange={() => {}} />)
+describe('CRDT undo behaviour (EditorView + yCollab)', () => {
+  const views: EditorView[] = []
+  const parents: HTMLElement[] = []
+  afterEach(() => {
+    for (const v of views) v.destroy()
+    views.length = 0
+    for (const p of parents) p.parentNode?.removeChild(p)
+    parents.length = 0
+  })
 
-    ref.current!.applyRemote('abcQQdef')
+  // RED with buggy code: Ctrl+Z fires native history undo which reverts the
+  // remote peers text and diverges. GREEN after fix: yUndoManagerKeymap takes
+  // highest precedence, Y.UndoManager reverts only the local edit.
+  it('Ctrl+Z reverts only the local edit and preserves remote peers text', () => {
+    const doc = new Y.Doc()
+    const ytext = doc.getText('content')
+    const awareness = new Awareness(doc)
 
-    expect(lastDispatch).toHaveBeenCalledTimes(1)
-    expect(lastDispatch).toHaveBeenCalledWith({
-      changes: { from: 3, to: 6, insert: 'QQ' },
+    const parent = document.createElement('div')
+    document.body.appendChild(parent)
+    parents.push(parent)
+
+    const view = new EditorView({
+      state: buildEditorState(ytext, awareness, false),
+      parent,
     })
-  })
+    views.push(view)
 
-  it('is a no-op when remote text equals the current doc', () => {
-    const ref = createRef<NoteEditorHandle>()
-    render(<NoteEditor ref={ref} value="same" onChange={() => {}} />)
+    // LOCAL edit: dispatch a plain insert transaction. ySync forwards it to
+    // ytext with the syncConf origin so Y.UndoManager tracks it.
+    view.dispatch({
+      changes: { from: 0, insert: 'L' },
+    })
+    expect(view.state.doc.toString()).toContain('L')
 
-    ref.current!.applyRemote('same')
+    // REMOTE edit: insert via ytext with a foreign origin. ySync observer
+    // forwards it into the CM view but Y.UndoManager does NOT track it.
+    doc.transact(() => {
+      ytext.insert(ytext.length, 'R')
+    }, 'remote-peer')
+    expect(view.state.doc.toString()).toContain('L')
+    expect(view.state.doc.toString()).toContain('R')
 
-    expect(lastDispatch).not.toHaveBeenCalled()
-  })
+    // Simulate Ctrl+Z through the actual keymap dispatch (same path as user
+    // pressing the key). runScopeHandlers resolves priority and fires whichever
+    // binding wins -- native historyKeymap (buggy) or yUndoManagerKeymap (fix).
+    const ctrlZ = new KeyboardEvent('keydown', {
+      key: 'z',
+      code: 'KeyZ',
+      ctrlKey: true,
+      metaKey: false,
+      bubbles: true,
+      cancelable: true,
+    })
+    runScopeHandlers(view, ctrlZ, 'editor')
 
-  it('suppresses the onChange echo from applyRemote (no autosave feedback loop)', () => {
-    const onChange = vi.fn()
-    const ref = createRef<NoteEditorHandle>()
-    render(<NoteEditor ref={ref} value="abc" onChange={onChange} />)
+    // Remote text must survive undo; local text must be gone.
+    expect(view.state.doc.toString()).not.toContain('L')
+    expect(view.state.doc.toString()).toContain('R')
 
-    // applyRemote -> dispatch -> @uiw fires onChange; the wrapper must swallow it.
-    ref.current!.applyRemote('abXc')
-
-    expect(lastDispatch).toHaveBeenCalledTimes(1)
-    expect(onChange).not.toHaveBeenCalled()
-  })
-
-  it('passes genuine user edits through onChange', () => {
-    const onChange = vi.fn()
-    render(<NoteEditor value="a" onChange={onChange} />)
-
-    lastOnChange?.('typed by user')
-
-    expect(onChange).toHaveBeenCalledWith('typed by user')
+    // View and Y.Text must be converged (no divergence).
+    expect(view.state.doc.toString()).toBe(ytext.toString())
   })
 })
