@@ -80,9 +80,7 @@
 					},
 					"correctness": {
 						"useQwikValidLexicalScope": "off",
-						"noProcessGlobal": "off",
 						"noInvalidPositionAtImportRule": "off",
-						"noNodejsModules": "off",
 						"noUndeclaredDependencies": "off",
 						"useExhaustiveDependencies": "off",
 						"useImageSize": "off",
@@ -96,7 +94,6 @@
 						"noConditionalExpect": "off",
 						"noDuplicateSelectors": "off",
 						"noInlineStyles": "off",
-						"noPlaywrightWaitForTimeout": "off",
 						"useBaseline": "off",
 						"useDomQuerySelector": "off",
 						"useExpect": "off",
@@ -115,7 +112,6 @@
 						"noJsxPropsBind": "off",
 						"noAwaitInLoops": "off",
 						"noBarrelFile": "off",
-						"noDelete": "off",
 						"noNamespaceImport": "off"
 					},
 					"security": {
@@ -139,7 +135,6 @@
 						"noNestedTernary": "off",
 						"noNonNullAssertion": "off",
 						"noParameterProperties": "off",
-						"noProcessEnv": "off",
 						"useAtIndex": "off",
 						"useComponentExportOnlyModules": "off",
 						"useConsistentArrayType": "off",
@@ -154,16 +149,51 @@
 						"noLeakedRender": "off",
 						"noAlert": "off",
 						"noArrayIndexKey": "off",
-						"noConsole": "off",
+						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
 						"noEmptyBlockStatements": "off",
 						"noEqualsToNull": "off",
-						"noExplicitAny": "off",
 						"noReturnAssign": "off",
 						"noShadow": "off",
 						"noSkippedTests": "off",
 						"noUnnecessaryConditions": "off",
 						"useAwait": "off"
 					}
+				}
+			}
+		},
+		{
+			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off",
+						"noGlobalDirnameFilename": "off"
+					},
+					"style": { "noProcessEnv": "off" },
+					"suspicious": { "noConsole": "off" }
+				}
+			}
+		},
+		{
+			"includes": [
+				"**/*.test.ts",
+				"**/*.test.tsx",
+				"src/test-setup.ts",
+				"**/__mocks__/**",
+				"e2e/**"
+			],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off",
+						"noGlobalDirnameFilename": "off"
+					},
+					"style": { "noProcessEnv": "off" },
+					"suspicious": { "noConsole": "off", "noExplicitAny": "off" },
+					"performance": { "noDelete": "off" },
+					"nursery": { "noPlaywrightWaitForTimeout": "off" }
 				}
 			}
 		}

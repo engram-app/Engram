@@ -279,7 +279,6 @@ export async function connectChannel({
 		.join()
 		.receive("ok", (resp) => {
 			captureServerJitter(resp);
-			console.log(`Joined ${topic}`);
 		})
 		.receive("error", (resp) => console.error("Channel join failed", resp));
 
@@ -305,7 +304,6 @@ export async function connectChannel({
 		.join()
 		.receive("ok", () => {
 			notifyCrdtChannelJoined();
-			console.log(`Joined ${crdtTopic}`);
 		})
 		.receive("error", (resp) => {
 			notifyCrdtChannelError();
