@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { toRelativeUrl } from "./clerk-auth-provider";
 
 describe("toRelativeUrl", () => {
-	const origin = window.location.origin;
+	const { origin } = window.location;
 
 	it("strips same-origin absolute URLs to path", () => {
 		expect(toRelativeUrl(`${origin}/`)).toBe("/");

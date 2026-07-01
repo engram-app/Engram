@@ -5,7 +5,7 @@ export function fileToBase64(file: File): Promise<string> {
 		const reader = new FileReader();
 		reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
 		reader.onload = () => {
-			const result = reader.result;
+			const { result } = reader;
 			if (typeof result !== "string") {
 				reject(new Error("unexpected FileReader result"));
 				return;

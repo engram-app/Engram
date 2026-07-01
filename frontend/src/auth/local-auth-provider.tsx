@@ -7,7 +7,7 @@ import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
 	try {
-		const base64 = token.split(".")[1];
+		const [, base64] = token.split(".");
 		if (!base64) {
 			return null;
 		}

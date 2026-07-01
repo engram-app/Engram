@@ -61,7 +61,7 @@ export function mapCheckoutEventsToSummary(data: CheckoutEventsInput): CheckoutS
 		lineTotal: item.totals?.subtotal ?? 0,
 	}));
 
-	const totals = data.totals;
+	const { totals } = data;
 	const recurringTotals = data.recurring_totals;
 
 	const discount = totals?.discount && totals.discount > 0 ? totals.discount : undefined;

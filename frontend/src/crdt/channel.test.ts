@@ -40,7 +40,7 @@ describe("CrdtChannel", () => {
 		// session forwards via sendUpdateRaw; emulate it:
 		const update = await aMgr.encodeStateAsUpdate("n.md");
 		aCh.sendUpdateRaw(aMgr.docId("n.md"), update);
-		const frame = aSends[aSends.length - 1]![1];
+		const [, frame] = aSends[aSends.length - 1]!;
 
 		const bMgr = mkManager();
 		const bCh = new CrdtChannel({ manager: bMgr, send: () => {} });

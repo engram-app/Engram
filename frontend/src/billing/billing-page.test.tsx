@@ -196,7 +196,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		renderBilling({ inline: true });
 
 		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalled());
-		const settings = initializePaddleMock.mock.calls[0]![0].checkout.settings;
+		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
 		expect(settings.displayMode).toBe("inline");
 		expect(settings.frameTarget).toBe("paddle-checkout");
 	});
@@ -210,7 +210,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		renderBilling({ inline: false });
 
 		await waitFor(() => expect(initializePaddleMock).toHaveBeenCalled());
-		const settings = initializePaddleMock.mock.calls[0]![0].checkout.settings;
+		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
 		expect(settings.displayMode).toBe("overlay");
 	});
 
