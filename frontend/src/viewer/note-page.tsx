@@ -14,7 +14,7 @@ import NoteView from './note-view'
 const NoteEditor = lazy(() => import('./note-editor'))
 
 type Mode = 'live' | 'reading'
-interface DocHandle { ytext: Y.Text; awareness: Awareness }
+interface DocHandle { ytext: Y.Text; awareness: Awareness; doc: Y.Doc }
 
 export default function NotePage() {
   const params = useParams()

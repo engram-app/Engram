@@ -3,13 +3,15 @@ import { render, waitFor } from '@testing-library/react'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 
-const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
+const { openDoc, closeDoc, enroll, getCrdtSyncStatus, subscribeToCrdtSyncStatus } = vi.hoisted(() => ({
   openDoc: vi.fn(),
   closeDoc: vi.fn(),
   enroll: vi.fn(),
+  getCrdtSyncStatus: vi.fn(() => 'synced' as const),
+  subscribeToCrdtSyncStatus: vi.fn(() => () => {}),
 }))
 
-vi.mock('../crdt/session', () => ({ openDoc, closeDoc, enroll }))
+vi.mock('../crdt/session', () => ({ openDoc, closeDoc, enroll, getCrdtSyncStatus, subscribeToCrdtSyncStatus }))
 
 const useNoteMock = vi.fn()
 vi.mock('../api/queries', () => ({ useNote: (...a: unknown[]) => useNoteMock(...a) }))
@@ -38,6 +40,7 @@ describe('NotePage (CRDT)', () => {
     openDoc.mockResolvedValue({
       ytext: doc.getText('content'),
       awareness: new Awareness(doc),
+      doc,
     })
     useNoteMock.mockReturnValue({ data: NOTE, isLoading: false, error: null })
   })
