@@ -287,7 +287,7 @@ export function SubscriptionStatusCard({
 				<div className="space-y-2">
 					{items.map((item, index) => (
 						<div
-							key={index}
+							key={`${item.productName}-${item.priceName ?? ""}`}
 							className={cn(
 								"flex items-center justify-between gap-4",
 								index > 0 && "border-t pt-2",

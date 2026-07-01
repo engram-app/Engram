@@ -40,8 +40,8 @@ export default function NoteToc({ content }: { content: string }) {
 				</p>
 			</header>
 			<ul className="space-y-px py-2">
-				{headings.map((h, i) => (
-					<li key={`${h.id}-${i}`}>
+				{headings.map((h) => (
+					<li key={h.id}>
 						<a
 							href={`#${h.id}`}
 							style={{ paddingLeft: `${0.75 + (h.depth - 1) * 0.75}rem` }}

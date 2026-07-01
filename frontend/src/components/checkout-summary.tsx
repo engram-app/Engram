@@ -58,8 +58,11 @@ export function CheckoutSummary({
 
 			<CardContent className="flex flex-col gap-4">
 				<ul className="space-y-3">
-					{items.map((item, index) => (
-						<li key={index} className="flex items-start justify-between gap-4 text-sm">
+					{items.map((item) => (
+						<li
+							key={`${item.name}-${item.priceName ?? ""}`}
+							className="flex items-start justify-between gap-4 text-sm"
+						>
 							<div className="min-w-0 flex-1">
 								<span className="font-medium">{item.name}</span>
 								{item.priceName && (

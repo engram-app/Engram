@@ -181,9 +181,9 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 			)}
 
 			<ul className="max-h-40 overflow-y-auto px-4">
-				{rows.map((row, i) => (
+				{rows.map((row) => (
 					<li
-						key={`${row.file.name}-${i}`}
+						key={`${row.file.name}-${row.file.size}-${row.file.lastModified}`}
 						className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm"
 					>
 						<span className="truncate">{row.file.name}</span>

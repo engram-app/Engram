@@ -61,8 +61,11 @@ function TransactionSection({
 			</div>
 
 			<div className="flex flex-col gap-2">
-				{section.lineItems.map((item, index) => (
-					<div key={index} className="flex items-start justify-between gap-4 text-sm">
+				{section.lineItems.map((item) => (
+					<div
+						key={`${item.productName}-${item.total}`}
+						className="flex items-start justify-between gap-4 text-sm"
+					>
 						<div className="flex min-w-0 flex-col gap-0.5">
 							<span className="truncate font-medium">{item.productName}</span>
 							<span className="text-muted-foreground text-xs">

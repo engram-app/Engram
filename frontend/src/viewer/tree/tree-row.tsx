@@ -209,12 +209,12 @@ function IndentGuides({ depth }: { depth: number }) {
 	}
 	let guides = guideCache.get(depth);
 	if (!guides) {
-		guides = Array.from({ length: depth }, (_, i) => (
+		guides = Array.from({ length: depth }, (_, i) => i).map((level) => (
 			<span
-				key={i}
+				key={`indent-${level}`}
 				aria-hidden="true"
 				className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
-				style={{ left: `${(i + 1) * INDENT_STEP}px` }}
+				style={{ left: `${(level + 1) * INDENT_STEP}px` }}
 			/>
 		));
 		guideCache.set(depth, guides);
