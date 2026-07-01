@@ -17,6 +17,7 @@ import { useRightSidebar } from "../layout/right-sidebar-context";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
+import { PropertiesWidget } from "./properties-widget";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
@@ -24,6 +25,7 @@ type Mode = "live" | "reading";
 interface DocHandle {
 	ytext: Y.Text;
 	awareness: Awareness;
+	doc: Y.Doc;
 }
 
 export default function NotePage() {
@@ -121,6 +123,8 @@ export default function NotePage() {
 					{mode === "live" ? "↗ Reading view" : "✎ Edit"}
 				</Button>
 			</div>
+
+			{handle ? <PropertiesWidget doc={handle.doc} /> : null}
 
 			{mode === "reading" ? (
 				<ScrollArea className="min-h-0 flex-1">

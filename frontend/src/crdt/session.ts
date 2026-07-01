@@ -97,7 +97,7 @@ export function stopCrdtSession(): void {
 
 export async function openDoc(
 	path: string,
-): Promise<{ ytext: Y.Text; awareness: Awareness } | null> {
+): Promise<{ ytext: Y.Text; awareness: Awareness; doc: Y.Doc } | null> {
 	if (!(session && path.endsWith(".md"))) {
 		return null;
 	}
@@ -108,7 +108,7 @@ export async function openDoc(
 		awareness = new Awareness(ytext.doc!);
 		session.awareness.set(path, awareness);
 	}
-	return { ytext, awareness };
+	return { ytext, awareness, doc: ytext.doc! };
 }
 
 export function closeDoc(path: string): void {

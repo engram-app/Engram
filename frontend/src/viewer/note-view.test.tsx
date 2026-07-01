@@ -46,6 +46,18 @@ function renderNote(content: string) {
 	return render(<NoteView content={content} tags={[]} />);
 }
 
+describe("NoteView frontmatter table removal", () => {
+	it("does not render the frontmatter dl table even when content has frontmatter", () => {
+		renderNote("---\nstatus: draft\nauthor: alice\n---\n\nBody paragraph here.");
+		expect(document.querySelector("dl")).toBeNull();
+	});
+
+	it("still renders the markdown body after removing the frontmatter table", () => {
+		renderNote("---\nstatus: draft\n---\n\nBody paragraph here.");
+		expect(screen.getByText("Body paragraph here.")).toBeInTheDocument();
+	});
+});
+
 describe("NoteView attachment gating", () => {
 	it("renders fallback lock for Free user on non-text embeds", () => {
 		mockTier = "free";

@@ -31,7 +31,7 @@ export default defineConfig({
 	projects: [
 		{
 			name: "local",
-			testMatch: /\/(?:local-auth|dark-mode|mobile|note-live-update)\.spec\.ts$/u,
+			testMatch: /\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},

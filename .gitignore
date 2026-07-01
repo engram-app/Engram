@@ -6,6 +6,9 @@ __pycache__/
 .pytest_cache/
 pytest-e2e.log
 
+# Node (root-level stray caches; frontend has its own .gitignore)
+node_modules/
+
 # Elixir/Phoenix
 /_build/
 /cover/
