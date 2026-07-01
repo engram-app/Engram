@@ -11,7 +11,9 @@ interface Props {
 export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: Props) {
 	return (
 		<>
-			<div
+			<button
+				type="button"
+				aria-label="Close menu"
 				data-testid="action-drawer-backdrop"
 				onClick={onClose}
 				className="fixed inset-0 z-40 bg-black/40"

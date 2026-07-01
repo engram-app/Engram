@@ -690,16 +690,18 @@ function ModalShell({
 	children: React.ReactNode;
 }) {
 	return (
-		<section
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="modal-title"
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-			onClick={onClose}
-		>
-			<article
-				className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl"
-				onClick={(e) => e.stopPropagation()}
+		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<button
+				type="button"
+				aria-label="Close dialog"
+				onClick={onClose}
+				className="fixed inset-0 bg-black/50"
+			/>
+			<section
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="modal-title"
+				className="relative w-full max-w-md rounded-lg bg-card p-6 shadow-xl"
 			>
 				<header className="mb-4">
 					<h2 id="modal-title" className="font-semibold text-foreground text-lg">
@@ -707,8 +709,8 @@ function ModalShell({
 					</h2>
 				</header>
 				{children}
-			</article>
-		</section>
+			</section>
+		</div>
 	);
 }
 
