@@ -19,7 +19,9 @@ export default function ClerkSignIn({ returnTo }: { returnTo: string }) {
 	const restricted = signIn?.firstFactorVerification?.error?.code === "sign_up_restricted_waitlist";
 
 	useEffect(() => {
-		if (isLoaded && restricted) navigate(ROUTES.WAITLIST, { replace: true });
+		if (isLoaded && restricted) {
+			navigate(ROUTES.WAITLIST, { replace: true });
+		}
 	}, [isLoaded, restricted, navigate]);
 
 	return <SignIn routing="hash" forceRedirectUrl={returnTo} />;

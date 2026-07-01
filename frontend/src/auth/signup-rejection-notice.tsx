@@ -11,17 +11,23 @@ export default function SignupRejectionNotice() {
 
 	useEffect(() => {
 		const id = takePendingSignupUser();
-		if (!id) return;
+		if (!id) {
+			return;
+		}
 		let active = true;
 		fetchSignupRejection(id).then((reason) => {
-			if (active && reason === "duplicate_identity") setRejected(true);
+			if (active && reason === "duplicate_identity") {
+				setRejected(true);
+			}
 		});
 		return () => {
 			active = false;
 		};
 	}, []);
 
-	if (!rejected) return null;
+	if (!rejected) {
+		return null;
+	}
 
 	return (
 		<div role="alert" className={cn(destructiveAlert, "mb-4 w-full max-w-sm")}>

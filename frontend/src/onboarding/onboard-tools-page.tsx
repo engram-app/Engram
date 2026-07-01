@@ -68,7 +68,9 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 			if (isFree) {
 				// Free tier: clicking a selected tool deselects it; clicking any
 				// other tool replaces the selection entirely.
-				if (prev.has(slug)) return new Set();
+				if (prev.has(slug)) {
+					return new Set();
+				}
 				return new Set([slug]);
 			}
 			const next = new Set(prev);
@@ -78,7 +80,9 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 	}
 
 	async function submit() {
-		if (tools.size === 0 || isPending) return;
+		if (tools.size === 0 || isPending) {
+			return;
+		}
 		await onSubmit(Array.from(tools));
 	}
 
@@ -94,7 +98,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 			</header>
 
 			{isFree ? (
-				<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+				<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
 					Free tier — pick 1 to start.{" "}
 					<Link
 						to="/onboard/billing"
@@ -129,12 +133,12 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 				layout="row"
 			/>
 
-			<p className="text-sm text-muted-foreground">
+			<p className="text-muted-foreground text-sm">
 				Not a comprehensive list — pick <strong>Other connection</strong> if yours isn't here.
 			</p>
 
 			{hasError ? (
-				<p role="alert" className="text-sm text-destructive">
+				<p role="alert" className="text-destructive text-sm">
 					Couldn't save your answers — please try again.
 				</p>
 			) : null}
@@ -143,7 +147,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 					type="button"
 					onClick={submit}
 					disabled={!canContinue}
-					className="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+					className="rounded-lg bg-primary px-6 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					{isPending ? "Saving…" : "Continue"}
 				</button>
@@ -166,7 +170,7 @@ function ToolColumn({ title, options, selected, onToggle, layout = "stack" }: To
 
 	return (
 		<fieldset className="flex flex-col gap-2">
-			<legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+			<legend className="mb-2 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
 				{title}
 			</legend>
 			<div className={innerClass}>

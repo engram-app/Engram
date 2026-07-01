@@ -23,7 +23,9 @@ interface PlanChangePanelProps {
 }
 
 function formatCents(cents: number | null | undefined): string {
-	if (cents === null || cents === undefined) return "—";
+	if (cents === null || cents === undefined) {
+		return "—";
+	}
 	// Paddle returns totals as raw cents (USD only for now). Zero-decimal
 	// currencies (JPY/KRW/CLP) would need a separate code path — defer until
 	// the proration UI supports non-USD.
@@ -81,7 +83,9 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	// deliberate cadence pick mid-interaction).
 	const userToggledRef = useRef(false);
 	useEffect(() => {
-		if (!userToggledRef.current) setCadence(currentCadence);
+		if (!userToggledRef.current) {
+			setCadence(currentCadence);
+		}
 	}, [currentCadence]);
 
 	const targetPriceId =
@@ -93,13 +97,15 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	if (!config) {
 		return (
 			<section role="region" aria-label="Change plan" className="py-2">
-				<p className="text-sm text-muted-foreground">Loading plan options…</p>
+				<p className="text-muted-foreground text-sm">Loading plan options…</p>
 			</section>
 		);
 	}
 
 	async function onConfirm() {
-		if (!targetPriceId) return;
+		if (!targetPriceId) {
+			return;
+		}
 		try {
 			await confirm.mutateAsync(targetPriceId);
 			toast.success("Plan change confirmed.");
@@ -112,8 +118,8 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	return (
 		<section role="region" aria-label="Change plan" className="space-y-5 pt-2">
 			<header>
-				<h2 className="text-base font-semibold text-foreground">Change your plan</h2>
-				<p className="mt-2 text-sm text-muted-foreground">
+				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+				<p className="mt-2 text-muted-foreground text-sm">
 					Proration applies immediately. The selected card shows what'll be charged or credited
 					before you confirm.
 				</p>
@@ -214,8 +220,8 @@ function TrialNotice({
 		return (
 			<section role="region" aria-label="Change plan" className="space-y-4 pt-2">
 				<header>
-					<h2 className="text-base font-semibold text-foreground">Change your plan</h2>
-					<p className="mt-2 text-sm text-muted-foreground">
+					<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+					<p className="mt-2 text-muted-foreground text-sm">
 						Your free trial is already scheduled to cancel
 						{cancelAt ? (
 							<>
@@ -226,7 +232,7 @@ function TrialNotice({
 						. You won't be charged. You can subscribe to the plan you want once your trial ends.
 					</p>
 				</header>
-				<div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+				<div className="rounded-md border border-border bg-muted/40 p-4 text-muted-foreground text-sm">
 					<p className="font-medium text-foreground">Changed your mind?</p>
 					<p className="mt-1">
 						Use <strong>Keep my subscription</strong> right below the Current Plan section to
@@ -243,8 +249,8 @@ function TrialNotice({
 	return (
 		<section role="region" aria-label="Change plan" className="space-y-4 pt-2">
 			<header>
-				<h2 className="text-base font-semibold text-foreground">Change your plan</h2>
-				<p className="mt-2 text-sm text-muted-foreground">
+				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+				<p className="mt-2 text-muted-foreground text-sm">
 					You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a
 					subscription is in trial
 					{renewsAt ? (
@@ -256,7 +262,7 @@ function TrialNotice({
 					.
 				</p>
 			</header>
-			<div className="rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+			<div className="rounded-md border border-border bg-muted/40 p-4 text-muted-foreground text-sm">
 				<p className="font-medium text-foreground">Want a different plan?</p>
 				<p className="mt-1">
 					Cancel the free trial below — you won't be charged. You can subscribe to the plan you want

@@ -10,7 +10,7 @@ import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "
 import { cn } from "@/lib/utils";
 
 /** Props for the `PlanChangeBreakdown` component. */
-export type PlanChangeBreakdownProps = {
+export interface PlanChangeBreakdownProps {
 	breakdown?: PlanChangeBreakdownData;
 	/**
 	 * Payment collection mode. From `subscription.collection_mode`.
@@ -18,7 +18,7 @@ export type PlanChangeBreakdownProps = {
 	 */
 	collectionMode?: "automatic" | "manual";
 	className?: string;
-};
+}
 
 const SECTION_TITLES: Record<
 	"immediate" | "next" | "recurring",
@@ -56,29 +56,29 @@ function TransactionSection({
 	return (
 		<div className="flex flex-col gap-3">
 			<div>
-				<h4 className="text-sm font-medium">{title}</h4>
-				{description && <p className="text-xs text-muted-foreground">{description}</p>}
+				<h4 className="font-medium text-sm">{title}</h4>
+				{description && <p className="text-muted-foreground text-xs">{description}</p>}
 			</div>
 
 			<div className="flex flex-col gap-2">
 				{section.lineItems.map((item, index) => (
 					<div key={index} className="flex items-start justify-between gap-4 text-sm">
-						<div className="flex flex-col gap-0.5 min-w-0">
-							<span className="font-medium truncate">{item.productName}</span>
-							<span className="text-xs text-muted-foreground">
+						<div className="flex min-w-0 flex-col gap-0.5">
+							<span className="truncate font-medium">{item.productName}</span>
+							<span className="text-muted-foreground text-xs">
 								{item.quantity > 1 && `${item.quantity} \u00d7 `}
 								{formatMoney(item.unitPrice, currency)}
 								{item.isProrated && (
-									<Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0">
+									<Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">
 										Prorated
 									</Badge>
 								)}
 							</span>
 							{item.prorationPeriod && (
-								<span className="text-xs text-muted-foreground">{item.prorationPeriod}</span>
+								<span className="text-muted-foreground text-xs">{item.prorationPeriod}</span>
 							)}
 						</div>
-						<span className="tabular-nums shrink-0">{formatMoney(item.total, currency)}</span>
+						<span className="shrink-0 tabular-nums">{formatMoney(item.total, currency)}</span>
 					</div>
 				))}
 			</div>
@@ -93,7 +93,7 @@ function TransactionSection({
 				{section.totals.discount !== undefined && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">Discount</dt>
-						<dd className="tabular-nums text-success-foreground">
+						<dd className="text-success-foreground tabular-nums">
 							−{formatMoney(section.totals.discount, currency)}
 						</dd>
 					</div>
@@ -105,7 +105,7 @@ function TransactionSection({
 				{section.totals.credit !== undefined && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">Credit applied</dt>
-						<dd className="tabular-nums text-success-foreground">
+						<dd className="text-success-foreground tabular-nums">
 							−{formatMoney(section.totals.credit, currency)}
 						</dd>
 					</div>
@@ -113,12 +113,12 @@ function TransactionSection({
 				{section.totals.creditToBalance !== undefined && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">Credit to balance</dt>
-						<dd className="tabular-nums text-success-foreground">
+						<dd className="text-success-foreground tabular-nums">
 							{formatMoney(section.totals.creditToBalance, currency)}
 						</dd>
 					</div>
 				)}
-				<div className="flex justify-between gap-4 pt-1.5 border-t font-medium">
+				<div className="flex justify-between gap-4 border-t pt-1.5 font-medium">
 					<dt>Total</dt>
 					<dd className="tabular-nums">{formatMoney(section.totals.total, currency)}</dd>
 				</div>
@@ -158,7 +158,7 @@ export function PlanChangeBreakdown({
 	return (
 		<Card className={cn("flex flex-col", className)}>
 			<CardHeader>
-				<CardTitle className="text-base font-semibold">Change summary</CardTitle>
+				<CardTitle className="font-semibold text-base">Change summary</CardTitle>
 				<CardDescription>Review the financial impact of this change</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-6">
@@ -179,7 +179,7 @@ export function PlanChangeBreakdown({
 						<span className="font-medium">{resultLabel}</span>
 					</div>
 					<span
-						className={cn("text-lg font-bold tabular-nums", isCredit && "text-success-foreground")}
+						className={cn("font-bold text-lg tabular-nums", isCredit && "text-success-foreground")}
 					>
 						{isCredit
 							? `−${formatMoney(result.amount, currency)}`
@@ -258,7 +258,7 @@ function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
 				<Skeleton className="h-3 w-56" />
 			</CardHeader>
 			<CardContent className="flex flex-col gap-6">
-				<div className="rounded-lg bg-muted p-4 flex items-center justify-between">
+				<div className="flex items-center justify-between rounded-lg bg-muted p-4">
 					<div className="flex items-center gap-2">
 						<Skeleton className="h-5 w-5 rounded" />
 						<Skeleton className="h-4 w-28" />
@@ -303,7 +303,7 @@ function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
 							<Skeleton className="h-3 w-8" />
 							<Skeleton className="h-3 w-10" />
 						</div>
-						<div className="flex justify-between gap-4 pt-1.5 border-t">
+						<div className="flex justify-between gap-4 border-t pt-1.5">
 							<Skeleton className="h-4 w-12" />
 							<Skeleton className="h-4 w-14" />
 						</div>
@@ -336,7 +336,7 @@ function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
 							<Skeleton className="h-3 w-8" />
 							<Skeleton className="h-3 w-10" />
 						</div>
-						<div className="flex justify-between gap-4 pt-1.5 border-t">
+						<div className="flex justify-between gap-4 border-t pt-1.5">
 							<Skeleton className="h-4 w-12" />
 							<Skeleton className="h-4 w-14" />
 						</div>

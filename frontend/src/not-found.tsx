@@ -9,11 +9,11 @@ export default function NotFoundPage() {
 	return (
 		<AuthShell>
 			<AuthPanel className="flex flex-col items-center gap-4 text-center">
-				<p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text font-extrabold leading-none tracking-tight text-transparent text-7xl sm:text-8xl">
+				<p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text font-extrabold text-7xl text-transparent leading-none tracking-tight sm:text-8xl">
 					404
 				</p>
 				<h1 className={heading}>Page not found</h1>
-				<p className="max-w-md text-sm text-muted-foreground">
+				<p className="max-w-md text-muted-foreground text-sm">
 					We couldn't find what you're looking for. The link may be broken or the page may have
 					moved.
 				</p>

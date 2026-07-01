@@ -35,10 +35,10 @@ export default function CurrentPlanCard({
 	return (
 		<section className="space-y-4 rounded-lg border border-border bg-card p-6">
 			<header className="flex items-center justify-between">
-				<h2 className="text-lg font-semibold text-foreground">Current Plan</h2>
+				<h2 className="font-semibold text-foreground text-lg">Current Plan</h2>
 				<span
 					className={cn(
-						"inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold",
+						"inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-semibold text-sm",
 						FLASHY_TIERS.includes(billing.tier)
 							? "bg-gradient-to-r from-primary via-primary to-primary/75 text-primary-foreground shadow-sm ring-1 ring-primary/40"
 							: "bg-secondary text-secondary-foreground",
@@ -50,7 +50,7 @@ export default function CurrentPlanCard({
 			</header>
 
 			{trialing && billing.trial_days_remaining > 0 && (
-				<p className="text-sm text-muted-foreground">
+				<p className="text-muted-foreground text-sm">
 					{billing.trial_days_remaining} days remaining in your free trial.
 				</p>
 			)}
@@ -68,7 +68,7 @@ export default function CurrentPlanCard({
 				</dl>
 			)}
 
-			{children && <div className="border-t border-border pt-4">{children}</div>}
+			{children && <div className="border-border border-t pt-4">{children}</div>}
 		</section>
 	);
 }

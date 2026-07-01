@@ -19,7 +19,7 @@ vi.mock("../api/client", () => ({
 
 // /billing/status drives the proactive cap UI; default to unlimited so the
 // existing tests still exercise the regular consent flow.
-type FakeBilling = {
+interface FakeBilling {
 	caps: {
 		obsidian_connections: number | null;
 		mcp_connections: number | null;
@@ -28,7 +28,7 @@ type FakeBilling = {
 	};
 	current_connections: { obsidian: number; mcp: number };
 	device_swap_cooldown_remaining_hours: number | null;
-};
+}
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: {

@@ -70,7 +70,9 @@ export function ChecklistWidget({ onStartTour }: Props) {
 	const isFreeTier = useIsFreeTier();
 	const qc = useQueryClient();
 
-	if (ob.isLoading) return null;
+	if (ob.isLoading) {
+		return null;
+	}
 
 	const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
 	const actions = status.data?.actions ?? [];
@@ -87,8 +89,12 @@ export function ChecklistWidget({ onStartTour }: Props) {
 		// waiting for the mutation to round-trip. The mutation's onSuccess
 		// invalidates this query, so the cache will be normalized from server.
 		qc.setQueryData<OnboardingStatus>(["onboarding", "status"], (prev) => {
-			if (!prev) return prev;
-			if (prev.actions.includes(action)) return prev;
+			if (!prev) {
+				return prev;
+			}
+			if (prev.actions.includes(action)) {
+				return prev;
+			}
 			return { ...prev, actions: [...prev.actions, action] };
 		});
 
@@ -109,7 +115,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 		(connections.data ?? [])
 			.filter((c) => c.kind === "mcp")
 			.map((c) => c.slug)
-			.filter((s): s is string => !!s),
+			.filter((s): s is string => Boolean(s)),
 	);
 
 	const items: Item[] = [
@@ -162,7 +168,9 @@ export function ChecklistWidget({ onStartTour }: Props) {
 	const visible = items.filter((i) => !i.dismissed);
 	const hasActionable = items.some((i) => !(i.done || i.dismissed));
 
-	if (!hasActionable) return null;
+	if (!hasActionable) {
+		return null;
+	}
 
 	if (collapsed) {
 		return (
@@ -170,7 +178,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 				type="button"
 				size="lg"
 				aria-label="Open setup checklist"
-				className="fixed bottom-4 right-4 z-40 h-12 gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 animate-surface-attention-pulse [&_svg:not([class*='size-'])]:size-5"
+				className="fixed right-4 bottom-4 z-40 h-12 animate-surface-attention-pulse gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 [&_svg:not([class*='size-'])]:size-5"
 				onClick={() => setCollapsed(false)}
 			>
 				<Waypoints aria-hidden />
@@ -187,11 +195,11 @@ export function ChecklistWidget({ onStartTour }: Props) {
 	return (
 		<section
 			aria-label="Onboarding checklist"
-			className="fixed bottom-4 right-4 z-40 w-96 overflow-hidden rounded-xl border border-border bg-background shadow-xl ring-1 ring-primary/10"
+			className="fixed right-4 bottom-4 z-40 w-96 overflow-hidden rounded-xl border border-border bg-background shadow-xl ring-1 ring-primary/10"
 		>
-			<header className="relative flex flex-row items-center justify-between px-4 py-3 border-b border-border overflow-hidden">
+			<header className="relative flex flex-row items-center justify-between overflow-hidden border-border border-b px-4 py-3">
 				<Shimmer />
-				<h2 className="relative text-base font-semibold tracking-tight">Finish setup</h2>
+				<h2 className="relative font-semibold text-base tracking-tight">Finish setup</h2>
 				<button
 					type="button"
 					aria-label="Dismiss checklist"
@@ -209,7 +217,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 							style={{ width: `${pct}%` }}
 						/>
 					</div>
-					<p className="mt-1.5 text-xs text-muted-foreground">
+					<p className="mt-1.5 text-muted-foreground text-xs">
 						{completed} of {total} done
 					</p>
 				</div>
@@ -257,7 +265,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 				))}
 			</ul>
 			{isFreeTier && (
-				<p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+				<p className="border-border border-t px-4 py-3 text-muted-foreground text-xs">
 					You're on Free — 1 connection.{" "}
 					<Link
 						to="/onboard/billing"

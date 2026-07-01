@@ -18,19 +18,23 @@ function extractHeadings(markdown: string): Heading[] {
 		const hashes = match[1] ?? "";
 		const text = (match[2] ?? "").trim();
 		const depth = hashes.length;
-		if (depth <= 4 && text) headings.push({ depth, text, id: slugger.slug(text) });
+		if (depth <= 4 && text) {
+			headings.push({ depth, text, id: slugger.slug(text) });
+		}
 	}
 	return headings;
 }
 
 export default function NoteToc({ content }: { content: string }) {
 	const headings = useMemo(() => extractHeadings(content), [content]);
-	if (headings.length < 2) return null;
+	if (headings.length < 2) {
+		return null;
+	}
 
 	return (
 		<nav aria-label="Table of contents" className="text-sm">
-			<header className="border-b border-border px-3 py-2">
-				<p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+			<header className="border-border border-b px-3 py-2">
+				<p className="font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
 					On this page
 				</p>
 			</header>

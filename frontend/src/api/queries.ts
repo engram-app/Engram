@@ -279,7 +279,9 @@ function folderIdForPath(
 	vaultId: string | null | undefined,
 	folder: string,
 ): string | null {
-	if (folder === "") return ROOT_FOLDER_ID;
+	if (folder === "") {
+		return ROOT_FOLDER_ID;
+	}
 	return (
 		qc
 			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
@@ -317,7 +319,9 @@ export function useUpdateNote() {
 			// path. Invalidate the specific id when the server returns it,
 			// and refresh folder listings so the title/mtime stay current.
 			const id = data?.note?.id;
-			if (id != null) qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
+			if (id != null) {
+				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
+			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
 	});
@@ -404,13 +408,17 @@ export function useCreateNote() {
 		onMutate: async ({ folder }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
-			if (folderId == null) return;
+			if (folderId == null) {
+				return;
+			}
 			const key = ["folder-notes-by-id", vaultId, folderId] as const;
 			await qc.cancelQueries({ queryKey: key });
 
 			const snapshot = qc.getQueryData<NoteSummary[]>(key);
 			// Not cached (e.g. an unexpanded subfolder) — skip; it surfaces on expand.
-			if (snapshot === undefined) return;
+			if (snapshot === undefined) {
+				return;
+			}
 
 			const name = collideBump(realFilenames(snapshot), "Untitled.md", { cap: 1000 });
 			const path = folder ? `${folder}/${name}` : name;
@@ -450,7 +458,9 @@ export function useCreateNote() {
 			navigate(`/note/${id}`);
 		},
 		onError: (err, _vars, ctx) => {
-			if (ctx) qc.setQueryData(ctx.key, ctx.snapshot);
+			if (ctx) {
+				qc.setQueryData(ctx.key, ctx.snapshot);
+			}
 			if (err instanceof ApiError && err.status === 402) {
 				toast.error("You've hit your note limit — upgrade to add more.");
 			} else if (err instanceof ApiError && err.status === 403) {
@@ -801,7 +811,9 @@ export function useAppBootstrap() {
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
 			qc.setQueryData(["vaults"], data.vaults);
-			if (data.billing) qc.setQueryData(["billing", "status"], data.billing);
+			if (data.billing) {
+				qc.setQueryData(["billing", "status"], data.billing);
+			}
 			return data;
 		},
 		staleTime: Number.POSITIVE_INFINITY,
@@ -1205,7 +1217,9 @@ function updateCachedList<T>(
 	mut: (data: { notes: T[] }) => { notes: T[] },
 ) {
 	const prev = qc.getQueryData<{ notes: T[] }>(key as readonly unknown[]);
-	if (!prev) return;
+	if (!prev) {
+		return;
+	}
 	qc.setQueryData(key as readonly unknown[], mut(prev));
 }
 
@@ -1213,16 +1227,22 @@ function updateCachedList<T>(
 // mutations (and the standalone drop handler) speak the same dialect.
 function renameErrorToast(err: ApiError, kind: "file" | "folder") {
 	const noun = kind === "file" ? "note" : "folder";
-	if (err.status === 409) toast.error(`A ${noun} with that name already exists.`);
-	else if (err.status === 404)
+	if (err.status === 409) {
+		toast.error(`A ${noun} with that name already exists.`);
+	} else if (err.status === 404) {
 		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
-	else toast.error("Rename failed.");
+	} else {
+		toast.error("Rename failed.");
+	}
 }
 
 function deleteErrorToast(err: ApiError, kind: "file" | "folder") {
 	const noun = kind === "file" ? "Note" : "Folder";
-	if (err.status === 404) toast.error(`${noun} no longer exists.`);
-	else toast.error("Delete failed.");
+	if (err.status === 404) {
+		toast.error(`${noun} no longer exists.`);
+	} else {
+		toast.error("Delete failed.");
+	}
 }
 
 interface RenameNoteContext {
@@ -1337,7 +1357,9 @@ export function useRenameNote() {
 			// Adjust folder counts when the note crosses folder boundaries.
 			if (oldFolder !== newFolder && folders) {
 				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
-					if (!prev) return prev;
+					if (!prev) {
+						return prev;
+					}
 					let next = prev.folders.map((f) =>
 						f.name === oldFolder ? { ...f, count: Math.max(0, f.count - 1) } : f,
 					);
@@ -1382,13 +1404,21 @@ export function useRenameNote() {
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
-			if (!ctx) return;
+			if (!ctx) {
+				return;
+			}
 			const oldListKey = ["folderNotes", vaultId, ctx.oldFolder];
 			const newListKey = ["folderNotes", vaultId, ctx.newFolder];
 			const foldersKey = ["folders", vaultId];
-			if (ctx.oldFolderNotes !== undefined) qc.setQueryData(oldListKey, ctx.oldFolderNotes);
-			if (ctx.newFolderNotes !== undefined) qc.setQueryData(newListKey, ctx.newFolderNotes);
-			if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders);
+			if (ctx.oldFolderNotes !== undefined) {
+				qc.setQueryData(oldListKey, ctx.oldFolderNotes);
+			}
+			if (ctx.newFolderNotes !== undefined) {
+				qc.setQueryData(newListKey, ctx.newFolderNotes);
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(foldersKey, ctx.folders);
+			}
 			if (ctx.noteId != null && ctx.prevNote !== undefined) {
 				qc.setQueryData(["note", vaultId, ctx.noteId], ctx.prevNote);
 			}
@@ -1454,11 +1484,15 @@ export function useRenameFolder() {
 			// Rewrite folder names.
 			if (ctx.folders) {
 				qc.setQueryData<{ folders: Folder[] }>(foldersKey, (prev) => {
-					if (!prev) return prev;
+					if (!prev) {
+						return prev;
+					}
 					const oldPrefix = `${old_path}/`;
 					return {
 						folders: prev.folders.map((f) => {
-							if (f.name === old_path) return { ...f, name: new_path };
+							if (f.name === old_path) {
+								return { ...f, name: new_path };
+							}
 							if (f.name.startsWith(oldPrefix)) {
 								return { ...f, name: `${new_path}/${f.name.slice(oldPrefix.length)}` };
 							}
@@ -1472,8 +1506,12 @@ export function useRenameFolder() {
 			const all = qc.getQueryCache().findAll({ queryKey: ["folderNotes", vaultId] });
 			for (const q of all) {
 				const folder = q.queryKey[2] as string | undefined;
-				if (typeof folder !== "string") continue;
-				if (folder !== old_path && !folder.startsWith(`${old_path}/`)) continue;
+				if (typeof folder !== "string") {
+					continue;
+				}
+				if (folder !== old_path && !folder.startsWith(`${old_path}/`)) {
+					continue;
+				}
 				ctx.childLists.push({
 					key: q.queryKey,
 					data: qc.getQueryData<{ notes: NoteSummary[] }>(q.queryKey),
@@ -1489,8 +1527,12 @@ export function useRenameFolder() {
 			const allNotes = qc.getQueryCache().findAll({ queryKey: ["note", vaultId] });
 			for (const q of allNotes) {
 				const note = q.state.data as Note | undefined;
-				if (!note) continue;
-				if (note.folder !== old_path && !note.folder.startsWith(oldPrefix)) continue;
+				if (!note) {
+					continue;
+				}
+				if (note.folder !== old_path && !note.folder.startsWith(oldPrefix)) {
+					continue;
+				}
 				ctx.noteSnapshots.push({ id: note.id, note });
 				const suffixFolder = note.folder === old_path ? "" : note.folder.slice(oldPrefix.length);
 				const newFolder = suffixFolder ? `${new_path}/${suffixFolder}` : new_path;
@@ -1507,10 +1549,16 @@ export function useRenameFolder() {
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
-			if (!ctx) return;
-			if (ctx.folders !== undefined) qc.setQueryData(["folders", vaultId], ctx.folders);
+			if (!ctx) {
+				return;
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(["folders", vaultId], ctx.folders);
+			}
 			for (const entry of ctx.childLists) {
-				if (entry.data !== undefined) qc.setQueryData(entry.key, entry.data);
+				if (entry.data !== undefined) {
+					qc.setQueryData(entry.key, entry.data);
+				}
 			}
 			for (const snap of ctx.noteSnapshots) {
 				qc.setQueryData<Note>(["note", vaultId, snap.id], snap.note);
@@ -1584,13 +1632,21 @@ export function useDeleteNote() {
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
-			if (!ctx) return;
+			if (!ctx) {
+				return;
+			}
 			const listKey = ["folderNotes", vaultId, ctx.folder];
 			const foldersKey = ["folders", vaultId];
 			const noteKey = ["note", vaultId, ctx.id];
-			if (ctx.folderNotes !== undefined) qc.setQueryData(listKey, ctx.folderNotes);
-			if (ctx.folders !== undefined) qc.setQueryData(foldersKey, ctx.folders);
-			if (ctx.note !== undefined) qc.setQueryData(noteKey, ctx.note);
+			if (ctx.folderNotes !== undefined) {
+				qc.setQueryData(listKey, ctx.folderNotes);
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(foldersKey, ctx.folders);
+			}
+			if (ctx.note !== undefined) {
+				qc.setQueryData(noteKey, ctx.note);
+			}
 			deleteErrorToast(err, "file");
 		},
 		onSettled: () => {
@@ -1640,10 +1696,15 @@ export function useDeleteFolder() {
 			return ctx;
 		},
 		onError: (err, vars, ctx) => {
-			if (!ctx) return;
-			if (ctx.folders !== undefined) qc.setQueryData(["folders", vaultId], ctx.folders);
-			if (ctx.folderList !== undefined)
+			if (!ctx) {
+				return;
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(["folders", vaultId], ctx.folders);
+			}
+			if (ctx.folderList !== undefined) {
 				qc.setQueryData(["folderNotes", vaultId, vars.path], ctx.folderList);
+			}
 			deleteErrorToast(err, "folder");
 		},
 		onSettled: () => {
@@ -1739,9 +1800,13 @@ export function useDuplicateNote() {
 			return ctx;
 		},
 		onSuccess: (data, _vars, ctx) => {
-			if (!ctx?.key) return;
+			if (!ctx?.key) {
+				return;
+			}
 			const real = data.note;
-			if (!real?.id) return;
+			if (!real?.id) {
+				return;
+			}
 			// Swap the placeholder for the real server row so a tree consumer keying
 			// on `n.id` transitions smoothly. onSettled also invalidates; the swap
 			// avoids a momentary "missing note" flash.
@@ -1827,7 +1892,9 @@ export function useBatchDeleteNotes() {
 			const queries = qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] });
 			for (const q of queries) {
 				const data = qc.getQueryData<NoteSummary[]>(q.queryKey);
-				if (!data) continue;
+				if (!data) {
+					continue;
+				}
 				snapshots.push({ key: q.queryKey, data });
 				qc.setQueryData<NoteSummary[]>(
 					q.queryKey,
@@ -1844,7 +1911,9 @@ export function useBatchDeleteNotes() {
 			return { noteListSnapshots: snapshots };
 		},
 		onError: (_err, _vars, ctx) => {
-			if (!ctx) return;
+			if (!ctx) {
+				return;
+			}
 			for (const snap of ctx.noteListSnapshots) {
 				qc.setQueryData(snap.key, snap.data);
 			}
@@ -1903,7 +1972,9 @@ export function useBatchMoveNotes() {
 			// id-keyed cache, so a single scan covers them all.
 			for (const q of qc.getQueryCache().findAll({ queryKey: ["folder-notes-by-id", vaultId] })) {
 				const data = qc.getQueryData<NoteSummary[]>(q.queryKey);
-				if (!data) continue;
+				if (!data) {
+					continue;
+				}
 				snapshots.push({ key: q.queryKey, data });
 				const folderId = q.queryKey[2] as string | null | undefined;
 				// Resolve this source list's folder PATH so the count decrement matches
@@ -1944,7 +2015,9 @@ export function useBatchMoveNotes() {
 				});
 				const targetKey = ["folder-notes-by-id", vaultId, targetCacheId] as const;
 				const targetData = qc.getQueryData<NoteSummary[]>(targetKey);
-				if (targetData) qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched]);
+				if (targetData) {
+					qc.setQueryData<NoteSummary[]>(targetKey, [...targetData, ...patched]);
+				}
 			}
 
 			// Patch the individual `['note', vaultId, id]` caches so an open viewer
@@ -1954,7 +2027,9 @@ export function useBatchMoveNotes() {
 				const dest = targetFolderName;
 				for (const id of ids) {
 					const note = qc.getQueryData<Note>(["note", vaultId, id]);
-					if (!note) continue;
+					if (!note) {
+						continue;
+					}
 					const filename = note.path.includes("/")
 						? note.path.slice(note.path.lastIndexOf("/") + 1)
 						: note.path;
@@ -1986,8 +2061,12 @@ export function useBatchMoveNotes() {
 						// derived folder has a null id in the raw cache, so id matching
 						// would miss it.
 						const removed = removedPerName.get(f.name);
-						if (removed) count -= removed;
-						if (target_folder !== "" && f.name === target_folder) count += moved.length;
+						if (removed) {
+							count -= removed;
+						}
+						if (target_folder !== "" && f.name === target_folder) {
+							count += moved.length;
+						}
 						return count === f.count ? f : { ...f, count };
 					});
 					qc.setQueryData<{ folders: Folder[] }>(["folders", vaultId], { folders: patched });
@@ -1997,11 +2076,15 @@ export function useBatchMoveNotes() {
 			return { noteListSnapshots: snapshots, folders: foldersSnapshot };
 		},
 		onError: (_err, _vars, ctx) => {
-			if (!ctx) return;
+			if (!ctx) {
+				return;
+			}
 			for (const snap of ctx.noteListSnapshots) {
 				qc.setQueryData(snap.key, snap.data);
 			}
-			if (ctx.folders !== undefined) qc.setQueryData(["folders", vaultId], ctx.folders);
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(["folders", vaultId], ctx.folders);
+			}
 			toast.error("Batch move failed.");
 		},
 		onSuccess: () => {
@@ -2078,8 +2161,12 @@ export function useBatchDeleteFolders() {
 			return ctx;
 		},
 		onError: (_err, _vars, ctx) => {
-			if (!ctx) return;
-			if (ctx.folders !== undefined) qc.setQueryData(["folders", vaultId], ctx.folders);
+			if (!ctx) {
+				return;
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(["folders", vaultId], ctx.folders);
+			}
 			for (const snap of ctx.noteListSnapshots) {
 				qc.setQueryData(snap.key, snap.data);
 			}
@@ -2115,7 +2202,9 @@ export function useBatchMoveFolders() {
 
 			const folders = qc.getQueryData<{ folders: Folder[] }>(foldersKey);
 			const ctx: BatchFoldersContext = { folders, noteListSnapshots: [] };
-			if (!folders) return ctx;
+			if (!folders) {
+				return ctx;
+			}
 
 			// Destination is the parent PATH ('' = top level). Children link to the
 			// target's loader id — a real marker id, else the stable `syn:<path>` id a
@@ -2159,7 +2248,9 @@ export function useBatchMoveFolders() {
 					const oldOriginal = folders.folders.find(
 						(m) => idSet.has(m.id) && (f.name === m.name || f.name.startsWith(`${m.name}/`)),
 					);
-					if (!oldOriginal) return f;
+					if (!oldOriginal) {
+						return f;
+					}
 					const slash = oldOriginal.name.lastIndexOf("/");
 					const basename = slash < 0 ? oldOriginal.name : oldOriginal.name.slice(slash + 1);
 					const newRoot = targetName ? `${targetName}/${basename}` : basename;
@@ -2173,8 +2264,12 @@ export function useBatchMoveFolders() {
 			return ctx;
 		},
 		onError: (_err, _vars, ctx) => {
-			if (!ctx) return;
-			if (ctx.folders !== undefined) qc.setQueryData(["folders", vaultId], ctx.folders);
+			if (!ctx) {
+				return;
+			}
+			if (ctx.folders !== undefined) {
+				qc.setQueryData(["folders", vaultId], ctx.folders);
+			}
 			toast.error("Batch move failed.");
 		},
 		onSuccess: () => {

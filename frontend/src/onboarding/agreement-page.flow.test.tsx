@@ -31,7 +31,9 @@ function LocationProbe() {
 // and routes the user wherever the *current cache value* says.
 function OnboardRedirect() {
 	const { data, isLoading } = useOnboardingStatus();
-	if (isLoading || !data) return null;
+	if (isLoading || !data) {
+		return null;
+	}
 	return <Navigate to={`/onboard/${data.next_step}`} replace />;
 }
 
@@ -68,17 +70,23 @@ describe("AgreementPage accept-then-redirect flow", () => {
 		let accepted = false;
 		let statusGetCalls = 0;
 		get.mockImplementation(async (url: string) => {
-			if (url !== "/onboarding/status") throw new Error(`unexpected GET ${url}`);
+			if (url !== "/onboarding/status") {
+				throw new Error(`unexpected GET ${url}`);
+			}
 			statusGetCalls++;
 			// The initial mount fetch returns instantly so the page renders. The
 			// refetch that invalidation triggers takes 80ms — long enough that
 			// OnboardRedirect would observably read a stale cache if onSuccess
 			// didn't await invalidation.
-			if (statusGetCalls > 1) await new Promise((r) => setTimeout(r, 80));
+			if (statusGetCalls > 1) {
+				await new Promise((r) => setTimeout(r, 80));
+			}
 			return accepted ? STATUS_AFTER : STATUS_BEFORE;
 		});
 		post.mockImplementation(async (url: string) => {
-			if (url !== "/onboarding/accept-terms") throw new Error(`unexpected POST ${url}`);
+			if (url !== "/onboarding/accept-terms") {
+				throw new Error(`unexpected POST ${url}`);
+			}
 			await new Promise((r) => setTimeout(r, 20));
 			accepted = true;
 			return { version: "v2.0", accepted_at: "now" };

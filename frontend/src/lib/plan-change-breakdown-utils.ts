@@ -14,17 +14,17 @@ import type {
 // and omits `billing_period`.
 // ---
 
-type AmountWithCurrency = {
+interface AmountWithCurrency {
 	amount: string;
 	currencyCode: string;
-};
+}
 
-type LineItemTotals = {
+interface LineItemTotals {
 	subtotal: string;
 	total: string;
 	tax: string;
 	discount: string;
-};
+}
 
 type Proration = {
 	rate: string;
@@ -34,15 +34,15 @@ type Proration = {
 	};
 } | null;
 
-type LineItem = {
+interface LineItem {
 	product: { name: string };
 	quantity: number;
 	unitTotals: { subtotal: string };
 	totals: LineItemTotals;
 	proration?: Proration;
-};
+}
 
-type TransactionTotals = {
+interface TransactionTotals {
 	subtotal: string;
 	discount: string;
 	tax: string;
@@ -50,22 +50,22 @@ type TransactionTotals = {
 	grandTotal: string;
 	credit: string;
 	creditToBalance?: string;
-};
+}
 
-type TransactionPreview = {
+interface TransactionPreview {
 	billingPeriod?: { startsAt?: string | null; endsAt?: string | null } | null;
 	details: {
 		totals: TransactionTotals;
 		lineItems: LineItem[];
 	};
-};
+}
 
-type RecurringTransactionDetails = {
+interface RecurringTransactionDetails {
 	totals: TransactionTotals & { currencyCode: string };
 	lineItems: LineItem[];
-};
+}
 
-type UpdateSummary = {
+interface UpdateSummary {
 	credit: AmountWithCurrency;
 	charge: AmountWithCurrency;
 	result: {
@@ -73,15 +73,15 @@ type UpdateSummary = {
 		amount: string;
 		currencyCode: string;
 	};
-};
+}
 
-type BreakdownPreviewResponse = {
+interface BreakdownPreviewResponse {
 	currencyCode: string;
 	updateSummary: UpdateSummary;
 	immediateTransaction?: TransactionPreview | null;
 	nextTransaction?: TransactionPreview | null;
 	recurringTransactionDetails?: RecurringTransactionDetails | null;
-};
+}
 
 function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineItemData[] {
 	return items.map((item) => {

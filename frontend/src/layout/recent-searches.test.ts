@@ -19,7 +19,9 @@ describe("recent-searches", () => {
 	});
 
 	it("caps at 8 entries", () => {
-		for (let i = 0; i < 10; i++) pushRecent(`q${i}`);
+		for (let i = 0; i < 10; i++) {
+			pushRecent(`q${i}`);
+		}
 		expect(readRecent()).toHaveLength(8);
 		expect(readRecent()[0]).toBe("q9");
 	});

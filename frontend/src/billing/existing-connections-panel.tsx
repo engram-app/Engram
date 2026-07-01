@@ -31,15 +31,19 @@ export function ExistingConnectionsPanel({
 	const [busyId, setBusyId] = useState<string | null>(null);
 
 	if (isLoading) {
-		return <p className="text-sm text-muted-foreground">Loading current connection…</p>;
+		return <p className="text-muted-foreground text-sm">Loading current connection…</p>;
 	}
 
 	const existing = (connections ?? []).filter((c) => c.kind === kind);
-	if (existing.length === 0) return null;
+	if (existing.length === 0) {
+		return null;
+	}
 
 	async function disconnect(c: Connection) {
 		const id = connectionId(c);
-		if (!id) return;
+		if (!id) {
+			return;
+		}
 		setBusyId(id);
 		try {
 			const path = c.kind === "obsidian" ? `/connections/device/${id}` : `/connections/oauth/${id}`;
@@ -79,7 +83,7 @@ export function ExistingConnectionsPanel({
 								<span className="truncate text-foreground">
 									{c.name ?? "(unnamed)"}
 									{c.connected_at ? (
-										<span className="ml-2 text-xs text-muted-foreground">
+										<span className="ml-2 text-muted-foreground text-xs">
 											since {new Date(c.connected_at).toLocaleDateString()}
 										</span>
 									) : null}

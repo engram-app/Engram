@@ -50,16 +50,16 @@ export default function OnboardBillingPage() {
 	}
 
 	return (
-		<section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pb-8 pt-5 sm:pt-8">
+		<section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pt-5 pb-8 sm:pt-8">
 			<div className="rounded-2xl border border-border bg-background p-4 sm:p-8">
 				{/* Header is hidden once a plan is chosen (checkout view open) so it
             doesn't sit stuck above the Paddle payment form. */}
 				{!checkoutActive && (
 					<header className="mb-4 text-center sm:mb-8">
-						<h1 className="text-2xl font-extrabold tracking-tight text-foreground sm:text-4xl">
+						<h1 className="font-extrabold text-2xl text-foreground tracking-tight sm:text-4xl">
 							Choose your plan
 						</h1>
-						<p className="mx-auto mt-1.5 max-w-md text-balance text-sm text-muted-foreground sm:mt-3 sm:text-base">
+						<p className="mx-auto mt-1.5 max-w-md text-balance text-muted-foreground text-sm sm:mt-3 sm:text-base">
 							7-day free trial on paid plans. Card required, no charge until it ends.
 						</p>
 					</header>
@@ -76,16 +76,16 @@ export default function OnboardBillingPage() {
 				{/* Desktop: understated bottom link — also hidden during checkout so it
             doesn't sit stuck below the payment form. */}
 				{!checkoutActive && (
-					<section className="mt-12 hidden border-t border-border pt-8 text-center sm:block">
+					<section className="mt-12 hidden border-border border-t pt-8 text-center sm:block">
 						<button
 							type="button"
 							onClick={handleContinueFree}
 							disabled={freeLoading}
-							className="text-sm font-medium text-muted-foreground underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+							className="font-medium text-muted-foreground text-sm underline underline-offset-4 hover:text-foreground disabled:opacity-50"
 						>
 							Continue with Free →
 						</button>
-						<p className="mt-2 text-xs text-muted-foreground">
+						<p className="mt-2 text-muted-foreground text-xs">
 							{FREE_TIER.summary} · upgrade anytime
 						</p>
 					</section>

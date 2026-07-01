@@ -73,7 +73,9 @@ export class CrdtManager {
 	closeDoc(path: string): void {
 		const id = this.docId(path);
 		const e = this.docs.get(id);
-		if (!e) return;
+		if (!e) {
+			return;
+		}
 		e.doc.destroy();
 		void e.persistence.destroy();
 		this.docs.delete(id);
@@ -124,7 +126,9 @@ export class CrdtManager {
 		// Single listener: local updates go to the channel; remote-origin updates
 		// are skipped. No disk-flush listener — the web has no local file.
 		doc.on("update", (update: Uint8Array, origin: unknown) => {
-			if (origin === REMOTE_ORIGIN) return;
+			if (origin === REMOTE_ORIGIN) {
+				return;
+			}
 			this.opts.onUpdate(id, update, origin);
 		});
 		const ready: Promise<void> = persistence.whenSynced.then(() => undefined);

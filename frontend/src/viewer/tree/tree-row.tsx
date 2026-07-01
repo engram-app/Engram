@@ -38,7 +38,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 		const tree = instance.getTree();
 		return (
 			<div
-				className="flex items-center gap-1 py-0.5 pl-1 pr-3"
+				className="flex items-center gap-1 py-0.5 pr-3 pl-1"
 				style={{ paddingLeft: `${item.kind === "folder" ? folderPad : notePad}px` }}
 			>
 				<RenameInput
@@ -120,7 +120,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				/>
 				<span className="min-w-0 flex-1 truncate">{filename}</span>
 				{ext && (
-					<span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">
+					<span className="shrink-0 text-gray-400 text-xs dark:text-gray-500">
 						{ext.toUpperCase()}
 					</span>
 				)}
@@ -154,7 +154,7 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 			<IndentGuides depth={depth} />
 			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
 			{item.ext && item.ext !== "md" && (
-				<span className="shrink-0 text-xs uppercase text-gray-400 dark:text-gray-500">
+				<span className="shrink-0 text-gray-400 text-xs uppercase dark:text-gray-500">
 					{item.ext}
 				</span>
 			)}
@@ -179,7 +179,9 @@ function rowClass(instance: ItemInstance<LoaderItem>): string {
 }
 
 function leafName(item: TreeItem): string {
-	if (item.kind === "folder") return item.name;
+	if (item.kind === "folder") {
+		return item.name;
+	}
 	return item.path.split("/").pop() ?? item.path;
 }
 
@@ -199,7 +201,9 @@ const INDENT_STEP = 12;
 const guideCache = new Map<number, React.ReactNode>();
 
 function IndentGuides({ depth }: { depth: number }) {
-	if (depth <= 0) return null;
+	if (depth <= 0) {
+		return null;
+	}
 	let guides = guideCache.get(depth);
 	if (!guides) {
 		guides = Array.from({ length: depth }, (_, i) => (
@@ -219,7 +223,7 @@ function Chevron({ open }: { open: boolean }) {
 	return (
 		<ChevronRight
 			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${
+			className={`h-4 w-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500 ${
 				open ? "rotate-90" : ""
 			}`}
 		/>

@@ -15,7 +15,9 @@ export default async function globalTeardown() {
 }
 
 async function cleanupClerkUser() {
-	if (!fs.existsSync(AUTH_STATE_PATH)) return;
+	if (!fs.existsSync(AUTH_STATE_PATH)) {
+		return;
+	}
 
 	const state = JSON.parse(fs.readFileSync(AUTH_STATE_PATH, "utf-8"));
 

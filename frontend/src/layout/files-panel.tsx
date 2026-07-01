@@ -9,8 +9,8 @@ export default function FilesPanel() {
 	return (
 		<FolderTreeProvider>
 			<div className="flex h-full flex-col">
-				<header className="flex shrink-0 items-center border-b border-border px-3 py-2">
-					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+				<header className="flex shrink-0 items-center border-border border-b px-3 py-2">
+					<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 						Files
 					</h2>
 				</header>
@@ -22,7 +22,7 @@ export default function FilesPanel() {
 						<div
 							data-tour="sidebar-vaults"
 							aria-hidden
-							className="pointer-events-none absolute inset-x-0 bottom-0 -top-24"
+							className="pointer-events-none absolute inset-x-0 -top-24 bottom-0"
 						/>
 					)}
 				</section>

@@ -13,7 +13,7 @@ export default function AppSidebarPanel() {
 		<div className="flex h-full flex-col">
 			<div className="min-h-0 flex-1">{view === "files" ? <FilesPanel /> : <SearchPanel />}</div>
 			{showFreeFooter && (
-				<div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+				<div className="border-border border-t px-3 py-2 text-muted-foreground text-xs">
 					Free tier — 1 connection.{" "}
 					<Link
 						to="/settings/billing"

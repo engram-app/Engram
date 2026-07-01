@@ -20,12 +20,18 @@ export interface UpgradeRequiredDialogProps {
 }
 
 function isConnectionCap(reason: string): "mcp" | "obsidian" | null {
-	if (reason === "mcp_connections_exceeded") return "mcp";
+	if (reason === "mcp_connections_exceeded") {
+		return "mcp";
+	}
 	// concurrent_devices_exceeded (device-flow) and obsidian_connections_exceeded
 	// (OAuth consent) both bottom out on Obsidian-kind grants — the user wants
 	// to swap whichever one is occupying the slot.
-	if (reason === "obsidian_connections_exceeded") return "obsidian";
-	if (reason === "concurrent_devices_exceeded") return "obsidian";
+	if (reason === "obsidian_connections_exceeded") {
+		return "obsidian";
+	}
+	if (reason === "concurrent_devices_exceeded") {
+		return "obsidian";
+	}
 	return null;
 }
 

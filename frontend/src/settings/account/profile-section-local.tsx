@@ -32,7 +32,7 @@ export function ProfileSectionLocal() {
 	return (
 		<SettingsSectionCard title="Profile" description="How your name appears in the app.">
 			<form onSubmit={onSubmit} className="space-y-3">
-				<label className="block text-sm font-medium text-foreground" htmlFor="display-name">
+				<label className="block font-medium text-foreground text-sm" htmlFor="display-name">
 					Display name
 					<input
 						id="display-name"

@@ -5,11 +5,16 @@ export type RailView = "files" | "search";
 const STORAGE_KEY = "engram:rail-view";
 const VALID: ReadonlySet<RailView> = new Set(["files", "search"]);
 
-type Ctx = { view: RailView; setView: (v: RailView) => void };
+interface Ctx {
+	view: RailView;
+	setView: (v: RailView) => void;
+}
 const RailViewCtx = createContext<Ctx | null>(null);
 
 function readStored(): RailView {
-	if (typeof window === "undefined") return "files";
+	if (typeof window === "undefined") {
+		return "files";
+	}
 	const raw = window.localStorage.getItem(STORAGE_KEY);
 	return raw && VALID.has(raw as RailView) ? (raw as RailView) : "files";
 }
@@ -27,6 +32,8 @@ export function RailViewProvider({ children }: { children: ReactNode }) {
 
 export function useRailView(): Ctx {
 	const ctx = useContext(RailViewCtx);
-	if (!ctx) throw new Error("useRailView must be used inside RailViewProvider");
+	if (!ctx) {
+		throw new Error("useRailView must be used inside RailViewProvider");
+	}
 	return ctx;
 }

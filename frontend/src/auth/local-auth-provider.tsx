@@ -8,7 +8,9 @@ import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-
 function parseJwtPayload(token: string): Record<string, unknown> | null {
 	try {
 		const base64 = token.split(".")[1];
-		if (!base64) return null;
+		if (!base64) {
+			return null;
+		}
 		const json = atob(base64.replace(/-/gu, "+").replace(/_/gu, "/"));
 		return JSON.parse(json);
 	} catch {
@@ -28,7 +30,9 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 		// backend with a token revoked microseconds ago. The backend's leeway
 		// window catches that race, but client-side dedup is still the cheaper
 		// first line of defense (avoids the round-trip + an extra DB rotate).
-		if (refreshPromiseRef.current) return refreshPromiseRef.current;
+		if (refreshPromiseRef.current) {
+			return refreshPromiseRef.current;
+		}
 
 		const promise = fetch(joinApiUrl(getApiBase(), "/api/auth/refresh"), {
 			method: "POST",
@@ -69,7 +73,9 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 	}, [doRefresh]);
 
 	const getToken = useCallback(async () => {
-		if (!accessToken) return null;
+		if (!accessToken) {
+			return null;
+		}
 
 		// Check if token is expired (with 60s buffer)
 		const payload = parseJwtPayload(accessToken);
@@ -138,7 +144,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 	const adapter: AuthAdapter = useMemo(
 		() => ({
 			isLoaded,
-			isSignedIn: !!accessToken,
+			isSignedIn: Boolean(accessToken),
 			user,
 			getToken,
 			login,

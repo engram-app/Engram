@@ -13,7 +13,9 @@ const Ctx = createContext<UploadApi | null>(null);
 
 export function useAttachmentUpload(): UploadApi {
 	const v = useContext(Ctx);
-	if (!v) throw new Error("useAttachmentUpload must be used within AttachmentUploadProvider");
+	if (!v) {
+		throw new Error("useAttachmentUpload must be used within AttachmentUploadProvider");
+	}
 	return v;
 }
 
@@ -36,10 +38,15 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	// the button never flashes an empty dialog). Files present → open directly.
 	const openUpload = useCallback(
 		(dropped?: File[], defaultFolder = "") => {
-			if (demoActive) return;
+			if (demoActive) {
+				return;
+			}
 			setPendingFolder(defaultFolder);
-			if (dropped && dropped.length > 0) setFiles(dropped);
-			else pickerRef.current?.click();
+			if (dropped && dropped.length > 0) {
+				setFiles(dropped);
+			} else {
+				pickerRef.current?.click();
+			}
 		},
 		[demoActive],
 	);
@@ -49,19 +56,27 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	// single most important invariant of this feature. Demo vaults register no
 	// listeners at all, so the overlay never appears mid-tour.
 	useEffect(() => {
-		if (demoActive) return;
+		if (demoActive) {
+			return;
+		}
 		const onEnter = (e: DragEvent) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e)) {
+				return;
+			}
 			e.preventDefault();
 			depth.current += 1;
 			setDragging(true);
 		};
 		const onOver = (e: DragEvent) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e)) {
+				return;
+			}
 			e.preventDefault(); // required so 'drop' fires
 		};
 		const onLeave = (e: DragEvent) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e)) {
+				return;
+			}
 			depth.current -= 1;
 			if (depth.current <= 0) {
 				depth.current = 0;
@@ -69,7 +84,9 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			}
 		};
 		const onDrop = (e: DragEvent) => {
-			if (!hasFiles(e)) return;
+			if (!hasFiles(e)) {
+				return;
+			}
 			e.preventDefault();
 			depth.current = 0;
 			setDragging(false);
@@ -103,15 +120,17 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				onChange={(e) => {
 					const picked = Array.from(e.target.files ?? []);
 					e.target.value = "";
-					if (picked.length > 0) setFiles(picked);
+					if (picked.length > 0) {
+						setFiles(picked);
+					}
 				}}
 			/>
 			{dragging && (
 				<div
 					aria-hidden
-					className="fixed inset-0 z-50 flex items-center justify-center bg-blue-500/10 ring-2 ring-inset ring-blue-400 backdrop-blur-sm"
+					className="fixed inset-0 z-50 flex items-center justify-center bg-blue-500/10 ring-2 ring-blue-400 ring-inset backdrop-blur-sm"
 				>
-					<p className="rounded-lg bg-card px-6 py-4 text-lg font-medium shadow-xl">
+					<p className="rounded-lg bg-card px-6 py-4 font-medium text-lg shadow-xl">
 						Drop files to upload
 					</p>
 				</div>

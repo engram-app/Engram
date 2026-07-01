@@ -5,7 +5,7 @@ import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 // Input shapes — minimal types matching the Paddle Node SDK / API response.
 // ---
 
-type MethodDetails = {
+interface MethodDetails {
 	type: string;
 	card?: {
 		type?: string | null;
@@ -13,28 +13,28 @@ type MethodDetails = {
 		expiryMonth?: number | null;
 		expiryYear?: number | null;
 	} | null;
-};
+}
 
-type PaymentEntry = {
+interface PaymentEntry {
 	methodDetails?: MethodDetails | null;
-};
+}
 
-type PaddleTransaction = {
+interface PaddleTransaction {
 	payments?: PaymentEntry[] | null;
 	details?: {
 		totals?: {
 			grandTotal?: string | null;
 		} | null;
 	} | null;
-};
+}
 
-type PaddleSubscription = {
+interface PaddleSubscription {
 	currencyCode: string;
 	nextBilledAt?: string | null;
 	managementUrls?: {
 		updatePaymentMethod?: string | null;
 	} | null;
-};
+}
 
 /**
  * Extracts the `NextPaymentData` display contract from a Paddle subscription.
@@ -59,7 +59,9 @@ export function mapSubscriptionToNextPayment(
 	subscription: PaddleSubscription,
 	nextTransaction?: PaddleTransaction | null,
 ): NextPaymentData | undefined {
-	if (!subscription.nextBilledAt) return;
+	if (!subscription.nextBilledAt) {
+		return;
+	}
 
 	const amount = nextTransaction?.details?.totals?.grandTotal
 		? parseAmount(nextTransaction.details.totals.grandTotal, subscription.currencyCode)
@@ -95,7 +97,9 @@ export function mapTransactionToPaymentMethod(
 	transaction?: PaddleTransaction | null,
 ): PaymentMethodData | undefined {
 	const methodDetails = transaction?.payments?.[0]?.methodDetails;
-	if (!methodDetails) return;
+	if (!methodDetails) {
+		return;
+	}
 
 	return {
 		type: methodDetails.type,

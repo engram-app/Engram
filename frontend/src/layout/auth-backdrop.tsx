@@ -4,9 +4,9 @@
 export default function AuthBackdrop() {
 	return (
 		<div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden="true">
-			<div className="absolute inset-0 grid-overlay opacity-30" />
-			<div className="absolute -left-32 -top-32 h-96 w-96 neural-glow-purple opacity-60" />
-			<div className="absolute -bottom-32 -right-32 h-96 w-96 neural-glow-cyan opacity-60" />
+			<div className="grid-overlay absolute inset-0 opacity-30" />
+			<div className="neural-glow-purple absolute -top-32 -left-32 h-96 w-96 opacity-60" />
+			<div className="neural-glow-cyan absolute -right-32 -bottom-32 h-96 w-96 opacity-60" />
 		</div>
 	);
 }

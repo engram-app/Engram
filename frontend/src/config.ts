@@ -61,7 +61,9 @@ export async function loadConfig(): Promise<EngramConfig> {
 	const injected = (window as unknown as { __ENGRAM_CONFIG__?: Record<string, unknown> })
 		.__ENGRAM_CONFIG__;
 
-	if (injected) return normalize(injected);
+	if (injected) {
+		return normalize(injected);
+	}
 
 	try {
 		const res = await fetch("/config.json", { cache: "no-cache" });

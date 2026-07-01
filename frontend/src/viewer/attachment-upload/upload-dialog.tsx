@@ -20,8 +20,12 @@ interface Props {
 }
 
 function humanSize(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	if (bytes < 1024) {
+		return `${bytes} B`;
+	}
+	if (bytes < 1024 * 1024) {
+		return `${(bytes / 1024).toFixed(1)} KB`;
+	}
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
@@ -48,7 +52,9 @@ function messageFor(err: unknown): string {
 	}
 	if (err instanceof ApiError || (err instanceof Error && err.name === "ApiError")) {
 		const apiErr = err as ApiError;
-		if (apiErr.status === 415) return "This file type is not allowed";
+		if (apiErr.status === 415) {
+			return "This file type is not allowed";
+		}
 		return apiErr.message || "Upload failed";
 	}
 	return "Upload failed";
@@ -77,11 +83,17 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	// the selection so the picker is operable without a mouse.
 	function onFolderKeyDown(e: React.KeyboardEvent) {
 		let next = activeIndex;
-		if (e.key === "ArrowDown") next = Math.min(activeIndex + 1, candidates.length - 1);
-		else if (e.key === "ArrowUp") next = Math.max(activeIndex - 1, 0);
-		else if (e.key === "Home") next = 0;
-		else if (e.key === "End") next = candidates.length - 1;
-		else return;
+		if (e.key === "ArrowDown") {
+			next = Math.min(activeIndex + 1, candidates.length - 1);
+		} else if (e.key === "ArrowUp") {
+			next = Math.max(activeIndex - 1, 0);
+		} else if (e.key === "Home") {
+			next = 0;
+		} else if (e.key === "End") {
+			next = candidates.length - 1;
+		} else {
+			return;
+		}
 		e.preventDefault();
 		setFolder(candidates[next] ?? "");
 	}
@@ -92,7 +104,9 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 		// (partial success is first-class).
 		try {
 			for (const [i, row] of rows.entries()) {
-				if (row.status === "done") continue;
+				if (row.status === "done") {
+					continue;
+				}
 				setRows((r) => patch(r, i, { status: "uploading", error: undefined }));
 				try {
 					const content_base64 = await fileToBase64(row.file);
@@ -116,7 +130,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 
 	function addFiles(picked: FileList | null) {
 		const more = Array.from(picked ?? []);
-		if (more.length) {
+		if (more.length > 0) {
 			setRows((r) => [...r, ...more.map((file) => ({ file, status: "pending" as RowStatus }))]);
 		}
 	}
@@ -129,8 +143,8 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 			aria-label="Upload attachments"
 			className="fixed inset-0 z-50 m-auto h-[28rem] w-[32rem] rounded-lg bg-card p-0 shadow-xl"
 		>
-			<header className="flex items-center justify-between border-b border-border px-4 py-3">
-				<h2 className="text-sm font-semibold">Upload attachments</h2>
+			<header className="flex items-center justify-between border-border border-b px-4 py-3">
+				<h2 className="font-semibold text-sm">Upload attachments</h2>
 				<Button variant="ghost" size="sm" onClick={onClose}>
 					Close
 				</Button>
@@ -138,7 +152,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 
 			{candidates.length > 1 && (
 				<section className="px-4 py-3">
-					<label className="mb-1 block text-xs font-medium text-muted-foreground">
+					<label className="mb-1 block font-medium text-muted-foreground text-xs">
 						Destination folder
 					</label>
 					<ul
@@ -169,10 +183,10 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 				{rows.map((row, i) => (
 					<li
 						key={`${row.file.name}-${i}`}
-						className="flex items-center justify-between border-b border-border/50 py-1.5 text-sm"
+						className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm"
 					>
 						<span className="truncate">{row.file.name}</span>
-						<span className="ml-2 shrink-0 text-xs text-muted-foreground">
+						<span className="ml-2 shrink-0 text-muted-foreground text-xs">
 							{row.status === "error" ? (
 								<span className="text-red-600 dark:text-red-400">{row.error}</span>
 							) : row.status === "uploading" ? (
@@ -187,7 +201,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 				))}
 			</ul>
 
-			<footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+			<footer className="flex items-center justify-end gap-2 border-border border-t px-4 py-3">
 				<input
 					ref={addRef}
 					type="file"

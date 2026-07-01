@@ -29,7 +29,9 @@ export default function LocalSignUp() {
 
 	// Navigate after auth state propagates (React 18 batching)
 	useEffect(() => {
-		if (isSignedIn) navigate(ROUTES.HOME, { replace: true });
+		if (isSignedIn) {
+			navigate(ROUTES.HOME, { replace: true });
+		}
 	}, [isSignedIn, navigate]);
 
 	// Preview the invite (non-enumerating: bad/expired/revoked → {valid:false}).
@@ -56,7 +58,9 @@ export default function LocalSignUp() {
 		setLoading(true);
 
 		try {
-			if (!register) throw new Error("Registration not available for this auth provider");
+			if (!register) {
+				throw new Error("Registration not available for this auth provider");
+			}
 			await register(email, password, invite || undefined);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Registration failed");
@@ -105,12 +109,12 @@ export default function LocalSignUp() {
 							{gated === "closed" ? "Sign-ups are closed" : "Invite required"}
 						</h1>
 					</div>
-					<p className="text-center text-sm text-muted-foreground">
+					<p className="text-center text-muted-foreground text-sm">
 						{gated === "closed"
 							? "This Engram instance is not accepting new accounts. Contact your admin if you think this is a mistake."
 							: "Sign-ups on this instance require an invite link. Contact your admin to request one — they can generate one from Settings → Administration."}
 					</p>
-					<p className="text-center text-sm text-muted-foreground">
+					<p className="text-center text-muted-foreground text-sm">
 						<Link to={ROUTES.SIGN_IN} className="font-medium text-primary hover:underline">
 							Back to sign in
 						</Link>
@@ -136,7 +140,7 @@ export default function LocalSignUp() {
 				{bootstrap?.bootstrap_pending && (
 					<>
 						<aside
-							className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground"
+							className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm"
 							role="status"
 						>
 							<p className="font-medium">Welcome — you're setting up this instance.</p>
@@ -148,7 +152,7 @@ export default function LocalSignUp() {
 						</aside>
 
 						<aside
-							className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+							className="rounded-md border border-border bg-muted/30 px-3 py-2 text-muted-foreground text-xs"
 							role="note"
 						>
 							Engram self-host is in active development — your feedback shapes what ships next. File
@@ -176,14 +180,14 @@ export default function LocalSignUp() {
 				{invite &&
 					invitePreview &&
 					(invitePreview.valid ? (
-						<p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground">
+						<p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm">
 							You've been invited{invitePreview.label ? ` (${invitePreview.label})` : ""} — finish
 							below to join.
 						</p>
 					) : (
 						<p
 							role="alert"
-							className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-foreground"
+							className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-foreground text-sm"
 						>
 							This invite link is invalid, expired, or already used.
 						</p>
@@ -196,7 +200,7 @@ export default function LocalSignUp() {
 				)}
 
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Email</span>
+					<span className="font-medium text-foreground text-sm">Email</span>
 					<input
 						type="email"
 						required
@@ -207,7 +211,7 @@ export default function LocalSignUp() {
 				</label>
 
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Password</span>
+					<span className="font-medium text-foreground text-sm">Password</span>
 					<input
 						type="password"
 						required
@@ -219,7 +223,7 @@ export default function LocalSignUp() {
 				</label>
 
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Confirm password</span>
+					<span className="font-medium text-foreground text-sm">Confirm password</span>
 					<input
 						type="password"
 						required
@@ -233,7 +237,7 @@ export default function LocalSignUp() {
 					{loading ? "Creating account…" : "Create account"}
 				</Button>
 
-				<p className="text-center text-sm text-muted-foreground">
+				<p className="text-center text-muted-foreground text-sm">
 					Already have an account?{" "}
 					<Link to={ROUTES.SIGN_IN} className="font-medium text-primary hover:underline">
 						Sign in

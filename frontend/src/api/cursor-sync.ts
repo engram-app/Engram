@@ -38,7 +38,9 @@ const inflight = new Map<string, Promise<void>>();
  */
 export function runCursorSync(vaultId: string, queryClient: QueryClient): Promise<void> {
 	const existing = inflight.get(vaultId);
-	if (existing) return existing;
+	if (existing) {
+		return existing;
+	}
 	const run = doCursorSync(vaultId, queryClient).finally(() => inflight.delete(vaultId));
 	inflight.set(vaultId, run);
 	return run;
@@ -57,7 +59,9 @@ async function doCursorSync(vaultId: string, queryClient: QueryClient): Promise<
 	const cursor = getCursor(vaultId);
 	if (cursor == null) {
 		const seeded = await bootstrap();
-		if (stillActive(vaultId)) setCursor(vaultId, seeded);
+		if (stillActive(vaultId)) {
+			setCursor(vaultId, seeded);
+		}
 		return;
 	}
 	try {
@@ -68,7 +72,9 @@ async function doCursorSync(vaultId: string, queryClient: QueryClient): Promise<
 		// normal queries already hold current state.
 		if (e instanceof ApiError && (e.status === 400 || e.status === 410)) {
 			const seeded = await bootstrap();
-			if (stillActive(vaultId)) setCursor(vaultId, seeded);
+			if (stillActive(vaultId)) {
+				setCursor(vaultId, seeded);
+			}
 			return;
 		}
 		throw e;
@@ -95,15 +101,21 @@ async function pullLoop(
 		// Vault switched while this page was in flight → it was fetched under the
 		// new vault's X-Vault-ID, so it isn't this vault's data. Stop before
 		// applying or advancing the cursor.
-		if (!stillActive(vaultId)) return;
-		for (const row of page.changes) applyRow(row, queryClient, vaultId);
+		if (!stillActive(vaultId)) {
+			return;
+		}
+		for (const row of page.changes) {
+			applyRow(row, queryClient, vaultId);
+		}
 
 		const next = nextCursor(page, cursor);
 		if (next !== cursor) {
 			cursor = next;
 			setCursor(vaultId, cursor);
 		}
-		if (!page.has_more) break;
+		if (!page.has_more) {
+			break;
+		}
 		if (i === MAX_PAGES - 1) {
 			// Don't silently truncate: a feed still reporting has_more at the cap is
 			// a server bug (or an absurdly large gap). The cursor is persisted, so
@@ -120,7 +132,9 @@ async function pullLoop(
 // branch never fires on a final page. On the final page we encode the head
 // ourselves from the last applied row; an empty page keeps the prior cursor.
 function nextCursor(page: ChangesPage, prev: string): string {
-	if (page.next_cursor) return page.next_cursor;
+	if (page.next_cursor) {
+		return page.next_cursor;
+	}
 	const last = page.changes[page.changes.length - 1];
 	return last ? encodeCursor(last.seq, last.id) : prev;
 }
@@ -129,7 +143,9 @@ function nextCursor(page: ChangesPage, prev: string): string {
 // the socket's invalidation pipeline; attachment rows get no UI action (parity
 // with the socket, which carries no attachment event) but the cursor advances.
 function applyRow(row: ChangeRow, queryClient: QueryClient, vaultId: string): void {
-	if (row.type !== "note") return;
+	if (row.type !== "note") {
+		return;
+	}
 	const payload: NoteChangedPayload = {
 		event_type: row.deleted ? "delete" : "upsert",
 		vault_id: vaultId,

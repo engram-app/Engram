@@ -82,7 +82,9 @@ export default function NoteEditor({ ytext, awareness }: NoteEditorProps) {
 
 	useEffect(() => {
 		const parent = hostRef.current;
-		if (!parent) return;
+		if (!parent) {
+			return;
+		}
 		const view = new EditorView({
 			state: buildEditorState(ytext, awareness, resolved === "dark"),
 			parent,

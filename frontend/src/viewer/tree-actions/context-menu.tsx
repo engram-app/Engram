@@ -11,10 +11,14 @@ interface Props {
 export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape") {
+				onClose();
+			}
 		};
 		const onClick = (e: MouseEvent) => {
-			if (!(e.target as HTMLElement).closest("[data-tree-context-menu]")) onClose();
+			if (!(e.target as HTMLElement).closest("[data-tree-context-menu]")) {
+				onClose();
+			}
 		};
 		document.addEventListener("keydown", onKey);
 		document.addEventListener("mousedown", onClick);

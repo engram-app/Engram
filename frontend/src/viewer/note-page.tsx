@@ -44,10 +44,14 @@ export default function NotePage() {
 	// on note switch / unmount. yCollab (in NoteEditor) owns convergence — there
 	// is no REST autosave, 3-way merge, or conflict UI on this path anymore.
 	useEffect(() => {
-		if (!path) return;
+		if (!path) {
+			return;
+		}
 		let cancelled = false;
 		void openDoc(path).then((h) => {
-			if (cancelled || !h) return;
+			if (cancelled || !h) {
+				return;
+			}
 			setHandle(h);
 			enroll(path);
 		});
@@ -63,7 +67,9 @@ export default function NotePage() {
 
 	// Signal the onboarding tour that the user opened a note.
 	useEffect(() => {
-		if (!note?.path) return;
+		if (!note?.path) {
+			return;
+		}
 		window.dispatchEvent(new CustomEvent("engram:note-opened", { detail: { path: note.path } }));
 	}, [note?.path]);
 
@@ -77,21 +83,29 @@ export default function NotePage() {
 		return () => setRightContent(null);
 	}, [note?.path, note?.content, setRightContent]);
 
-	if (validId === null) return <p className="p-6 text-destructive">Invalid note id.</p>;
-	if (isLoading) return <LoadingPane />;
-	if (error) return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>;
-	if (!note) return <p className="p-6 text-muted-foreground">Note not found</p>;
+	if (validId === null) {
+		return <p className="p-6 text-destructive">Invalid note id.</p>;
+	}
+	if (isLoading) {
+		return <LoadingPane />;
+	}
+	if (error) {
+		return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>;
+	}
+	if (!note) {
+		return <p className="p-6 text-muted-foreground">Note not found</p>;
+	}
 
 	const titlePath = note.folder ? `${note.folder}/${note.title}` : note.title;
 
 	return (
-		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-x border-border bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
+		<section className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
 			{syncStatus === "error" && (
-				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-xs text-destructive">
+				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					Not syncing - reconnecting...
 				</p>
 			)}
-			<div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
 				<h2 className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
 					{note.folder && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>

@@ -9,6 +9,8 @@ export function nextCopyName(path: string, existing: Set<string>): string {
 	const candidate = (n: number) => `${folder}${stem} (${n === 1 ? "copy" : `copy ${n}`})${ext}`;
 
 	let n = 1;
-	while (existing.has(candidate(n))) n++;
+	while (existing.has(candidate(n))) {
+		n++;
+	}
 	return candidate(n);
 }

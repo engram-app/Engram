@@ -48,7 +48,7 @@ export default function Rail() {
 	return (
 		<nav
 			aria-label="App navigation"
-			className="flex h-full w-12 shrink-0 flex-col items-center gap-2 border-r border-border bg-card pt-3 pb-4"
+			className="flex h-full w-12 shrink-0 flex-col items-center gap-2 border-border border-r bg-card pt-3 pb-4"
 		>
 			<NavLink
 				to="/"

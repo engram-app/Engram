@@ -60,11 +60,17 @@ export function treeStructureKey(
 }
 
 function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
-	if (!attachments || attachments.length === 0) return "0";
+	if (!attachments || attachments.length === 0) {
+		return "0";
+	}
 	// length + max(updated_at) is enough: the list is static per fetch, and any
 	// add/remove changes one of the two.
 	let max = "";
-	for (const a of attachments) if (a.updated_at > max) max = a.updated_at;
+	for (const a of attachments) {
+		if (a.updated_at > max) {
+			max = a.updated_at;
+		}
+	}
 	return `${attachments.length}:${max}`;
 }
 
@@ -81,7 +87,9 @@ export function useEngramTree(deps: Deps) {
 				fetchFolderNotes: deps.fetchFolderNotes,
 				onChildrenLoaded: (folderId) => {
 					const t = treeRef.current;
-					if (!t) return;
+					if (!t) {
+						return;
+					}
 					// Root notes hang off the ROOT_ID container, not an `f:<id>` marker.
 					const itemId = folderId === ROOT_FOLDER_ID ? ROOT_ID : `f:${folderId}`;
 					const inst = t.getItemInstance(itemId);
@@ -107,7 +115,9 @@ export function useEngramTree(deps: Deps) {
 					};
 				}
 				const cached = childIndex.get(itemId);
-				if (cached) return cached;
+				if (cached) {
+					return cached;
+				}
 				const direct = inner.getItem(itemId);
 				if (direct) {
 					childIndex.set(itemId, direct);
@@ -122,7 +132,9 @@ export function useEngramTree(deps: Deps) {
 			},
 			getChildren(itemId: string): string[] {
 				const kids = inner.getChildren(itemId);
-				for (const k of kids) childIndex.set(k.itemId, k);
+				for (const k of kids) {
+					childIndex.set(k.itemId, k);
+				}
 				return kids.map((k) => k.itemId);
 			},
 		};
@@ -138,10 +150,16 @@ export function useEngramTree(deps: Deps) {
 		dataLoader,
 		getItemName: (item: ItemInstance<Data>) => {
 			const d = item.getItemData();
-			if (!d) return "";
+			if (!d) {
+				return "";
+			}
 			const t = d.item;
-			if (t.kind === "folder") return t.name;
-			if (t.kind === "attachment") return t.path.split("/").pop() ?? t.path;
+			if (t.kind === "folder") {
+				return t.name;
+			}
+			if (t.kind === "attachment") {
+				return t.path.split("/").pop() ?? t.path;
+			}
 			return t.title;
 		},
 		isItemFolder: (item: ItemInstance<Data>) => {
@@ -165,7 +183,9 @@ export function useEngramTree(deps: Deps) {
 				parentId: i.getParent()?.getId(),
 			}));
 			const move = resolveDropMove(sources, destId);
-			if (move) deps.onMove(move.ids, move.dest);
+			if (move) {
+				deps.onMove(move.ids, move.dest);
+			}
 		},
 		features: [
 			syncDataLoaderFeature,
@@ -186,11 +206,12 @@ export function useEngramTree(deps: Deps) {
 	// data shape changes — keyed on stable structural fingerprints so we never
 	// re-trigger from spurious identity churn (rebuildTree → setState → render
 	// would otherwise spin into a max-update-depth loop).
-	const structureKey =
-		treeStructureKey(deps.folders, deps.sort) + "#" + attachmentsFingerprint(deps.attachments);
+	const structureKey = `${treeStructureKey(deps.folders, deps.sort)}#${attachmentsFingerprint(deps.attachments)}`;
 	const lastKey = useRef("");
 	useEffect(() => {
-		if (lastKey.current === structureKey) return;
+		if (lastKey.current === structureKey) {
+			return;
+		}
 		lastKey.current = structureKey;
 		tree.rebuildTree();
 	}, [tree, structureKey]);
@@ -205,7 +226,9 @@ export function useEngramTree(deps: Deps) {
 		const cache = deps.qc.getQueryCache();
 		let scheduled = false;
 		const schedule = () => {
-			if (scheduled) return;
+			if (scheduled) {
+				return;
+			}
 			scheduled = true;
 			queueMicrotask(() => {
 				scheduled = false;
@@ -219,8 +242,11 @@ export function useEngramTree(deps: Deps) {
 			}
 			// Data presence/content changes only — ignore fetch-status churn
 			// (pending/error) that would rebuild for no structural reason.
-			if (event.type === "added" || event.type === "removed") schedule();
-			else if (event.type === "updated" && event.action.type === "success") schedule();
+			if (event.type === "added" || event.type === "removed") {
+				schedule();
+			} else if (event.type === "updated" && event.action.type === "success") {
+				schedule();
+			}
 		});
 		return unsubscribe;
 	}, [deps.qc, deps.vaultId]);

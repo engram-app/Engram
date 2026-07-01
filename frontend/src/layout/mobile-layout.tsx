@@ -22,7 +22,9 @@ import VaultSwitcher from "./vault-switcher";
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
 function closeOnLinkClick(close: () => void) {
 	return (event: MouseEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("a")) close();
+		if ((event.target as HTMLElement).closest("a")) {
+			close();
+		}
 	};
 }
 
@@ -42,7 +44,7 @@ export default function MobileLayout() {
 
 	return (
 		<section className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-card px-2 py-2">
+			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card px-2 py-2">
 				<section className="flex items-center gap-1">
 					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 						<SheetTrigger asChild>
@@ -56,8 +58,8 @@ export default function MobileLayout() {
 							className="flex flex-col gap-0 p-0 data-[side=left]:w-[85vw] sm:max-w-none"
 						>
 							<FolderTreeProvider>
-								<section className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-									<SheetTitle className="text-base font-medium">Files</SheetTitle>
+								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+									<SheetTitle className="font-medium text-base">Files</SheetTitle>
 									<SheetDescription className="sr-only">Folder navigation</SheetDescription>
 									<SheetClose asChild>
 										<Button variant="ghost" size="icon-sm" aria-label="Close">
@@ -76,7 +78,7 @@ export default function MobileLayout() {
 							</FolderTreeProvider>
 						</SheetContent>
 					</Sheet>
-					<Link to="/" className="text-base font-semibold text-foreground">
+					<Link to="/" className="font-semibold text-base text-foreground">
 						Engram
 					</Link>
 				</section>
@@ -94,8 +96,8 @@ export default function MobileLayout() {
 								showCloseButton={false}
 								className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
 							>
-								<section className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-									<SheetTitle className="text-base font-medium">On this page</SheetTitle>
+								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+									<SheetTitle className="font-medium text-base">On this page</SheetTitle>
 									<SheetDescription className="sr-only">
 										Headings on the current note
 									</SheetDescription>

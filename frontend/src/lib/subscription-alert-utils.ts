@@ -57,7 +57,9 @@ export type DerivedAlert = {
  * }
  */
 export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined): DerivedAlert {
-	if (!data) return null;
+	if (!data) {
+		return null;
+	}
 
 	const { status, canceledAt, scheduledChange, trialEndsAt, updatePaymentMethodUrl } = data;
 
@@ -137,7 +139,7 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 // Mapping utility — Paddle API → SubscriptionAlertData display contract
 // ---
 
-type PaddleSubscription = {
+interface PaddleSubscription {
 	status: "active" | "canceled" | "past_due" | "paused" | "trialing";
 	canceledAt?: string | null;
 	scheduledChange?: {
@@ -151,7 +153,7 @@ type PaddleSubscription = {
 	managementUrls?: {
 		updatePaymentMethod?: string | null;
 	} | null;
-};
+}
 
 /**
  * Maps a Paddle subscription API response to the `SubscriptionAlertData`

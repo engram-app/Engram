@@ -63,12 +63,12 @@ export default function ResetPasswordPage() {
 				{done ? (
 					<section className="space-y-3 text-center">
 						<h1 className={heading}>Password updated</h1>
-						<p className="text-sm text-muted-foreground">
+						<p className="text-muted-foreground text-sm">
 							You can sign in with your new password now. Any old sessions have been signed out.
 						</p>
 						<Link
 							to={ROUTES.SIGN_IN}
-							className="inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+							className="inline-block rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 						>
 							Sign in
 						</Link>
@@ -77,7 +77,7 @@ export default function ResetPasswordPage() {
 					<form onSubmit={submit} className="space-y-4">
 						<div className="text-center">
 							<h1 className={heading}>Set a new password</h1>
-							<p className="mt-1 text-sm text-muted-foreground">
+							<p className="mt-1 text-muted-foreground text-sm">
 								Choose something at least 8 characters long.
 							</p>
 						</div>
@@ -89,7 +89,7 @@ export default function ResetPasswordPage() {
 						)}
 
 						<label className="block">
-							<span className="text-sm font-medium text-foreground">New password</span>
+							<span className="font-medium text-foreground text-sm">New password</span>
 							<input
 								type="password"
 								required
@@ -101,7 +101,7 @@ export default function ResetPasswordPage() {
 						</label>
 
 						<label className="block">
-							<span className="text-sm font-medium text-foreground">Confirm password</span>
+							<span className="font-medium text-foreground text-sm">Confirm password</span>
 							<input
 								type="password"
 								required

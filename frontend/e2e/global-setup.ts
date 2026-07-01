@@ -298,20 +298,30 @@ async function cleanupOrphanedClerkUsers(secretKey: string) {
 		const resp = await fetch(`${CLERK_API}/users?limit=100&offset=${offset}&order_by=created_at`, {
 			headers,
 		});
-		if (!resp.ok) break;
+		if (!resp.ok) {
+			break;
+		}
 		const users = await resp.json();
-		if (!users.length) break;
+		if (users.length === 0) {
+			break;
+		}
 
 		for (const user of users) {
 			const emails: string[] =
 				user.email_addresses?.map((ea: { email_address: string }) => ea.email_address) ?? [];
 			if (emails.some((e: string) => E2E_PREFIXES.some((p) => e.startsWith(p)))) {
 				const del = await fetch(`${CLERK_API}/users/${user.id}`, { method: "DELETE", headers });
-				if (del.ok) deleted++;
+				if (del.ok) {
+					deleted++;
+				}
 			}
 		}
-		if (users.length < 100) break;
+		if (users.length < 100) {
+			break;
+		}
 	}
 
-	if (deleted) console.log(`Cleaned up ${deleted} orphaned Clerk test user(s)`);
+	if (deleted) {
+		console.log(`Cleaned up ${deleted} orphaned Clerk test user(s)`);
+	}
 }

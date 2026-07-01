@@ -19,7 +19,7 @@ export default function SearchPanel() {
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 	const inputRef = useRef<HTMLInputElement>(null);
 	const lastRecordedRef = useRef<string>("");
-	const hasResults = !!results && results.length > 0;
+	const hasResults = (results?.length ?? 0) > 0;
 
 	useEffect(() => {
 		inputRef.current?.focus();
@@ -36,8 +36,8 @@ export default function SearchPanel() {
 
 	return (
 		<div className="flex h-full flex-col">
-			<header className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-				<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+			<header className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+				<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 					Search
 				</h2>
 				<Button
@@ -50,9 +50,9 @@ export default function SearchPanel() {
 					<X className="h-4 w-4" />
 				</Button>
 			</header>
-			<div className="border-b border-border p-2">
+			<div className="border-border border-b p-2">
 				<label className="relative block">
-					<Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+					<Search className="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
 					<input
 						ref={inputRef}
 						type="search"
@@ -60,9 +60,11 @@ export default function SearchPanel() {
 						value={input}
 						onChange={(e) => setInput(e.target.value)}
 						onKeyDown={(e) => {
-							if (e.key === "Escape") close();
+							if (e.key === "Escape") {
+								close();
+							}
 						}}
-						className="w-full rounded-md border border-border bg-background py-1.5 pl-7 pr-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+						className="w-full rounded-md border border-border bg-background py-1.5 pr-2 pl-7 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
 					/>
 				</label>
 			</div>
@@ -71,13 +73,13 @@ export default function SearchPanel() {
 					<RecentList recent={recent} onPick={(q) => setInput(q)} />
 				)}
 				{deferred && isLoading && (
-					<p className="px-3 py-2 text-xs text-muted-foreground">Searching…</p>
+					<p className="px-3 py-2 text-muted-foreground text-xs">Searching…</p>
 				)}
 				{error && (
-					<p className="px-3 py-2 text-xs text-destructive">Search failed: {error.message}</p>
+					<p className="px-3 py-2 text-destructive text-xs">Search failed: {error.message}</p>
 				)}
 				{deferred && results && results.length === 0 && !isLoading && (
-					<p className="px-3 py-2 text-xs text-muted-foreground">No results for "{deferred}"</p>
+					<p className="px-3 py-2 text-muted-foreground text-xs">No results for "{deferred}"</p>
 				)}
 				{results && results.length > 0 && (
 					<ul className="space-y-1 p-2">
@@ -96,7 +98,7 @@ export default function SearchPanel() {
 function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) => void }) {
 	return (
 		<section className="p-2">
-			<p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+			<p className="px-1 pb-1 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 				Recent
 			</p>
 			<ul className="space-y-0.5">
@@ -118,7 +120,9 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 
 function ResultRow({ result }: { result: SearchResult }) {
 	// Orphan hits (no id) are unreachable — render nothing.
-	if (result.id == null) return null;
+	if (result.id == null) {
+		return null;
+	}
 	const href = `/note/${result.id}`;
 	return (
 		<Link
@@ -127,10 +131,10 @@ function ResultRow({ result }: { result: SearchResult }) {
 		>
 			<p className="font-medium">{result.title || lastSegment(result.path)}</p>
 			{result.heading_path && result.heading_path !== result.title && (
-				<p className="text-xs text-muted-foreground">↳ {result.heading_path}</p>
+				<p className="text-muted-foreground text-xs">↳ {result.heading_path}</p>
 			)}
 			{result.snippet && (
-				<p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{result.snippet}</p>
+				<p className="mt-1 line-clamp-2 text-muted-foreground text-xs">{result.snippet}</p>
 			)}
 		</Link>
 	);

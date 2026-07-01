@@ -64,7 +64,9 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	// block deletes this user moments later, the sign-in bounce can look up why.
 	const clerkUserId = clerk.user?.id;
 	useEffect(() => {
-		if (clerkUserId) rememberSignupUser(clerkUserId);
+		if (clerkUserId) {
+			rememberSignupUser(clerkUserId);
+		}
 	}, [clerkUserId]);
 
 	useClearQueryCacheOnUserChange(queryClient, clerkUserId);
@@ -78,7 +80,9 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	// PostHog integration bug per [[project_observability_stack_plan]].
 	// No-op when PostHog isn't initialized (VITE_POSTHOG_KEY unset).
 	useEffect(() => {
-		if (!isLoaded) return;
+		if (!isLoaded) {
+			return;
+		}
 		if (isSignedIn && clerkUserId) {
 			posthog.identify(clerkUserId, email ? { email } : undefined);
 		} else if (!isSignedIn) {

@@ -13,6 +13,8 @@ import { useConfig } from "../config-context";
 export function useIsFreeTier(): boolean {
 	const { billingEnabled } = useConfig();
 	const { data } = useBillingStatus();
-	if (!billingEnabled) return false;
+	if (!billingEnabled) {
+		return false;
+	}
 	return data?.tier === "free" || data?.tier === "none";
 }

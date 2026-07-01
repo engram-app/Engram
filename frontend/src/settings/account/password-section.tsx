@@ -17,7 +17,9 @@ export function PasswordSection() {
 			user!.updatePassword(params),
 	);
 
-	if (!(isLoaded && user)) return null;
+	if (!(isLoaded && user)) {
+		return null;
+	}
 	const hasPassword = user.passwordEnabled;
 
 	async function submit() {
@@ -31,7 +33,9 @@ export function PasswordSection() {
 			setNext("");
 			toast.success("Password updated");
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not update password");
 		}
 	}
@@ -45,7 +49,7 @@ export function PasswordSection() {
 				}}
 			>
 				{hasPassword && (
-					<label className="block text-sm font-medium text-foreground">
+					<label className="block font-medium text-foreground text-sm">
 						Current password
 						<input
 							className={inputClass}
@@ -55,7 +59,7 @@ export function PasswordSection() {
 						/>
 					</label>
 				)}
-				<label className="mt-4 block text-sm font-medium text-foreground">
+				<label className="mt-4 block font-medium text-foreground text-sm">
 					New password
 					<input
 						className={inputClass}
@@ -64,7 +68,7 @@ export function PasswordSection() {
 						onChange={(e) => setNext(e.target.value)}
 					/>
 				</label>
-				<p className="mt-1 text-xs text-muted-foreground">
+				<p className="mt-1 text-muted-foreground text-xs">
 					Changing your password signs you out of all other sessions.
 				</p>
 				<Button className="mt-4" type="submit">

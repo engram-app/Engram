@@ -24,10 +24,14 @@ export function rememberSignupUser(clerkUserId: string): void {
 export function takePendingSignupUser(): string | null {
 	try {
 		const raw = sessionStorage.getItem(KEY);
-		if (!raw) return null;
+		if (!raw) {
+			return null;
+		}
 		sessionStorage.removeItem(KEY);
 		const { id, ts } = JSON.parse(raw) as { id?: string; ts?: number };
-		if (!(id && ts) || Date.now() - ts > WINDOW_MS) return null;
+		if (!(id && ts) || Date.now() - ts > WINDOW_MS) {
+			return null;
+		}
 		return id;
 	} catch {
 		return null;
@@ -46,7 +50,9 @@ export async function fetchSignupRejection(
 				`/api/auth/signup-rejection?clerk_id=${encodeURIComponent(clerkUserId)}`,
 			),
 		);
-		if (!res.ok) return null;
+		if (!res.ok) {
+			return null;
+		}
 		const body = (await res.json()) as { reason?: SignupRejectionReason | null };
 		return body.reason ?? null;
 	} catch (err) {

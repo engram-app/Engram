@@ -16,7 +16,9 @@ export function useMediaQuery(query: string): boolean {
 	const [matches, setMatches] = useState<boolean>(getMatch);
 
 	useEffect(() => {
-		if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+		if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+			return;
+		}
 		const mql = window.matchMedia(query);
 		const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
 		// Sync once on mount in case the initial render mismatched (SSR / hydration).

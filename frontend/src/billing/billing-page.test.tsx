@@ -65,7 +65,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		get.mockReset();
 		initializePaddleMock.mockReset();
 		socketCtor.mockClear();
-		for (const k of Object.keys(channelHandlers)) delete channelHandlers[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
 	});
 
 	afterEach(() => {
@@ -74,7 +76,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 	it("Paddle effect cleanup: post-unmount eventCallback invocations are inert", async () => {
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status")
+			if (url === "/billing/status") {
 				return {
 					tier: "free",
 					active: false,
@@ -82,7 +84,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					subscription: null,
 					caps: {},
 				};
-			if (url === "/billing/config")
+			}
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -94,8 +97,13 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: null,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return { next_step: "tools", enabled: true };
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return { next_step: "tools", enabled: true };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -131,7 +139,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	// as the other tests; factored so the new tests stay short.
 	function mockBillingApi() {
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status")
+			if (url === "/billing/status") {
 				return {
 					tier: "free",
 					active: false,
@@ -139,7 +147,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					subscription: null,
 					caps: {},
 				};
-			if (url === "/billing/config")
+			}
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -151,8 +160,13 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: null,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return { next_step: "tools", enabled: true };
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return { next_step: "tools", enabled: true };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 	}
@@ -324,7 +338,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() => expect(channelHandlers["subscription_activated"]).toBeDefined());
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 		// Wait for paddle instance to land
 		await act(async () => {
 			await Promise.resolve();
@@ -332,7 +346,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 
 		await act(async () => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_1",
@@ -364,7 +378,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 							caps: {},
 						};
 			}
-			if (url === "/billing/config")
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -376,8 +390,13 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: null,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return { next_step: "tools", enabled: true };
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return { next_step: "tools", enabled: true };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -400,11 +419,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			</QueryClientProvider>,
 		);
 
-		await waitFor(() => expect(channelHandlers["subscription_activated"]).toBeDefined());
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 
 		billingActive = true;
 		await act(async () => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_settings",
@@ -428,7 +447,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// 'done' on upgrade), so every useBillingStatus() consumer stayed on the
 		// old tier until a manual refresh.
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status")
+			if (url === "/billing/status") {
 				return {
 					tier: "free",
 					active: false,
@@ -436,7 +455,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					subscription: null,
 					caps: {},
 				};
-			if (url === "/billing/config")
+			}
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -448,8 +468,13 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: null,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return { next_step: "done", enabled: true };
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return { next_step: "done", enabled: true };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -501,7 +526,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
 
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status")
+			if (url === "/billing/status") {
 				return {
 					tier: "pro",
 					active: true,
@@ -513,7 +538,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					},
 					caps: {},
 				};
-			if (url === "/billing/config")
+			}
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -525,10 +551,16 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: null,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/billing/subscription")
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/billing/subscription") {
 				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
-			if (url === "/billing/transactions") return { payment_method: null, transactions: [] };
+			}
+			if (url === "/billing/transactions") {
+				return { payment_method: null, transactions: [] };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -548,7 +580,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		initializePaddleMock.mockResolvedValue({ Checkout: { open: vi.fn(), close: vi.fn() } });
 
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status")
+			if (url === "/billing/status") {
 				return {
 					tier: "starter",
 					active: true,
@@ -560,7 +592,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					},
 					caps: {},
 				};
-			if (url === "/billing/config")
+			}
+			if (url === "/billing/config") {
 				return {
 					client_token: "tok",
 					environment: "sandbox",
@@ -572,10 +605,16 @@ describe("BillingPage — Paddle effect cleanup", () => {
 					custom_data: { user_id: "1" },
 					vaults_cap: 5,
 				};
-			if (url === "/me") return { user: ME };
-			if (url === "/billing/subscription")
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/billing/subscription") {
 				return { next_billed_at: "2026-07-01T00:00:00Z", scheduled_change: null };
-			if (url === "/billing/transactions") return { payment_method: null, transactions: [] };
+			}
+			if (url === "/billing/transactions") {
+				return { payment_method: null, transactions: [] };
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 

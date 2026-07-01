@@ -36,7 +36,7 @@ export const FREE_TIER = {
 // merges extra layout (e.g. `flex-1` on the full card).
 function FeatureList({ features, className }: { features: string[]; className?: string }) {
 	return (
-		<ul className={cn("space-y-1 text-sm text-muted-foreground", className)}>
+		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
 			{features.map((f) => (
 				<li key={f} className="flex items-center gap-2">
 					<span className="text-primary" aria-hidden="true">
@@ -184,21 +184,21 @@ export function PlanCard({
 				"relative flex flex-col gap-4 rounded-lg border bg-card p-6 transition duration-150",
 				state === "idle" && "border-border hover:-translate-y-0.5 hover:border-primary/60",
 				state === "recommended" && "border-primary ring-1 ring-primary hover:-translate-y-0.5",
-				state === "selected" && "border-primary ring-2 ring-primary shadow-sm",
+				state === "selected" && "border-primary shadow-sm ring-2 ring-primary",
 				// 'current' reads as "you've got this" — primary accent ring, no
 				// muted bg. Diminished-grey treatment made the card feel locked
 				// out; this leans into the card visually instead.
-				state === "current" && "border-primary/60 ring-1 ring-primary/30 shadow-sm",
+				state === "current" && "border-primary/60 shadow-sm ring-1 ring-primary/30",
 			)}
 		>
 			{badgeText && (
-				<span className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground">
+				<span className="absolute -top-3 left-6 rounded-full bg-primary px-2.5 py-0.5 font-semibold text-primary-foreground text-xs uppercase tracking-wide">
 					{badgeText}
 				</span>
 			)}
-			<h3 className="text-lg font-semibold">{name}</h3>
-			<p className="text-2xl font-bold">{price}</p>
-			<p className="-mt-3 text-xs text-muted-foreground">{subPrice}</p>
+			<h3 className="font-semibold text-lg">{name}</h3>
+			<p className="font-bold text-2xl">{price}</p>
+			<p className="-mt-3 text-muted-foreground text-xs">{subPrice}</p>
 			<FeatureList features={features} className="flex-1" />
 			<div className="flex flex-col gap-1">
 				{current ? (
@@ -208,7 +208,7 @@ export function PlanCard({
 					<div
 						role="status"
 						aria-label="Your current plan"
-						className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-medium text-primary"
+						className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 font-medium text-primary text-sm"
 					>
 						<span aria-hidden="true">&#10003;</span>
 						<span>You're on this plan</span>
@@ -219,7 +219,7 @@ export function PlanCard({
 							onClick={() => onAction(tier)}
 							disabled={disabled}
 							className={cn(
-								"w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
+								"w-full rounded-lg px-4 py-2 font-medium text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
 								// recommended (onboarding's Pro) and selected (change-plan's
 								// chosen target) get filled-primary CTA so the actionable
 								// card has weight. idle stays a clean outline.
@@ -229,7 +229,7 @@ export function PlanCard({
 							{ctaLabel}
 						</button>
 						{selected && ctaSubLabel && (
-							<p className="text-center text-xs text-muted-foreground">{ctaSubLabel}</p>
+							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
 						)}
 					</>
 				)}
@@ -287,16 +287,16 @@ export function PlanAccordionRow({
 				className="flex w-full items-center justify-between gap-3 p-4 text-left"
 			>
 				<span className="flex min-w-0 flex-col gap-1">
-					<span className="flex flex-wrap items-center gap-x-2 text-sm font-semibold text-foreground">
+					<span className="flex flex-wrap items-center gap-x-2 font-semibold text-foreground text-sm">
 						<span>{name}</span>
 						{recommended && (
-							<span className="inline-flex items-center rounded-full bg-primary px-2 pb-[2px] pt-[4px] text-[10px] font-semibold uppercase leading-none tracking-wide text-primary-foreground">
+							<span className="inline-flex items-center rounded-full bg-primary px-2 pt-[4px] pb-[2px] font-semibold text-[10px] text-primary-foreground uppercase leading-none tracking-wide">
 								Popular
 							</span>
 						)}
 						<span className="font-normal text-muted-foreground">· {price}</span>
 					</span>
-					<span className="block text-xs text-muted-foreground">{summary}</span>
+					<span className="block text-muted-foreground text-xs">{summary}</span>
 				</span>
 				<ChevronDown
 					aria-hidden="true"
@@ -324,7 +324,7 @@ export function PlanAccordionRow({
 							disabled={disabled}
 							tabIndex={open ? 0 : -1}
 							className={cn(
-								"mt-3 w-full rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
+								"mt-3 w-full rounded-lg px-4 py-2 font-medium text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
 								// Paid tiers get the strong filled CTA; Free is intentionally
 								// quieter (outline) so it doesn't pull weight from the revenue
 								// tiers.
@@ -334,7 +334,7 @@ export function PlanAccordionRow({
 							{ctaLabel}
 						</button>
 						{ctaNote && (
-							<p className="mt-1.5 text-center text-xs text-muted-foreground">{ctaNote}</p>
+							<p className="mt-1.5 text-center text-muted-foreground text-xs">{ctaNote}</p>
 						)}
 					</div>
 				</div>

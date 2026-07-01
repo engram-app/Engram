@@ -33,9 +33,13 @@ export function subscribeToCrdtSyncStatus(cb: (s: CrdtSyncStatus) => void): () =
 }
 
 function setCrdtSyncStatus(s: CrdtSyncStatus): void {
-	if (syncStatus === s) return;
+	if (syncStatus === s) {
+		return;
+	}
 	syncStatus = s;
-	for (const cb of syncStatusListeners) cb(s);
+	for (const cb of syncStatusListeners) {
+		cb(s);
+	}
 }
 
 export interface StartSessionOpts {
@@ -64,7 +68,9 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 		onAfterEnroll: (p) => {
 			// Skip flatten while the doc is open in an editor -- destroying and
 			// rebuilding the Y.Doc would leave the editor bound to a dead doc.
-			if (openPaths.has(p)) return Promise.resolve();
+			if (openPaths.has(p)) {
+				return Promise.resolve();
+			}
 			return manager.flattenIfBloated(p).then(() => undefined);
 		},
 	});
@@ -79,8 +85,12 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 }
 
 export function stopCrdtSession(): void {
-	if (!session) return;
-	for (const a of session.awareness.values()) a.destroy();
+	if (!session) {
+		return;
+	}
+	for (const a of session.awareness.values()) {
+		a.destroy();
+	}
 	void session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -88,7 +98,9 @@ export function stopCrdtSession(): void {
 export async function openDoc(
 	path: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness } | null> {
-	if (!(session && path.endsWith(".md"))) return null;
+	if (!(session && path.endsWith(".md"))) {
+		return null;
+	}
 	session.openPaths.add(path);
 	const ytext = await session.manager.getSharedText(path);
 	let awareness = session.awareness.get(path);
@@ -100,7 +112,9 @@ export async function openDoc(
 }
 
 export function closeDoc(path: string): void {
-	if (!session) return;
+	if (!session) {
+		return;
+	}
 	session.openPaths.delete(path);
 	const a = session.awareness.get(path);
 	if (a) {
@@ -115,8 +129,12 @@ export function enroll(path: string): void {
 }
 
 export async function handleFrame(path: string, b64: string): Promise<void> {
-	if (!session) return;
-	if (!session.manager.hasDoc(path)) return; // not active — drop; STEP1 re-syncs on reopen
+	if (!session) {
+		return;
+	}
+	if (!session.manager.hasDoc(path)) {
+		return; // not active — drop; STEP1 re-syncs on reopen
+	}
 	await session.channel.handleFrame(path, b64);
 }
 
@@ -125,7 +143,9 @@ export async function handleFrame(path: string, b64: string): Promise<void> {
  *  crdt_doc_ready. Open docs are those with a live Awareness entry (created by
  *  openDoc, removed by closeDoc). */
 export function resyncOpenDocs(): void {
-	if (!session) return;
+	if (!session) {
+		return;
+	}
 	for (const path of session.awareness.keys()) {
 		session.enrollment.reset(path); // clears enrolled set + CrdtChannel.initiated guard
 		session.enrollment.enroll(path); // re-sends STEP1 (idempotent; reset re-armed it)
@@ -145,7 +165,9 @@ export function resyncOpenDocs(): void {
  */
 export function installCrdtResyncTriggers(): () => void {
 	const onVisible = () => {
-		if (document.visibilityState === "visible") resyncOpenDocs();
+		if (document.visibilityState === "visible") {
+			resyncOpenDocs();
+		}
 	};
 	// visibilitychange targets document, not window (does not bubble).
 	document.addEventListener("visibilitychange", onVisible);

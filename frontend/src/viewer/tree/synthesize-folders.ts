@@ -36,20 +36,30 @@ export function syntheticFolderPath(id: string): string {
 // Real folders keep their id; missing nodes get `syn:<full-path>` ids.
 export function synthesizeFolders(real: Folder[], attachments: AttachmentSummary[]): Folder[] {
 	const realByName = new Map<string, Folder>();
-	for (const f of real) realByName.set(f.name, f);
+	for (const f of real) {
+		realByName.set(f.name, f);
+	}
 
 	// Every folder path we must represent, plus all of its ancestor prefixes —
 	// sourced from both the real folder names and the attachment directories.
 	const paths = new Set<string>();
 	const addPrefixes = (full: string) => {
-		if (!full) return;
+		if (!full) {
+			return;
+		}
 		const segments = full.split("/");
-		for (let i = 1; i <= segments.length; i++) paths.add(segments.slice(0, i).join("/"));
+		for (let i = 1; i <= segments.length; i++) {
+			paths.add(segments.slice(0, i).join("/"));
+		}
 	};
-	for (const f of real) addPrefixes(f.name);
+	for (const f of real) {
+		addPrefixes(f.name);
+	}
 	for (const a of attachments) {
 		const slash = a.path.lastIndexOf("/");
-		if (slash >= 0) addPrefixes(a.path.slice(0, slash));
+		if (slash >= 0) {
+			addPrefixes(a.path.slice(0, slash));
+		}
 	}
 
 	// A path's id: the real folder's id when present, else a stable synthetic id.

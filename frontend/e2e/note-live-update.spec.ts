@@ -31,7 +31,9 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ email, password: PASS }),
 	});
-	if (!login.ok) throw new Error(`login failed: ${login.status} ${await login.text()}`);
+	if (!login.ok) {
+		throw new Error(`login failed: ${login.status} ${await login.text()}`);
+	}
 	const { access_token } = (await login.json()) as { access_token: string };
 
 	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${access_token}` };
@@ -40,7 +42,9 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
 		headers: auth,
 		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
 	});
-	if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
+	if (!prof.ok) {
+		throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
+	}
 	// Vault is created later by the spec (createVault helper). Just suppress
 	// the checklist tour row so the dashboard doesn't intercept editor clicks.
 	const act = await fetch(`${baseURL}/api/onboarding/actions`, {
@@ -48,7 +52,9 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
 		headers: auth,
 		body: JSON.stringify({ action: "dismissed:tour" }),
 	});
-	if (!act.ok) throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`);
+	if (!act.ok) {
+		throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`);
+	}
 
 	return access_token;
 }
@@ -64,7 +70,9 @@ async function createVault(baseURL: string, token: string, name: string): Promis
 		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
 		body: JSON.stringify({ name }),
 	});
-	if (!res.ok) throw new Error(`vault create failed: ${res.status} ${await res.text()}`);
+	if (!res.ok) {
+		throw new Error(`vault create failed: ${res.status} ${await res.text()}`);
+	}
 	const { vault } = (await res.json()) as { vault: Vault };
 	return vault;
 }
@@ -86,7 +94,9 @@ async function upsertNote(
 		},
 		body: JSON.stringify({ path, content, mtime: Date.now() / 1000, version }),
 	});
-	if (!res.ok) throw new Error(`note upsert failed: ${res.status} ${await res.text()}`);
+	if (!res.ok) {
+		throw new Error(`note upsert failed: ${res.status} ${await res.text()}`);
+	}
 	const { note } = (await res.json()) as { note: { id: number } };
 	return { id: note.id };
 }

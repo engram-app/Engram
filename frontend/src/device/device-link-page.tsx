@@ -15,7 +15,11 @@ import AuthShell from "../layout/auth-shell";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
 
-type Vault = { id: string; name: string; note_count: number };
+interface Vault {
+	id: string;
+	name: string;
+	note_count: number;
+}
 
 type Step = "enter-code" | "pick-vault" | "success" | "error";
 
@@ -27,7 +31,9 @@ export default function DeviceLinkPage() {
 	// RFC 8628 verification_uri_complete: if the plugin sends the user to
 	// /link?code=ENGR-7X4K, prefill the field instead of forcing a re-type.
 	const [userCode, setUserCode] = useState(() => {
-		if (typeof window === "undefined") return "";
+		if (typeof window === "undefined") {
+			return "";
+		}
 		const raw = new URLSearchParams(window.location.search).get("code") ?? "";
 		const clean = raw
 			.toUpperCase()
@@ -67,7 +73,7 @@ export default function DeviceLinkPage() {
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
 					<h1 className={heading}>Link Obsidian Vault</h1>
-					<p className="text-sm text-muted-foreground">
+					<p className="text-muted-foreground text-sm">
 						Please sign in to link your Obsidian vault.
 					</p>
 				</AuthPanel>
@@ -85,7 +91,7 @@ export default function DeviceLinkPage() {
 		setLoading(true);
 		setError("");
 		try {
-			const formattedCode = formatted.slice(0, 4) + "-" + formatted.slice(4);
+			const formattedCode = `${formatted.slice(0, 4)}-${formatted.slice(4)}`;
 			const data = await api.get<{ vaults: Vault[]; suggested_vault_name?: string | null }>(
 				`/vaults?user_code=${encodeURIComponent(formattedCode)}`,
 			);
@@ -206,7 +212,7 @@ export default function DeviceLinkPage() {
 					step === "pick-vault" && "mx-auto sm:w-4/5",
 				)}
 			>
-				<h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+				<h1 className="font-bold text-2xl text-foreground tracking-tight sm:text-3xl">
 					{step === "pick-vault" ? "Choose a vault to sync" : "Link Obsidian Vault"}
 				</h1>
 
@@ -217,7 +223,7 @@ export default function DeviceLinkPage() {
 					// gated on `atCap`, so the disabled button always has its reason.
 					<div
 						role="alert"
-						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 					>
 						You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap
 						again in {capCheck.swapCooldownHours}h.{" "}
@@ -236,7 +242,7 @@ export default function DeviceLinkPage() {
 				) : capCheck.atCap && existingObsidian && step !== "success" ? (
 					<div
 						role="status"
-						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 					>
 						Heads up — your Free plan syncs files between 1 device at a time. Linking this device
 						will disconnect <strong>{describeObsidianDevice(existingObsidian)}</strong>, which will
@@ -257,7 +263,7 @@ export default function DeviceLinkPage() {
 
 				{step === "enter-code" && (
 					<div className="flex flex-col gap-3">
-						<p className="text-sm text-muted-foreground">
+						<p className="text-muted-foreground text-sm">
 							Enter the code shown in your Obsidian plugin:
 						</p>
 						<input
@@ -277,7 +283,7 @@ export default function DeviceLinkPage() {
 
 				{step === "pick-vault" && (
 					<div className="flex flex-col gap-3">
-						<p className="text-sm text-muted-foreground">
+						<p className="text-muted-foreground text-sm">
 							Pick an existing one, or create a new vault for these notes.
 						</p>
 
@@ -291,7 +297,7 @@ export default function DeviceLinkPage() {
 							atVaultCap={atVaultCap}
 						/>
 						{atVaultCap && (
-							<p className="text-xs text-muted-foreground">
+							<p className="text-muted-foreground text-xs">
 								Your Free plan includes 1 vault — link into the existing one above, or{" "}
 								<a
 									className="underline underline-offset-4"
@@ -356,15 +362,15 @@ function SuccessStep({ linkedVaultId, onForward }: SuccessStepProps) {
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
-				<h2 className="text-lg font-semibold text-foreground">Vault linked!</h2>
-				<p className="text-sm text-foreground">
+				<h2 className="font-semibold text-foreground text-lg">Vault linked!</h2>
+				<p className="text-foreground text-sm">
 					Now jump back to Obsidian and run your first sync.
 				</p>
 			</div>
 
 			<SyncStatusPill message="Waiting for your first sync…" />
 
-			<p className="text-sm text-muted-foreground">
+			<p className="text-muted-foreground text-sm">
 				Once it lands we'll take you to your vault automatically.
 			</p>
 
@@ -419,8 +425,8 @@ function VaultPickerFieldset({
 						className="accent-primary"
 					/>
 					<span className="flex flex-col">
-						<span className="text-sm font-medium text-foreground">{matchedExisting.name}</span>
-						<span className="text-xs text-muted-foreground">
+						<span className="font-medium text-foreground text-sm">{matchedExisting.name}</span>
+						<span className="text-muted-foreground text-xs">
 							Sync into your existing vault &middot; {matchedExisting.note_count} notes
 						</span>
 					</span>
@@ -437,8 +443,8 @@ function VaultPickerFieldset({
 							className="accent-primary"
 						/>
 						<span className="flex flex-col">
-							<span className="text-sm font-medium text-foreground">{suggestedName}</span>
-							<span className="text-xs text-muted-foreground">
+							<span className="font-medium text-foreground text-sm">{suggestedName}</span>
+							<span className="text-muted-foreground text-xs">
 								Makes a new vault matching your Obsidian vault name
 							</span>
 						</span>
@@ -458,8 +464,8 @@ function VaultPickerFieldset({
 							className="accent-primary"
 						/>
 						<span className="flex flex-col">
-							<span className="text-sm font-medium text-foreground">{v.name}</span>
-							<span className="text-xs text-muted-foreground">
+							<span className="font-medium text-foreground text-sm">{v.name}</span>
+							<span className="text-muted-foreground text-xs">
 								Sync into this existing vault &middot; {v.note_count} notes
 							</span>
 						</span>
@@ -477,7 +483,7 @@ function VaultPickerFieldset({
 						className="accent-primary"
 					/>
 					<span className="flex flex-1 flex-col gap-2">
-						<span className="text-sm font-medium text-foreground">
+						<span className="font-medium text-foreground text-sm">
 							Create a vault with a custom name
 						</span>
 						<input
@@ -485,7 +491,9 @@ function VaultPickerFieldset({
 							value={customName}
 							onChange={(e) => {
 								onCustomChange(e.target.value);
-								if (!isCustom) onSelect("custom");
+								if (!isCustom) {
+									onSelect("custom");
+								}
 							}}
 							onFocus={() => onSelect("custom")}
 							placeholder="choose a new name"
@@ -507,39 +515,73 @@ function VaultPickerFieldset({
 // (e.g., a freshly seeded test row with no UA / no vault name).
 function describeObsidianDevice(c: Connection): string {
 	const parts: string[] = [];
-	if (c.vault_name) parts.push(`the device syncing your '${c.vault_name}' vault`);
+	if (c.vault_name) {
+		parts.push(`the device syncing your '${c.vault_name}' vault`);
+	}
 	const os = parseUserAgentOs(c.first_user_agent);
-	if (os) parts.push(`on ${os}`);
+	if (os) {
+		parts.push(`on ${os}`);
+	}
 	const since = relativeTime(c.last_used_at ?? c.connected_at);
-	if (since) parts.push(`(last active ${since})`);
-	if (parts.length === 0) return c.name ?? "your previous device";
+	if (since) {
+		parts.push(`(last active ${since})`);
+	}
+	if (parts.length === 0) {
+		return c.name ?? "your previous device";
+	}
 	return parts.join(" ");
 }
 
 function parseUserAgentOs(ua: string | null): string | null {
-	if (!ua) return null;
-	if (/iphone|ipad|ipod/iu.test(ua)) return "iOS";
-	if (/android/iu.test(ua)) return "Android";
-	if (/mac os|macintosh/iu.test(ua)) return "macOS";
-	if (/windows/iu.test(ua)) return "Windows";
-	if (/linux/iu.test(ua)) return "Linux";
+	if (!ua) {
+		return null;
+	}
+	if (/iphone|ipad|ipod/iu.test(ua)) {
+		return "iOS";
+	}
+	if (/android/iu.test(ua)) {
+		return "Android";
+	}
+	if (/mac os|macintosh/iu.test(ua)) {
+		return "macOS";
+	}
+	if (/windows/iu.test(ua)) {
+		return "Windows";
+	}
+	if (/linux/iu.test(ua)) {
+		return "Linux";
+	}
 	return null;
 }
 
 function relativeTime(iso: string | null): string | null {
-	if (!iso) return null;
+	if (!iso) {
+		return null;
+	}
 	const then = new Date(iso).getTime();
-	if (Number.isNaN(then)) return null;
+	if (Number.isNaN(then)) {
+		return null;
+	}
 	const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
-	if (secs < 60) return "just now";
+	if (secs < 60) {
+		return "just now";
+	}
 	const mins = Math.floor(secs / 60);
-	if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+	if (mins < 60) {
+		return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+	}
 	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+	if (hours < 24) {
+		return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+	}
 	const days = Math.floor(hours / 24);
-	if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+	if (days < 30) {
+		return `${days} day${days === 1 ? "" : "s"} ago`;
+	}
 	const months = Math.floor(days / 30);
-	if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
+	if (months < 12) {
+		return `${months} month${months === 1 ? "" : "s"} ago`;
+	}
 	const years = Math.floor(months / 12);
 	return `${years} year${years === 1 ? "" : "s"} ago`;
 }

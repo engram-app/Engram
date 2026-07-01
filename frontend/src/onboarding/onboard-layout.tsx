@@ -16,7 +16,9 @@ export default function OnboardLayout() {
 	const { pathname } = useLocation();
 	const { data, isLoading } = useOnboardingStatus();
 
-	if (isLoading || !data) return <LoadingScreen />;
+	if (isLoading || !data) {
+		return <LoadingScreen />;
+	}
 
 	const current = stepFromPath(pathname);
 	// Step not in the active chain for this account (e.g. /onboard/agreement on
@@ -35,11 +37,11 @@ export default function OnboardLayout() {
 			navLabel="Onboarding"
 			actions={
 				<>
-					{counter ? <p className="text-sm text-muted-foreground">{counter}</p> : null}
+					{counter ? <p className="text-muted-foreground text-sm">{counter}</p> : null}
 					<button
 						type="button"
 						onClick={() => logout()}
-						className="text-sm text-muted-foreground transition hover:text-foreground"
+						className="text-muted-foreground text-sm transition hover:text-foreground"
 					>
 						Sign out
 					</button>

@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PriceData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
-export type PricingSelectCardGridProps = {
+export interface PricingSelectCardGridProps {
 	priceId: string;
 	name: string;
 	priceData?: PriceData;
@@ -18,7 +18,7 @@ export type PricingSelectCardGridProps = {
 	showInterval?: boolean;
 	loading?: boolean;
 	className?: string;
-};
+}
 
 export function PricingSelectCardGrid({
 	priceId,
@@ -71,18 +71,18 @@ export function PricingSelectCardGrid({
 					</div>
 				)}
 
-				<CardHeader className="flex-1 p-0 flex flex-col items-center justify-center text-center">
-					<CardTitle className="text-base font-medium">{name}</CardTitle>
-					{description && <div className="text-muted-foreground text-xs mt-0.5">{description}</div>}
+				<CardHeader className="flex flex-1 flex-col items-center justify-center p-0 text-center">
+					<CardTitle className="font-medium text-base">{name}</CardTitle>
+					{description && <div className="mt-0.5 text-muted-foreground text-xs">{description}</div>}
 					{originalTotal && (
-						<div className="text-muted-foreground text-sm line-through mt-2">{originalTotal}</div>
+						<div className="mt-2 text-muted-foreground text-sm line-through">{originalTotal}</div>
 					)}
-					<div className="text-2xl font-bold mt-2">{total}</div>
+					<div className="mt-2 font-bold text-2xl">{total}</div>
 					{showInterval && interval && (
 						<div className="text-muted-foreground text-xs">per {interval}</div>
 					)}
 					{trialPeriod && (
-						<div className="text-muted-foreground text-xs mt-1">{trialPeriod} free trial</div>
+						<div className="mt-1 text-muted-foreground text-xs">{trialPeriod} free trial</div>
 					)}
 				</CardHeader>
 
@@ -94,7 +94,7 @@ export function PricingSelectCardGrid({
 								"border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary",
 							)}
 						>
-							<CheckIcon className="size-4 text-primary-foreground opacity-0 group-data-[state=checked]:opacity-100 transition-opacity" />
+							<CheckIcon className="size-4 text-primary-foreground opacity-0 transition-opacity group-data-[state=checked]:opacity-100" />
 						</div>
 					</RadioGroupPrimitive.Indicator>
 				</CardContent>

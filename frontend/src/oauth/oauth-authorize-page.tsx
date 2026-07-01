@@ -64,7 +64,7 @@ export default function OAuthAuthorizePage() {
 	const clientQuery = useQuery({
 		queryKey: ["oauth-client", values.client_id],
 		queryFn: () => fetchOAuthClient(values.client_id),
-		enabled: missing.length === 0 && !!values.client_id,
+		enabled: missing.length === 0 && Boolean(values.client_id),
 		retry: false,
 	});
 
@@ -92,11 +92,15 @@ export default function OAuthAuthorizePage() {
 	const [showSwapConfirm, setShowSwapConfirm] = useState(false);
 
 	useEffect(() => {
-		if (vaultChoice === "vault:*" || !vaultsQuery.data) return;
+		if (vaultChoice === "vault:*" || !vaultsQuery.data) {
+			return;
+		}
 		if (vaultChoice.startsWith("vault:")) {
 			const id = vaultChoice.slice("vault:".length);
 			const stillExists = id === "*" || vaultsQuery.data.some((v) => String(v.id) === id);
-			if (!stillExists) setVaultChoice("vault:*");
+			if (!stillExists) {
+				setVaultChoice("vault:*");
+			}
 		}
 	}, [vaultsQuery.data, vaultChoice]);
 
@@ -115,7 +119,7 @@ export default function OAuthAuthorizePage() {
 							))}
 						</ul>
 					</div>
-					<p className="text-sm text-muted-foreground">
+					<p className="text-muted-foreground text-sm">
 						This page should be opened via an OAuth client redirect, not directly.
 					</p>
 				</AuthPanel>
@@ -163,7 +167,9 @@ export default function OAuthAuthorizePage() {
 			scope: values.scope,
 			vault_choice: vaultChoice,
 		};
-		if (resource) body.resource = resource;
+		if (resource) {
+			body.resource = resource;
+		}
 
 		// If swapping, disconnect the existing connection of the same kind
 		// first so the consent call doesn't 402. Mirrors the /link page swap
@@ -224,20 +230,20 @@ export default function OAuthAuthorizePage() {
 					<h1 className={heading}>
 						Authorize <span className="text-primary">{clientName}</span>
 					</h1>
-					<p className="text-sm text-muted-foreground">
+					<p className="text-muted-foreground text-sm">
 						This app is requesting access to your Engram.
 						{meQuery.data ? ` Signed in as ${meQuery.data.email}.` : ""}
 					</p>
 				</header>
 
 				{isLoadingShell ? (
-					<p className="text-sm text-muted-foreground">Loading…</p>
+					<p className="text-muted-foreground text-sm">Loading…</p>
 				) : (
 					<>
 						{capCheck.atCap && existingPeer && (
 							<div
 								role="status"
-								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-foreground"
+								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 							>
 								Heads up — your Free plan allows 1 active{" "}
 								{clientKind === "obsidian" ? "device" : "external connection"}. Approving will
@@ -257,7 +263,7 @@ export default function OAuthAuthorizePage() {
 							</div>
 						)}
 						<fieldset className="flex flex-col gap-2">
-							<legend className="mb-1 text-sm font-medium text-foreground">Which vault?</legend>
+							<legend className="mb-1 font-medium text-foreground text-sm">Which vault?</legend>
 							{vaultsQuery.data?.map((v) => {
 								const value = `vault:${v.id}`;
 								const active = vaultChoice === value;
@@ -271,7 +277,7 @@ export default function OAuthAuthorizePage() {
 											onChange={() => setVaultChoice(value)}
 											className="accent-primary"
 										/>
-										<span className="text-sm font-medium text-foreground">{v.name}</span>
+										<span className="font-medium text-foreground text-sm">{v.name}</span>
 									</label>
 								);
 							})}
@@ -284,7 +290,7 @@ export default function OAuthAuthorizePage() {
 									onChange={() => setVaultChoice("vault:*")}
 									className="accent-primary"
 								/>
-								<span className="text-sm font-medium text-foreground">All vaults</span>
+								<span className="font-medium text-foreground text-sm">All vaults</span>
 							</label>
 						</fieldset>
 

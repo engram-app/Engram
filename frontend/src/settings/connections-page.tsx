@@ -45,11 +45,11 @@ function useTierCaps() {
 
 // ── Page ──────────────────────────────────────────────────────
 
-type PendingRevoke = {
+interface PendingRevoke {
 	name: string;
 	description: string;
 	onConfirm: () => Promise<unknown>;
-};
+}
 
 export default function ConnectionsPage() {
 	const { data: connections, isLoading, error } = useConnections();
@@ -59,13 +59,16 @@ export default function ConnectionsPage() {
 	const revokePat = useRevokePat();
 	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
 
-	if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
-	if (error)
+	if (isLoading) {
+		return <p className="text-muted-foreground text-sm">Loading…</p>;
+	}
+	if (error) {
 		return (
-			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm">
 				Failed to load: {error instanceof Error ? error.message : "unknown error"}
 			</p>
 		);
+	}
 
 	const list = connections ?? [];
 	const obs = list.filter((c) => c.kind === "obsidian");
@@ -79,8 +82,8 @@ export default function ConnectionsPage() {
 	return (
 		<article className="space-y-8">
 			<header>
-				<h1 className="text-xl font-semibold text-foreground">Connections</h1>
-				<p className="mt-1 text-sm text-muted-foreground">
+				<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+				<p className="mt-1 text-muted-foreground text-sm">
 					Manage what's connected to your Engram account.
 				</p>
 				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
@@ -90,10 +93,10 @@ export default function ConnectionsPage() {
 						rel="noreferrer"
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
-						<p className="text-sm font-medium text-foreground group-hover:text-primary">
+						<p className="font-medium text-foreground text-sm group-hover:text-primary">
 							AI integrations →
 						</p>
-						<p className="mt-0.5 text-xs text-muted-foreground">
+						<p className="mt-0.5 text-muted-foreground text-xs">
 							Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps that support
 							custom integrations.
 						</p>
@@ -104,10 +107,10 @@ export default function ConnectionsPage() {
 						rel="noreferrer"
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
-						<p className="text-sm font-medium text-foreground group-hover:text-primary">
+						<p className="font-medium text-foreground text-sm group-hover:text-primary">
 							MCP protocol →
 						</p>
-						<p className="mt-0.5 text-xs text-muted-foreground">
+						<p className="mt-0.5 text-muted-foreground text-xs">
 							Connect Engram anywhere that supports MCP.
 						</p>
 					</a>
@@ -224,12 +227,12 @@ function ConnectionCard({
 						<div className="truncate font-medium">
 							{connection.name ?? "Unnamed"}
 							{!connection.verified && (
-								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-normal text-muted-foreground">
+								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
 									unverified
 								</span>
 							)}
 						</div>
-						<div className="truncate text-xs text-muted-foreground">
+						<div className="truncate text-muted-foreground text-xs">
 							<strong className="font-semibold">
 								{connection.kind === "obsidian" ? "Vault:" : "Vaults:"}
 							</strong>{" "}
@@ -237,7 +240,7 @@ function ConnectionCard({
 						</div>
 					</div>
 				</summary>
-				<dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-xs text-muted-foreground [&_dt]:font-semibold">
+				<dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-muted-foreground text-xs [&_dt]:font-semibold">
 					{connection.software_version && (
 						<>
 							<dt>Version:</dt>
@@ -287,7 +290,7 @@ function ConnectionCard({
 			<button
 				type="button"
 				onClick={onRevoke}
-				className="shrink-0 self-center p-3 text-sm text-destructive hover:text-destructive/80"
+				className="shrink-0 self-center p-3 text-destructive text-sm hover:text-destructive/80"
 			>
 				Revoke
 			</button>
@@ -299,8 +302,8 @@ function ConnectionCard({
 
 function EmptyState({ text }: { text: string }) {
 	return (
-		<section className="rounded-lg border-2 border-dashed border-input p-8 text-center">
-			<p className="text-sm text-muted-foreground">{text}</p>
+		<section className="rounded-lg border-2 border-input border-dashed p-8 text-center">
+			<p className="text-muted-foreground text-sm">{text}</p>
 		</section>
 	);
 }
@@ -328,12 +331,12 @@ function PatSection({
 		>
 			{!canCreate && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
-					<p className="text-sm text-muted-foreground">
+					<p className="text-muted-foreground text-sm">
 						Upgrade to Starter to create API keys for scripting and external integrations.
 					</p>
 					<a
 						href="/settings/billing"
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade
 					</a>
@@ -346,7 +349,7 @@ function PatSection({
 				<section className="overflow-hidden rounded-lg border border-border bg-card">
 					<div className="overflow-x-auto">
 						<table className="w-full min-w-[640px] text-sm">
-							<thead className="bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
+							<thead className="bg-muted text-left text-muted-foreground text-xs uppercase tracking-wide">
 								<tr>
 									<th className="px-4 py-3 font-medium">Name</th>
 									<th className="px-4 py-3 font-medium">Key</th>
@@ -361,7 +364,7 @@ function PatSection({
 										<td className="px-4 py-3 font-medium text-foreground">
 											{p.name || "(unnamed)"}
 										</td>
-										<td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+										<td className="px-4 py-3 font-mono text-muted-foreground text-xs">
 											engram_••••••
 										</td>
 										<td className="px-4 py-3 text-muted-foreground">
@@ -374,7 +377,7 @@ function PatSection({
 											<button
 												type="button"
 												onClick={() => onRevoke(p)}
-												className="text-sm text-destructive hover:text-destructive/80"
+												className="text-destructive text-sm hover:text-destructive/80"
 											>
 												Revoke
 											</button>
@@ -416,7 +419,9 @@ function CreatePatModal({
 
 	async function submit(e: React.FormEvent) {
 		e.preventDefault();
-		if (name.trim().length === 0) return;
+		if (name.trim().length === 0) {
+			return;
+		}
 		try {
 			const created = await create.mutateAsync(name.trim());
 			onCreated(created);
@@ -429,22 +434,22 @@ function CreatePatModal({
 		<ModalShell onClose={onClose} title="New API Key">
 			<form onSubmit={submit} className="space-y-4">
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Name</span>
+					<span className="font-medium text-foreground text-sm">Name</span>
 					<input
 						autoFocus
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 						placeholder="e.g. ci-bot"
 						maxLength={64}
-						className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+						className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
 					/>
-					<span className="mt-1 block text-xs text-muted-foreground">
+					<span className="mt-1 block text-muted-foreground text-xs">
 						Helps you identify the key later — pick something memorable.
 					</span>
 				</label>
 
 				{create.error && (
-					<p className="text-sm text-destructive" role="alert">
+					<p className="text-destructive text-sm" role="alert">
 						{create.error instanceof ApiError
 							? create.error.message
 							: "Could not create key. Try again."}
@@ -455,14 +460,14 @@ function CreatePatModal({
 					<button
 						type="button"
 						onClick={onClose}
-						className="rounded-md px-4 py-2 text-sm text-foreground hover:bg-accent"
+						className="rounded-md px-4 py-2 text-foreground text-sm hover:bg-accent"
 					>
 						Cancel
 					</button>
 					<button
 						type="submit"
 						disabled={create.isPending || name.trim().length === 0}
-						className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+						className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
 					>
 						{create.isPending ? "Generating…" : "Generate Key"}
 					</button>
@@ -499,7 +504,7 @@ function RevealKeyModal({
 	return (
 		<ModalShell onClose={onClose} title="Save your API key">
 			<div className="space-y-4">
-				<p className="rounded-md bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+				<p className="rounded-md bg-amber-50 px-3 py-2 text-amber-800 text-sm dark:bg-amber-950 dark:text-amber-200">
 					This is the only time the key will be shown. Copy it now and store it somewhere safe.
 				</p>
 
@@ -510,14 +515,14 @@ function RevealKeyModal({
 						value={createdKey.key}
 						onFocus={selectAll}
 						onClick={selectAll}
-						className="flex-1 min-w-0 rounded-md border border-input bg-muted px-3 py-2 font-mono text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+						className="min-w-0 flex-1 rounded-md border border-input bg-muted px-3 py-2 font-mono text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
 						aria-label="API key"
 					/>
 					<button
 						type="button"
 						onClick={copy}
 						aria-label="Copy API key"
-						className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
+						className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-2 font-medium text-primary-foreground text-sm shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
 					>
 						<CopyIcon copied={copyState === "copied"} />
 						<span className="min-w-12 text-left">{copyState === "copied" ? "Copied" : "Copy"}</span>
@@ -525,7 +530,7 @@ function RevealKeyModal({
 				</div>
 
 				{copyState === "error" && (
-					<p className="text-sm text-destructive" role="alert">
+					<p className="text-destructive text-sm" role="alert">
 						Copy failed — click the field and press Cmd/Ctrl+C to copy manually.
 					</p>
 				)}
@@ -534,7 +539,7 @@ function RevealKeyModal({
 					<button
 						type="button"
 						onClick={onClose}
-						className="rounded-md border border-input bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-accent"
+						className="rounded-md border border-input bg-card px-4 py-2 font-medium text-foreground text-sm shadow-sm hover:bg-accent"
 					>
 						Done
 					</button>
@@ -644,7 +649,9 @@ function ConfirmRevokeModal({
 			onOpenChange={(open) => {
 				// Esc + outside-click route through here; ignore while the mutation
 				// is in flight so the user can't accidentally close mid-request.
-				if (!(open || submitting)) onClose();
+				if (!(open || submitting)) {
+					onClose();
+				}
 			}}
 		>
 			<DialogContent>
@@ -654,7 +661,7 @@ function ConfirmRevokeModal({
 				</DialogHeader>
 				{error && (
 					<p
-						className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+						className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm"
 						role="alert"
 					>
 						{error}
@@ -695,7 +702,7 @@ function ModalShell({
 				onClick={(e) => e.stopPropagation()}
 			>
 				<header className="mb-4">
-					<h2 id="modal-title" className="text-lg font-semibold text-foreground">
+					<h2 id="modal-title" className="font-semibold text-foreground text-lg">
 						{title}
 					</h2>
 				</header>

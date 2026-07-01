@@ -18,8 +18,12 @@ export function resolveDropMove(
 ): { dest: string; ids: string[] } | null {
 	// A root destination is allowed (move to vault root). Only a missing target
 	// is a no-op. Sources already at root are filtered below.
-	if (destId == null) return null;
+	if (destId == null) {
+		return null;
+	}
 	const ids = sources.filter((s) => s.parentId !== destId).map((s) => s.id);
-	if (ids.length === 0) return null;
+	if (ids.length === 0) {
+		return null;
+	}
 	return { dest: destId, ids };
 }

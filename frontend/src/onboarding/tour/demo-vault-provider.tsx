@@ -42,7 +42,9 @@ export function DemoVaultProvider({ children }: { children: ReactNode }) {
 	const activate = useCallback(async () => {
 		// Static SPA asset, not an API call — served from same origin on both selfhost and CF Pages.
 		const res = await fetch("/demo-vault.json");
-		if (!res.ok) throw new Error("demo fixture missing");
+		if (!res.ok) {
+			throw new Error("demo fixture missing");
+		}
 		const json = (await res.json()) as DemoVaultData;
 		setData(json);
 	}, []);
@@ -66,7 +68,9 @@ export function DemoVaultProvider({ children }: { children: ReactNode }) {
 
 export function useDemoVault(): DemoVaultCtx {
 	const v = useContext(Ctx);
-	if (!v) throw new Error("useDemoVault must be used inside DemoVaultProvider");
+	if (!v) {
+		throw new Error("useDemoVault must be used inside DemoVaultProvider");
+	}
 	return v;
 }
 

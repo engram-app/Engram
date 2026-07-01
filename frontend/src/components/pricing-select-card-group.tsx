@@ -4,13 +4,13 @@ import type * as React from "react";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 
-export type PricingSelectCardGroupProps = {
+export interface PricingSelectCardGroupProps {
 	children: React.ReactNode;
 	value: string;
 	onValueChange: (value: string) => void;
 	layout?: "stacked" | "grid";
 	className?: string;
-};
+}
 
 export function PricingSelectCardGroup({
 	children,

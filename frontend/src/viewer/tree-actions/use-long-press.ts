@@ -37,7 +37,9 @@ export function useLongPress({
 			// makes a click-and-drag trip the action drawer — and once a native
 			// mouse drag starts the browser stops emitting pointermove, so the
 			// move-threshold can't cancel it. pointerType is the mouse/touch signal.
-			if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+			if (e.pointerType !== "touch" && e.pointerType !== "pen") {
+				return;
+			}
 			start.current = { x: e.clientX, y: e.clientY };
 			timer.current = setTimeout(() => {
 				fired.current = true;
@@ -45,7 +47,9 @@ export function useLongPress({
 			}, delayMs);
 		},
 		onPointerMove(e: React.PointerEvent) {
-			if (!start.current) return;
+			if (!start.current) {
+				return;
+			}
 			const dx = e.clientX - start.current.x;
 			const dy = e.clientY - start.current.y;
 			if (dx * dx + dy * dy > moveThresholdPx * moveThresholdPx) {

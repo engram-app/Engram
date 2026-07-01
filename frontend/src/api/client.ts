@@ -66,7 +66,9 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 		const body = await response.json().catch(() => ({}));
 		if (response.status === 402) {
 			const reason = body.reason ?? "unknown";
-			if (upgradeHandler) upgradeHandler(reason);
+			if (upgradeHandler) {
+				upgradeHandler(reason);
+			}
 			throw new LimitExceededError(
 				reason,
 				body.limit_key ?? null,

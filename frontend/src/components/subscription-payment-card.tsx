@@ -11,7 +11,7 @@ import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 import { getPaymentMethodIcon } from "@/lib/payment-method-icons";
 import { cn } from "@/lib/utils";
 
-export type SubscriptionPaymentCardProps = {
+export interface SubscriptionPaymentCardProps {
 	/**
 	 * Next payment details. Absent when subscription is paused or canceled.
 	 *
@@ -28,7 +28,7 @@ export type SubscriptionPaymentCardProps = {
 	/** Portal deep link to update payment method. Absent for manual collection. */
 	updatePaymentMethodUrl?: string;
 	className?: string;
-};
+}
 
 export function SubscriptionPaymentCard({
 	nextPayment,
@@ -62,7 +62,7 @@ export function SubscriptionPaymentCard({
 	return (
 		<Card className={cn("gap-4", className)}>
 			<CardHeader>
-				<CardTitle className="text-base font-semibold">Payment</CardTitle>
+				<CardTitle className="font-semibold text-base">Payment</CardTitle>
 			</CardHeader>
 
 			<CardContent className="flex flex-col gap-4">
@@ -72,10 +72,10 @@ export function SubscriptionPaymentCard({
 							<div className="font-semibold">
 								{formatMoney(nextPayment.amount, nextPayment.currency)}
 							</div>
-							<div className="text-sm text-muted-foreground">{formatDate(nextPayment.date)}</div>
+							<div className="text-muted-foreground text-sm">{formatDate(nextPayment.date)}</div>
 						</>
 					) : (
-						<div className="text-sm font-medium text-muted-foreground">No upcoming payment</div>
+						<div className="font-medium text-muted-foreground text-sm">No upcoming payment</div>
 					)}
 				</PaymentInfoRow>
 
@@ -84,8 +84,8 @@ export function SubscriptionPaymentCard({
 						<Separator />
 						<div className="flex items-center justify-between gap-4">
 							<PaymentInfoRow icon={PaymentMethodIcon} label="Payment method">
-								<div className="text-sm font-medium truncate">{displayLabel}</div>
-								{expiryLabel && <div className="text-xs text-muted-foreground">{expiryLabel}</div>}
+								<div className="truncate font-medium text-sm">{displayLabel}</div>
+								{expiryLabel && <div className="text-muted-foreground text-xs">{expiryLabel}</div>}
 							</PaymentInfoRow>
 
 							{updatePaymentMethodUrl && (
@@ -93,7 +93,7 @@ export function SubscriptionPaymentCard({
 									href={updatePaymentMethodUrl}
 									target="_blank"
 									rel="noopener noreferrer"
-									className="flex items-center gap-1 text-sm font-medium text-primary hover:underline shrink-0"
+									className="flex shrink-0 items-center gap-1 font-medium text-primary text-sm hover:underline"
 								>
 									Update
 									<ExternalLink className="size-3" />
@@ -111,11 +111,11 @@ export function SubscriptionPaymentCard({
 							href={updatePaymentMethodUrl}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+							className="flex items-center gap-1 font-medium text-primary text-sm hover:underline"
 						>
 							<CreditCard className="size-4" />
 							Update payment method
-							<ExternalLink className="size-3 ml-0.5" />
+							<ExternalLink className="ml-0.5 size-3" />
 						</a>
 					</>
 				)}
@@ -139,7 +139,7 @@ function PaymentInfoRow({
 				<Icon className="size-4 text-muted-foreground" />
 			</div>
 			<div className="min-w-0">
-				<div className="text-sm text-muted-foreground">{label}</div>
+				<div className="text-muted-foreground text-sm">{label}</div>
 				{children}
 			</div>
 		</div>
@@ -154,7 +154,7 @@ function SubscriptionPaymentCardSkeleton({ className }: { className?: string }) 
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
 				<div className="flex items-start gap-3">
-					<Skeleton className="size-8 rounded-md shrink-0" />
+					<Skeleton className="size-8 shrink-0 rounded-md" />
 					<div className="space-y-1.5">
 						<Skeleton className="h-3 w-24" />
 						<Skeleton className="h-5 w-16" />
@@ -164,7 +164,7 @@ function SubscriptionPaymentCardSkeleton({ className }: { className?: string }) 
 				<Separator />
 				<div className="flex items-center justify-between gap-4">
 					<div className="flex items-center gap-3">
-						<Skeleton className="size-8 rounded-md shrink-0" />
+						<Skeleton className="size-8 shrink-0 rounded-md" />
 						<div className="space-y-1.5">
 							<Skeleton className="h-3 w-28" />
 							<Skeleton className="h-4 w-20" />

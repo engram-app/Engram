@@ -14,8 +14,12 @@ export function useClearQueryCacheOnUserChange(
 ): void {
 	const prevRef = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (prevRef.current === userId) return;
-		if (prevRef.current !== undefined) queryClient.clear();
+		if (prevRef.current === userId) {
+			return;
+		}
+		if (prevRef.current !== undefined) {
+			queryClient.clear();
+		}
 		prevRef.current = userId;
 	}, [queryClient, userId]);
 }

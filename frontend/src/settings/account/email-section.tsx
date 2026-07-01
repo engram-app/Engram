@@ -23,7 +23,9 @@ export function EmailSection() {
 		user!.createEmailAddress({ email: address }),
 	);
 
-	if (!(isLoaded && user)) return null;
+	if (!(isLoaded && user)) {
+		return null;
+	}
 
 	async function add() {
 		try {
@@ -32,7 +34,9 @@ export function EmailSection() {
 			setPending(created);
 			toast.success("Verification code sent");
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error(clerkErrorMessage(e, "Could not add email"));
 		}
 	}
@@ -55,7 +59,9 @@ export function EmailSection() {
 			await user!.reload();
 			toast.success("Primary email updated");
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not set primary email");
 		}
 	}
@@ -66,14 +72,20 @@ export function EmailSection() {
 			await user!.reload();
 			toast.success("Email removed");
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not remove email");
 		}
 	}
 
 	const sortedEmails = [...user.emailAddresses].sort((a, b) => {
-		if (a.id === user!.primaryEmailAddressId) return -1;
-		if (b.id === user!.primaryEmailAddressId) return 1;
+		if (a.id === user!.primaryEmailAddressId) {
+			return -1;
+		}
+		if (b.id === user!.primaryEmailAddressId) {
+			return 1;
+		}
 		return 0;
 	});
 
@@ -91,7 +103,7 @@ export function EmailSection() {
 						<span className="flex min-w-0 items-center gap-2 text-foreground">
 							<span className="truncate">{e.emailAddress}</span>
 							{e.id === user.primaryEmailAddressId && (
-								<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+								<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
 									Primary
 								</span>
 							)}
@@ -129,7 +141,7 @@ export function EmailSection() {
 						verify();
 					}}
 				>
-					<label className="block text-sm font-medium text-foreground">
+					<label className="block font-medium text-foreground text-sm">
 						Verification code
 						<input
 							className={inputClass}
@@ -149,7 +161,7 @@ export function EmailSection() {
 						add();
 					}}
 				>
-					<label className="flex-1 block text-sm font-medium text-foreground">
+					<label className="block flex-1 font-medium text-foreground text-sm">
 						Add email
 						<input
 							className={inputClass}

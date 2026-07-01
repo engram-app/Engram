@@ -32,14 +32,18 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
 	const [state, setState] = useState<State>(INITIAL);
 
 	useEffect(() => {
-		if (!enabled || userId == null) return;
+		if (!enabled || userId == null) {
+			return;
+		}
 
 		let socket: Socket | null = null;
 		let cancelled = false;
 
 		async function connect() {
 			const token = await getToken();
-			if (cancelled || !token) return;
+			if (cancelled || !token) {
+				return;
+			}
 
 			socket = new Socket(joinWsUrl(getWsBase(), "/socket"), { params: { token } });
 			socket.connect();

@@ -30,7 +30,9 @@ function inlineBootstrap(): Plugin {
 		transformIndexHtml: {
 			order: "post",
 			handler(html, ctx) {
-				if (process.env.VITE_INLINE_BOOTSTRAP_CONFIG !== "1") return;
+				if (process.env.VITE_INLINE_BOOTSTRAP_CONFIG !== "1") {
+					return;
+				}
 
 				const { config, errors } = bootstrapConfigFromEnv(process.env);
 				if (errors.length > 0) {
@@ -88,8 +90,11 @@ function stripSourceMaps(outDir: string): Plugin {
 	const deleteMaps = (dir: string) => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const full = join(dir, entry.name);
-			if (entry.isDirectory()) deleteMaps(full);
-			else if (entry.name.endsWith(".map")) rmSync(full);
+			if (entry.isDirectory()) {
+				deleteMaps(full);
+			} else if (entry.name.endsWith(".map")) {
+				rmSync(full);
+			}
 		}
 	};
 

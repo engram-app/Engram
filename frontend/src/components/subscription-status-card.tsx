@@ -22,7 +22,7 @@ import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
-export type SubscriptionStatusCardProps = {
+export interface SubscriptionStatusCardProps {
 	subscription?: SubscriptionStatusData;
 	/** Override the card title. Defaults to the first item's product name (single-item) or "Subscription" (multi-item). */
 	title?: string;
@@ -50,7 +50,7 @@ export type SubscriptionStatusCardProps = {
 	 */
 	onManageSubscription?: () => void;
 	className?: string;
-};
+}
 
 // --- Status badge ---
 
@@ -114,7 +114,9 @@ function getValidScheduledChange(
 	status: SubscriptionStatus,
 	scheduledChange?: SubscriptionStatusData["scheduledChange"],
 ): SubscriptionStatusData["scheduledChange"] | undefined {
-	if (!scheduledChange) return;
+	if (!scheduledChange) {
+		return;
+	}
 	switch (status) {
 		case "canceled":
 			return;
@@ -205,10 +207,10 @@ export function SubscriptionStatusCard({
 
 	const effectiveScheduledChange = getValidScheduledChange(status, scheduledChange);
 
-	const showChangePlan = !!onChangePlan && canShowChangePlan(status);
+	const showChangePlan = Boolean(onChangePlan) && canShowChangePlan(status);
 	const showUpdatePayment =
-		!!onUpdatePaymentMethod && canShowUpdatePaymentMethod(status, collectionMode);
-	const showManage = !!onManageSubscription;
+		Boolean(onUpdatePaymentMethod) && canShowUpdatePaymentMethod(status, collectionMode);
+	const showManage = Boolean(onManageSubscription);
 	const hasActions = showChangePlan || showUpdatePayment || showManage;
 
 	const cardTitle =
@@ -237,7 +239,7 @@ export function SubscriptionStatusCard({
 		>
 			<CardHeader>
 				<div className="flex items-start justify-between gap-4">
-					<div className="flex-1 min-w-0 space-y-1">
+					<div className="min-w-0 flex-1 space-y-1">
 						<div className="flex flex-wrap items-center gap-2">
 							<CardTitle className="truncate">{cardTitle}</CardTitle>
 							{statusBadgePosition === "inline" && <StatusBadge status={status} />}
@@ -246,7 +248,7 @@ export function SubscriptionStatusCard({
 							<CardDescription>{primaryItem.priceName}</CardDescription>
 						)}
 					</div>
-					<div className="flex items-center gap-2 shrink-0">
+					<div className="flex shrink-0 items-center gap-2">
 						{statusBadgePosition === "end" && <StatusBadge status={status} />}
 						{isSingleItem && primaryItem?.productImageUrl && (
 							<img
@@ -288,27 +290,27 @@ export function SubscriptionStatusCard({
 							key={index}
 							className={cn(
 								"flex items-center justify-between gap-4",
-								index > 0 && "pt-2 border-t",
+								index > 0 && "border-t pt-2",
 							)}
 						>
-							<div className="flex items-center gap-2 min-w-0">
+							<div className="flex min-w-0 items-center gap-2">
 								{item.productImageUrl && items.length > 1 && (
 									<img
 										src={item.productImageUrl}
 										alt={item.productName}
-										className="size-6 rounded object-cover shrink-0"
+										className="size-6 shrink-0 rounded object-cover"
 									/>
 								)}
 								<div className="min-w-0 space-y-0.5">
-									<p className="text-sm font-medium truncate">{item.productName}</p>
+									<p className="truncate font-medium text-sm">{item.productName}</p>
 									{item.quantity > 1 && item.unitPrice !== undefined && (
-										<p className="text-sm text-muted-foreground">
+										<p className="text-muted-foreground text-sm">
 											{item.quantity} &times; {formatMoney(item.unitPrice, currency)}
 										</p>
 									)}
 								</div>
 							</div>
-							<p className="text-sm font-medium shrink-0 tabular-nums">
+							<p className="shrink-0 font-medium text-sm tabular-nums">
 								{formatMoney(item.lineTotal, currency)}
 							</p>
 						</div>
@@ -320,15 +322,15 @@ export function SubscriptionStatusCard({
 				<div className="space-y-1.5">
 					{discount && (
 						<div className="flex items-center justify-between text-success-foreground">
-							<span className="text-sm flex items-center gap-1.5">
+							<span className="flex items-center gap-1.5 text-sm">
 								Discount
 								{discount.code && (
-									<span className="text-xs bg-success/10 px-1.5 py-0.5 rounded">
+									<span className="rounded bg-success/10 px-1.5 py-0.5 text-xs">
 										{discount.code}
 									</span>
 								)}
 								{discount.endsAt && (
-									<span className="text-xs text-muted-foreground">
+									<span className="text-muted-foreground text-xs">
 										until {formatDate(discount.endsAt)}
 									</span>
 								)}
@@ -343,14 +345,14 @@ export function SubscriptionStatusCard({
 						<span className="text-sm">Total</span>
 						<span className="text-sm tabular-nums">
 							{formatMoney(totalAmount, currency)}
-							<span className="text-muted-foreground font-normal"> / {billingIntervalLabel}</span>
+							<span className="font-normal text-muted-foreground"> / {billingIntervalLabel}</span>
 						</span>
 					</div>
 				</div>
 
 				<Separator />
 
-				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground text-sm">
 					{nextBilledAt && nextBillingLabel && (
 						<div className="flex items-center gap-1.5">
 							<CalendarIcon className="size-3.5" />

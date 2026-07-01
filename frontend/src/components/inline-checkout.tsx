@@ -30,7 +30,7 @@ const SUMMARY_EVENT_NAMES = new Set([
 ]);
 
 /** Props for the `InlineCheckout` component. */
-export type InlineCheckoutProps = {
+export interface InlineCheckoutProps {
 	clientToken: string;
 	environment?: Environments;
 	items: CheckoutOpenLineItem[];
@@ -60,7 +60,7 @@ export type InlineCheckoutProps = {
 	onError?: (error: Error) => void;
 
 	className?: string;
-};
+}
 
 export function InlineCheckout({
 	clientToken,
@@ -149,7 +149,9 @@ export function InlineCheckout({
 
 	// Open checkout once Paddle is ready
 	React.useEffect(() => {
-		if (!isReady || items.length === 0) return;
+		if (!isReady || items.length === 0) {
+			return;
+		}
 
 		if (!isOpenRef.current) {
 			isOpenRef.current = true;
@@ -168,7 +170,9 @@ export function InlineCheckout({
 
 	// Update items reactively after mount
 	React.useEffect(() => {
-		if (!(isReady && isOpenRef.current)) return;
+		if (!(isReady && isOpenRef.current)) {
+			return;
+		}
 
 		// First run after openCheckout — record the baseline key and skip the call.
 		// openCheckout already applied these items; calling updateItems immediately
@@ -178,7 +182,9 @@ export function InlineCheckout({
 			return;
 		}
 
-		if (prevItemsKeyRef.current === itemsKey) return;
+		if (prevItemsKeyRef.current === itemsKey) {
+			return;
+		}
 		prevItemsKeyRef.current = itemsKey;
 		updateItems(items.map((i) => ({ priceId: i.priceId, quantity: i.quantity ?? 1 })));
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,7 +209,7 @@ export function InlineCheckout({
 		return (
 			<div
 				className={cn(
-					"rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive",
+					"rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive text-sm",
 					className,
 				)}
 			>
@@ -230,7 +236,7 @@ export function InlineCheckout({
 			)}
 
 			<div className="min-w-0 flex-1">
-				<div className={cn(INLINE_CHECKOUT_FRAME_TARGET, "w-full min-h-[450px]")} />
+				<div className={cn(INLINE_CHECKOUT_FRAME_TARGET, "min-h-[450px] w-full")} />
 			</div>
 
 			{!summaryFirst && (

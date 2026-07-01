@@ -62,9 +62,13 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 	const views: EditorView[] = [];
 	const parents: HTMLElement[] = [];
 	afterEach(() => {
-		for (const v of views) v.destroy();
+		for (const v of views) {
+			v.destroy();
+		}
 		views.length = 0;
-		for (const p of parents) p.parentNode?.removeChild(p);
+		for (const p of parents) {
+			p.parentNode?.removeChild(p);
+		}
 		parents.length = 0;
 	});
 

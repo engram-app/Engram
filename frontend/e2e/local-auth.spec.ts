@@ -9,8 +9,12 @@ async function registerUser(baseURL: string, email: string) {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ email, password: TEST_PASSWORD }),
 	});
-	if (res.status === 422) return; // already exists (idempotent)
-	if (!res.ok) throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`);
+	if (res.status === 422) {
+		return; // already exists (idempotent)
+	}
+	if (!res.ok) {
+		throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`);
+	}
 
 	// Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
 	// instead of being bounced to /onboard/vault by OnboardingGate; record a
@@ -23,20 +27,25 @@ async function registerUser(baseURL: string, email: string) {
 		headers: auth,
 		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
 	});
-	if (!prof.ok)
+	if (!prof.ok) {
 		throw new Error(`Onboarding profile PATCH failed: ${prof.status} ${await prof.text()}`);
+	}
 	const act = await fetch(`${baseURL}/api/onboarding/actions`, {
 		method: "POST",
 		headers: auth,
 		body: JSON.stringify({ action: "dismissed:tour" }),
 	});
-	if (!act.ok) throw new Error(`Onboarding action POST failed: ${act.status} ${await act.text()}`);
+	if (!act.ok) {
+		throw new Error(`Onboarding action POST failed: ${act.status} ${await act.text()}`);
+	}
 	const vault = await fetch(`${baseURL}/api/vaults`, {
 		method: "POST",
 		headers: auth,
 		body: JSON.stringify({ name: "E2E Vault" }),
 	});
-	if (!vault.ok) throw new Error(`Vault POST failed: ${vault.status} ${await vault.text()}`);
+	if (!vault.ok) {
+		throw new Error(`Vault POST failed: ${vault.status} ${await vault.text()}`);
+	}
 }
 
 /** Unique email per test — no cross-test dependency. */

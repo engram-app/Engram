@@ -1,4 +1,4 @@
-export type PriceData = {
+export interface PriceData {
 	/** Formatted price string, e.g. "$9.99" or "£12.00" */
 	total: string;
 	/** Pre-discount price, e.g. "$12.99". Present only when a discount is applied. */
@@ -7,7 +7,7 @@ export type PriceData = {
 	interval?: string;
 	/** Trial period length, e.g. "7 days", "1 month" */
 	trialPeriod?: string;
-};
+}
 
 /**
  * Normalized payload delivered to the `onComplete` callback when a Paddle
@@ -17,11 +17,11 @@ export type PriceData = {
  * fields most commonly needed for post-purchase handling (e.g. sending to
  * your backend, showing a confirmation screen).
  */
-export type CheckoutCompleteData = {
+export interface CheckoutCompleteData {
 	transactionId: string;
 	customerId: string;
 	customerEmail: string;
-};
+}
 
 /**
  * A single line item in the checkout order summary.
@@ -30,12 +30,12 @@ export type CheckoutCompleteData = {
  * the parent `CheckoutSummaryData.currency`.
  * Produced by `mapCheckoutEventsToSummary` from `CheckoutEventsData`.
  */
-export type CheckoutSummaryItem = {
+export interface CheckoutSummaryItem {
 	name: string;
 	priceName?: string;
 	quantity: number;
 	lineTotal: number;
-};
+}
 
 /**
  * Display contract for the `CheckoutSummary` component.
@@ -44,7 +44,7 @@ export type CheckoutSummaryItem = {
  * Produced by `mapCheckoutEventsToSummary` from the `CheckoutEventsData` payload
  * emitted by Paddle.js checkout events.
  */
-export type CheckoutSummaryData = {
+export interface CheckoutSummaryData {
 	items: CheckoutSummaryItem[];
 	subtotal: number;
 	tax: number;
@@ -60,7 +60,7 @@ export type CheckoutSummaryData = {
 	recurringFrequency?: number;
 	/** Trial period label, e.g. "7 days" or "1 month" */
 	trialPeriod?: string;
-};
+}
 
 // ---
 // Subscription display types
@@ -79,7 +79,7 @@ export type SubscriptionStatus = "active" | "canceled" | "past_due" | "paused" |
  * `lineTotal` should come from `recurring_transaction_details.line_items[n].totals.subtotal`
  * as a decimal number (e.g. 29.99).
  */
-export type SubscriptionStatusItemData = {
+export interface SubscriptionStatusItemData {
 	/** Product name, e.g. "Pro Plan" */
 	productName: string;
 	/** Optional product description */
@@ -100,7 +100,7 @@ export type SubscriptionStatusItemData = {
 	 * Discounts are shown as a separate summary line — this field should NOT include them.
 	 */
 	lineTotal: number;
-};
+}
 
 /**
  * Display contract for the `SubscriptionStatusCard` component.
@@ -112,7 +112,7 @@ export type SubscriptionStatusItemData = {
  * `totalAmount` should come from `recurring_transaction_details.totals.total` —
  * this is the steady-state recurring amount (after discounts and tax).
  */
-export type SubscriptionStatusData = {
+export interface SubscriptionStatusData {
 	/** Paddle subscription ID, e.g. "sub_01abc..." */
 	id?: string;
 	/** Subscription line items — auto-adapts layout for single vs multi-item */
@@ -156,7 +156,7 @@ export type SubscriptionStatusData = {
 		/** Discount description for billing summary, e.g. "-15%" or "-$5.00". API-provided or derived. */
 		description?: string;
 	};
-};
+}
 
 /**
  * Display contract for the `SubscriptionAlert` component.
@@ -168,7 +168,7 @@ export type SubscriptionStatusData = {
  * `updatePaymentMethodUrl` comes from `subscription.management_urls.update_payment_method`.
  * `trialEndsAt` comes from `subscription.items[0].trial_dates.ends_at`.
  */
-export type SubscriptionAlertData = {
+export interface SubscriptionAlertData {
 	status: SubscriptionStatus;
 	/** ISO 8601 cancellation date. Present when status is "canceled". */
 	canceledAt?: string;
@@ -184,7 +184,7 @@ export type SubscriptionAlertData = {
 	trialEndsAt?: string;
 	/** Portal deep link to update payment method. Null for manual collection. */
 	updatePaymentMethodUrl?: string;
-};
+}
 
 /**
  * Next payment details for the `SubscriptionPaymentCard` component.
@@ -194,14 +194,14 @@ export type SubscriptionAlertData = {
  * `currency` should come from `subscription.currency_code`.
  * `date` should come from `subscription.next_billed_at` as an ISO 8601 string.
  */
-export type NextPaymentData = {
+export interface NextPaymentData {
 	/** Payment amount as a decimal number, e.g. 29.99 */
 	amount: number;
 	/** ISO 4217 currency code, e.g. "USD" */
 	currency: string;
 	/** ISO 8601 date string for the next billing date, e.g. "2025-02-01T00:00:00Z" */
 	date: string;
-};
+}
 
 /**
  * Payment method details for the `SubscriptionPaymentCard` component.
@@ -221,7 +221,7 @@ export type NextPaymentData = {
  *   last4: payment.card?.last4,
  * } : undefined}
  */
-export type PaymentMethodData = {
+export interface PaymentMethodData {
 	/** Paddle payment method type from `method_details.type`, e.g. "card", "paypal", "apple_pay" */
 	type: string;
 	/** Card brand from `method_details.card.type`, e.g. "visa", "mastercard". Card payments only. */
@@ -238,7 +238,7 @@ export type PaymentMethodData = {
 	 * (e.g. "Visa •••• 4242") or when you've already formatted the label upstream.
 	 */
 	label?: string;
-};
+}
 
 /**
  * Display contract for the `PlanChangePreview` component.
@@ -250,7 +250,7 @@ export type PaymentMethodData = {
  * Date values are ISO 8601 strings — the component formats them for display.
  * UI labels and contextual messages belong on component props, not here.
  */
-export type PlanChangePreviewData = {
+export interface PlanChangePreviewData {
 	/** ISO 4217 currency code, e.g. "USD" */
 	currency: string;
 	/** The plan being replaced */
@@ -339,7 +339,7 @@ export type PlanChangePreviewData = {
 	 * "Amount due now" when `collectionMode === "manual"`.
 	 */
 	collectionMode?: "automatic" | "manual";
-};
+}
 
 // ---
 // Plan change breakdown types
@@ -355,7 +355,7 @@ export type PlanChangePreviewData = {
  * Maps to `details.line_items[]` (immediate/next transaction) or
  * `line_items[]` (recurring_transaction_details) in the preview response.
  */
-export type PlanChangeLineItemData = {
+export interface PlanChangeLineItemData {
 	/** Product name, e.g. "Pro Plan". From `line_items[].product.name`. */
 	productName: string;
 	/** Item quantity. From `line_items[].quantity`. */
@@ -368,7 +368,7 @@ export type PlanChangeLineItemData = {
 	isProrated?: boolean;
 	/** Proration period label, e.g. "15 of 31 days". Derived from `proration.rate` and `proration.billing_period`. */
 	prorationPeriod?: string;
-};
+}
 
 /**
  * Totals breakdown for a single transaction section.
@@ -377,7 +377,7 @@ export type PlanChangeLineItemData = {
  *
  * Maps to `details.totals` (immediate/next) or `totals` (recurring) in the preview response.
  */
-export type PlanChangeTransactionTotalsData = {
+export interface PlanChangeTransactionTotalsData {
 	/** Subtotal as a decimal number (before discount, tax, and deductions). From `totals.subtotal`. */
 	subtotal: number;
 	/** Discount amount as a decimal number. Present when a discount is active. From `totals.discount`. */
@@ -390,14 +390,14 @@ export type PlanChangeTransactionTotalsData = {
 	creditToBalance?: number;
 	/** Total due as a decimal number (after credits). From `totals.grand_total`. */
 	total: number;
-};
+}
 
 /**
  * A complete transaction section (immediate, next, or recurring).
  * The section's position within `PlanChangeBreakdownData` determines its
  * role — the component derives titles and descriptions from that context.
  */
-export type PlanChangeTransactionSectionData = {
+export interface PlanChangeTransactionSectionData {
 	/**
 	 * ISO 8601 billing date for this transaction period.
 	 * Only relevant for `nextTransaction` — sourced from `billing_period.starts_at`.
@@ -406,7 +406,7 @@ export type PlanChangeTransactionSectionData = {
 	billingDate?: string;
 	lineItems: PlanChangeLineItemData[];
 	totals: PlanChangeTransactionTotalsData;
-};
+}
 
 /**
  * Display contract for the `PlanChangeBreakdown` component.
@@ -414,7 +414,7 @@ export type PlanChangeTransactionSectionData = {
  * Sourced from `PATCH /subscriptions/{id}/preview`. Pass `undefined` to render a skeleton.
  * Shows the full financial detail: per-transaction line items, tax, proration, and totals.
  */
-export type PlanChangeBreakdownData = {
+export interface PlanChangeBreakdownData {
 	/** ISO 4217 currency code, e.g. "USD" */
 	currency: string;
 	/** Net financial result of the change. From `update_summary.result`. */
@@ -445,4 +445,4 @@ export type PlanChangeBreakdownData = {
 	nextTransaction?: PlanChangeTransactionSectionData;
 	/** Recurring (steady-state) billing details. From `recurring_transaction_details`. */
 	recurringTransaction?: PlanChangeTransactionSectionData;
-};
+}

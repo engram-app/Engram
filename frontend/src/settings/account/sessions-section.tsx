@@ -8,7 +8,9 @@ export function SessionsSection() {
 	const { isLoaded, sessions } = useSessionList();
 	const { session: active } = useSession();
 
-	if (!isLoaded) return null;
+	if (!isLoaded) {
+		return null;
+	}
 
 	// `useSessionList()` is typed as `SessionResource[]`, but at runtime returns
 	// session-with-activities resources carrying `latestActivity` + `revoke()`.
@@ -35,7 +37,7 @@ export function SessionsSection() {
 							<span className="text-foreground">
 								{name}
 								{isCurrent && (
-									<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+									<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
 										Current
 									</span>
 								)}

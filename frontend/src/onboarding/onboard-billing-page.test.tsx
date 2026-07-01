@@ -185,7 +185,9 @@ describe("OnboardBillingPage — push activation", () => {
 		socketChannel.mockClear();
 		socketConnect.mockClear();
 		socketDisconnect.mockClear();
-		for (const k of Object.keys(channelHandlers)) delete channelHandlers[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
 	});
 
 	it("navigates user off the billing page when subscription_activated lands on the channel", async () => {
@@ -193,9 +195,15 @@ describe("OnboardBillingPage — push activation", () => {
 		let billingActive = false;
 		let nextStep: "billing" | "tools" = "billing";
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status") return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
-			if (url === "/billing/config") return BILLING_CONFIG;
-			if (url === "/me") return { user: ME };
+			if (url === "/billing/status") {
+				return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
 			if (url === "/onboarding/status") {
 				return nextStep === "tools" ? STATUS_TOOLS : STATUS_BILLING;
 			}
@@ -212,7 +220,7 @@ describe("OnboardBillingPage — push activation", () => {
 		);
 
 		// Channel must be wired by now.
-		await waitFor(() => expect(channelHandlers["subscription_activated"]).toBeDefined());
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 
 		// Simulate the post-Start-trial flow: payment initiates inside Paddle's
 		// inline frame (which here is mocked — we just drive the event directly).
@@ -228,7 +236,7 @@ describe("OnboardBillingPage — push activation", () => {
 		billingActive = true;
 		nextStep = "tools";
 		await act(async () => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_1",
@@ -244,9 +252,15 @@ describe("OnboardBillingPage — push activation", () => {
 		let billingActive = false;
 		let nextStep: "billing" | "tools" = "billing";
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status") return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
-			if (url === "/billing/config") return BILLING_CONFIG;
-			if (url === "/me") return { user: ME };
+			if (url === "/billing/status") {
+				return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
 			if (url === "/onboarding/status") {
 				return nextStep === "tools" ? STATUS_TOOLS : STATUS_BILLING;
 			}
@@ -260,7 +274,7 @@ describe("OnboardBillingPage — push activation", () => {
 				0,
 			),
 		);
-		await waitFor(() => expect(channelHandlers["subscription_activated"]).toBeDefined());
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 		await waitFor(() => expect(capturedEventCallback).toBeDefined());
 		await act(async () => {
 			capturedEventCallback!({
@@ -274,7 +288,7 @@ describe("OnboardBillingPage — push activation", () => {
 
 		// First broadcast.
 		await act(async () => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_1",
@@ -288,7 +302,7 @@ describe("OnboardBillingPage — push activation", () => {
 		// Second broadcast (e.g. subscription.activated after subscription.created)
 		// must NOT trigger a second navigation.
 		await act(async () => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "active",
 				subscription_id: "sub_1",
@@ -301,10 +315,18 @@ describe("OnboardBillingPage — push activation", () => {
 
 	it("navigates immediately if cached onboarding status is already past billing", async () => {
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status") return BILLING_ACTIVE;
-			if (url === "/billing/config") return BILLING_CONFIG;
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return STATUS_TOOLS;
+			if (url === "/billing/status") {
+				return BILLING_ACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_TOOLS;
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -337,10 +359,18 @@ describe("OnboardBillingPage — push activation", () => {
 
 	it("returns from inline Paddle frame back to plan picker on CHECKOUT_PAYMENT_FAILED", async () => {
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status") return BILLING_INACTIVE;
-			if (url === "/billing/config") return BILLING_CONFIG;
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return STATUS_BILLING;
+			if (url === "/billing/status") {
+				return BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_BILLING;
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 
@@ -382,13 +412,23 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 		socketChannel.mockClear();
 		socketConnect.mockClear();
 		socketDisconnect.mockClear();
-		for (const k of Object.keys(channelHandlers)) delete channelHandlers[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
 
 		get.mockImplementation(async (url: string) => {
-			if (url === "/billing/status") return BILLING_INACTIVE;
-			if (url === "/billing/config") return BILLING_CONFIG;
-			if (url === "/me") return { user: ME };
-			if (url === "/onboarding/status") return STATUS_BILLING;
+			if (url === "/billing/status") {
+				return BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_BILLING;
+			}
 			throw new Error(`unexpected GET ${url}`);
 		});
 	});

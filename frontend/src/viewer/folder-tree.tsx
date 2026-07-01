@@ -93,14 +93,18 @@ export default function FolderTree() {
 	const onRenameCommit = (itemId: string, newName: string) => {
 		const p = parseItemId(itemId);
 		// Synthetic folders have no backend record — nothing to rename.
-		if (p.kind === "folder" && isSyntheticFolderId(p.id)) return;
+		if (p.kind === "folder" && isSyntheticFolderId(p.id)) {
+			return;
+		}
 		if (p.kind === "note") {
 			const item = qc
 				.getQueryCache()
 				.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
 				.flatMap((q) => (q.state.data as Array<{ id: string; path: string }> | undefined) ?? [])
 				.find((n) => n.id === p.id);
-			if (!item) return;
+			if (!item) {
+				return;
+			}
 			const parts = item.path.split("/");
 			parts[parts.length - 1] = newName;
 			const new_path = parts.join("/");
@@ -109,7 +113,9 @@ export default function FolderTree() {
 				.catch(() => toast.error("Rename failed"));
 		} else if (p.kind === "folder") {
 			const folder = folders?.find((f) => f.id === p.id);
-			if (!folder) return;
+			if (!folder) {
+				return;
+			}
 			const parts = folder.name.split("/");
 			parts[parts.length - 1] = newName;
 			const new_path = parts.join("/");
@@ -130,7 +136,9 @@ export default function FolderTree() {
 	// matching batch hook. Drop target must be a folder or the vault root.
 	const onMove = (sourceIds: string[], targetItemId: string) => {
 		const target = parseItemId(targetItemId);
-		if (target.kind !== "folder" && target.kind !== "root") return;
+		if (target.kind !== "folder" && target.kind !== "root") {
+			return;
+		}
 		const parsed = sourceIds.map(parseItemId);
 		const noteIds = parsed.filter((p) => p.kind === "note").map((p) => (p as { id: string }).id);
 		// A derived folder has no marker id, so it can't be a move SOURCE — only
@@ -146,9 +154,13 @@ export default function FolderTree() {
 		// a derived folder (syn: id) yields its path — moves into it work by path.
 		const destFolder =
 			target.kind === "root" ? "" : (allFolders.find((f) => f.id === target.id)?.name ?? "");
-		if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder: destFolder });
-		if (folderIds.length) batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder });
-		if (attachmentPaths.length) {
+		if (noteIds.length > 0) {
+			batchMoveNotes.mutate({ ids: noteIds, target_folder: destFolder });
+		}
+		if (folderIds.length > 0) {
+			batchMoveFolders.mutate({ ids: folderIds, target_parent: destFolder });
+		}
+		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder });
 		}
 	};
@@ -179,10 +191,16 @@ export default function FolderTree() {
 	// becoming non-zero — and `staleTime` keeps it idempotent on remount.
 	const bulkPrefetchedRef = useRef(false);
 	useEffect(() => {
-		if (bulkPrefetchedRef.current) return;
-		if (!folders || folders.length === 0) return;
+		if (bulkPrefetchedRef.current) {
+			return;
+		}
+		if (!folders || folders.length === 0) {
+			return;
+		}
 		bulkPrefetchedRef.current = true;
-		for (const f of folders) prefetchFolderNotes(f.id);
+		for (const f of folders) {
+			prefetchFolderNotes(f.id);
+		}
 	}, [folders, prefetchFolderNotes]);
 
 	const { tree, virtualizer, items } = useEngramTree({
@@ -225,16 +243,22 @@ export default function FolderTree() {
 	// where they are after navigation. Mirrors the old recursive
 	// `containsSelected` behaviour but driven by HT's expand API.
 	useEffect(() => {
-		if (selectedNoteId == null || !folders) return;
+		if (selectedNoteId == null || !folders) {
+			return;
+		}
 		const note = qc.getQueryData<Note>(["note", vaultId, selectedNoteId]);
-		if (!note?.folder) return;
+		if (!note?.folder) {
+			return;
+		}
 		const segments = note.folder.split("/");
 		for (let i = 1; i <= segments.length; i++) {
 			const path = segments.slice(0, i).join("/");
 			const folder = folders.find((f) => f.name === path);
 			if (folder) {
 				const instance = tree.getItemInstance(`f:${folder.id}`);
-				if (instance && !instance.isExpanded()) instance.expand();
+				if (instance && !instance.isExpanded()) {
+					instance.expand();
+				}
 			}
 		}
 	}, [selectedNoteId, folders, vaultId, qc, tree]);
@@ -244,14 +268,18 @@ export default function FolderTree() {
 		const p = parseItemId(itemId);
 		if (p.kind === "note") {
 			const note = lookupNote(p.id);
-			if (!note) return [];
+			if (!note) {
+				return [];
+			}
 			return mode === "delete"
 				? [{ kind: "file", path: note.path }]
 				: [{ kind: "file", path: note.path }];
 		}
 		if (p.kind === "folder") {
 			const folder = folders?.find((f) => f.id === p.id);
-			if (!folder) return [];
+			if (!folder) {
+				return [];
+			}
 			const direct = folder.count;
 			const descendants =
 				folders
@@ -276,14 +304,20 @@ export default function FolderTree() {
 					(q.state.data as Array<{ id: string; path: string; title?: string }> | undefined) ?? [],
 			)
 			.find((n) => n.id === id);
-		if (cached) return cached;
+		if (cached) {
+			return cached;
+		}
 		return rootNotes.find((n) => n.id === id);
 	}
 
 	function kindOf(itemId: string): "file" | "folder" | "attachment" {
 		const p = parseItemId(itemId);
-		if (p.kind === "folder") return "folder";
-		if (p.kind === "attachment") return "attachment";
+		if (p.kind === "folder") {
+			return "folder";
+		}
+		if (p.kind === "attachment") {
+			return "attachment";
+		}
 		return "file";
 	}
 
@@ -325,7 +359,9 @@ export default function FolderTree() {
 		switch (actionId) {
 			case "rename": {
 				const instance = tree.getItemInstance(itemId);
-				if (instance) instance.startRenaming();
+				if (instance) {
+					instance.startRenaming();
+				}
 				break;
 			}
 			case "delete":
@@ -336,9 +372,13 @@ export default function FolderTree() {
 				break;
 			case "duplicate": {
 				const p = parseItemId(itemId);
-				if (p.kind !== "note") break;
+				if (p.kind !== "note") {
+					break;
+				}
 				const note = lookupNote(p.id);
-				if (!note) break;
+				if (!note) {
+					break;
+				}
 				// No reliable sibling-name set on hand — pass an empty Set and let
 				// the backend reject if collision happens; the toast surfaces it.
 				const new_path = nextCopyName(note.path, new Set<string>());
@@ -350,9 +390,13 @@ export default function FolderTree() {
 			}
 			case "copy-wikilink": {
 				const p = parseItemId(itemId);
-				if (p.kind !== "note") break;
+				if (p.kind !== "note") {
+					break;
+				}
 				const note = lookupNote(p.id);
-				if (!note) break;
+				if (!note) {
+					break;
+				}
 				const label = note.title || note.path.split("/").pop() || note.path;
 				navigator.clipboard
 					.writeText(`[[${label}]]`)
@@ -373,35 +417,53 @@ export default function FolderTree() {
 		const attachmentPaths: string[] = [];
 		for (const id of itemIds) {
 			const p = parseItemId(id);
-			if (p.kind === "note") noteIds.push(p.id);
+			if (p.kind === "note") {
+				noteIds.push(p.id);
+			}
 			// Synthetic folders (syn:) have no backend record — never send their id
 			// to a batch mutation. Unreachable today (their rows expose no menu), but
 			// a guard here keeps any future bulk-select path from 404ing.
-			else if (p.kind === "folder" && !isSyntheticFolderId(p.id)) folderIds.push(p.id);
-			else if (p.kind === "attachment") attachmentPaths.push(p.path);
+			else if (p.kind === "folder" && !isSyntheticFolderId(p.id)) {
+				folderIds.push(p.id);
+			} else if (p.kind === "attachment") {
+				attachmentPaths.push(p.path);
+			}
 		}
 		return { noteIds, folderIds, attachmentPaths };
 	}
 
 	function commitDelete() {
-		if (dialog.kind !== "delete") return;
+		if (dialog.kind !== "delete") {
+			return;
+		}
 		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
-		if (noteIds.length) batchDeleteNotes.mutate({ ids: noteIds });
-		if (folderIds.length) batchDeleteFolders.mutate({ ids: folderIds });
-		if (attachmentPaths.length) batchDeleteAttachments.mutate({ paths: attachmentPaths });
+		if (noteIds.length > 0) {
+			batchDeleteNotes.mutate({ ids: noteIds });
+		}
+		if (folderIds.length > 0) {
+			batchDeleteFolders.mutate({ ids: folderIds });
+		}
+		if (attachmentPaths.length > 0) {
+			batchDeleteAttachments.mutate({ paths: attachmentPaths });
+		}
 		tree.setSelectedItems([]);
 		setDialog({ kind: "none" });
 	}
 
 	function commitMove(targetFolderName: string) {
-		if (dialog.kind !== "move") return;
+		if (dialog.kind !== "move") {
+			return;
+		}
 		const { noteIds, folderIds, attachmentPaths } = partition(dialog.itemIds);
 		// Everything moves by PATH (targetFolderName is the folder path, '' = root),
 		// so a derived folder with no marker is a valid destination.
-		if (noteIds.length) batchMoveNotes.mutate({ ids: noteIds, target_folder: targetFolderName });
-		if (folderIds.length)
+		if (noteIds.length > 0) {
+			batchMoveNotes.mutate({ ids: noteIds, target_folder: targetFolderName });
+		}
+		if (folderIds.length > 0) {
 			batchMoveFolders.mutate({ ids: folderIds, target_parent: targetFolderName });
-		if (attachmentPaths.length) {
+		}
+		if (attachmentPaths.length > 0) {
 			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName });
 		}
 		tree.setSelectedItems([]);
@@ -412,7 +474,7 @@ export default function FolderTree() {
 		return (
 			<p
 				data-testid="folder-tree-root"
-				className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400"
+				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
 			>
 				Loading…
 			</p>
@@ -422,7 +484,7 @@ export default function FolderTree() {
 		return (
 			<p
 				data-testid="folder-tree-root"
-				className="px-3 py-2 text-xs text-red-600 dark:text-red-400"
+				className="px-3 py-2 text-red-600 text-xs dark:text-red-400"
 			>
 				Failed to load folders.
 			</p>
@@ -435,7 +497,7 @@ export default function FolderTree() {
 		return (
 			<p
 				data-testid="folder-tree-root"
-				className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400"
+				className="px-3 py-2 text-gray-500 text-xs dark:text-gray-400"
 			>
 				No notes yet.
 			</p>
@@ -453,7 +515,7 @@ export default function FolderTree() {
 				data-testid="folder-tree-root"
 				data-tour="folder-tree"
 				className={`relative min-h-0 flex-1 overflow-auto py-2 text-base ${
-					rootDragOver ? "ring-1 ring-inset ring-blue-400 bg-blue-50/40 dark:bg-blue-950/30" : ""
+					rootDragOver ? "bg-blue-50/40 ring-1 ring-blue-400 ring-inset dark:bg-blue-950/30" : ""
 				}`}
 			>
 				{/* minHeight ensures blank, droppable space below the rows even for a

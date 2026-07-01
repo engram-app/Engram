@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PriceData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
-export type PricingSelectCardStackedProps = {
+export interface PricingSelectCardStackedProps {
 	priceId: string;
 	name: string;
 	priceData?: PriceData;
@@ -21,7 +21,7 @@ export type PricingSelectCardStackedProps = {
 	showInterval?: boolean;
 	loading?: boolean;
 	className?: string;
-};
+}
 
 export function PricingSelectCardStacked({
 	priceId,
@@ -78,16 +78,16 @@ export function PricingSelectCardStacked({
 
 				<div className="flex items-start justify-between">
 					<CardHeader className="p-0">
-						<div className="text-muted-foreground mb-1 text-sm">{description || name}</div>
+						<div className="mb-1 text-muted-foreground text-sm">{description || name}</div>
 						{originalTotal && (
 							<div className="text-muted-foreground text-sm line-through">{originalTotal}</div>
 						)}
-						<CardTitle className="text-3xl font-bold">{total}</CardTitle>
+						<CardTitle className="font-bold text-3xl">{total}</CardTitle>
 						{showInterval && interval && (
 							<div className="text-muted-foreground text-sm">per {interval}</div>
 						)}
 						{trialPeriod && (
-							<div className="text-muted-foreground text-xs mt-1">{trialPeriod} free trial</div>
+							<div className="mt-1 text-muted-foreground text-xs">{trialPeriod} free trial</div>
 						)}
 					</CardHeader>
 

@@ -71,7 +71,9 @@ export function installAppRouter(r: AppRouter) {
 // (e.g. Clerk's routerPush). Throws if invoked before BootstrapGate
 // mounted — that would be a wiring regression worth surfacing loudly.
 export function getAppRouter(): AppRouter {
-	if (!_appRouter) throw new Error("Router accessed before installAppRouter() ran");
+	if (!_appRouter) {
+		throw new Error("Router accessed before installAppRouter() ran");
+	}
 	return _appRouter;
 }
 

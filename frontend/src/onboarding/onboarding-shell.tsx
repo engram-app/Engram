@@ -17,7 +17,9 @@ function ShellInner({ children }: { children: ReactNode }) {
 	const [tourReachedEnd, setTourReachedEnd] = useState(false);
 	const [vaultModalHandled, setVaultModalHandled] = useState(false);
 
-	if (ob.isLoading) return <>{children}</>;
+	if (ob.isLoading) {
+		return <>{children}</>;
+	}
 
 	const showVaultModal = !vaultModalHandled && ob.vaultCount === 0 && !tourActive;
 
@@ -27,7 +29,9 @@ function ShellInner({ children }: { children: ReactNode }) {
 	};
 
 	const onTourExit = (reachedEnd: boolean) => {
-		if (reachedEnd) ob.record("tour_completed");
+		if (reachedEnd) {
+			ob.record("tour_completed");
+		}
 		setTourActive(false);
 		demo.deactivate();
 		// The tour walks through a demo note (`/note/<id>`) that doesn't exist

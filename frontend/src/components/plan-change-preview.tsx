@@ -16,7 +16,7 @@ import type { PlanChangePreviewData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
 /** Props for the `PlanChangePreview` component. */
-export type PlanChangePreviewProps = {
+export interface PlanChangePreviewProps {
 	preview?: PlanChangePreviewData;
 	/**
 	 * Paddle proration billing mode passed to `PATCH /subscriptions/{id}/preview`.
@@ -29,7 +29,7 @@ export type PlanChangePreviewProps = {
 		| "full_next_billing_period"
 		| "do_not_bill";
 	className?: string;
-};
+}
 
 export function PlanChangePreview({
 	preview,
@@ -67,17 +67,25 @@ export function PlanChangePreview({
 
 	function resolveEffectiveDate(): string | undefined {
 		if (prorationBillingMode) {
-			if (isImmediate) return "Immediately";
+			if (isImmediate) {
+				return "Immediately";
+			}
 			return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
 		}
-		if (costImpact.immediateAmount !== undefined) return "Immediately";
+		if (costImpact.immediateAmount !== undefined) {
+			return "Immediately";
+		}
 		return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
 	}
 	const effectiveDate = resolveEffectiveDate();
 
 	function resolveScheduledChangeMessage(): string | undefined {
-		if (!scheduledChange) return;
-		if (scheduledChange.action === "resume") return;
+		if (!scheduledChange) {
+			return;
+		}
+		if (scheduledChange.action === "resume") {
+			return;
+		}
 		const actionLabel = scheduledChange.action === "cancel" ? "Cancellation" : "Pause";
 		return `${actionLabel} scheduled for ${formatDate(scheduledChange.effectiveAt)}. Billing options may be restricted.`;
 	}
@@ -110,7 +118,7 @@ export function PlanChangePreview({
 	return (
 		<Card className={cn("gap-4", className)}>
 			<CardHeader>
-				<CardTitle className="text-base font-semibold">Change summary</CardTitle>
+				<CardTitle className="font-semibold text-base">Change summary</CardTitle>
 				<CardDescription>Review the overview of this change</CardDescription>
 			</CardHeader>
 
@@ -123,22 +131,22 @@ export function PlanChangePreview({
 				)}
 
 				<div className="flex items-stretch gap-3">
-					<div className="flex-1 min-w-0 rounded-lg border bg-muted/40 p-3">
-						<div className="text-xs text-muted-foreground mb-1">Current plan</div>
-						<div className="font-medium text-sm truncate">{currentPlan.productName}</div>
+					<div className="min-w-0 flex-1 rounded-lg border bg-muted/40 p-3">
+						<div className="mb-1 text-muted-foreground text-xs">Current plan</div>
+						<div className="truncate font-medium text-sm">{currentPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
 							{formatMoney(currentPlan.price, currency)}
 							<span className="text-xs"> / {currentIntervalLabel}</span>
 						</div>
 					</div>
 
-					<div className="flex items-center shrink-0">
+					<div className="flex shrink-0 items-center">
 						<ArrowRight className="size-4 text-muted-foreground" />
 					</div>
 
-					<div className="flex-1 min-w-0 rounded-lg border bg-primary/5 border-primary/20 p-3">
-						<div className="text-xs text-muted-foreground mb-1">New plan</div>
-						<div className="font-medium text-sm truncate">{newPlan.productName}</div>
+					<div className="min-w-0 flex-1 rounded-lg border border-primary/20 bg-primary/5 p-3">
+						<div className="mb-1 text-muted-foreground text-xs">New plan</div>
+						<div className="truncate font-medium text-sm">{newPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
 							{formatMoney(newPlan.price, currency)}
 							<span className="text-xs"> / {newIntervalLabel}</span>
@@ -188,7 +196,7 @@ export function PlanChangePreview({
 							<span className="text-right">
 								<span className="text-success-foreground">{discount.description}</span>
 								{discount.endsAt && (
-									<span className="text-muted-foreground text-xs block">
+									<span className="block text-muted-foreground text-xs">
 										until {formatDate(discount.endsAt)}
 									</span>
 								)}
@@ -236,7 +244,7 @@ export function PlanChangePreview({
 							<div
 								className={cn(
 									"flex items-center justify-between font-medium",
-									hasBreakdownRows && "pt-1.5 border-t",
+									hasBreakdownRows && "border-t pt-1.5",
 								)}
 							>
 								<span>{totalLabel}</span>
@@ -251,12 +259,12 @@ export function PlanChangePreview({
 
 				{/* Contextual notes derived from subscription state */}
 				{isTrialing && isNeutral && (
-					<p className="text-xs text-muted-foreground">
+					<p className="text-muted-foreground text-xs">
 						No charges during your trial. Billing begins when your trial ends.
 					</p>
 				)}
 				{isManual && isCharge && (
-					<p className="text-xs text-muted-foreground">
+					<p className="text-muted-foreground text-xs">
 						An invoice will be created for this amount.
 					</p>
 				)}
@@ -274,7 +282,7 @@ function PlanChangePreviewSkeleton({ className }: { className?: string }) {
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="flex items-stretch gap-3">
-					<div className="flex-1 rounded-lg border bg-muted/40 p-3 space-y-2">
+					<div className="flex-1 space-y-2 rounded-lg border bg-muted/40 p-3">
 						<Skeleton className="h-3 w-20" />
 						<Skeleton className="h-4 w-24" />
 						<Skeleton className="h-3 w-16" />
@@ -282,7 +290,7 @@ function PlanChangePreviewSkeleton({ className }: { className?: string }) {
 					<div className="flex items-center">
 						<Skeleton className="h-4 w-4 rounded" />
 					</div>
-					<div className="flex-1 rounded-lg border p-3 space-y-2">
+					<div className="flex-1 space-y-2 rounded-lg border p-3">
 						<Skeleton className="h-3 w-16" />
 						<Skeleton className="h-4 w-20" />
 						<Skeleton className="h-3 w-16" />

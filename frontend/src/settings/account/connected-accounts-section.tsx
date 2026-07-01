@@ -61,7 +61,9 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			user!.createExternalAccount(params),
 	);
 
-	if (!(isLoaded && user)) return null;
+	if (!(isLoaded && user)) {
+		return null;
+	}
 	const connected = new Set(user.externalAccounts.map((a) => `oauth_${a.provider}`));
 
 	async function onDisconnect(destroy: () => Promise<unknown>) {
@@ -70,7 +72,9 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			await user!.reload();
 			toast.success("Account disconnected");
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not disconnect account");
 		}
 	}
@@ -82,9 +86,13 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 				redirectUrl: `${window.location.origin}/settings/account`,
 			});
 			const url = acct?.verification?.externalVerificationRedirectURL;
-			if (url) window.location.href = url.toString();
+			if (url) {
+				window.location.href = url.toString();
+			}
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not start connection");
 		}
 	}
@@ -112,7 +120,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 									</span>
 									<span className="flex min-w-0 flex-col">
 										<span className="font-medium text-foreground">{name}</span>
-										<span className="truncate text-xs text-muted-foreground">{secondary}</span>
+										<span className="truncate text-muted-foreground text-xs">{secondary}</span>
 									</span>
 								</span>
 								<Button

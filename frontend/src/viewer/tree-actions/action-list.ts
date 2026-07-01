@@ -32,7 +32,11 @@ export function actionsFor({
 }: {
 	kind: "file" | "folder" | "attachment";
 }): readonly Action[] {
-	if (kind === "folder") return FOLDER_ACTIONS;
-	if (kind === "attachment") return ATTACHMENT_ACTIONS;
+	if (kind === "folder") {
+		return FOLDER_ACTIONS;
+	}
+	if (kind === "attachment") {
+		return ATTACHMENT_ACTIONS;
+	}
 	return FILE_ACTIONS;
 }

@@ -8,12 +8,12 @@ import type { CheckoutSummaryData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
 /** Props for the `CheckoutSummary` component. */
-export type CheckoutSummaryProps = {
+export interface CheckoutSummaryProps {
 	summary?: CheckoutSummaryData;
 	policyUrl?: string;
 	policyLabel?: string;
 	className?: string;
-};
+}
 
 export function CheckoutSummary({
 	summary,
@@ -53,7 +53,7 @@ export function CheckoutSummary({
 	return (
 		<Card className={cn("gap-4", className)}>
 			<CardHeader>
-				<CardTitle className="text-base font-semibold">Order summary</CardTitle>
+				<CardTitle className="font-semibold text-base">Order summary</CardTitle>
 			</CardHeader>
 
 			<CardContent className="flex flex-col gap-4">
@@ -114,7 +114,7 @@ export function CheckoutSummary({
 						href={policyUrl}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="text-muted-foreground hover:text-foreground text-xs underline transition-colors"
+						className="text-muted-foreground text-xs underline transition-colors hover:text-foreground"
 					>
 						{policyLabel}
 					</a>

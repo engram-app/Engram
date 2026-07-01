@@ -16,8 +16,12 @@ export class CrdtEnrollment {
 
 	enroll(path: string): void {
 		// CRDT manages MARKDOWN only — mirrors the server-side `.md` gate.
-		if (!path.endsWith(".md")) return;
-		if (this.enrolled.has(path)) return;
+		if (!path.endsWith(".md")) {
+			return;
+		}
+		if (this.enrolled.has(path)) {
+			return;
+		}
 		this.enrolled.add(path);
 		void this.startSync(path).then(() => this.onAfterEnroll?.(path));
 	}

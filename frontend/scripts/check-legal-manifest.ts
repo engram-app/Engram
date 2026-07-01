@@ -17,5 +17,7 @@ for (const [doc, versions] of Object.entries(manifest) as [string, Record<string
 		}
 	}
 }
-if (bad) process.exit(1);
+if (bad) {
+	process.exit(1);
+}
 console.log("legal manifest OK");

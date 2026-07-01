@@ -25,7 +25,9 @@ export function collideBump(
 
 	for (let i = 0; i < cap; i++) {
 		const candidate = i === 0 ? base : `${stem} ${i}${extension}`;
-		if (!existing.has(candidate)) return candidate;
+		if (!existing.has(candidate)) {
+			return candidate;
+		}
 	}
 	throw new Error(`collideBump: too many collisions for "${base}" (cap ${cap})`);
 }

@@ -7,10 +7,10 @@ export function formatDate(isoString: string, locale = "en-US"): string {
 }
 
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
-type TimePeriodLike = {
+interface TimePeriodLike {
 	frequency: number;
 	interval: string;
-};
+}
 
 /**
  * Formats a billing cycle for display.
@@ -141,6 +141,8 @@ export function formatIntervalLabel(
 	style: "noun" | "adjective" = "noun",
 ): string {
 	const entry = INTERVAL_LABELS[interval];
-	if (entry) return entry[style];
+	if (entry) {
+		return entry[style];
+	}
 	return interval.charAt(0).toUpperCase() + interval.slice(1);
 }

@@ -7,12 +7,12 @@ import type { PlanChangePreviewData } from "@/lib/paddle-types";
 // subscription snapshot plus update_summary and transaction previews.
 // ---
 
-type AmountWithCurrency = {
+interface AmountWithCurrency {
 	amount: string;
 	currencyCode: string;
-};
+}
 
-type UpdateSummary = {
+interface UpdateSummary {
 	credit: AmountWithCurrency;
 	charge: AmountWithCurrency;
 	result: {
@@ -20,7 +20,7 @@ type UpdateSummary = {
 		amount: string;
 		currencyCode: string;
 	};
-};
+}
 
 type TransactionPreview = {
 	billingPeriod?: { startsAt?: string | null } | null;
@@ -31,20 +31,20 @@ type TransactionPreview = {
 	} | null;
 } | null;
 
-type RecurringDetails = {
+interface RecurringDetails {
 	totals: { total: string; currencyCode: string };
 	lineItems?: Array<{ totals: { total: string } }> | null;
-};
+}
 
-type PlanItem = {
+interface PlanItem {
 	product: { name: string };
 	price: {
 		unitPrice?: { amount: string; currencyCode: string } | null;
 		billingCycle?: { interval: string; frequency: number } | null;
 	};
-};
+}
 
-type SubscriptionPreviewResponse = {
+interface SubscriptionPreviewResponse {
 	currencyCode: string;
 	billingCycle: { interval: string; frequency: number };
 	updateSummary: UpdateSummary;
@@ -52,7 +52,7 @@ type SubscriptionPreviewResponse = {
 	nextTransaction?: TransactionPreview;
 	recurringTransactionDetails: RecurringDetails;
 	items: PlanItem[];
-};
+}
 
 // Matches SDK SubscriptionDiscount — subscription.discount only has id + dates
 type SubscriptionDiscountField = {
@@ -61,7 +61,7 @@ type SubscriptionDiscountField = {
 	endsAt?: string | null;
 } | null;
 
-type PaddleSubscription = {
+interface PaddleSubscription {
 	currencyCode: string;
 	billingCycle: { interval: string; frequency: number };
 	items: PlanItem[];
@@ -72,16 +72,16 @@ type PaddleSubscription = {
 		effectiveAt: string;
 	} | null;
 	discount?: SubscriptionDiscountField;
-};
+}
 
 // Full Discount catalog entity — fetched separately via paddle.discounts.get(id)
-type PaddleDiscount = {
+interface PaddleDiscount {
 	id: string;
 	description: string;
 	code?: string | null;
 	type: "flat" | "flat_per_seat" | "percentage";
 	amount: string;
-};
+}
 
 /**
  * Maps a Paddle subscription preview API response to the `PlanChangePreviewData`

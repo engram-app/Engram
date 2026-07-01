@@ -22,7 +22,9 @@ let seeded = false;
 let inflight: Promise<Bootstrap | null> | null = null;
 
 function fetchBootstrap(): Promise<Bootstrap | null> {
-	if (inflight) return inflight;
+	if (inflight) {
+		return inflight;
+	}
 	inflight = fetch(joinApiUrl(getApiBase(), "/api/auth/bootstrap"))
 		.then((r) => (r.ok ? r.json() : null))
 		.catch(() => null)
@@ -51,10 +53,14 @@ export function useBootstrap(): BootstrapState {
 	const [state, setState] = useState<BootstrapState>(cached);
 
 	useEffect(() => {
-		if (cached !== undefined) return;
+		if (cached !== undefined) {
+			return;
+		}
 		let cancelled = false;
 		fetchBootstrap().then((b) => {
-			if (!cancelled) setState(b);
+			if (!cancelled) {
+				setState(b);
+			}
 		});
 		return () => {
 			cancelled = true;

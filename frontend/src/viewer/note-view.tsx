@@ -85,7 +85,7 @@ function NoteView({ content, tags }: NoteViewProps) {
 						{tags.map((tag) => (
 							<li
 								key={tag}
-								className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
+								className="rounded-full bg-secondary px-2 py-0.5 text-secondary-foreground text-xs"
 							>
 								#{tag}
 							</li>
@@ -105,7 +105,7 @@ function NoteView({ content, tags }: NoteViewProps) {
 					</dl>
 				)}
 			</header>
-			<section className="prose prose-neutral max-w-none dark:prose-invert">
+			<section className="prose prose-neutral dark:prose-invert max-w-none">
 				<ReactMarkdown
 					remarkPlugins={remarkPlugins as never}
 					rehypePlugins={rehypePlugins as never}

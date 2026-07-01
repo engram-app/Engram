@@ -16,8 +16,12 @@ const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof S
 ];
 
 function ActiveIcon({ choice }: { choice: ThemeChoice }) {
-	if (choice === "light") return <Sun />;
-	if (choice === "dark") return <Moon />;
+	if (choice === "light") {
+		return <Sun />;
+	}
+	if (choice === "dark") {
+		return <Moon />;
+	}
 	return <Monitor />;
 }
 

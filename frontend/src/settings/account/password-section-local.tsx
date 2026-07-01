@@ -52,7 +52,7 @@ export function PasswordSectionLocal() {
 			description="Changing your password signs you out on all devices."
 		>
 			<form onSubmit={onSubmit} className="space-y-3">
-				<label className="block text-sm font-medium text-foreground">
+				<label className="block font-medium text-foreground text-sm">
 					Current password
 					<input
 						className={inputClass}
@@ -63,7 +63,7 @@ export function PasswordSectionLocal() {
 						required
 					/>
 				</label>
-				<label className="block text-sm font-medium text-foreground">
+				<label className="block font-medium text-foreground text-sm">
 					New password
 					<input
 						className={inputClass}
@@ -74,7 +74,7 @@ export function PasswordSectionLocal() {
 						required
 					/>
 				</label>
-				<label className="block text-sm font-medium text-foreground">
+				<label className="block font-medium text-foreground text-sm">
 					Confirm new password
 					<input
 						className={inputClass}
@@ -85,7 +85,7 @@ export function PasswordSectionLocal() {
 						required
 					/>
 				</label>
-				{error && <p className="text-sm text-destructive">{error}</p>}
+				{error && <p className="text-destructive text-sm">{error}</p>}
 				<Button type="submit" size="sm" disabled={submitting}>
 					{submitting ? "Changing…" : "Change password"}
 				</Button>

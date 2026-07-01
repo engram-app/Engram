@@ -14,7 +14,9 @@ export default function PendingChangeBanner({
 }: {
 	scheduledChange: SubscriptionDetail["scheduled_change"];
 }) {
-	if (!scheduledChange) return null;
+	if (!scheduledChange) {
+		return null;
+	}
 
 	const label = ACTION_LABELS[scheduledChange.action] ?? "Your plan changes";
 	const date = new Date(scheduledChange.effective_at).toLocaleDateString();

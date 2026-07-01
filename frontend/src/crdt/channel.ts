@@ -32,7 +32,9 @@ export class CrdtChannel {
 
 	async startSync(path: string): Promise<void> {
 		const id = this.mgr.docId(path);
-		if (this.initiated.has(id)) return;
+		if (this.initiated.has(id)) {
+			return;
+		}
 		this.initiated.add(id);
 		const doc = await this.mgr.getDoc(path);
 		const encoder = encoding.createEncoder();
@@ -64,7 +66,9 @@ export class CrdtChannel {
 		try {
 			const decoder = decoding.createDecoder(bytes);
 			const messageType = decoding.readVarUint(decoder);
-			if (messageType !== MESSAGE_SYNC) return;
+			if (messageType !== MESSAGE_SYNC) {
+				return;
+			}
 			const replyEncoder = encoding.createEncoder();
 			encoding.writeVarUint(replyEncoder, MESSAGE_SYNC);
 			syncProtocol.readSyncMessage(decoder, replyEncoder, doc, REMOTE_ORIGIN);

@@ -5,7 +5,9 @@ import { setUpgradeHandler } from "@/api/client";
 
 import { UpgradeRequiredDialog } from "./upgrade-required-dialog";
 
-type Ctx = { showUpgrade: (reason: string) => void };
+interface Ctx {
+	showUpgrade: (reason: string) => void;
+}
 const UpgradeCtx = createContext<Ctx | null>(null);
 
 export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
@@ -29,7 +31,9 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 					reason={reason}
 					open={true}
 					onOpenChange={(open) => {
-						if (!open) setReason(null);
+						if (!open) {
+							setReason(null);
+						}
 					}}
 				/>
 			)}
@@ -39,6 +43,8 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 
 export function useUpgradeDialog(): Ctx {
 	const ctx = useContext(UpgradeCtx);
-	if (!ctx) throw new Error("useUpgradeDialog called outside UpgradeDialogProvider");
+	if (!ctx) {
+		throw new Error("useUpgradeDialog called outside UpgradeDialogProvider");
+	}
 	return ctx;
 }

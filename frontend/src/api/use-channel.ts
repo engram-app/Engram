@@ -24,7 +24,9 @@ export function useChannel() {
 	}, [getToken]);
 
 	useEffect(() => {
-		if (!user || vaultId == null) return;
+		if (!user || vaultId == null) {
+			return;
+		}
 
 		connectChannel({
 			userId: user.id,

@@ -62,7 +62,9 @@ export default function SettingsLayout() {
 	const navigate = useNavigate();
 
 	useEffect(() => {
-		if (open) return;
+		if (open) {
+			return;
+		}
 		const t = setTimeout(() => navigate("/"), CLOSE_ANIMATION_MS);
 		return () => clearTimeout(t);
 	}, [open, navigate]);
@@ -73,7 +75,7 @@ export default function SettingsLayout() {
 				<DialogOverlay className="bg-background/20 supports-backdrop-filter:backdrop-blur-sm" />
 				<DialogPrimitive.Content
 					aria-describedby={undefined}
-					className="fixed left-1/2 top-1/2 z-50 flex h-[88vh] w-[min(96vw,1100px)] max-w-none -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl duration-200 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+					className="data-open:fade-in-0 data-open:zoom-in-95 data-closed:fade-out-0 data-closed:zoom-out-95 fixed top-1/2 left-1/2 z-50 flex h-[88vh] w-[min(96vw,1100px)] max-w-none -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl duration-200 data-closed:animate-out data-open:animate-in"
 				>
 					<DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
 					<DialogPrimitive.Close asChild>
@@ -82,13 +84,13 @@ export default function SettingsLayout() {
 							size="icon-sm"
 							aria-label="Close settings"
 							title="Close settings"
-							className="absolute right-2 top-2 z-30 text-muted-foreground hover:text-foreground"
+							className="absolute top-2 right-2 z-30 text-muted-foreground hover:text-foreground"
 						>
 							<X className="h-4 w-4" />
 						</Button>
 					</DialogPrimitive.Close>
 					{/* Mobile: section switcher row */}
-					<div className="flex items-center gap-2 border-b border-border px-3 py-1.5 md:hidden">
+					<div className="flex items-center gap-2 border-border border-b px-3 py-1.5 md:hidden">
 						<Sheet open={navOpen} onOpenChange={setNavOpen}>
 							<SheetTrigger asChild>
 								<Button
@@ -101,7 +103,7 @@ export default function SettingsLayout() {
 								</Button>
 							</SheetTrigger>
 							<SheetContent side="left" className="w-64 p-0">
-								<SheetTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
+								<SheetTitle className="border-border border-b px-4 py-3 font-semibold text-sm">
 									Settings
 								</SheetTitle>
 								<SheetDescription className="sr-only">Settings sections</SheetDescription>
@@ -110,18 +112,18 @@ export default function SettingsLayout() {
 								</nav>
 							</SheetContent>
 						</Sheet>
-						<span className="text-sm font-semibold text-foreground">Settings</span>
+						<span className="font-semibold text-foreground text-sm">Settings</span>
 					</div>
 
 					<div className="flex min-h-0 flex-1 flex-col md:flex-row">
 						{/* Desktop: persistent side rail */}
 						<nav
 							aria-label="Settings sections"
-							className="hidden h-full w-56 shrink-0 border-r border-border md:block"
+							className="hidden h-full w-56 shrink-0 border-border border-r md:block"
 						>
 							<ScrollArea className="h-full">
 								<div className="p-4">
-									<h2 className="mb-3 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+									<h2 className="mb-3 px-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 										Settings
 									</h2>
 									<SettingsNavList sections={sections} />

@@ -44,7 +44,7 @@ export default function PdfView({ url, filename }: { url: string; filename: stri
 					onLoadSuccess={({ numPages }) => setNumPages(numPages)}
 					className="flex flex-col items-center gap-4"
 					loading={<LoadingPane />}
-					error={<p className="p-2 text-sm text-destructive">Couldn&apos;t render {filename}.</p>}
+					error={<p className="p-2 text-destructive text-sm">Couldn&apos;t render {filename}.</p>}
 				>
 					{Array.from({ length: numPages }, (_, i) => (
 						<Page

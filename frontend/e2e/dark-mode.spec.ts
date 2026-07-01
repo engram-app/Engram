@@ -8,8 +8,12 @@ async function registerUser(baseURL: string, email: string) {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ email, password: TEST_PASSWORD }),
 	});
-	if (res.status === 422) return;
-	if (!res.ok) throw new Error(`Register failed: ${res.status} ${await res.text()}`);
+	if (res.status === 422) {
+		return;
+	}
+	if (!res.ok) {
+		throw new Error(`Register failed: ${res.status} ${await res.text()}`);
+	}
 	const { access_token: token } = await res.json();
 	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 	const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
@@ -17,19 +21,25 @@ async function registerUser(baseURL: string, email: string) {
 		headers: auth,
 		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
 	});
-	if (!prof.ok) throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
+	if (!prof.ok) {
+		throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
+	}
 	const act = await fetch(`${baseURL}/api/onboarding/actions`, {
 		method: "POST",
 		headers: auth,
 		body: JSON.stringify({ action: "dismissed:tour" }),
 	});
-	if (!act.ok) throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`);
+	if (!act.ok) {
+		throw new Error(`onboarding action POST failed: ${act.status} ${await act.text()}`);
+	}
 	const vault = await fetch(`${baseURL}/api/vaults`, {
 		method: "POST",
 		headers: auth,
 		body: JSON.stringify({ name: "E2E Vault" }),
 	});
-	if (!vault.ok) throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`);
+	if (!vault.ok) {
+		throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`);
+	}
 }
 
 function testEmail(label: string) {
@@ -112,7 +122,7 @@ it.describe("Dark mode", () => {
 			window.localStorage.setItem("engram:theme", "dark");
 		});
 		const page = await ctx.newPage();
-		await page.goto(baseURL! + "/sign-in/");
+		await page.goto(`${baseURL!}/sign-in/`);
 		// At domcontentloaded the inline boot script has already run.
 		await page.waitForLoadState("domcontentloaded");
 		await expect(page.locator("html")).toHaveClass(/dark/u);

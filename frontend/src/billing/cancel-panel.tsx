@@ -44,8 +44,8 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	return (
 		<section role="region" aria-label="Cancel subscription" className="space-y-4 pt-2">
 			<header>
-				<h2 className="text-base font-semibold text-foreground">Cancel subscription</h2>
-				<p className="mt-2 text-sm text-muted-foreground">
+				<h2 className="font-semibold text-base text-foreground">Cancel subscription</h2>
+				<p className="mt-2 text-muted-foreground text-sm">
 					{effective ? (
 						<>
 							You'll keep your {tierLabel} plan until <strong>{effective}</strong>, then drop to
@@ -56,7 +56,7 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 					)}
 				</p>
 			</header>
-			<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+			<ul className="list-disc space-y-1 pl-5 text-muted-foreground text-sm">
 				<li>Your notes stay. Sync still works for vaults within Free limits.</li>
 				<li>Vaults or notes that exceed Free limits become read-only.</li>
 				<li>You can reverse this any time before the effective date.</li>

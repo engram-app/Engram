@@ -136,7 +136,9 @@ export default function BillingPage({
 	// doesn't land within COOLDOWN_MS, swap from Paddle's own success screen
 	// to our recovery banner. The push listener stays connected.
 	useEffect(() => {
-		if (completedAt === null) return;
+		if (completedAt === null) {
+			return;
+		}
 		const t = setTimeout(() => {
 			paddleRef.current?.Checkout.close();
 			setSlow(true);
@@ -155,7 +157,9 @@ export default function BillingPage({
 		// fire latch too: a duplicate/late activation broadcast after the first
 		// fire must NOT re-raise `finalizing` (the reset/navigate path below is
 		// skipped once fired, which would otherwise strand the spinner forever).
-		if (onActivatedRef.current && !onActivatedFiredRef.current) setFinalizing(true);
+		if (onActivatedRef.current && !onActivatedFiredRef.current) {
+			setFinalizing(true);
+		}
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
 		setCompletedAt(null);
@@ -195,8 +199,12 @@ export default function BillingPage({
 	// /onboard/billing to upgrade — bouncing them back to the next step
 	// defeats the upgrade affordance.
 	useEffect(() => {
-		if (!onActivatedRef.current) return;
-		if (!billing?.active) return;
+		if (!onActivatedRef.current) {
+			return;
+		}
+		if (!billing?.active) {
+			return;
+		}
 		const cached = qc.getQueryData<OnboardingStatus>(["onboarding", "status"]);
 		if (cached && cached.next_step !== "billing" && !onActivatedFiredRef.current) {
 			onActivatedFiredRef.current = true;
@@ -209,13 +217,17 @@ export default function BillingPage({
 	}, []);
 
 	useEffect(() => {
-		if (!config) return;
+		if (!config) {
+			return;
+		}
 		let cancelled = false;
 		initializePaddle({
 			token: config.client_token,
 			environment: config.environment,
 			eventCallback: (event) => {
-				if (cancelled) return;
+				if (cancelled) {
+					return;
+				}
 				switch (event.name) {
 					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
@@ -270,7 +282,9 @@ export default function BillingPage({
 						},
 			},
 		}).then((instance) => {
-			if (cancelled) return;
+			if (cancelled) {
+				return;
+			}
 			if (instance) {
 				paddleRef.current = instance;
 				setPaddle(instance);
@@ -292,8 +306,12 @@ export default function BillingPage({
 				setCheckingOut(true);
 				return;
 			}
-			if (!(paddle && config)) return;
-			if (isInline) setCheckingOut(true);
+			if (!(paddle && config)) {
+				return;
+			}
+			if (isInline) {
+				setCheckingOut(true);
+			}
 			// Paddle finds the .paddle-checkout div by class — the div is rendered
 			// synchronously by the same render cycle as the setCheckingOut update.
 			// React 18 batches state into the same commit, so the DOM is ready by
@@ -382,8 +400,8 @@ export default function BillingPage({
 		<article className="space-y-6">
 			{!hideHeading && (
 				<header>
-					<h1 className="text-xl font-semibold text-foreground">Billing</h1>
-					<p className="mt-1 text-sm text-muted-foreground">Manage your plan and payment method.</p>
+					<h1 className="font-semibold text-foreground text-xl">Billing</h1>
+					<p className="mt-1 text-muted-foreground text-sm">Manage your plan and payment method.</p>
 				</header>
 			)}
 
@@ -439,7 +457,7 @@ export default function BillingPage({
 							className="flex flex-col items-center justify-center gap-3 py-16 text-center"
 						>
 							<Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
-							<p className="text-sm text-muted-foreground">Setting up your account…</p>
+							<p className="text-muted-foreground text-sm">Setting up your account…</p>
 						</section>
 					) : slow ? (
 						<SlowActivationBanner
@@ -455,14 +473,14 @@ export default function BillingPage({
 									setCheckingOut(false);
 									setCompletedAt(null);
 								}}
-								className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+								className="text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline"
 							>
 								← Choose a different plan
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
-								<div className="rounded-lg border border-dashed border-primary/50 bg-muted/30 p-6 text-center">
-									<p className="text-sm font-medium text-foreground">Test checkout (dev only)</p>
-									<p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+								<div className="rounded-lg border border-primary/50 border-dashed bg-muted/30 p-6 text-center">
+									<p className="font-medium text-foreground text-sm">Test checkout (dev only)</p>
+									<p className="mx-auto mt-1 max-w-sm text-muted-foreground text-xs">
 										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
 										flow. Not shown in production.
 									</p>
@@ -471,7 +489,7 @@ export default function BillingPage({
 											type="button"
 											onClick={handleDevCheckoutSuccess}
 											className={cn(
-												"rounded-lg px-4 py-2 text-sm font-medium transition",
+												"rounded-lg px-4 py-2 font-medium text-sm transition",
 												ctaFilled,
 											)}
 										>
@@ -484,7 +502,7 @@ export default function BillingPage({
 												toast.error("Payment did not go through. Please try again.");
 											}}
 											className={cn(
-												"rounded-lg px-4 py-2 text-sm font-medium transition",
+												"rounded-lg px-4 py-2 font-medium text-sm transition",
 												ctaOutline,
 											)}
 										>
@@ -500,8 +518,8 @@ export default function BillingPage({
 						<>
 							{!hideHeading && (
 								<>
-									<h2 className="text-lg font-semibold text-foreground">Choose a Plan</h2>
-									<p className="text-sm text-muted-foreground">
+									<h2 className="font-semibold text-foreground text-lg">Choose a Plan</h2>
+									<p className="text-muted-foreground text-sm">
 										Both plans include a 7-day free trial.
 									</p>
 								</>
@@ -607,7 +625,7 @@ export default function BillingPage({
 							{portalLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
 							{portalLoading ? "Opening Paddle…" : "Open Paddle billing portal"}
 						</Button>
-						<p className="text-xs text-muted-foreground">
+						<p className="text-muted-foreground text-xs">
 							Paddle is our payment processor. Use this if the controls above don't cover what you
 							need.
 						</p>
@@ -652,7 +670,7 @@ function SlowActivationBanner({
 				</Button>
 			</div>
 			{transactionId ? (
-				<p className="mt-3 text-xs text-muted-foreground">Reference: {transactionId}</p>
+				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
 			) : null}
 		</div>
 	);

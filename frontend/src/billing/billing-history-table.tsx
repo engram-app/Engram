@@ -13,10 +13,10 @@ export default function BillingHistoryTable({
 }) {
 	return (
 		<section className="space-y-4 rounded-lg border border-border bg-card p-6">
-			<h2 className="text-lg font-semibold text-foreground">Billing history</h2>
+			<h2 className="font-semibold text-foreground text-lg">Billing history</h2>
 
 			{transactions.length === 0 ? (
-				<p className="text-sm text-muted-foreground">No transactions yet.</p>
+				<p className="text-muted-foreground text-sm">No transactions yet.</p>
 			) : (
 				<table className="w-full text-sm">
 					<thead>
@@ -29,7 +29,7 @@ export default function BillingHistoryTable({
 					</thead>
 					<tbody>
 						{transactions.map((t) => (
-							<tr key={t.id} className="border-t border-border">
+							<tr key={t.id} className="border-border border-t">
 								<td className="py-2">
 									{t.billed_at ? new Date(t.billed_at).toLocaleDateString() : "—"}
 								</td>

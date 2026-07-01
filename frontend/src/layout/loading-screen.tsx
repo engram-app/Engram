@@ -9,7 +9,7 @@ export default function LoadingScreen() {
 				aria-hidden="true"
 				className="size-6 animate-spin rounded-full border-2 border-border border-t-primary"
 			/>
-			<p className="text-sm text-muted-foreground">Loading…</p>
+			<p className="text-muted-foreground text-sm">Loading…</p>
 		</main>
 	);
 }

@@ -17,33 +17,41 @@ export default function VaultSwitcher() {
 	const qc = useQueryClient();
 
 	useEffect(() => {
-		if (!vaults || vaults.length === 0) return;
+		if (!vaults || vaults.length === 0) {
+			return;
+		}
 		const stillValid = activeId != null && vaults.some((v) => v.id === activeId);
-		if (stillValid) return;
+		if (stillValid) {
+			return;
+		}
 		const fallback = vaults.find((v) => v.is_default) ?? vaults[0];
-		if (fallback) setActiveVaultId(fallback.id);
+		if (fallback) {
+			setActiveVaultId(fallback.id);
+		}
 	}, [vaults, activeId]);
 
 	if (isLoading) {
-		return <p className="px-3 py-2 text-xs text-muted-foreground">Loading vaults…</p>;
+		return <p className="px-3 py-2 text-muted-foreground text-xs">Loading vaults…</p>;
 	}
 	if (!vaults || vaults.length === 0) {
-		return <p className="px-3 py-2 text-xs text-muted-foreground">No vaults yet</p>;
+		return <p className="px-3 py-2 text-muted-foreground text-xs">No vaults yet</p>;
 	}
 
 	const active = vaults.find((v) => v.id === activeId) ?? vaults[0]!;
 
-	if (vaults.length === 1) return <VaultLabel vault={active} />;
+	if (vaults.length === 1) {
+		return <VaultLabel vault={active} />;
+	}
 
 	return (
-		<section className="border-t border-border">
+		<section className="border-border border-t">
 			<DropdownMenu>
 				<DropdownMenuTrigger className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-muted aria-expanded:bg-muted">
 					<span className="min-w-0 flex-1">
-						<span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						<span className="block font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
 							Vault
 						</span>
-						<span className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
+						<span className="flex items-center gap-1.5 truncate font-medium text-foreground text-sm">
 							{active.encrypted && <Lock className="size-3 shrink-0 text-muted-foreground" />}
 							{active.name}
 						</span>
@@ -58,7 +66,9 @@ export default function VaultSwitcher() {
 						value={active.id}
 						onValueChange={(v) => {
 							const next = v;
-							if (next === active.id) return;
+							if (next === active.id) {
+								return;
+							}
 							setActiveVaultId(next);
 							qc.invalidateQueries();
 							// Onboarding tour gates step 0 on a real switch; emit a DOM
@@ -85,9 +95,9 @@ export default function VaultSwitcher() {
 
 function VaultLabel({ vault }: { vault: Vault }) {
 	return (
-		<section className="border-t border-border px-3 py-2">
-			<p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vault</p>
-			<p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
+		<section className="border-border border-t px-3 py-2">
+			<p className="font-medium text-[10px] text-muted-foreground uppercase tracking-wide">Vault</p>
+			<p className="flex items-center gap-1.5 truncate font-medium text-foreground text-sm">
 				{vault.encrypted && <Lock className="size-3 shrink-0 text-muted-foreground" />}
 				{vault.name}
 			</p>

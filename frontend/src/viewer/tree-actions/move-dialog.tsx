@@ -9,7 +9,9 @@ interface Props {
 }
 
 function buildMessage(nodes: MoveNode[]): string {
-	if (nodes.length > 1) return `Move ${nodes.length} items to…`;
+	if (nodes.length > 1) {
+		return `Move ${nodes.length} items to…`;
+	}
 	return "Move to…";
 }
 
@@ -23,7 +25,9 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 		const eligible = folders
 			.map((f) => f.name)
 			.filter((name) => nodes.every((node) => isValidMoveTarget(node, name)));
-		if (!query) return eligible;
+		if (!query) {
+			return eligible;
+		}
 		const q = query.toLowerCase();
 		return eligible.filter((name) => (name || "root").toLowerCase().includes(q));
 	}, [folders, nodes, query]);
@@ -34,7 +38,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 			className="fixed inset-0 z-50 m-auto h-96 w-96 rounded-lg bg-white shadow-xl dark:bg-gray-900"
 		>
 			{nodes.length > 1 && (
-				<p className="border-b border-gray-200 px-3 py-2 text-sm font-medium text-gray-800 dark:border-gray-700 dark:text-gray-100">
+				<p className="border-gray-200 border-b px-3 py-2 font-medium text-gray-800 text-sm dark:border-gray-700 dark:text-gray-100">
 					{placeholder}
 				</p>
 			)}
@@ -47,13 +51,21 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 					setActive(0);
 				}}
 				onKeyDown={(e) => {
-					if (e.key === "ArrowDown") setActive((a) => Math.min(a + 1, candidates.length - 1));
-					if (e.key === "ArrowUp") setActive((a) => Math.max(a - 1, 0));
-					if (e.key === "Enter" && candidates[active] !== undefined) onPick(candidates[active]);
-					if (e.key === "Escape") onCancel();
+					if (e.key === "ArrowDown") {
+						setActive((a) => Math.min(a + 1, candidates.length - 1));
+					}
+					if (e.key === "ArrowUp") {
+						setActive((a) => Math.max(a - 1, 0));
+					}
+					if (e.key === "Enter" && candidates[active] !== undefined) {
+						onPick(candidates[active]);
+					}
+					if (e.key === "Escape") {
+						onCancel();
+					}
 				}}
 				placeholder={placeholder}
-				className="w-full border-b border-gray-200 bg-transparent p-3 text-sm outline-none dark:border-gray-700"
+				className="w-full border-gray-200 border-b bg-transparent p-3 text-sm outline-none dark:border-gray-700"
 			/>
 			<ul role="listbox" className="max-h-72 overflow-y-auto py-1">
 				{candidates.map((name, i) => (

@@ -21,7 +21,9 @@ export function TreeRowVirtualized({
 	onFolderHover,
 }: Props) {
 	const fallback = items[virtualItem.index];
-	if (!fallback) return null;
+	if (!fallback) {
+		return null;
+	}
 	const instance = instanceFor ? (instanceFor(fallback.getId()) ?? fallback) : fallback;
 
 	return (

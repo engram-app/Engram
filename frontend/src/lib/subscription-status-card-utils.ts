@@ -7,7 +7,7 @@ import type { SubscriptionStatusData } from "@/lib/paddle-types";
 // or destructure these fields from your own subscription fetch.
 // ---
 
-type SubscriptionItem = {
+interface SubscriptionItem {
 	product: {
 		name: string;
 		description?: string | null;
@@ -18,11 +18,11 @@ type SubscriptionItem = {
 		unitPrice?: { amount: string; currencyCode: string } | null;
 	} | null;
 	quantity: number;
-};
+}
 
-type RecurringLineItem = {
+interface RecurringLineItem {
 	totals: { subtotal: string; total: string };
-};
+}
 
 type ScheduledChange = {
 	action: "cancel" | "pause" | "resume";
@@ -38,15 +38,15 @@ type SubscriptionDiscountField = {
 } | null;
 
 // Full Discount catalog entity — fetched separately via paddle.discounts.get(id)
-type PaddleDiscount = {
+interface PaddleDiscount {
 	id: string;
 	description: string;
 	code?: string | null;
 	type: "flat" | "flat_per_seat" | "percentage";
 	amount: string;
-};
+}
 
-type PaddleSubscription = {
+interface PaddleSubscription {
 	id: string;
 	status: "active" | "canceled" | "past_due" | "paused" | "trialing";
 	currencyCode: string;
@@ -58,12 +58,12 @@ type PaddleSubscription = {
 	scheduledChange?: ScheduledChange;
 	discount?: SubscriptionDiscountField;
 	items: SubscriptionItem[];
-};
+}
 
-type RecurringTransactionDetails = {
+interface RecurringTransactionDetails {
 	totals: { total: string; discount?: string };
 	lineItems: RecurringLineItem[];
-};
+}
 
 /**
  * Maps a Paddle subscription API response to the `SubscriptionStatusData`

@@ -11,13 +11,13 @@ import { formatBillingCycle, formatTrialPeriod } from "@/lib/paddle-format";
 import { getOrCreatePaddle } from "@/lib/paddle-instance";
 import type { PriceData } from "@/lib/paddle-types";
 
-export type UsePaddlePricesArgs = {
+export interface UsePaddlePricesArgs {
 	clientToken: string;
 	environment?: Environments;
 	priceIds: string[];
 	countryCode?: string;
 	discountId?: string;
-};
+}
 
 type PaddlePrices = Record<string, PriceData>;
 
@@ -51,7 +51,9 @@ export function usePaddlePrices(args: UsePaddlePricesArgs): {
 
 	// Initialize Paddle once
 	useEffect(() => {
-		if (paddle || !clientToken) return;
+		if (paddle || !clientToken) {
+			return;
+		}
 
 		getOrCreatePaddle(clientToken, environment)
 			.then((paddleInstance) => {
@@ -69,14 +71,20 @@ export function usePaddlePrices(args: UsePaddlePricesArgs): {
 	const fetchedRef = useRef<string | null>(null);
 
 	const fetchPrices = useCallback(async () => {
-		if (!paddle) return;
+		if (!paddle) {
+			return;
+		}
 
 		const fetchKey = `${priceIdsKey}:${countryCode ?? ""}:${discountIdKey}`;
-		if (fetchedRef.current === fetchKey) return;
+		if (fetchedRef.current === fetchKey) {
+			return;
+		}
 		fetchedRef.current = fetchKey;
 
 		const priceIdList = priceIdsKey.split(",").filter(Boolean);
-		if (priceIdList.length === 0) return;
+		if (priceIdList.length === 0) {
+			return;
+		}
 
 		const paddlePricePreviewRequest: Partial<PricePreviewParams> = {
 			items: priceIdList.map((priceId) => ({ priceId, quantity: 1 })),

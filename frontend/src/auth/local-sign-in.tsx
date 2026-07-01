@@ -33,7 +33,9 @@ export default function LocalSignIn() {
 
 	// Navigate after auth state propagates (React 18 batching)
 	useEffect(() => {
-		if (isSignedIn) navigate(returnTo, { replace: true });
+		if (isSignedIn) {
+			navigate(returnTo, { replace: true });
+		}
 	}, [isSignedIn, navigate, returnTo]);
 
 	// Self-host first-run: bounce to /sign-up so the operator creates the
@@ -50,7 +52,9 @@ export default function LocalSignIn() {
 		setLoading(true);
 
 		try {
-			if (!login) throw new Error("Login not available for this auth provider");
+			if (!login) {
+				throw new Error("Login not available for this auth provider");
+			}
 			await login(email, password);
 		} catch (err) {
 			const raw = err instanceof Error ? err.message : "Login failed";
@@ -78,7 +82,7 @@ export default function LocalSignIn() {
 				)}
 
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Email</span>
+					<span className="font-medium text-foreground text-sm">Email</span>
 					<input
 						type="email"
 						required
@@ -89,7 +93,7 @@ export default function LocalSignIn() {
 				</label>
 
 				<label className="block">
-					<span className="text-sm font-medium text-foreground">Password</span>
+					<span className="font-medium text-foreground text-sm">Password</span>
 					<input
 						type="password"
 						required
@@ -124,20 +128,20 @@ function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
 	const mode = bootstrap?.registration_mode;
 	if (mode === "invite_only") {
 		return (
-			<p className="text-center text-sm text-muted-foreground">
+			<p className="text-center text-muted-foreground text-sm">
 				Sign-ups require an invite link. Contact your admin to request one.
 			</p>
 		);
 	}
 	if (mode === "closed") {
 		return (
-			<p className="text-center text-sm text-muted-foreground">
+			<p className="text-center text-muted-foreground text-sm">
 				Sign-ups are closed on this instance.
 			</p>
 		);
 	}
 	return (
-		<p className="text-center text-sm text-muted-foreground">
+		<p className="text-center text-muted-foreground text-sm">
 			Don't have an account?{" "}
 			<Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
 				Sign up

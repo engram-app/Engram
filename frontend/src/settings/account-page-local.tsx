@@ -8,8 +8,8 @@ export default function AccountPageLocal() {
 	return (
 		<article className="space-y-6">
 			<header>
-				<h1 className="text-xl font-semibold text-foreground">Account</h1>
-				<p className="mt-1 text-sm text-muted-foreground">
+				<h1 className="font-semibold text-foreground text-xl">Account</h1>
+				<p className="mt-1 text-muted-foreground text-sm">
 					Manage your profile, password, and account.
 				</p>
 			</header>

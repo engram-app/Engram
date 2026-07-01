@@ -24,16 +24,26 @@ export type ParsedItemId =
 	| { kind: "root" };
 
 export function parseItemId(id: ItemId): ParsedItemId {
-	if (id === ROOT_ID) return { kind: "root" };
+	if (id === ROOT_ID) {
+		return { kind: "root" };
+	}
 	// uuid contains '-' but not ':' — splitting on the first ':' keeps
 	// the rest of the id intact as the uuid string.
 	const colon = id.indexOf(":");
-	if (colon < 0) throw new Error(`Unknown tree item id: ${id}`);
+	if (colon < 0) {
+		throw new Error(`Unknown tree item id: ${id}`);
+	}
 	const prefix = id.slice(0, colon);
 	const rest = id.slice(colon + 1);
-	if (rest.length === 0) throw new Error(`Unknown tree item id: ${id}`);
-	if (prefix === "f") return { kind: "folder", id: rest };
-	if (prefix === "n") return { kind: "note", id: rest };
+	if (rest.length === 0) {
+		throw new Error(`Unknown tree item id: ${id}`);
+	}
+	if (prefix === "f") {
+		return { kind: "folder", id: rest };
+	}
+	if (prefix === "n") {
+		return { kind: "note", id: rest };
+	}
 	if (prefix === "a") {
 		const path = rest.split("/").map(decodeURIComponent).join("/");
 		return { kind: "attachment", path };

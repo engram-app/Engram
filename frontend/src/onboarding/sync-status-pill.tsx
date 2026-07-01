@@ -15,7 +15,7 @@ export function SyncStatusPill({ message }: SyncStatusPillProps) {
 		<p
 			role="status"
 			aria-live="polite"
-			className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+			className="flex items-center gap-2 rounded-md border border-border border-dashed bg-muted/40 px-3 py-2 text-muted-foreground text-sm"
 		>
 			<span
 				aria-hidden

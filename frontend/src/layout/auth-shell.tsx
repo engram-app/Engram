@@ -2,17 +2,17 @@ import type { ReactNode } from "react";
 import ThemeToggle from "../theme/theme-toggle";
 import AuthBackdrop from "./auth-backdrop";
 
-type AuthShellProps = {
+interface AuthShellProps {
 	actions?: ReactNode;
 	navLabel?: string;
 	children: ReactNode;
-};
+}
 
 export default function AuthShell({ actions, navLabel, children }: AuthShellProps) {
 	return (
 		<main className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-				<span className="flex items-center gap-2 text-lg font-semibold text-foreground">
+			<header className="flex items-center justify-between border-border border-b bg-card px-4 py-2">
+				<span className="flex items-center gap-2 font-semibold text-foreground text-lg">
 					<img src="/engram-mark.svg" alt="" className="size-6" />
 					Engram
 				</span>

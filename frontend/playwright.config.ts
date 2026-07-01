@@ -1,12 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const isCI = !!process.env.CI;
+const isCI = Boolean(process.env.CI);
 
 // Ports — configurable via env for parallel CI, defaults for local dev
-const LOCAL_BACKEND_PORT = +(process.env.PW_LOCAL_BACKEND_PORT ?? 4000);
-const LOCAL_VITE_PORT = +(process.env.PW_LOCAL_VITE_PORT ?? 5173);
-const CLERK_BACKEND_PORT = +(process.env.PW_CLERK_BACKEND_PORT ?? 4001);
-const CLERK_VITE_PORT = +(process.env.PW_CLERK_VITE_PORT ?? 5174);
+const LOCAL_BACKEND_PORT = Number(process.env.PW_LOCAL_BACKEND_PORT ?? 4000);
+const LOCAL_VITE_PORT = Number(process.env.PW_LOCAL_VITE_PORT ?? 5173);
+const CLERK_BACKEND_PORT = Number(process.env.PW_CLERK_BACKEND_PORT ?? 4001);
+const CLERK_VITE_PORT = Number(process.env.PW_CLERK_VITE_PORT ?? 5174);
 
 // Clerk webServers are only started when Clerk credentials are available.
 const clerkPublishableKey = process.env.VITE_CLERK_PUBLISHABLE_KEY ?? "";

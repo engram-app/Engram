@@ -59,9 +59,13 @@ function findMarketingDir(): string {
 	let dir = SCRIPT_DIR;
 	while (true) {
 		const guess = join(dir, "engram-marketing");
-		if (existsSync(join(guess, "src/styles/global.css"))) return guess;
+		if (existsSync(join(guess, "src/styles/global.css"))) {
+			return guess;
+		}
 		const parent = dirname(dir);
-		if (parent === dir) break;
+		if (parent === dir) {
+			break;
+		}
 		dir = parent;
 	}
 	die(
@@ -83,9 +87,13 @@ function blockBody(css: string, selector: string, mustContain: string): string {
 	while ((m = re.exec(css))) {
 		const start = m.index + m[0].length;
 		const end = css.indexOf("}", start);
-		if (end === -1) continue;
+		if (end === -1) {
+			continue;
+		}
 		const body = css.slice(start, end);
-		if (body.includes(mustContain)) return body;
+		if (body.includes(mustContain)) {
+			return body;
+		}
 	}
 	die(`no '${selector}' block containing '${mustContain}'`);
 }
@@ -98,7 +106,12 @@ function parseVars(body: string): Map<string, string> {
 	return out;
 }
 
-type Change = { scope: string; appVar: string; from: string; to: string };
+interface Change {
+	scope: string;
+	appVar: string;
+	from: string;
+	to: string;
+}
 
 /* Rewrite the mapped app vars inside one app block to the marketing values.
  * Only existing declarations are touched; unmapped lines pass through verbatim. */
@@ -113,12 +126,18 @@ function rewriteBlock(
 	let newBody = appBody;
 	for (const [mktVar, appVar] of TOKEN_MAP) {
 		const value = marketingVars.get(mktVar);
-		if (value === undefined) continue;
+		if (value === undefined) {
+			continue;
+		}
 		const decl = new RegExp(`(--${appVar}:\\s*)([^;]+)(;)`);
 		const found = decl.exec(newBody);
-		if (!found) continue; // app-only target not present in this block
+		if (!found) {
+			continue; // app-only target not present in this block
+		}
 		const current = found[2].trim();
-		if (current === value) continue;
+		if (current === value) {
+			continue;
+		}
 		changes.push({ scope, appVar, from: current, to: value });
 		newBody = newBody.replace(decl, `$1${value}$3`);
 	}
@@ -136,9 +155,13 @@ function syncAssets(marketingDir: string, appPublic: string, dryRun: boolean): s
 		}
 		const srcBuf = readFileSync(src);
 		const same = existsSync(dst) && Buffer.compare(srcBuf, readFileSync(dst)) === 0;
-		if (same) continue;
+		if (same) {
+			continue;
+		}
 		actions.push(name);
-		if (!dryRun) writeFileSync(dst, srcBuf);
+		if (!dryRun) {
+			writeFileSync(dst, srcBuf);
+		}
 	}
 	return actions;
 }
@@ -162,7 +185,9 @@ function syncLegal(marketingDir: string, appLegalDir: string, dryRun: boolean): 
 		const dst = join(appLegalDir, name);
 		const srcBuf = readFileSync(src);
 		const same = existsSync(dst) && Buffer.compare(srcBuf, readFileSync(dst)) === 0;
-		if (same) continue;
+		if (same) {
+			continue;
+		}
 		actions.push(name);
 		if (!dryRun) {
 			mkdirSync(appLegalDir, { recursive: true });
@@ -184,9 +209,13 @@ const SURFACE_PAGE_HEX = "#f5f5f7"; // email background, not in marketing tokens
 
 function oklchToHex(oklch: string): string {
 	const parsed = parse(oklch);
-	if (!parsed) die(`could not parse oklch value: ${oklch}`);
+	if (!parsed) {
+		die(`could not parse oklch value: ${oklch}`);
+	}
 	const hex = formatHex(parsed);
-	if (!hex) die(`could not format hex for: ${oklch}`);
+	if (!hex) {
+		die(`could not format hex for: ${oklch}`);
+	}
 	return hex.toLowerCase();
 }
 
@@ -203,7 +232,9 @@ function emailTokensElixir(light: Map<string, string>): string {
 	lines.push("");
 	for (const [mktVar, elixirFn] of EMAIL_TOKEN_MAP) {
 		const oklch = light.get(mktVar);
-		if (!oklch) die(`marketing token missing: --${mktVar}`);
+		if (!oklch) {
+			die(`marketing token missing: --${mktVar}`);
+		}
 		const hex = oklchToHex(oklch);
 		lines.push(`  def ${elixirFn}, do: "${hex}"`);
 	}
@@ -221,8 +252,12 @@ function syncEmailTokens(
 	const dest = join(appRoot, "lib/engram/email/tokens.ex");
 	const next = emailTokensElixir(light);
 	const current = existsSync(dest) ? readFileSync(dest, "utf8") : "";
-	if (current === next) return null;
-	if (!dryRun) writeFileSync(dest, next);
+	if (current === next) {
+		return null;
+	}
+	if (!dryRun) {
+		writeFileSync(dest, next);
+	}
 	return "lib/engram/email/tokens.ex";
 }
 
@@ -264,10 +299,15 @@ function main() {
 	for (const c of changes) {
 		console.log(`  [${c.scope}] --${c.appVar}: ${c.from}  ->  ${c.to}`);
 	}
-	for (const a of assetActions) console.log(`  [asset] ${a} ${dryRun ? "(would copy)" : "copied"}`);
-	for (const l of legalActions) console.log(`  [legal] ${l} ${dryRun ? "(would copy)" : "copied"}`);
-	if (tokensAction)
+	for (const a of assetActions) {
+		console.log(`  [asset] ${a} ${dryRun ? "(would copy)" : "copied"}`);
+	}
+	for (const l of legalActions) {
+		console.log(`  [legal] ${l} ${dryRun ? "(would copy)" : "copied"}`);
+	}
+	if (tokensAction) {
 		console.log(`  [email-tokens] ${tokensAction} ${dryRun ? "(would write)" : "written"}`);
+	}
 
 	if (
 		changes.length === 0 &&

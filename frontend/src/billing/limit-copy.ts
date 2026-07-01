@@ -17,7 +17,10 @@ export type LimitReason =
 	| "account_suspended"
 	| "no_tier";
 
-export type LimitCopy = { title: string; body: string };
+export interface LimitCopy {
+	title: string;
+	body: string;
+}
 
 const TABLE: Record<LimitReason, LimitCopy> = {
 	notes_cap_exceeded: {

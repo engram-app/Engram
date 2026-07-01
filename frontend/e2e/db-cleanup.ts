@@ -30,7 +30,9 @@ function isSafeDbUrl(rawUrl: string): { ok: true } | { ok: false; reason: string
 		.map((h) => h.trim())
 		.filter(Boolean);
 
-	if (SAFE_HOSTS.has(host) || extra.includes(host)) return { ok: true };
+	if (SAFE_HOSTS.has(host) || extra.includes(host)) {
+		return { ok: true };
+	}
 	return {
 		ok: false,
 		reason: `host "${host}" not in allowlist (localhost/127.0.0.1 or E2E_DB_CLEANUP_EXTRA_HOSTS)`,

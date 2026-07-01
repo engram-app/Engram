@@ -27,7 +27,9 @@ export default function AttachmentPage() {
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
 
 	useEffect(() => {
-		if (!path) return;
+		if (!path) {
+			return;
+		}
 		let revoke: string | null = null;
 		let cancelled = false;
 		setUrl(null);
@@ -36,19 +38,27 @@ export default function AttachmentPage() {
 		api
 			.getBlob(`/attachments/${encoded}?raw=1`)
 			.then((blob) => {
-				if (cancelled) return;
+				if (cancelled) {
+					return;
+				}
 				const objectUrl = URL.createObjectURL(blob);
 				revoke = objectUrl;
 				setUrl(objectUrl);
 			})
 			.catch((err) => {
-				if (cancelled) return;
-				if (!(err instanceof ApiError)) console.error("attachment load failed", path, err);
+				if (cancelled) {
+					return;
+				}
+				if (!(err instanceof ApiError)) {
+					console.error("attachment load failed", path, err);
+				}
 				setError(err instanceof ApiError && err.status === 404 ? "missing" : "failed");
 			});
 		return () => {
 			cancelled = true;
-			if (revoke) URL.revokeObjectURL(revoke);
+			if (revoke) {
+				URL.revokeObjectURL(revoke);
+			}
 		};
 	}, [path]);
 
@@ -60,14 +70,14 @@ export default function AttachmentPage() {
 	if (!att) {
 		return (
 			<section className="p-6">
-				<p className="text-sm text-destructive">Attachment not found.</p>
+				<p className="text-destructive text-sm">Attachment not found.</p>
 			</section>
 		);
 	}
 	if (error) {
 		return (
 			<section className="p-6">
-				<p className="text-sm text-destructive">
+				<p className="text-destructive text-sm">
 					{error === "missing"
 						? `${filename} no longer exists.`
 						: `Couldn't load ${filename} — it may be temporarily unavailable.`}
@@ -101,11 +111,11 @@ export default function AttachmentPage() {
 	}
 	return (
 		<section className="p-6">
-			<p className="mb-3 text-sm text-muted-foreground">Preview not supported for {filename}.</p>
+			<p className="mb-3 text-muted-foreground text-sm">Preview not supported for {filename}.</p>
 			<a
 				href={url}
 				download={filename}
-				className="inline-flex items-center rounded bg-primary px-3 py-2 text-sm text-primary-foreground"
+				className="inline-flex items-center rounded bg-primary px-3 py-2 text-primary-foreground text-sm"
 			>
 				Download {filename}
 			</a>

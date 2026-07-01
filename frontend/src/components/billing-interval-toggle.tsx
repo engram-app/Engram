@@ -4,12 +4,12 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatIntervalLabel } from "@/lib/paddle-format";
 import { cn } from "@/lib/utils";
 
-export type BillingIntervalToggleProps = {
+export interface BillingIntervalToggleProps {
 	intervals: string[];
 	value: string;
 	onValueChange: (value: string) => void;
 	className?: string;
-};
+}
 
 export function BillingIntervalToggle({
 	intervals,

@@ -41,13 +41,13 @@ export default function UserMenu() {
 				{user?.imageUrl ? (
 					<img src={user.imageUrl} alt="" className="h-9 w-9 rounded-full object-cover" />
 				) : (
-					<span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
+					<span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
 						{initial}
 					</span>
 				)}
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" side="right" className="w-64 p-1.5">
-				<DropdownMenuLabel className="truncate px-3 py-2 text-sm font-normal text-muted-foreground">
+				<DropdownMenuLabel className="truncate px-3 py-2 font-normal text-muted-foreground text-sm">
 					{user?.email}
 				</DropdownMenuLabel>
 				<DropdownMenuSeparator />
@@ -58,7 +58,7 @@ export default function UserMenu() {
 					</Link>
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
-				<DropdownMenuLabel className="px-3 pb-1 pt-2 text-xs uppercase tracking-wide text-muted-foreground">
+				<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
 					Theme
 				</DropdownMenuLabel>
 				<DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as ThemeChoice)}>

@@ -5,7 +5,9 @@ import { useConfig } from "@/config-context";
 // plug prefixes `/api` server-side) and keeps it on selfhost (apiBase
 // = "", same-origin Phoenix-hosted SPA).
 export function joinApiUrl(apiBase: string, path: string): string {
-	if (!apiBase) return path;
+	if (!apiBase) {
+		return path;
+	}
 	const stripped = path.startsWith("/api/") ? path.slice(4) : path;
 	return apiBase + stripped;
 }

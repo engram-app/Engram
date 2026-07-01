@@ -36,7 +36,9 @@ export default function RegistrationTab() {
 	}, []);
 
 	async function choose(next: RegistrationMode) {
-		if (next === mode || saving) return;
+		if (next === mode || saving) {
+			return;
+		}
 		setSaving(true);
 		try {
 			await adminApi.setRegistration(next);
@@ -51,12 +53,12 @@ export default function RegistrationTab() {
 	}
 
 	if (!mode) {
-		return <p className="text-sm text-muted-foreground">Loading…</p>;
+		return <p className="text-muted-foreground text-sm">Loading…</p>;
 	}
 
 	return (
 		<fieldset disabled={saving} className="space-y-2">
-			<legend className="mb-2 text-sm font-medium text-foreground">Who can create accounts</legend>
+			<legend className="mb-2 font-medium text-foreground text-sm">Who can create accounts</legend>
 			{MODES.map((m) => (
 				<label
 					key={m.value}
@@ -71,8 +73,8 @@ export default function RegistrationTab() {
 						className="mt-1"
 					/>
 					<span className="flex-1">
-						<strong className="block text-sm font-medium text-foreground">{m.label}</strong>
-						<span className="text-xs text-muted-foreground">{m.hint}</span>
+						<strong className="block font-medium text-foreground text-sm">{m.label}</strong>
+						<span className="text-muted-foreground text-xs">{m.hint}</span>
 					</span>
 				</label>
 			))}

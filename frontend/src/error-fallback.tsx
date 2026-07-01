@@ -21,23 +21,23 @@ import AuthPanel from "./layout/auth-panel";
 // no VITE_SENTRY_DSN), but that id has no transport behind it — claiming the
 // crash was reported would be a lie. `getClient()` is truthy only when
 // Sentry.init actually ran, so we default to it and let tests inject the flag.
-type ErrorFallbackProps = {
+interface ErrorFallbackProps {
 	error: unknown;
 	eventId?: string;
 	reported?: boolean;
-};
+}
 
 export default function ErrorFallback({
 	error,
 	eventId,
-	reported = !!Sentry.getClient(),
+	reported = Boolean(Sentry.getClient()),
 }: ErrorFallbackProps) {
 	const message = error instanceof Error ? error.message : String(error);
 
 	return (
 		<main className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-				<span className="flex items-center gap-2 text-lg font-semibold text-foreground">
+			<header className="flex items-center justify-between border-border border-b bg-card px-4 py-2">
+				<span className="flex items-center gap-2 font-semibold text-foreground text-lg">
 					<img src="/engram-mark.svg" alt="" className="size-6" />
 					Engram
 				</span>
@@ -46,11 +46,11 @@ export default function ErrorFallback({
 				<AuthBackdrop />
 				<div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<AuthPanel className="flex flex-col items-center gap-4 text-center">
-						<p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text text-7xl font-extrabold leading-none tracking-tight text-transparent sm:text-8xl">
+						<p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text font-extrabold text-7xl text-transparent leading-none tracking-tight sm:text-8xl">
 							Oops
 						</p>
 						<h1 className={heading}>Something went wrong</h1>
-						<p className="max-w-md text-sm text-muted-foreground">
+						<p className="max-w-md text-muted-foreground text-sm">
 							An unexpected error broke this page.{reported ? " It has been reported." : ""} Try
 							reloading. If it keeps happening, contact{" "}
 							<a className="underline" href="mailto:support@engram.page">
@@ -60,7 +60,7 @@ export default function ErrorFallback({
 						</p>
 
 						{reported && eventId ? (
-							<p className="text-xs text-muted-foreground">
+							<p className="text-muted-foreground text-xs">
 								Reference:{" "}
 								<code className="rounded bg-muted px-1.5 py-0.5 font-mono">{eventId}</code>
 							</p>

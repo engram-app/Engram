@@ -22,8 +22,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 	}, [resolved]);
 
 	useEffect(() => {
-		if (theme !== "system") return;
-		if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+		if (theme !== "system") {
+			return;
+		}
+		if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+			return;
+		}
 
 		const mql = window.matchMedia("(prefers-color-scheme: dark)");
 		const handler = (e: MediaQueryListEvent) => setSystemPref(e.matches ? "dark" : "light");
@@ -44,6 +48,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export function useTheme(): ThemeContextValue {
 	const ctx = useContext(ThemeContext);
-	if (!ctx) throw new Error("useTheme must be used within ThemeProvider");
+	if (!ctx) {
+		throw new Error("useTheme must be used within ThemeProvider");
+	}
 	return ctx;
 }

@@ -13,10 +13,10 @@ export {
  * Maps to a single Paddle price ID — pass an array of these to describe
  * the selectable plans in a checkout or pricing selector.
  */
-export type PricingSelectPlan = {
+export interface PricingSelectPlan {
 	priceId: string;
 	name: string;
 	description?: string;
 	badge?: string;
 	icon?: React.ReactNode;
-};
+}

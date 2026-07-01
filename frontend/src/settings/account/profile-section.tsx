@@ -12,16 +12,22 @@ export function ProfileSection() {
 	// Changing the avatar is reverification-protected — raw calls return 403.
 	const setProfileImage = useReverification((file: File) => user!.setProfileImage({ file }));
 
-	if (!(isLoaded && user)) return null;
+	if (!(isLoaded && user)) {
+		return null;
+	}
 
 	async function onImage(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0];
-		if (!file) return;
+		if (!file) {
+			return;
+		}
 		try {
 			await setProfileImage(file);
 			toast.success("Profile image updated");
 		} catch (err) {
-			if (isReverificationCancelledError(err)) return;
+			if (isReverificationCancelledError(err)) {
+				return;
+			}
 			toast.error(clerkErrorMessage(err, "Could not update image"));
 		} finally {
 			// Reset so picking the same file again still fires onChange.
@@ -54,7 +60,7 @@ export function ProfileSection() {
 					>
 						Change photo
 					</Button>
-					<p className="mt-1 text-xs text-muted-foreground">JPG, PNG or GIF.</p>
+					<p className="mt-1 text-muted-foreground text-xs">JPG, PNG or GIF.</p>
 				</div>
 			</div>
 		</SettingsSectionCard>

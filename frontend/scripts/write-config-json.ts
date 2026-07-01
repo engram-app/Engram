@@ -16,7 +16,9 @@ const target = process.argv[2] ?? "dist/config.json";
 const { config, errors } = bootstrapConfigFromEnv(process.env);
 
 if (errors.length > 0) {
-	for (const err of errors) console.error(`[write-config-json] ${err}`);
+	for (const err of errors) {
+		console.error(`[write-config-json] ${err}`);
+	}
 	process.exit(1);
 }
 

@@ -65,7 +65,9 @@ describe("useSubscriptionActivatedEvents", () => {
 		socketConnectMock.mockClear();
 		socketDisconnectMock.mockClear();
 		channelOn.mockClear();
-		for (const k of Object.keys(channelHandlers)) delete channelHandlers[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
 	});
 
 	it("connects to user:{userId} and subscribes to subscription_activated", async () => {
@@ -79,7 +81,7 @@ describe("useSubscriptionActivatedEvents", () => {
 		});
 		expect(socketCtor).toHaveBeenCalledWith("/socket", { params: { token: "tok-test" } });
 		expect(socketChannelMock).toHaveBeenCalledWith("user:42");
-		expect(channelHandlers["subscription_activated"]).toBeDefined();
+		expect(channelHandlers.subscription_activated).toBeDefined();
 	});
 
 	it("invokes onActivated when the channel fires subscription_activated", async () => {
@@ -93,7 +95,7 @@ describe("useSubscriptionActivatedEvents", () => {
 		});
 
 		act(() => {
-			channelHandlers["subscription_activated"]!({
+			channelHandlers.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_1",

@@ -8,13 +8,13 @@ export type SortKey =
 	| "modified-desc"
 	| "modified-asc";
 
-type FolderTreeContextValue = {
+interface FolderTreeContextValue {
 	isOpen: (path: string) => boolean;
 	toggle: (path: string) => void;
 	collapseAll: () => void;
 	sort: SortKey;
 	setSort: (next: SortKey) => void;
-};
+}
 
 const FolderTreeContext = createContext<FolderTreeContextValue | null>(null);
 
@@ -26,8 +26,11 @@ export function FolderTreeProvider({ children }: { children: ReactNode }) {
 	const toggle = useCallback((path: string) => {
 		setOpenSet((prev) => {
 			const next = new Set(prev);
-			if (next.has(path)) next.delete(path);
-			else next.add(path);
+			if (next.has(path)) {
+				next.delete(path);
+			} else {
+				next.add(path);
+			}
 			return next;
 		});
 	}, []);
@@ -42,6 +45,8 @@ export function FolderTreeProvider({ children }: { children: ReactNode }) {
 
 export function useFolderTreeState(): FolderTreeContextValue {
 	const v = useContext(FolderTreeContext);
-	if (!v) throw new Error("useFolderTreeState must be used inside FolderTreeProvider");
+	if (!v) {
+		throw new Error("useFolderTreeState must be used inside FolderTreeProvider");
+	}
 	return v;
 }

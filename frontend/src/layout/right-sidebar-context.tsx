@@ -24,6 +24,8 @@ export function RightSidebarProvider({ children }: { children: ReactNode }) {
 
 export function useRightSidebar() {
 	const ctx = useContext(Ctx);
-	if (!ctx) throw new Error("useRightSidebar must be used within RightSidebarProvider");
+	if (!ctx) {
+		throw new Error("useRightSidebar must be used within RightSidebarProvider");
+	}
 	return ctx;
 }

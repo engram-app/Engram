@@ -28,14 +28,18 @@ export function useSubscriptionActivatedEvents({ userId, enabled, onActivated }:
 	const { getToken } = useAuthAdapter();
 
 	useEffect(() => {
-		if (!enabled || userId == null) return;
+		if (!enabled || userId == null) {
+			return;
+		}
 
 		let socket: Socket | null = null;
 		let cancelled = false;
 
 		async function connect() {
 			const token = await getToken();
-			if (cancelled || !token) return;
+			if (cancelled || !token) {
+				return;
+			}
 
 			socket = new Socket(joinWsUrl(getWsBase(), "/socket"), { params: { token } });
 			socket.connect();
@@ -60,7 +64,9 @@ export function useSubscriptionActivatedEvents({ userId, enabled, onActivated }:
 
 		return () => {
 			cancelled = true;
-			if (socket) socket.disconnect();
+			if (socket) {
+				socket.disconnect();
+			}
 		};
 	}, [userId, enabled, getToken, onActivated]);
 }

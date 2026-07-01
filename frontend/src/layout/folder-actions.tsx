@@ -20,10 +20,10 @@ import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 const ICON = "size-5";
 const BUTTON = "size-10";
 
-type SortSection = {
+interface SortSection {
 	label: string;
 	options: ReadonlyArray<{ value: SortKey; label: string }>;
-};
+}
 
 const SORT_SECTIONS: ReadonlyArray<SortSection> = [
 	{
@@ -63,7 +63,7 @@ export default function FolderActions() {
 	return (
 		<section
 			aria-label="File actions"
-			className="flex items-center justify-around border-t border-border bg-card px-4 py-0.5"
+			className="flex items-center justify-around border-border border-t bg-card px-4 py-0.5"
 		>
 			<TooltipProvider delayDuration={300}>
 				<Tooltip>
@@ -130,7 +130,7 @@ export default function FolderActions() {
 							// a real DOM element breaks the radio group.
 							<Fragment key={section.label}>
 								{i > 0 && <DropdownMenuSeparator />}
-								<DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+								<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
 									{section.label}
 								</DropdownMenuLabel>
 								{section.options.map((opt) => (

@@ -7,21 +7,21 @@ import type { CheckoutSummaryData } from "@/lib/paddle-types";
 // payload or any object matching this shape.
 // ---
 
-type TimePeriodLike = {
+interface TimePeriodLike {
 	interval: string;
 	frequency: number;
-};
+}
 
-type CheckoutEventItem = {
+interface CheckoutEventItem {
 	product?: { name?: string | null } | null;
 	price_name?: string | null;
 	quantity?: number | null;
 	totals?: { subtotal?: number | null } | null;
 	billing_cycle?: TimePeriodLike | null;
 	trial_period?: TimePeriodLike | null;
-};
+}
 
-type CheckoutEventsInput = {
+interface CheckoutEventsInput {
 	currency_code?: string | null;
 	items?: CheckoutEventItem[] | null;
 	totals?: {
@@ -33,7 +33,7 @@ type CheckoutEventsInput = {
 	recurring_totals?: {
 		total?: number | null;
 	} | null;
-};
+}
 
 /**
  * Maps a Paddle.js checkout event payload to the `CheckoutSummaryData`

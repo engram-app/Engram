@@ -14,7 +14,9 @@ export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props)
 
 	useEffect(() => {
 		const el = inputRef.current;
-		if (!el) return;
+		if (!el) {
+			return;
+		}
 		el.focus();
 		if (kind === "file") {
 			const dot = initial.lastIndexOf(".");
@@ -34,18 +36,21 @@ export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props)
 				onKeyDown={(e) => {
 					if (e.key === "Enter") {
 						e.preventDefault();
-						if (value && value !== initial) onCommit(value);
-						else onCancel();
+						if (value && value !== initial) {
+							onCommit(value);
+						} else {
+							onCancel();
+						}
 					} else if (e.key === "Escape") {
 						e.preventDefault();
 						onCancel();
 					}
 				}}
 				onBlur={() => onCancel()}
-				className="w-full rounded border border-blue-400 bg-white px-1 py-0.5 text-sm text-gray-900 dark:bg-gray-900 dark:text-gray-100"
+				className="w-full rounded border border-blue-400 bg-white px-1 py-0.5 text-gray-900 text-sm dark:bg-gray-900 dark:text-gray-100"
 			/>
 			{error && (
-				<span className="text-xs text-red-600 dark:text-red-400" role="alert">
+				<span className="text-red-600 text-xs dark:text-red-400" role="alert">
 					{error}
 				</span>
 			)}

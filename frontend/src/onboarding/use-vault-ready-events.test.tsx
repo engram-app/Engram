@@ -73,7 +73,9 @@ describe("useVaultReadyEvents", () => {
 		socketConnectMock.mockClear();
 		socketDisconnectMock.mockClear();
 		channelOn.mockClear();
-		for (const k of Object.keys(channelHandlers)) delete channelHandlers[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
 	});
 
 	it("connects to user:{userId} and subscribes to vault_created + vault_populated", async () => {
@@ -84,8 +86,8 @@ describe("useVaultReadyEvents", () => {
 		});
 		expect(socketCtor).toHaveBeenCalledWith("/socket", { params: { token: "tok-test" } });
 		expect(socketChannelMock).toHaveBeenCalledWith("user:42");
-		expect(channelHandlers["vault_created"]).toBeDefined();
-		expect(channelHandlers["vault_populated"]).toBeDefined();
+		expect(channelHandlers.vault_created).toBeDefined();
+		expect(channelHandlers.vault_populated).toBeDefined();
 	});
 
 	it("flips vaultCreated + records vaultId when vault_created fires", async () => {
@@ -98,7 +100,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			channelHandlers["vault_created"]!({ vault_id: "v_1" });
+			channelHandlers.vault_created!({ vault_id: "v_1" });
 		});
 
 		expect(result.current.vaultCreated).toBe(true);
@@ -116,7 +118,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			channelHandlers["vault_populated"]!({ vault_id: "v_2" });
+			channelHandlers.vault_populated!({ vault_id: "v_2" });
 		});
 
 		expect(result.current.vaultCreated).toBe(true);

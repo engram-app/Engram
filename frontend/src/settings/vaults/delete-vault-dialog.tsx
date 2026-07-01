@@ -28,7 +28,9 @@ export function DeleteVaultDialog({
 	const [phrase, setPhrase] = useState("");
 
 	useEffect(() => {
-		if (!open) setPhrase("");
+		if (!open) {
+			setPhrase("");
+		}
 	}, [open]);
 
 	const noteCount = vault.note_count ?? 0;
@@ -55,7 +57,7 @@ export function DeleteVaultDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<ul className="space-y-2 text-sm text-muted-foreground">
+				<ul className="space-y-2 text-muted-foreground text-sm">
 					<li>
 						It moves to trash and is{" "}
 						<strong className="text-foreground">recoverable for 30 days</strong>, then permanently
@@ -73,7 +75,7 @@ export function DeleteVaultDialog({
 						confirmDelete();
 					}}
 				>
-					<label className="block text-sm text-foreground">
+					<label className="block text-foreground text-sm">
 						Type "{vault.name}" to confirm
 						<input
 							autoFocus

@@ -174,7 +174,7 @@ function SourceScreen({
 		<AuthPanel className="flex flex-col gap-5">
 			<header className="flex flex-col gap-2">
 				<h1 className={heading}>Let's get your notes in.</h1>
-				<p className="text-sm text-muted-foreground">
+				<p className="text-muted-foreground text-sm">
 					If you have an Obsidian vault, we'll pull it in on the first connect. If not, we'll spin
 					up a new vault for you.
 				</p>
@@ -204,7 +204,7 @@ function SourceScreen({
 			</div>
 
 			{pickError && (
-				<p role="alert" className="text-sm text-destructive">
+				<p role="alert" className="text-destructive text-sm">
 					{pickError}
 				</p>
 			)}
@@ -237,7 +237,7 @@ function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
 			onClick={onClick}
 			aria-pressed={selected}
 			className={
-				"group flex flex-col gap-2 rounded-xl border p-4 text-left transition sm:p-5 " +
+				"group flex flex-col gap-2 rounded-xl border p-4 text-left transition sm:p-5" +
 				(selected
 					? "border-primary bg-accent/40"
 					: "border-border bg-background hover:border-primary hover:bg-accent/30")
@@ -245,11 +245,11 @@ function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
 		>
 			<span className="flex items-center gap-2">
 				{icon}
-				<span className="text-base font-semibold text-foreground group-hover:text-primary">
+				<span className="font-semibold text-base text-foreground group-hover:text-primary">
 					{title}
 				</span>
 			</span>
-			<span className="text-sm text-muted-foreground">{body}</span>
+			<span className="text-muted-foreground text-sm">{body}</span>
 		</button>
 	);
 }
@@ -286,7 +286,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 
 	return (
 		<div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
-			<h2 className="text-lg font-semibold text-foreground">
+			<h2 className="font-semibold text-foreground text-lg">
 				Install the Engram Vault Sync plugin
 			</h2>
 			<ol className="flex list-decimal flex-col gap-3 pl-5 text-base text-foreground">
@@ -296,7 +296,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 							In Obsidian: <strong>Settings → Community plugins → Browse</strong>, search{" "}
 							<em>Engram Vault Sync</em>, then install and enable it.
 						</span>
-						<span className="text-sm text-muted-foreground">
+						<span className="text-muted-foreground text-sm">
 							Or open the{" "}
 							<a
 								href="https://community.obsidian.md/plugins/engram-vault-sync"
@@ -317,7 +317,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 								Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter your Engram server URL,
 								and click <strong>Sign in</strong>.
 							</span>
-							<span className="text-sm text-muted-foreground">
+							<span className="text-muted-foreground text-sm">
 								Use the same URL you used to reach this page.
 							</span>
 						</div>
@@ -371,8 +371,8 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 
 	return (
 		<div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
-			<h2 className="text-base font-semibold text-foreground">Name your first vault</h2>
-			<p className="text-sm text-muted-foreground">
+			<h2 className="font-semibold text-base text-foreground">Name your first vault</h2>
+			<p className="text-muted-foreground text-sm">
 				A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't
 				empty when you arrive.
 			</p>
@@ -388,7 +388,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 				/>
 			</label>
 			{error ? (
-				<p role="alert" className="text-sm text-destructive">
+				<p role="alert" className="text-destructive text-sm">
 					{error}
 				</p>
 			) : null}
@@ -396,7 +396,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 				type="button"
 				onClick={submit}
 				disabled={disabled}
-				className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+				className="rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				{isCommitting ? "Creating…" : "Create vault & continue"}
 			</button>

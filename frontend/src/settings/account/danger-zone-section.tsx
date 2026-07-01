@@ -15,14 +15,18 @@ export function DangerZoneSection() {
 	const [phrase, setPhrase] = useState("");
 	const remove = useReverification(() => user!.delete());
 
-	if (!(isLoaded && user)) return null;
+	if (!(isLoaded && user)) {
+		return null;
+	}
 
 	async function onDelete() {
 		try {
 			await remove();
 			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
 		} catch (e) {
-			if (isReverificationCancelledError(e)) return;
+			if (isReverificationCancelledError(e)) {
+				return;
+			}
 			toast.error("Could not delete account");
 		}
 	}
@@ -30,8 +34,8 @@ export function DangerZoneSection() {
 	return (
 		<section className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 sm:p-6">
 			<header className="mb-4">
-				<h2 className="text-base font-semibold text-destructive">Danger zone</h2>
-				<p className="mt-1 text-sm text-muted-foreground">
+				<h2 className="font-semibold text-base text-destructive">Danger zone</h2>
+				<p className="mt-1 text-muted-foreground text-sm">
 					Permanently delete your account and all associated data. This cannot be undone.
 				</p>
 			</header>
@@ -41,7 +45,7 @@ export function DangerZoneSection() {
 					onDelete();
 				}}
 			>
-				<label className="block text-sm font-medium text-foreground">
+				<label className="block font-medium text-foreground text-sm">
 					Type "{CONFIRM}" to confirm
 					<input
 						className={inputClass}

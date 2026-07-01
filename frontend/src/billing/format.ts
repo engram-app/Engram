@@ -7,10 +7,14 @@ export function formatMoney(
 	currency: string | null | undefined,
 	locale?: string,
 ): string | null {
-	if (minorUnits == null || currency == null) return null;
+	if (minorUnits == null || currency == null) {
+		return null;
+	}
 
 	const amount = Number(minorUnits);
-	if (Number.isNaN(amount)) return null;
+	if (Number.isNaN(amount)) {
+		return null;
+	}
 
 	const digits =
 		new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()

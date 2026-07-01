@@ -80,7 +80,7 @@ export function ToolBadge({ slug, fallbackLabel }: { slug: string; fallbackLabel
 						<span className="sr-only">{fallbackLabel}</span>
 					</>
 				) : (
-					<span className="text-sm font-medium text-foreground">{fallbackLabel}</span>
+					<span className="font-medium text-foreground text-sm">{fallbackLabel}</span>
 				)}
 			</span>
 		);
@@ -89,7 +89,7 @@ export function ToolBadge({ slug, fallbackLabel }: { slug: string; fallbackLabel
 	return (
 		<span className="inline-flex items-center gap-2">
 			<Icon size={16} aria-hidden className="shrink-0" />
-			<span className="text-sm font-medium text-foreground">{fallbackLabel}</span>
+			<span className="font-medium text-foreground text-sm">{fallbackLabel}</span>
 		</span>
 	);
 }

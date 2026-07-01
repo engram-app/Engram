@@ -26,7 +26,9 @@ function writeStored(id: string): void {
  * id → one clean re-bootstrap (safe by design — the web has no local mirror).
  */
 export function getDeviceId(): string {
-	if (deviceId) return deviceId;
+	if (deviceId) {
+		return deviceId;
+	}
 	deviceId = readStored() ?? crypto.randomUUID();
 	writeStored(deviceId);
 	return deviceId;

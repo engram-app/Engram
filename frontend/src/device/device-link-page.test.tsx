@@ -27,7 +27,7 @@ vi.mock("../theme/theme-toggle", () => ({
 
 // The /link page now reads /billing/status to drive the proactive cap UI.
 // Default: unlimited (atCap=false) so existing tests still see the normal flow.
-type FakeBilling = {
+interface FakeBilling {
 	caps: {
 		obsidian_connections: number | null;
 		mcp_connections: number | null;
@@ -35,7 +35,7 @@ type FakeBilling = {
 	};
 	current_connections: { obsidian: number; mcp: number };
 	device_swap_cooldown_remaining_hours: number | null;
-};
+}
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },

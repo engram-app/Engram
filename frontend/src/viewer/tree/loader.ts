@@ -36,18 +36,30 @@ export interface LoaderItem {
 export function buildLoader(deps: LoaderDeps) {
 	return {
 		getItem(itemId: string): LoaderItem | undefined {
-			if (itemId === ROOT_ID) return;
+			if (itemId === ROOT_ID) {
+				return;
+			}
 			const p = parseItemId(itemId);
-			if (p.kind === "root") return;
-			if (p.kind === "folder") return folderLoaderItem(deps, p.id);
-			if (p.kind === "note") return noteLoaderItem(deps, p.id);
+			if (p.kind === "root") {
+				return;
+			}
+			if (p.kind === "folder") {
+				return folderLoaderItem(deps, p.id);
+			}
+			if (p.kind === "note") {
+				return noteLoaderItem(deps, p.id);
+			}
 			return attachmentLoaderItem(deps, p.path);
 		},
 
 		getChildren(itemId: string): LoaderItem[] {
-			if (itemId === ROOT_ID) return rootChildren(deps);
+			if (itemId === ROOT_ID) {
+				return rootChildren(deps);
+			}
 			const p = parseItemId(itemId);
-			if (p.kind !== "folder") return [];
+			if (p.kind !== "folder") {
+				return [];
+			}
 			return folderChildren(deps, p.id);
 		},
 	};
@@ -55,7 +67,9 @@ export function buildLoader(deps: LoaderDeps) {
 
 function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
 	const f = deps.folders.find((x) => x.id === id);
-	if (!f) return;
+	if (!f) {
+		return;
+	}
 	return {
 		itemId: formatItemId({ kind: "folder", id: f.id }),
 		item: {
@@ -76,12 +90,13 @@ function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
 		queryKey: ["folder-notes-by-id"],
 	})) {
 		const hit = list?.find((n) => n.id === id);
-		if (hit)
+		if (hit) {
 			return {
 				itemId: formatItemId({ kind: "note", id }),
 				item: noteToTreeItem(hit),
 				isFolder: false,
 			};
+		}
 	}
 }
 
@@ -149,7 +164,9 @@ function attachmentToTreeItem(a: AttachmentSummary): Extract<TreeItem, { kind: "
 // but it keeps getItem total over the whole TreeItem union.
 function attachmentLoaderItem(deps: LoaderDeps, path: string): LoaderItem | undefined {
 	const a = (deps.attachments ?? []).find((x) => x.path === path);
-	if (!a) return;
+	if (!a) {
+		return;
+	}
 	return {
 		itemId: formatItemId({ kind: "attachment", path }),
 		item: attachmentToTreeItem(a),
@@ -199,10 +216,12 @@ function folderCmp(a: Folder, b: Folder, sort: SortKey): number {
 function sortNotes(notes: NoteSummary[], sort: SortKey): NoteSummary[] {
 	const sign = sort.endsWith("-desc") ? -1 : 1;
 	const copy = [...notes];
-	if (sort.startsWith("modified"))
+	if (sort.startsWith("modified")) {
 		return copy.sort((a, b) => sign * (Date.parse(a.updated_at) - Date.parse(b.updated_at)));
-	if (sort.startsWith("created"))
+	}
+	if (sort.startsWith("created")) {
 		return copy.sort((a, b) => sign * (Date.parse(a.created_at) - Date.parse(b.created_at)));
+	}
 	return copy.sort((a, b) => sign * a.title.localeCompare(b.title));
 }
 

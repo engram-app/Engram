@@ -23,8 +23,8 @@ export default function ThemeSegmented() {
 						data-theme-option={opt.value}
 						className={
 							active
-								? "rounded px-3 py-1 text-sm font-medium bg-blue-600 text-white dark:bg-blue-500"
-								: "rounded px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+								? "rounded bg-blue-600 px-3 py-1 font-medium text-sm text-white dark:bg-blue-500"
+								: "rounded px-3 py-1 text-gray-700 text-sm hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
 						}
 					>
 						{opt.label}

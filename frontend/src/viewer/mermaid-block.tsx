@@ -24,12 +24,16 @@ export default function MermaidBlock({ code }: { code: string }) {
 		loadMermaid()
 			.then((mermaid) => mermaid.render(id, code))
 			.then(({ svg }) => {
-				if (cancelled || !ref.current) return;
+				if (cancelled || !ref.current) {
+					return;
+				}
 				ref.current.innerHTML = svg;
 				setError(null);
 			})
 			.catch((err) => {
-				if (!cancelled) setError(err?.message ?? String(err));
+				if (!cancelled) {
+					setError(err?.message ?? String(err));
+				}
 			});
 		return () => {
 			cancelled = true;
@@ -38,7 +42,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 
 	if (error) {
 		return (
-			<pre className="rounded border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+			<pre className="rounded border border-red-300 bg-red-50 p-3 text-red-700 text-xs dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
 				Mermaid error: {error}
 				{"\n\n"}
 				{code}

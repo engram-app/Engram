@@ -31,14 +31,22 @@ function DesktopLayout() {
 
 	const toggleRight = () => {
 		const p = rightRef.current;
-		if (!p) return;
-		if (p.isCollapsed()) p.expand();
-		else p.collapse();
+		if (!p) {
+			return;
+		}
+		if (p.isCollapsed()) {
+			p.expand();
+		} else {
+			p.collapse();
+		}
 	};
 
 	useEffect(() => {
-		if (rightContent == null) rightRef.current?.collapse();
-		else if (rightRef.current?.isCollapsed()) rightRef.current?.expand();
+		if (rightContent == null) {
+			rightRef.current?.collapse();
+		} else if (rightRef.current?.isCollapsed()) {
+			rightRef.current?.expand();
+		}
 	}, [rightContent]);
 
 	const hasRight = rightContent != null;
@@ -57,7 +65,7 @@ function DesktopLayout() {
 					defaultSize="240px"
 					minSize="180px"
 					maxSize="480px"
-					className="border-r border-border bg-card"
+					className="border-border border-r bg-card"
 				>
 					<AppSidebarPanel />
 				</ResizablePanel>
@@ -81,7 +89,7 @@ function DesktopLayout() {
 								onClick={toggleRight}
 								aria-label="Expand outline"
 								title="Expand outline"
-								className="absolute right-2 top-2 z-10 bg-card/80 backdrop-blur"
+								className="absolute top-2 right-2 z-10 bg-card/80 backdrop-blur"
 							>
 								<PanelRightOpen />
 							</Button>
@@ -101,10 +109,10 @@ function DesktopLayout() {
 					collapsible
 					collapsedSize="0%"
 					onResize={(size) => setRightCollapsed(size.asPercentage === 0)}
-					className="border-l border-border bg-card"
+					className="border-border border-l bg-card"
 				>
 					<div className="flex h-full flex-col">
-						<div className="flex shrink-0 items-center justify-start border-b border-border px-1 py-1">
+						<div className="flex shrink-0 items-center justify-start border-border border-b px-1 py-1">
 							<Button
 								variant="ghost"
 								size="icon-sm"
@@ -126,10 +134,12 @@ function DesktopLayout() {
 function TrialBanner() {
 	const { data: billing } = useBillingStatus();
 	const days = billing?.trial_days_remaining ?? 0;
-	if (billing?.subscription?.status !== "trialing" || days <= 0 || days > 3) return null;
+	if (billing?.subscription?.status !== "trialing" || days <= 0 || days > 3) {
+		return null;
+	}
 	return (
 		<aside
-			className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+			className="bg-amber-50 px-4 py-2 text-center text-amber-900 text-sm dark:bg-amber-950/40 dark:text-amber-100"
 			role="alert"
 		>
 			{days} days left in your trial.

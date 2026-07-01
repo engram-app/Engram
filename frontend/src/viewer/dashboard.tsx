@@ -17,20 +17,20 @@ interface NoteRowProps {
 
 function NoteRow({ note }: NoteRowProps) {
 	return (
-		<article className="border-b border-gray-100 dark:border-gray-800 py-3 last:border-0">
+		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
 			<Link to={`/note/${note.id}`} className="block hover:text-blue-700">
-				<h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+				<h3 className="font-medium text-gray-900 text-sm dark:text-gray-100">
 					{note.title || note.path}
 				</h3>
 			</Link>
-			<footer className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+			<footer className="mt-1 flex flex-wrap items-center gap-3 text-gray-500 text-xs dark:text-gray-400">
 				{note.folder && <span>{note.folder}</span>}
 				{note.tags.length > 0 && (
 					<ul className="flex gap-1" aria-label="Tags">
 						{note.tags.map((tag) => (
 							<li
 								key={tag}
-								className="rounded bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 text-gray-600 dark:text-gray-300"
+								className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
 							>
 								{tag}
 							</li>
@@ -46,11 +46,14 @@ function NoteRow({ note }: NoteRowProps) {
 function FolderNotes({ folder }: { folder: string }) {
 	const { data: notes, isLoading, isError } = useFolderNotes(folder);
 
-	if (isLoading) return <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>;
-	if (isError)
-		return <p className="text-sm text-red-600 dark:text-red-400">Failed to load notes.</p>;
+	if (isLoading) {
+		return <p className="text-gray-500 text-sm dark:text-gray-400">Loading…</p>;
+	}
+	if (isError) {
+		return <p className="text-red-600 text-sm dark:text-red-400">Failed to load notes.</p>;
+	}
 	if (!notes || notes.length === 0) {
-		return <p className="text-sm text-gray-500 dark:text-gray-400">No notes in this folder.</p>;
+		return <p className="text-gray-500 text-sm dark:text-gray-400">No notes in this folder.</p>;
 	}
 
 	return (
@@ -83,7 +86,7 @@ export default function Dashboard() {
 		return (
 			<section data-tour="dashboard-root">
 				<header className="mb-4">
-					<h2 className="text-base font-semibold text-gray-800 dark:text-gray-200">{folder}</h2>
+					<h2 className="font-semibold text-base text-gray-800 dark:text-gray-200">{folder}</h2>
 				</header>
 				<FolderNotes folder={folder} />
 			</section>
@@ -100,7 +103,7 @@ export default function Dashboard() {
 				<CardHeader>
 					<CardTitle className="text-xl">Welcome to Engram</CardTitle>
 				</CardHeader>
-				<CardContent className="space-y-1 text-sm text-muted-foreground">
+				<CardContent className="space-y-1 text-muted-foreground text-sm">
 					<p>Select a folder from the sidebar to browse your notes.</p>
 					<p>
 						Use the <strong className="font-semibold text-foreground">Search</strong> icon in the

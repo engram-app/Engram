@@ -66,7 +66,9 @@ export function DangerZoneSectionLocal() {
 				open={open}
 				onOpenChange={(v) => {
 					setOpen(v);
-					if (!v) reset();
+					if (!v) {
+						reset();
+					}
 				}}
 			>
 				<DialogTrigger asChild>
@@ -83,7 +85,7 @@ export function DangerZoneSectionLocal() {
 						</DialogDescription>
 					</DialogHeader>
 					<fieldset className="space-y-3">
-						<label className="block text-sm font-medium text-foreground">
+						<label className="block font-medium text-foreground text-sm">
 							Password
 							<input
 								className={inputClass}
@@ -101,7 +103,7 @@ export function DangerZoneSectionLocal() {
 							/>
 							I understand this is irreversible
 						</label>
-						{error && <p className="text-sm text-destructive">{error}</p>}
+						{error && <p className="text-destructive text-sm">{error}</p>}
 					</fieldset>
 					<DialogFooter>
 						<DialogClose asChild>

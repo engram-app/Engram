@@ -31,7 +31,7 @@ function ActionButton({
 			disabled={disabled}
 			title={title}
 			className={cn(
-				"inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 py-1.5 text-xs font-medium",
+				"inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 py-1.5 font-medium text-xs",
 				"transition-[transform,background-color,opacity] active:scale-[0.97]",
 				"disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
 				variant === "destructive"
@@ -68,8 +68,12 @@ export default function MembersTab({
 
 	function sortUsers(list: AdminUser[]): AdminUser[] {
 		return [...list].sort((a, b) => {
-			if (a.id === currentUserId) return -1;
-			if (b.id === currentUserId) return 1;
+			if (a.id === currentUserId) {
+				return -1;
+			}
+			if (b.id === currentUserId) {
+				return 1;
+			}
 			return 0;
 		});
 	}
@@ -165,14 +169,14 @@ export default function MembersTab({
 	return (
 		<section>
 			{loading ? (
-				<p className="p-4 text-sm text-muted-foreground">Loading…</p>
+				<p className="p-4 text-muted-foreground text-sm">Loading…</p>
 			) : users.length === 0 ? (
-				<p className="p-4 text-sm text-muted-foreground">No users.</p>
+				<p className="p-4 text-muted-foreground text-sm">No users.</p>
 			) : (
 				<table className="w-full text-sm">
-					<thead className="text-left text-xs text-muted-foreground">
+					<thead className="text-left text-muted-foreground text-xs">
 						<tr>
-							<th className="py-3 pl-4 pr-2 font-medium">Email</th>
+							<th className="py-3 pr-2 pl-4 font-medium">Email</th>
 							<th className="py-3 pr-2 font-medium">Role</th>
 							<th className="py-3 pr-2 font-medium">Status</th>
 							<th className="py-3 pr-2 font-medium">Last active</th>
@@ -187,16 +191,16 @@ export default function MembersTab({
 								<Fragment key={u.id}>
 									<tr
 										className={cn(
-											"cursor-pointer border-t border-border transition-colors",
+											"cursor-pointer border-border border-t transition-colors",
 											isSelf && "bg-primary/5",
 											isExpanded ? "bg-accent/50" : "hover:bg-accent/30",
 										)}
 										onClick={() => toggleExpanded(u.id)}
 									>
-										<td className="py-3 pl-4 pr-2">
+										<td className="py-3 pr-2 pl-4">
 											<span className="text-foreground">{u.email}</span>
 											{isSelf && (
-												<span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
+												<span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 font-medium text-[10px] text-primary uppercase tracking-wider">
 													you
 												</span>
 											)}
@@ -208,7 +212,7 @@ export default function MembersTab({
 										<td className="py-3 pr-2">
 											{u.last_active ? new Date(u.last_active).toLocaleDateString() : "—"}
 										</td>
-										<td className="py-3 pl-2 pr-4 text-right">
+										<td className="py-3 pr-4 pl-2 text-right">
 											<ChevronRight
 												aria-hidden
 												strokeWidth={2.5}
@@ -220,25 +224,25 @@ export default function MembersTab({
 										</td>
 									</tr>
 									{isExpanded && (
-										<tr className="border-t border-border bg-accent/20">
+										<tr className="border-border border-t bg-accent/20">
 											<td colSpan={5} className="px-4 py-4">
 												{pendingDelete === u.id ? (
 													<div className="flex flex-wrap items-center justify-between gap-3">
-														<span className="text-xs text-muted-foreground">
+														<span className="text-muted-foreground text-xs">
 															Delete {u.email} + their vault data?
 														</span>
 														<div className="flex items-center gap-2">
 															<button
 																type="button"
 																onClick={() => setPendingDelete(null)}
-																className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+																className="rounded-md border border-border bg-background px-3 py-1.5 font-medium text-xs hover:bg-accent"
 															>
 																Cancel
 															</button>
 															<button
 																type="button"
 																onClick={() => remove(u)}
-																className="rounded-md bg-destructive px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-destructive/90"
+																className="rounded-md bg-destructive px-3 py-1.5 font-semibold text-white text-xs shadow-sm hover:bg-destructive/90"
 															>
 																Confirm delete
 															</button>

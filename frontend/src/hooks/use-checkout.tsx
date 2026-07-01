@@ -8,7 +8,7 @@ import {
 } from "@/lib/paddle-sdk-types";
 import type { CheckoutCompleteData } from "@/lib/paddle-types";
 
-export type UseCheckoutArgs = {
+export interface UseCheckoutArgs {
 	clientToken: string;
 	environment?: Environments;
 	theme?: Theme;
@@ -17,7 +17,7 @@ export type UseCheckoutArgs = {
 	checkoutSettings: CheckoutSettings;
 	onComplete?: (data: CheckoutCompleteData) => void;
 	onError?: (error: Error) => void;
-};
+}
 
 export function useCheckout(args: UseCheckoutArgs) {
 	const {
@@ -60,7 +60,9 @@ export function useCheckout(args: UseCheckoutArgs) {
 
 	// Initialize Paddle
 	useEffect(() => {
-		if (paddle || !clientToken) return;
+		if (paddle || !clientToken) {
+			return;
+		}
 
 		getOrCreatePaddle(clientToken, environment)
 			.then((paddleInstance) => {

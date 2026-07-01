@@ -25,7 +25,9 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
 
 	// Reset to first step whenever the tour (re)starts.
 	useEffect(() => {
-		if (active) setStepIndex(0);
+		if (active) {
+			setStepIndex(0);
+		}
 	}, [active]);
 
 	// The final step targets `[data-tour="dashboard-root"]` which only exists
@@ -33,7 +35,9 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
 	// we're on /note/<id> and Joyride times out waiting for that target.
 	// Bounce back to / when we land on the final step.
 	useEffect(() => {
-		if (!active) return;
+		if (!active) {
+			return;
+		}
 		if (stepIndex === tourSteps.length - 1) {
 			navigate("/", { replace: true });
 		}
@@ -43,9 +47,13 @@ export function TourController({ active, onExit, setReachedEnd }: Props) {
 	// the configured interaction. The step declares which window CustomEvent
 	// signals success (e.g. step 0 waits for `engram:vault-switched`).
 	useEffect(() => {
-		if (!active) return;
+		if (!active) {
+			return;
+		}
 		const eventName = GATED_STEPS[stepIndex];
-		if (!eventName) return;
+		if (!eventName) {
+			return;
+		}
 
 		const handler = () => setStepIndex((i) => i + 1);
 		window.addEventListener(eventName, handler, { once: true });

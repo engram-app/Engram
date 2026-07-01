@@ -31,12 +31,16 @@ async function clerkSignIn(page: Page, email: string) {
 			lastErr = undefined;
 			break;
 		} catch (err) {
-			if (!/No user found/iu.test(String(err))) throw err;
+			if (!/No user found/iu.test(String(err))) {
+				throw err;
+			}
 			lastErr = err;
 			await page.waitForTimeout(1000);
 		}
 	}
-	if (lastErr) throw lastErr;
+	if (lastErr) {
+		throw lastErr;
+	}
 	await page.goto("/");
 }
 

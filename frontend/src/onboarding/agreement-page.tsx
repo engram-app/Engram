@@ -15,7 +15,9 @@ const PRIVACY_URL = "https://engram.page/privacy";
 // log loudly and degrade to an error panel with Continue disabled, so a user can
 // never accept text we can't display, but onboarding doesn't white-screen.
 function tryLoadVersion(doc: "terms" | "privacy", version: string | undefined): string | undefined {
-	if (!version) return;
+	if (!version) {
+		return;
+	}
 	try {
 		return loadVersion(doc, version);
 	} catch (err) {
@@ -41,7 +43,9 @@ export default function AgreementPage() {
 	const ready = Boolean(tosV && privV && tosText && privText);
 
 	async function submit() {
-		if (!(tosV && privV && tosText && privText)) return;
+		if (!(tosV && privV && tosText && privText)) {
+			return;
+		}
 		const [tos_hash, privacy_hash] = await Promise.all([sha256Hex(tosText), sha256Hex(privText)]);
 		await mutateAsync({
 			tos_version: tosV,
@@ -55,7 +59,7 @@ export default function AgreementPage() {
 	return (
 		<AuthPanel className="flex flex-col gap-4">
 			<h1 className={heading}>Review the Terms</h1>
-			<p className="text-sm text-muted-foreground">
+			<p className="text-muted-foreground text-sm">
 				Please read the full agreement below before continuing. Our{" "}
 				<a
 					href={PRIVACY_URL}
@@ -92,7 +96,7 @@ export default function AgreementPage() {
 							onCheckedChange={(v) => setAgreed(v === true)}
 							aria-label="I have read and agree to the Terms of Service and Privacy Policy"
 						/>
-						<span className="text-sm font-medium text-foreground">
+						<span className="font-medium text-foreground text-sm">
 							I have read and agree to the agreement shown above and the privacy notice
 						</span>
 					</label>
@@ -100,7 +104,7 @@ export default function AgreementPage() {
 						type="button"
 						onClick={submit}
 						disabled={!agreed || isPending || !ready}
-						className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+						className="w-full rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						{isPending ? "Saving…" : "Continue"}
 					</button>

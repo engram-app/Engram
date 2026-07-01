@@ -27,7 +27,9 @@ export function VaultCreateForm({
 	function submit(e: React.FormEvent) {
 		e.preventDefault();
 		const next = name.trim();
-		if (!next) return;
+		if (!next) {
+			return;
+		}
 		create.mutate(
 			{ name: next },
 			{
@@ -40,7 +42,9 @@ export function VaultCreateForm({
 					// 402 cap errors are already surfaced by UpgradeDialogProvider via
 					// the central LimitExceededError handler — don't double-render as a
 					// toast.
-					if (e instanceof Error && e.name === "LimitExceededError") return;
+					if (e instanceof Error && e.name === "LimitExceededError") {
+						return;
+					}
 					toast.error("Could not create vault");
 				},
 			},
@@ -49,7 +53,7 @@ export function VaultCreateForm({
 
 	return (
 		<form className="flex flex-col" onSubmit={submit}>
-			<label className="block text-sm font-medium text-foreground">
+			<label className="block font-medium text-foreground text-sm">
 				Vault name
 				<input
 					className={inputClass}

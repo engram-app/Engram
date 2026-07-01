@@ -36,7 +36,7 @@ export type CheckoutSettings = Omit<SDKCheckoutSettings, "variant"> & {
  * Note: this is a simplified wrapper over the raw Paddle SDK `CheckoutOpenOptions`.
  * For full control over the checkout, use `paddle.Checkout.open()` directly.
  */
-export type OpenCheckoutOptions = {
+export interface OpenCheckoutOptions {
 	priceId: string;
 	items?: Array<{ priceId: string; quantity?: number }>;
 	customer?: CheckoutCustomer;
@@ -46,4 +46,4 @@ export type OpenCheckoutOptions = {
 	customData?: Record<string, unknown>;
 	/** Must be an absolute URL (starting with `https://` or `http://`) */
 	successUrl?: string;
-};
+}

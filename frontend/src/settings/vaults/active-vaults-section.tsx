@@ -35,12 +35,12 @@ export function ActiveVaultsSection() {
 		>
 			{atCap && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-					<p className="text-sm text-foreground">
+					<p className="text-foreground text-sm">
 						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
 					</p>
 					<a
 						href="/settings/billing"
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
 						Upgrade
 					</a>
@@ -56,10 +56,10 @@ export function ActiveVaultsSection() {
 					/>
 				</section>
 			)}
-			{isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+			{isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
 			<table className="w-full text-sm">
 				<thead>
-					<tr className="border-b border-border text-left text-xs text-muted-foreground">
+					<tr className="border-border border-b text-left text-muted-foreground text-xs">
 						<th className="py-2 font-medium">Name</th>
 						<th className="py-2 text-right font-medium">Files</th>
 						<th className="py-2 text-right font-medium">Attachments</th>
@@ -121,17 +121,17 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 					<span className="flex items-center gap-2">
 						<span className="font-medium text-foreground">{vault.name}</span>
 						{vault.is_default && (
-							<span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+							<span className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-xs">
 								Default
 							</span>
 						)}
 					</span>
 				)}
 			</td>
-			<td className="py-3 text-right tabular-nums text-muted-foreground">
+			<td className="py-3 text-right text-muted-foreground tabular-nums">
 				{vault.note_count ?? 0}
 			</td>
-			<td className="py-3 text-right tabular-nums text-muted-foreground">
+			<td className="py-3 text-right text-muted-foreground tabular-nums">
 				{vault.attachment_count ?? 0}
 			</td>
 			<td className="py-3">

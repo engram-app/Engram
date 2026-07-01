@@ -22,7 +22,7 @@ export interface ConnectionCapState {
  */
 export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
 	const { data: billing } = useBillingStatus();
-	if (!billing)
+	if (!billing) {
 		return {
 			isLoading: true,
 			atCap: false,
@@ -30,6 +30,7 @@ export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
 			current: 0,
 			swapCooldownHours: null,
 		};
+	}
 
 	const limit =
 		kind === "obsidian" ? billing.caps.obsidian_connections : billing.caps.mcp_connections;

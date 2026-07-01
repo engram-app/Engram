@@ -24,7 +24,9 @@ const PHX_RECONNECT_STEPS = [10, 50, 100, 150, 200, 250, 500, 1000, 2000];
 let serverJitterMs: number | null = null;
 
 export function clampReconnectJitter(raw: unknown): number | null {
-	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return null;
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+		return null;
+	}
 	return Math.min(raw, RECONNECT_JITTER_MAX_MS);
 }
 
@@ -33,7 +35,9 @@ export function computeReconnectMs(
 	jitterMaxMs: number | null,
 	rng: () => number = Math.random,
 ): number {
-	if (tries <= 1) return rng() * (jitterMaxMs ?? RECONNECT_JITTER_DEFAULT_MS);
+	if (tries <= 1) {
+		return rng() * (jitterMaxMs ?? RECONNECT_JITTER_DEFAULT_MS);
+	}
 	return PHX_RECONNECT_STEPS[tries - 1] ?? 5000;
 }
 
@@ -44,7 +48,9 @@ export function computeReconnectMs(
 export function captureServerJitter(resp: unknown): void {
 	const raw = (resp as { reconnect_jitter_max_ms?: unknown })?.reconnect_jitter_max_ms;
 	const clamped = clampReconnectJitter(raw);
-	if (clamped !== null) serverJitterMs = clamped;
+	if (clamped !== null) {
+		serverJitterMs = clamped;
+	}
 }
 
 /** Test seams. */
@@ -160,7 +166,9 @@ export function handleNoteChanged(
 	// Server broadcasts on the vault topic; this guard protects against
 	// an unrelated vault's payload reaching the wrong queryClient (e.g.
 	// mid-vault-switch race).
-	if (payload.vault_id !== activeVaultId) return;
+	if (payload.vault_id !== activeVaultId) {
+		return;
+	}
 
 	if (payload.id != null) {
 		queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.id] });
@@ -183,7 +191,9 @@ export function handleNoteChanged(
 
 	pending.folders.add(payload.folder ?? folderFromPath(payload.path));
 
-	for (const listener of listeners) listener(payload);
+	for (const listener of listeners) {
+		listener(payload);
+	}
 }
 
 // Bulk pushes (POST /api/notes/batch) broadcast ONE notes.batch digest
@@ -211,8 +221,12 @@ export function handleNotesBatch(
 	queryClient: QueryClient,
 	activeVaultId: string,
 ): void {
-	if (payload.op !== "upsert") return;
-	if (payload.vault_id !== activeVaultId) return;
+	if (payload.op !== "upsert") {
+		return;
+	}
+	if (payload.vault_id !== activeVaultId) {
+		return;
+	}
 
 	for (const note of payload.notes ?? []) {
 		handleNoteChanged(
