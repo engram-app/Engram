@@ -40,7 +40,9 @@ describe('PropertiesWidget', () => {
     input.focus()
     fireEvent.change(input, { target: { value: 'Draft' } })
     setValue(doc, 'title', 'RemoteWins') // remote update while focused
-    await waitFor(() => {}) // allow observers to fire
+    await waitFor(() =>
+      expect(readRows(doc).find((r) => r.key === 'title')?.value).toBe('RemoteWins'),
+    )
     expect(input.value).toBe('Draft') // local draft preserved while focused
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type * as Y from 'yjs'
 import {
   addKey,
@@ -16,7 +16,6 @@ import { PropertyTypeMenu } from './property-type-menu'
 
 export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
   const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc))
-  const focusedKey = useRef<string | null>(null)
 
   useEffect(() => {
     const refresh = () => setRows(readRows(doc))
@@ -45,14 +44,7 @@ export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
               <dt className="font-medium text-muted-foreground">{row.key}</dt>
               <PropertyTypeMenu value={type} onChange={(t) => setType(doc, row.key, t)} />
               <dd>
-                <PropertyField
-                  type={type}
-                  value={row.value}
-                  onCommit={(v) => setValue(doc, row.key, v)}
-                  onFocusChange={(f) => {
-                    focusedKey.current = f ? row.key : null
-                  }}
-                />
+                <PropertyField type={type} value={row.value} onCommit={(v) => setValue(doc, row.key, v)} />
               </dd>
               <div className="flex items-center gap-0.5 text-muted-foreground">
                 <button
