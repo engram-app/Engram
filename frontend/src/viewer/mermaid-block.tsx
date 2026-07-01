@@ -44,7 +44,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 		return (
 			<pre className="rounded border border-red-300 bg-red-50 p-3 text-red-700 text-xs dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
 				Mermaid error: {error}
-				{"\n\n"}
+				\n\n
 				{code}
 			</pre>
 		);

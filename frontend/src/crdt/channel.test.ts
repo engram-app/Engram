@@ -32,7 +32,7 @@ describe("CrdtChannel", () => {
 	it("applies an inbound update frame to the doc (round-trip via two peers)", async () => {
 		// Peer A produces an update frame; peer B ingests it via handleFrame.
 		const aMgr = mkManager();
-		const aSends: Array<[string, string]> = [];
+		const aSends: [string, string][] = [];
 		const aCh = new CrdtChannel({ manager: aMgr, send: (id, f) => aSends.push([id, f]) });
 		const aText = await aMgr.getSharedText("n.md");
 		// Hook A's local update through sendUpdateRaw the way session.ts will.

@@ -70,7 +70,7 @@ describe("crdt session", () => {
 
 	it("handleFrame drops frames for docs not open in the session", async () => {
 		// Build a valid STEP2/UPDATE frame from a separate session
-		const frames: Array<[string, string]> = [];
+		const frames: [string, string][] = [];
 		startCrdtSession({ vaultId: VAULT, push: (id, b64) => frames.push([id, b64]) });
 		const a = await openDoc("note.md");
 		a!.ytext.insert(0, "ghost-content");
@@ -89,7 +89,7 @@ describe("crdt session", () => {
 
 	it("handleFrame applies inbound bytes (two-session round-trip)", async () => {
 		// Session A emits frames into a buffer; feed them into session B.
-		const frames: Array<[string, string]> = [];
+		const frames: [string, string][] = [];
 		startCrdtSession({ vaultId: VAULT, push: (id, b64) => frames.push([id, b64]) });
 		const a = await openDoc("note.md");
 		a!.ytext.insert(0, "payload");

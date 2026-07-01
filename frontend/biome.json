@@ -136,8 +136,6 @@
 						"noParameterProperties": "off",
 						"useAtIndex": "off",
 						"useComponentExportOnlyModules": "off",
-						"useConsistentArrayType": "off",
-						"useConsistentCurlyBraces": "off",
 						"useConsistentMemberAccessibility": "off",
 						"useConsistentMethodSignatures": "off",
 						"useDestructuring": "off",
