@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as Y from 'yjs'
-import { FRONTMATTER_KEY, ORDER_KEY, TYPES_KEY, frontmatterMaps, readRows } from './frontmatter-doc'
+import { FRONTMATTER_KEY, ORDER_KEY, TYPES_KEY, frontmatterMaps, readRows, addKey, setValue, removeKey, moveKey, setType } from './frontmatter-doc'
 
 function seed(doc: Y.Doc) {
   doc.transact(() => {
@@ -41,5 +41,58 @@ describe('frontmatter-doc', () => {
 
   test('empty doc yields no rows', () => {
     expect(readRows(new Y.Doc())).toEqual([])
+  })
+})
+
+describe('frontmatter-doc mutations', () => {
+  test('setValue writes only when changed', () => {
+    const doc = new Y.Doc()
+    addKey(doc, 'title', 'text')
+    setValue(doc, 'title', 'Hello')
+    expect(readRows(doc)).toEqual([{ key: 'title', value: 'Hello', typeOverride: 'text' }])
+  })
+
+  test('addKey rejects empty and duplicate', () => {
+    const doc = new Y.Doc()
+    expect(addKey(doc, 'a', 'text')).toBe(true)
+    expect(addKey(doc, 'a', 'text')).toBe(false)
+    expect(addKey(doc, '', 'text')).toBe(false)
+    expect(readRows(doc).map((r) => r.key)).toEqual(['a'])
+  })
+
+  test('addKey seeds a typed empty default', () => {
+    const doc = new Y.Doc()
+    addKey(doc, 'tags', 'list')
+    addKey(doc, 'done', 'checkbox')
+    expect(readRows(doc)).toEqual([
+      { key: 'tags', value: [], typeOverride: 'list' },
+      { key: 'done', value: false, typeOverride: 'checkbox' },
+    ])
+  })
+
+  test('removeKey drops from all three maps', () => {
+    const doc = new Y.Doc()
+    addKey(doc, 'a', 'text')
+    addKey(doc, 'b', 'text')
+    removeKey(doc, 'a')
+    expect(readRows(doc).map((r) => r.key)).toEqual(['b'])
+  })
+
+  test('moveKey swaps neighbors and no-ops at ends', () => {
+    const doc = new Y.Doc()
+    addKey(doc, 'a', 'text')
+    addKey(doc, 'b', 'text')
+    moveKey(doc, 'b', 'up')
+    expect(readRows(doc).map((r) => r.key)).toEqual(['b', 'a'])
+    moveKey(doc, 'b', 'up')
+    expect(readRows(doc).map((r) => r.key)).toEqual(['b', 'a'])
+  })
+
+  test('setType coerces the stored value', () => {
+    const doc = new Y.Doc()
+    addKey(doc, 'x', 'text')
+    setValue(doc, 'x', 'hi')
+    setType(doc, 'x', 'list')
+    expect(readRows(doc)).toEqual([{ key: 'x', value: ['hi'], typeOverride: 'list' }])
   })
 })

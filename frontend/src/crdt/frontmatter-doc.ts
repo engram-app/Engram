@@ -1,4 +1,5 @@
 import type * as Y from 'yjs'
+import { type PropertyType, coerceValue } from '../viewer/property-types'
 
 export const CONTENT_KEY = 'content'
 export const FRONTMATTER_KEY = 'frontmatter'
@@ -38,5 +39,67 @@ export function readRows(doc: Y.Doc): PropertyRow[] {
       }
     }
     return { key, value, typeOverride: types.get(key) ?? null }
+  })
+}
+
+const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
+  text: '',
+  list: [],
+  number: null,
+  checkbox: false,
+  date: '',
+  datetime: '',
+}
+
+export function setValue(doc: Y.Doc, key: string, value: unknown): void {
+  const { values } = frontmatterMaps(doc)
+  const encoded = JSON.stringify(value)
+  if (values.get(key) === encoded) return
+  values.set(key, encoded)
+}
+
+export function addKey(doc: Y.Doc, key: string, type: PropertyType): boolean {
+  const trimmed = key.trim()
+  if (trimmed === '') return false
+  const { values, order, types } = frontmatterMaps(doc)
+  if (values.has(trimmed)) return false
+  doc.transact(() => {
+    values.set(trimmed, JSON.stringify(EMPTY_DEFAULT[type]))
+    types.set(trimmed, type)
+    order.push([trimmed])
+  })
+  return true
+}
+
+export function removeKey(doc: Y.Doc, key: string): void {
+  const { values, order, types } = frontmatterMaps(doc)
+  doc.transact(() => {
+    values.delete(key)
+    types.delete(key)
+    const idx = order.toArray().indexOf(key)
+    if (idx >= 0) order.delete(idx, 1)
+  })
+}
+
+export function moveKey(doc: Y.Doc, key: string, dir: 'up' | 'down'): void {
+  const { order } = frontmatterMaps(doc)
+  const arr = order.toArray()
+  const idx = arr.indexOf(key)
+  if (idx < 0) return
+  const target = dir === 'up' ? idx - 1 : idx + 1
+  if (target < 0 || target >= arr.length) return
+  doc.transact(() => {
+    order.delete(idx, 1)
+    order.insert(target, [key])
+  })
+}
+
+export function setType(doc: Y.Doc, key: string, type: PropertyType): void {
+  const { values, types } = frontmatterMaps(doc)
+  const rows = readRows(doc)
+  const row = rows.find((r) => r.key === key)
+  doc.transact(() => {
+    types.set(key, type)
+    if (row) values.set(key, JSON.stringify(coerceValue(row.value, type)))
   })
 }
