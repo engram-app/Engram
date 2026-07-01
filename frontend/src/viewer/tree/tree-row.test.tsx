@@ -99,7 +99,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} />
 			</MemoryRouter>,
 		);
-		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByRole("treeitem")).toHaveAttribute("aria-expanded", "true");
 	});
 
 	it("renders note as link to /note/:id", () => {
@@ -163,7 +163,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} />
 			</MemoryRouter>,
 		);
-		expect(screen.getByRole("button")).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("treeitem")).toHaveAttribute("aria-selected", "true");
 	});
 
 	it("indents by depth × 12px via getItemMeta().level", () => {
@@ -173,7 +173,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} />
 			</MemoryRouter>,
 		);
-		const btn = screen.getByRole("button");
+		const btn = screen.getByRole("treeitem");
 		expect(btn.style.paddingLeft).toBe("28px"); // 2 * 12 + 4
 	});
 
@@ -185,7 +185,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} onContextMenu={onContextMenu} />
 			</MemoryRouter>,
 		);
-		fireEvent.contextMenu(screen.getByRole("button"), { clientX: 42, clientY: 99 });
+		fireEvent.contextMenu(screen.getByRole("treeitem"), { clientX: 42, clientY: 99 });
 		expect(onContextMenu).toHaveBeenCalledWith("f:1", 42, 99);
 	});
 
@@ -204,7 +204,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} onContextMenu={onContextMenu} />
 			</MemoryRouter>,
 		);
-		fireEvent.contextMenu(screen.getByRole("button"), { clientX: 42, clientY: 99 });
+		fireEvent.contextMenu(screen.getByRole("treeitem"), { clientX: 42, clientY: 99 });
 		expect(onContextMenu).not.toHaveBeenCalled();
 	});
 
@@ -282,7 +282,7 @@ describe("TreeRow", () => {
 				<TreeRow instance={instance} />
 			</MemoryRouter>,
 		);
-		const btn = screen.getByRole("button");
+		const btn = screen.getByRole("treeitem");
 		expect(btn).toHaveAttribute("data-ht", "yes");
 		expect(btn).toHaveAttribute("tabindex", "-1");
 	});

@@ -76,6 +76,7 @@ export default function LocalSignUp() {
 		return (
 			<AuthLayout>
 				<div
+					role="status"
 					aria-busy
 					aria-label="Loading"
 					className="h-[420px] w-full max-w-sm rounded-2xl border border-border bg-card shadow-sm sm:p-8"

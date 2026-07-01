@@ -70,8 +70,6 @@
 							"level": "error",
 							"options": { "inputComponents": ["Checkbox"] }
 						},
-						"useAriaPropsForRole": "off",
-						"useAriaPropsSupportedByRole": "off",
 						"useSemanticElements": "off"
 					},
 					"complexity": {

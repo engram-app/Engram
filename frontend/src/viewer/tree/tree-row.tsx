@@ -76,6 +76,9 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				type="button"
 				{...instance.getProps()}
 				{...(isSynthetic ? {} : longPressProps)}
+				// getProps() spreads role="treeitem" from @headless-tree; declare it
+				// explicitly so the linter sees the role that supports aria-expanded/selected
+				role="treeitem"
 				onContextMenu={isSynthetic ? undefined : contextMenuHandler}
 				onPointerEnter={hoverPrefetch}
 				onFocus={hoverPrefetch}
