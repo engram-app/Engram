@@ -60,16 +60,13 @@ const TEXT_EMBED = /\.(md|canvas)$/i
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
 function NoteView({ content, tags }: NoteViewProps) {
   const isFreeTier = useIsFreeTier()
-  const { frontmatter, body } = useMemo(() => {
+  const body = useMemo(() => {
     try {
-      const parsed = matter(content)
-      return { frontmatter: parsed.data as Record<string, unknown>, body: rewriteEmbeds(parsed.content) }
+      return rewriteEmbeds(matter(content).content)
     } catch {
-      return { frontmatter: {}, body: rewriteEmbeds(content) }
+      return rewriteEmbeds(content)
     }
   }, [content])
-
-  const frontmatterEntries = Object.entries(frontmatter).filter(([, v]) => v != null && v !== '')
 
   return (
     <article className="w-full">
@@ -85,16 +82,6 @@ function NoteView({ content, tags }: NoteViewProps) {
               </li>
             ))}
           </ul>
-        )}
-        {frontmatterEntries.length > 0 && (
-          <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs">
-            {frontmatterEntries.map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="font-medium text-muted-foreground">{k}</dt>
-                <dd className="text-foreground/90">{String(Array.isArray(v) ? v.join(', ') : v)}</dd>
-              </div>
-            ))}
-          </dl>
         )}
       </header>
       <section className="prose prose-neutral max-w-none dark:prose-invert">

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 
@@ -56,5 +56,21 @@ describe('NotePage (CRDT)', () => {
     await waitFor(() => expect(openDoc).toHaveBeenCalled())
     unmount()
     expect(closeDoc).toHaveBeenCalledWith('folder/note.md')
+  })
+
+  it('renders the properties widget with frontmatter keys in both modes', async () => {
+    const doc = new Y.Doc()
+    doc.getMap('frontmatter').set('status', JSON.stringify('draft'))
+    doc.getArray('frontmatter_order').insert(0, ['status'])
+    openDoc.mockResolvedValue({
+      ytext: doc.getText('content'),
+      awareness: new Awareness(doc),
+      doc,
+    })
+
+    render(<NotePage />)
+
+    // Widget should appear in the default live mode
+    await waitFor(() => expect(screen.getByText('status')).toBeInTheDocument())
   })
 })

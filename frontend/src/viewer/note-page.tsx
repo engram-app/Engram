@@ -10,6 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import LoadingPane from './loading-pane'
 import NoteToc from './note-toc'
 import NoteView from './note-view'
+import { PropertiesWidget } from './properties-widget'
 
 const NoteEditor = lazy(() => import('./note-editor'))
 
@@ -99,6 +100,8 @@ export default function NotePage() {
           {mode === 'live' ? '↗ Reading view' : '✎ Edit'}
         </Button>
       </div>
+
+      {handle && <PropertiesWidget doc={handle.doc} />}
 
       {mode === 'reading' ? (
         <ScrollArea className="min-h-0 flex-1">
