@@ -17,7 +17,13 @@
     "test:e2e": "playwright test",
     "test:e2e:local": "playwright test --project=local",
     "test:e2e:clerk": "playwright test --project=clerk",
-    "sync-theme": "bun scripts/sync-theme.ts"
+    "sync-theme": "bun scripts/sync-theme.ts",
+    "lint": "biome lint --error-on-warnings .",
+    "lint:fix": "biome lint --write .",
+    "format": "biome format --write .",
+    "check": "biome check --error-on-warnings .",
+    "check:fix": "biome check --write .",
+    "ci": "biome ci ."
   },
   "keywords": [],
   "dependencies": {
@@ -76,6 +82,7 @@
     "yjs": "^13.6.31"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.1",
     "@clerk/testing": "^2.0.34",
     "@playwright/test": "^1.60.0",
     "@resvg/resvg-js": "^2.6.2",

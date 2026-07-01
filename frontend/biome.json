@@ -1,0 +1,131 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": ["**", "!**/dist", "!**/node_modules", "!bun.lock"]
+	},
+	"css": {
+		"parser": {
+			"cssModules": false,
+			"tailwindDirectives": true
+		},
+		"formatter": {
+			"enabled": true
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100,
+		"lineEnding": "lf"
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always",
+			"trailingCommas": "all"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"a11y": "error",
+			"complexity": "error",
+			"correctness": "error",
+			"nursery": "error",
+			"performance": "error",
+			"security": "error",
+			"style": "error",
+			"suspicious": "error"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"useNamingConvention": "off",
+						"noMagicNumbers": "off",
+						"noDefaultExport": "off",
+						"noImplicitBoolean": "off",
+						"noJsxLiterals": "off",
+						"noTernary": "off",
+						"noHexColors": "off",
+						"useGlobalThis": "off"
+					},
+					"nursery": {
+						"useExplicitType": "off",
+						"useExplicitReturnType": "off",
+						"noReactNativeRawText": "off"
+					},
+					"complexity": {
+						"noExcessiveLinesPerFunction": "off",
+						"useMaxParams": "off"
+					},
+					"performance": {
+						"useTopLevelRegex": "off",
+						"useSolidForComponent": "off",
+						"noImgElement": "off",
+						"noJsxPropsBind": "off"
+					},
+					"correctness": {
+						"useQwikValidLexicalScope": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["vite.config.ts", "playwright.config.ts", "scripts/**", "**/*.config.ts"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off",
+						"noGlobalDirnameFilename": "off"
+					},
+					"style": {
+						"noProcessEnv": "off"
+					},
+					"suspicious": {
+						"noConsole": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [
+				"**/*.test.ts",
+				"**/*.test.tsx",
+				"src/test-setup.ts",
+				"**/__mocks__/**",
+				"e2e/**"
+			],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "off",
+						"noExplicitAny": "off"
+					},
+					"style": {
+						"noNonNullAssertion": "off",
+						"noExcessiveLinesPerFile": "off"
+					},
+					"nursery": {}
+				}
+			}
+		}
+	]
+}
