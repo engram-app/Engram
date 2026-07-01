@@ -155,7 +155,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
 						Destination folder
 					</span>
-					<ul
+					<div
 						role="listbox"
 						aria-label="Destination folder"
 						tabIndex={0}
@@ -165,7 +165,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 					>
 						{candidates.map((name, i) => (
 							// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in an aria-activedescendant listbox; options are intentionally not individually focusable and keyboard activation is handled on the listbox container above
-							<li
+							<div
 								key={name || "__root__"}
 								id={optionId(i)}
 								role="option"
@@ -174,9 +174,9 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 								className={`cursor-pointer px-3 py-1 text-sm ${name === folder ? "bg-blue-50 dark:bg-blue-950" : ""}`}
 							>
 								{name === "" ? "/ (root)" : name}
-							</li>
+							</div>
 						))}
-					</ul>
+					</div>
 				</section>
 			)}
 
