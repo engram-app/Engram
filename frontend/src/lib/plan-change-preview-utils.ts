@@ -108,9 +108,13 @@ export function mapPreviewToPlanChangeData(
 	preview: SubscriptionPreviewResponse,
 	discount?: PaddleDiscount | null,
 ): PlanChangePreviewData {
-	const currencyCode = preview.currencyCode;
-	const { updateSummary, immediateTransaction, nextTransaction, recurringTransactionDetails } =
-		preview;
+	const {
+		currencyCode,
+		updateSummary,
+		immediateTransaction,
+		nextTransaction,
+		recurringTransactionDetails,
+	} = preview;
 
 	const resultAmount = parseAmount(updateSummary.result.amount, currencyCode);
 	const creditAmount = parseAmount(updateSummary.credit.amount, currencyCode);

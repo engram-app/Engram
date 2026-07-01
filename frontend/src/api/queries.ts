@@ -2061,7 +2061,7 @@ export function useBatchMoveNotes() {
 				if (cache) {
 					foldersSnapshot = cache;
 					const patched = cache.folders.map((f) => {
-						let count = f.count;
+						let { count } = f;
 						// Both source decrement and destination bump match by NAME: a
 						// derived folder has a null id in the raw cache, so id matching
 						// would miss it.

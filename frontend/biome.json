@@ -137,7 +137,6 @@
 						"useComponentExportOnlyModules": "off",
 						"useConsistentMemberAccessibility": "off",
 						"useConsistentMethodSignatures": "off",
-						"useDestructuring": "off",
 						"useExportsLast": "off"
 					},
 					"suspicious": {

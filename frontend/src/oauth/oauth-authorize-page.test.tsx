@@ -197,8 +197,8 @@ describe("OAuthAuthorizePage", () => {
 		await waitFor(() =>
 			expect(postOAuthConsent).toHaveBeenCalledWith(expect.objectContaining({ client_id: "cli" })),
 		);
-		const delOrder = apiDel.mock.invocationCallOrder[0];
-		const consentOrder = postOAuthConsent.mock.invocationCallOrder[0];
+		const [delOrder] = apiDel.mock.invocationCallOrder;
+		const [consentOrder] = postOAuthConsent.mock.invocationCallOrder;
 		expect(delOrder).toBeDefined();
 		expect(consentOrder).toBeDefined();
 		expect(delOrder!).toBeLessThan(consentOrder!);

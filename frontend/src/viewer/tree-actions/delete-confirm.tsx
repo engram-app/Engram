@@ -10,7 +10,7 @@ function buildMessage(nodes: Node[]): string {
 	if (nodes.length > 1) {
 		return `Delete ${nodes.length} items?`;
 	}
-	const node = nodes[0];
+	const [node] = nodes;
 	if (!node) {
 		return "Delete?";
 	}
