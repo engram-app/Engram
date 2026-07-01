@@ -46,10 +46,10 @@ export default function PdfView({ url, filename }: { url: string; filename: stri
 					loading={<LoadingPane />}
 					error={<p className="p-2 text-destructive text-sm">Couldn&apos;t render {filename}.</p>}
 				>
-					{Array.from({ length: numPages }, (_, i) => (
+					{Array.from({ length: numPages }, (_, i) => i + 1).map((pageNumber) => (
 						<Page
-							key={i + 1}
-							pageNumber={i + 1}
+							key={`pdf-page-${pageNumber}`}
+							pageNumber={pageNumber}
 							width={pageWidth}
 							className="shadow-md"
 							renderAnnotationLayer={false}
