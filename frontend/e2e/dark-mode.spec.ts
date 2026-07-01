@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 
@@ -54,8 +54,8 @@ async function signIn(page: import("@playwright/test").Page, email: string) {
 	await expect(page).toHaveURL("/");
 }
 
-it.describe("Dark mode", () => {
-	it("account menu hosts the theme picker — Light / Dark / System", async ({ page, baseURL }) => {
+test.describe("Dark mode", () => {
+	test("account menu hosts the theme picker — Light / Dark / System", async ({ page, baseURL }) => {
 		const email = testEmail("menu");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);
@@ -97,7 +97,7 @@ it.describe("Dark mode", () => {
 		await expect(page.getByRole("menuitemradio", { name: "System" })).toBeHidden();
 	});
 
-	it("System mode tracks prefers-color-scheme", async ({ browser, baseURL }) => {
+	test("System mode tracks prefers-color-scheme", async ({ browser, baseURL }) => {
 		const email = testEmail("system");
 		await registerUser(baseURL!, email);
 
@@ -110,7 +110,7 @@ it.describe("Dark mode", () => {
 		await ctx.close();
 	});
 
-	it("FOUC-free: pre-seeded localStorage applies class before React mounts", async ({
+	test("FOUC-free: pre-seeded localStorage applies class before React mounts", async ({
 		browser,
 		baseURL,
 	}) => {

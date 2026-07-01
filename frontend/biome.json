@@ -200,7 +200,10 @@
 					"style": { "noProcessEnv": "off" },
 					"suspicious": { "noConsole": "off", "noExplicitAny": "off" },
 					"performance": { "noDelete": "off" },
-					"nursery": { "noPlaywrightWaitForTimeout": "off" }
+					"nursery": {
+						"noPlaywrightWaitForTimeout": "off",
+						"useConsistentTestIt": "off"
+					}
 				}
 			}
 		}

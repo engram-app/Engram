@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 
@@ -43,18 +43,18 @@ async function clerkSignIn(page: Page, email: string) {
 	await expect(page).toHaveURL(/\/$/u, { timeout: 15_000 });
 }
 
-it.describe("Clerk auth provider", () => {
+test.describe("Clerk auth provider", () => {
 	const state = loadAuthState();
 
-	it.skip(() => state.skipped, "E2E_CLERK_SECRET_KEY not set — skipping Clerk browser tests");
+	test.skip(() => state.skipped, "E2E_CLERK_SECRET_KEY not set — skipping Clerk browser tests");
 
 	// Bypass Clerk's bot detection — intercepts Clerk Frontend API requests
 	// and injects testing token + captcha bypass via @clerk/testing
-	it.beforeEach(async ({ page }) => {
+	test.beforeEach(async ({ page }) => {
 		await setupClerkTestingToken({ page });
 	});
 
-	it("redirects unauthenticated users to sign-in with Clerk UI", async ({ page }) => {
+	test("redirects unauthenticated users to sign-in with Clerk UI", async ({ page }) => {
 		await page.goto("/");
 		// Wait for auth provider to finish loading before checking redirect
 		await page.getByText("Loading...").waitFor({ state: "hidden", timeout: 15_000 });
@@ -63,24 +63,24 @@ it.describe("Clerk auth provider", () => {
 		await expect(page.locator("h1.cl-headerTitle")).toContainText("Sign in");
 	});
 
-	it("renders Clerk SignUp component", async ({ page }) => {
+	test("renders Clerk SignUp component", async ({ page }) => {
 		await page.goto("/sign-up/");
 		// Wait for Clerk container to attach, then for SDK to render it visible
 		await page.locator(SIGN_UP).waitFor({ state: "attached", timeout: 15_000 });
 		await expect(page.locator(SIGN_UP)).toBeVisible({ timeout: 15_000 });
 	});
 
-	it("sign in via Clerk → dashboard", async ({ page }) => {
+	test("sign in via Clerk → dashboard", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 	});
 
-	it("user menu renders in header", async ({ page }) => {
+	test("user menu renders in header", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 
 		await expect(page.getByRole(USER_MENU.role, { name: USER_MENU.name })).toBeVisible();
 	});
 
-	it("sign out via Clerk → redirects", async ({ page }) => {
+	test("sign out via Clerk → redirects", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 
 		await page.getByRole(USER_MENU.role, { name: USER_MENU.name }).click();
@@ -89,7 +89,7 @@ it.describe("Clerk auth provider", () => {
 		await expect(page).toHaveURL(/\/sign-in/u, { timeout: 10_000 });
 	});
 
-	it("wrong password shows Clerk error", async ({ page }) => {
+	test("wrong password shows Clerk error", async ({ page }) => {
 		await page.goto("/sign-in/");
 		// Two-stage wait (mirrors the SignUp test): the Clerk container attaches
 		// first, then the SDK hydrates it visible. Asserting toBeVisible directly

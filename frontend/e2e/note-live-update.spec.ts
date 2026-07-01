@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /**
  * #277 — Two-session live-update behavior for the web SPA note editor.
@@ -131,8 +131,8 @@ async function signInForNote(
 	await expect(page).toHaveURL(new RegExp(`/note/${noteId}`), { timeout: 10_000 });
 }
 
-it.describe("SPA viewer live-update (#277)", () => {
-	it("viewer re-renders when a remote client upserts the open note", async ({
+test.describe("SPA viewer live-update (#277)", () => {
+	test("viewer re-renders when a remote client upserts the open note", async ({
 		browser,
 		baseURL,
 	}) => {
@@ -166,7 +166,7 @@ it.describe("SPA viewer live-update (#277)", () => {
 		await ctx.close();
 	});
 
-	it("concurrent edits in two tabs converge in both editors (CRDT, no conflict bar)", async ({
+	test("concurrent edits in two tabs converge in both editors (CRDT, no conflict bar)", async ({
 		browser,
 		baseURL,
 	}) => {

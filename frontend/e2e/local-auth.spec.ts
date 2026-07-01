@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const TEST_PASSWORD = "E2eTestPass!99";
 
@@ -53,8 +53,8 @@ function testEmail(label: string) {
 	return `e2e-local-${Date.now()}-${label}@test.com`;
 }
 
-it.describe("Local auth provider", () => {
-	it("redirects unauthenticated users to sign-in", async ({ page }) => {
+test.describe("Local auth provider", () => {
+	test("redirects unauthenticated users to sign-in", async ({ page }) => {
 		await page.goto("/");
 		// Wait for auth provider to finish loading before checking redirect
 		await page.getByText("Loading...").waitFor({ state: "hidden", timeout: 15_000 });
@@ -63,7 +63,7 @@ it.describe("Local auth provider", () => {
 		await expect(page.locator(".cl-signIn")).toHaveCount(0);
 	});
 
-	it("register first user → redirects to onboarding", async ({ page }) => {
+	test("register first user → redirects to onboarding", async ({ page }) => {
 		const email = testEmail("register");
 		await page.goto("/sign-up/");
 		await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
@@ -78,7 +78,7 @@ it.describe("Local auth provider", () => {
 		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
 	});
 
-	it("sign out → redirects to sign-in", async ({ page, baseURL }) => {
+	test("sign out → redirects to sign-in", async ({ page, baseURL }) => {
 		const email = testEmail("signout");
 		await registerUser(baseURL!, email);
 
@@ -94,7 +94,7 @@ it.describe("Local auth provider", () => {
 		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 
-	it("sign in with existing credentials → dashboard", async ({ page, baseURL }) => {
+	test("sign in with existing credentials → dashboard", async ({ page, baseURL }) => {
 		const email = testEmail("signin");
 		await registerUser(baseURL!, email);
 
@@ -106,7 +106,7 @@ it.describe("Local auth provider", () => {
 		await expect(page).toHaveURL(/\/$/u, { timeout: 10_000 });
 	});
 
-	it("wrong password shows error", async ({ page, baseURL }) => {
+	test("wrong password shows error", async ({ page, baseURL }) => {
 		const email = testEmail("wrongpw");
 		await registerUser(baseURL!, email);
 
@@ -119,7 +119,7 @@ it.describe("Local auth provider", () => {
 		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 
-	it("second user registration works", async ({ page }) => {
+	test("second user registration works", async ({ page }) => {
 		const email = testEmail("register2");
 		await page.goto("/sign-up/");
 		await page.getByLabel("Email").fill(email);

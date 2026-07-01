@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 // Mirrors clerk-auth.spec.ts — same auth-state file, same sign-in retry pattern.
 // Kept in this file (not extracted) so the FTUX spec stands alone and the auth
@@ -44,16 +44,16 @@ async function clerkSignIn(page: Page, email: string) {
 	await page.goto("/");
 }
 
-it.describe("FTUX happy path", () => {
+test.describe("FTUX happy path", () => {
 	const state = loadAuthState();
 
-	it.skip(() => state.skipped, "E2E_CLERK_SECRET_KEY not set — skipping Clerk FTUX test");
+	test.skip(() => state.skipped, "E2E_CLERK_SECRET_KEY not set — skipping Clerk FTUX test");
 
-	it.beforeEach(async ({ page }) => {
+	test.beforeEach(async ({ page }) => {
 		await setupClerkTestingToken({ page });
 	});
 
-	it("tour offer → tour steps → create-vault modal → checklist", async ({ page }) => {
+	test("tour offer → tour steps → create-vault modal → checklist", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 
 		// OnboardingGate redirects unfinished onboarding to /onboard/{agreement|billing}.
@@ -63,7 +63,7 @@ it.describe("FTUX happy path", () => {
 		// signal so the rest of the suite still runs.
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
 		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
-			it.skip(
+			test.skip(
 				true,
 				`Onboarding wizard not pre-completed for test user (landed on ${new URL(page.url()).pathname}). ` +
 					"Complete TOS + billing trial for the Clerk test user once, then re-run.",
@@ -107,11 +107,11 @@ it.describe("FTUX happy path", () => {
 		await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 10_000 });
 	});
 
-	it("checklist widget mounts on the dashboard after vault creation", async ({ page }) => {
+	test("checklist widget mounts on the dashboard after vault creation", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
 		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
-			it.skip(true, "Onboarding wizard not pre-completed for test user.");
+			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
 
@@ -129,18 +129,20 @@ it.describe("FTUX happy path", () => {
 		await expect(openHeading.or(closedPill).first()).toBeVisible({ timeout: 10_000 });
 	});
 
-	it("vault modal cannot be dismissed by ESC, click-outside, or close button", async ({ page }) => {
+	test("vault modal cannot be dismissed by ESC, click-outside, or close button", async ({
+		page,
+	}) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
 		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
-			it.skip(true, "Onboarding wizard not pre-completed for test user.");
+			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
 
 		// Only meaningful on a fresh user — skip if the modal isn't surfaced.
 		const headingLocator = page.getByRole("heading", { name: /first vault/iu });
 		if (!(await headingLocator.isVisible().catch(() => false))) {
-			it.skip(true, "user already has a vault — modal not shown");
+			test.skip(true, "user already has a vault — modal not shown");
 			return;
 		}
 
@@ -155,11 +157,11 @@ it.describe("FTUX happy path", () => {
 		await expect(closeButton).toHaveCount(0);
 	});
 
-	it("completed flow does not re-fire modals after reload", async ({ page }) => {
+	test("completed flow does not re-fire modals after reload", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
 		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
-			it.skip(true, "Onboarding wizard not pre-completed for test user.");
+			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
 
@@ -180,13 +182,13 @@ it.describe("FTUX happy path", () => {
 		await expect(page.getByRole("heading", { name: /first vault/iu })).toHaveCount(0);
 	});
 
-	it("completing device-link flow ticks the plugin checklist item", async ({ page }) => {
+	test("completing device-link flow ticks the plugin checklist item", async ({ page }) => {
 		// This test requires triggering the backend device-flow exchange end-to-end.
 		// No harness helper exists yet — skipping with a clear signal so the rest of
 		// the suite still runs. File a follow-up issue to add a device-flow helper
 		// and unskip this test.
 		void page;
-		it.skip(true, "requires device-flow helper — see follow-up issue");
+		test.skip(true, "requires device-flow helper — see follow-up issue");
 
 		// Sketch:
 		// 1. Sign in (standard setup).
@@ -196,11 +198,11 @@ it.describe("FTUX happy path", () => {
 		// 5. Refresh dashboard, expect plugin item ✅ in checklist.
 	});
 
-	it("user with existing vault sees no vault modal", async ({ page }) => {
+	test("user with existing vault sees no vault modal", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 		await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 15_000 });
 		if (!new URL(page.url()).pathname.match(/^\/(note|search)?\/?$/u)) {
-			it.skip(true, "Onboarding wizard not pre-completed for test user.");
+			test.skip(true, "Onboarding wizard not pre-completed for test user.");
 			return;
 		}
 
@@ -218,7 +220,7 @@ it.describe("FTUX happy path", () => {
 		await expect(headingLocator).toHaveCount(0);
 	});
 
-	it("mobile viewport: tour offer suppressed", async ({ browser }) => {
+	test("mobile viewport: tour offer suppressed", async ({ browser }) => {
 		const context = await browser.newContext({ viewport: { width: 375, height: 667 } });
 		const page = await context.newPage();
 
