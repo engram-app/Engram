@@ -68,8 +68,7 @@
 						"noLabelWithoutControl": {
 							"level": "error",
 							"options": { "inputComponents": ["Checkbox"] }
-						},
-						"useSemanticElements": "off"
+						}
 					},
 					"complexity": {
 						"noExcessiveLinesPerFunction": "off",
