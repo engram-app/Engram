@@ -1435,7 +1435,8 @@ defmodule Engram.Notes do
 
     base_attrs = batch_base_attrs(entry, user, vault)
 
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id) do
+    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id),
+         {:ok, crdt} <- build_crdt_state(entry, user, note_id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, entry.tags)
 
@@ -1447,11 +1448,25 @@ defmodule Engram.Notes do
           |> Ecto.Changeset.apply_changes()
           |> Map.take(@batch_insert_columns)
           |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
+          |> Map.merge(crdt)
 
         {:ok, note_id, row}
       else
         {:error, changeset}
       end
+    end
+  end
+
+  defp build_crdt_state(entry, user, note_id) do
+    content = entry.content || ""
+
+    # merge_plaintext ingests via CrdtBridge.ingest_plaintext, which splits any
+    # frontmatter fence out of the body into the Y.Map at insert time, so the
+    # seeded state already satisfies the invariant. No normalize_doc is needed
+    # on this path (unlike bind/3, which heals legacy at-rest state).
+    with {:ok, %{state: state}} <- Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
+      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce}}
     end
   end
 

@@ -68,9 +68,7 @@ defmodule Engram.Notes.CrdtDeliver do
       room ->
         try do
           SharedDoc.update_doc(room, fn doc ->
-            doc
-            |> Yex.Doc.get_text(CrdtBridge.text_name())
-            |> CrdtBridge.diff_into_text(content)
+            CrdtBridge.ingest_plaintext(doc, content)
           end)
         catch
           :exit, _reason -> :ok

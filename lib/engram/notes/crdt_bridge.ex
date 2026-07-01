@@ -183,6 +183,55 @@ defmodule Engram.Notes.CrdtBridge do
     :ok
   end
 
+  @doc """
+  Heal a doc that violates the frontmatter invariant. If the body `Y.Text`
+  starts with a frontmatter fence, lift its keys into `Y.Map` (Y.Map wins on
+  a key collision; fence-only keys are appended to the order array) and strip
+  the fence from the body. Loops so stacked fences fully heal in one call.
+
+  Idempotent: a doc whose body has no leading fence, or whose top block is not
+  valid map YAML, is left unchanged.
+  """
+  @spec normalize_doc(Yex.Doc.t()) :: :ok
+  def normalize_doc(%Yex.Doc{} = doc) do
+    body = body_of(doc)
+
+    case Frontmatter.split(body) do
+      {nil, _} ->
+        :ok
+
+      {fm_block, rest} ->
+        case Frontmatter.parse(fm_block) do
+          {:ok, order, values} ->
+            map = Yex.Doc.get_map(doc, @frontmatter_name)
+            arr = Yex.Doc.get_array(doc, @order_name)
+            existing = Yex.Map.to_map(map)
+            existing_order = Yex.Array.to_list(arr)
+
+            # Y.Map wins: only lift keys not already present.
+            new_keys = Enum.filter(order, fn k -> not Map.has_key?(existing, k) end)
+            Enum.each(new_keys, fn k -> Yex.Map.set(map, k, Map.fetch!(values, k)) end)
+
+            to_append = Enum.reject(new_keys, fn k -> k in existing_order end)
+
+            if to_append != [] do
+              Yex.Array.insert_list(arr, length(existing_order), to_append)
+            end
+
+            text = Yex.Doc.get_text(doc, @text_name)
+            :ok = diff_into_text(text, rest)
+
+            # The body may now begin with another fence (stacked); heal again.
+            # Terminates: each pass strips one fence so the body strictly shrinks.
+            normalize_doc(doc)
+
+          :error ->
+            # Malformed or non-map YAML at the top: not real frontmatter. Leave as-is.
+            :ok
+        end
+    end
+  end
+
   defp apply_frontmatter(doc, order, values) do
     map = Yex.Doc.get_map(doc, @frontmatter_name)
     current = Yex.Map.to_map(map)

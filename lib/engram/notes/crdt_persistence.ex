@@ -56,6 +56,8 @@ defmodule Engram.Notes.CrdtPersistence do
               seed_from_content(doc, note, user)
             end
 
+            :ok = CrdtBridge.normalize_doc(doc)
+
           nil ->
             :ok
         end
