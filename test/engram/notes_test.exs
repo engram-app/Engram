@@ -1881,6 +1881,39 @@ defmodule Engram.NotesTest do
   # #746 — rename must repath Qdrant points, not re-embed through Voyage
   # ---------------------------------------------------------------------------
 
+  # ---------------------------------------------------------------------------
+  # batch_upsert_notes — crdt_state seeded at insert time
+  # ---------------------------------------------------------------------------
+
+  describe "batch_upsert_notes/3 — crdt_state seeding" do
+    test "batch-inserted note carries crdt_state decoding to the frontmatter Y.Map",
+         %{user: user, vault: vault} do
+      import Ecto.Query, only: [from: 2]
+
+      {:ok, %{results: _}} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "Batch/JoinRefBatch.md", "content" => "---\ntitle: Batched\n---\nbody\n"}
+        ])
+
+      # The vault is freshly created in setup, so it holds exactly this one note.
+      {:ok, note} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.one(from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id))
+        end)
+
+      refute is_nil(note.crdt_state_ciphertext)
+
+      {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Yex.apply_update(doc, state)
+
+      assert Engram.Notes.CrdtBridge.frontmatter_of(doc) ==
+               {["title"], %{"title" => "\"Batched\""}}
+
+      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
+    end
+  end
+
   describe "rename does not re-embed (#746)" do
     test "single-note rename enqueues RepathNoteIndex, not EmbedNote, and keeps embed_hash",
          %{user: user, vault: vault} do
