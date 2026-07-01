@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import process from "node:process";
 import { clerkSetup } from "@clerk/testing/playwright";
 import { cleanupTestUsers } from "./db-cleanup";
 

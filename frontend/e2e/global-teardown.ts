@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import process from "node:process";
 import { cleanupTestUsers } from "./db-cleanup";
 
 const AUTH_STATE_PATH = path.join(import.meta.dirname, ".auth-state.json");

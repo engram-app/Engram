@@ -1,4 +1,3 @@
-import process from "node:process";
 import pg from "pg";
 
 const TEST_EMAIL_PATTERNS = [
