@@ -508,6 +508,7 @@ export default function FolderTree() {
 
 	return (
 		<>
+			{/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: drag-and-drop drop zone; native HTML5 DnD has no keyboard equivalent, keyboard users move folders via the action menu */}
 			<nav
 				{...containerProps}
 				ref={setContainerEl}

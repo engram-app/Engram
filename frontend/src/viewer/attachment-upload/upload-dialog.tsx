@@ -164,6 +164,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 						className="max-h-24 overflow-y-auto rounded border border-border focus:outline-none focus:ring-2 focus:ring-blue-400"
 					>
 						{candidates.map((name, i) => (
+							// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in an aria-activedescendant listbox; options are intentionally not individually focusable and keyboard activation is handled on the listbox container above
 							<li
 								key={name || "__root__"}
 								id={optionId(i)}

@@ -67,13 +67,9 @@
 					"a11y": {
 						"noAutofocus": "off",
 						"noLabelWithoutControl": "off",
-						"noNoninteractiveElementInteractions": "off",
 						"noNoninteractiveElementToInteractiveRole": "off",
-						"noStaticElementInteractions": "off",
 						"useAriaPropsForRole": "off",
 						"useAriaPropsSupportedByRole": "off",
-						"useFocusableInteractive": "off",
-						"useKeyWithClickEvents": "off",
 						"useSemanticElements": "off"
 					},
 					"complexity": {

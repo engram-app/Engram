@@ -69,6 +69,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 			/>
 			<ul role="listbox" className="max-h-72 overflow-y-auto py-1">
 				{candidates.map((name, i) => (
+					// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in a combobox-controlled listbox; options are intentionally not individually focusable and keyboard activation is handled on the input above
 					<li
 						key={name || "__root__"}
 						role="option"
