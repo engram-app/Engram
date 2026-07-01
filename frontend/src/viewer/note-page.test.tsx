@@ -9,7 +9,13 @@ const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
 	enroll: vi.fn(),
 }));
 
-vi.mock("../crdt/session", () => ({ openDoc, closeDoc, enroll }));
+vi.mock("../crdt/session", () => ({
+	openDoc,
+	closeDoc,
+	enroll,
+	getCrdtSyncStatus: () => "connecting",
+	subscribeToCrdtSyncStatus: () => () => {},
+}));
 
 const useNoteMock = vi.fn();
 vi.mock("../api/queries", () => ({ useNote: (...a: unknown[]) => useNoteMock(...a) }));
