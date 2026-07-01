@@ -3065,6 +3065,55 @@ jobs:
 
           echo "Prod audit clean (critical/high)."
 
+  frontend-lint:
+    name: frontend lint
+    # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
+    if: github.event_name != 'repository_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    # Biome lint + format check (`bun run ci` → `biome ci .`) with
+    # --error-on-warnings, so every enabled rule and any format drift fails
+    # the PR. The ruleset is curated max-strict with a ratchet backlog of
+    # temporarily-disabled rules (see frontend/biome.json + tracking issue).
+    # Path-gated to frontend/ so backend-only pushes skip it.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Need history to diff against origin/main in the guard step.
+          fetch-depth: 50
+
+      - name: Path-filter early-exit
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "On main — running lint unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin main --depth=50 >/dev/null 2>&1 || true
+          if git diff --quiet origin/main HEAD -- frontend/ 2>/dev/null; then
+            echo "Skipped — no frontend/ changes vs main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend/ changed — running lint."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          bun-version: latest
+
+      - name: Install frontend deps
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
+
+      - name: Biome check (lint + format, --error-on-warnings)
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: bun run ci
+
   e2e-local:
     needs: [fingerprint, prebuild-ci-image]
     # Skip on cross-repo plugin dispatch — plugin uses Clerk JWTs in production,
@@ -3447,7 +3496,7 @@ jobs:
     # and a real e2e/unit failure there is never gated. Mirrors the per-job +
     # prebuild is-full forcing so main is genuinely the full safety net.
     if: always() && (needs.fingerprint.outputs.is-full == 'true' || needs.fingerprint.outputs.backend-cache-hit != 'true' || needs.fingerprint.outputs.e2e-cache-hit != 'true')
-    needs: [fingerprint, version-check, unit-tests, lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, storage-database, e2e-clerk, e2e-api, e2e-crdt, e2e-local, e2e-browser, n1-compat, legal-cross-repo]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -3455,6 +3504,7 @@ jobs:
           VC="${{ needs.version-check.result }}"
           UT="${{ needs.unit-tests.result }}"
           LN="${{ needs.lint.result }}"
+          FL="${{ needs.frontend-lint.result }}"
           SD="${{ needs.storage-database.result }}"
           EC="${{ needs.e2e-clerk.result }}"
           EA="${{ needs.e2e-api.result }}"
@@ -3497,7 +3547,7 @@ jobs:
           # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint /
           # e2e-local / e2e-browser are intentionally skipped — plugin cannot regress
           # backend internals. Only assert success when those jobs actually ran.
-          for pair in "unit-tests=$UT" "lint=$LN" "storage-database=$SD" "e2e-crdt=$ED" "e2e-local=$EL" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
+          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "storage-database=$SD" "e2e-crdt=$ED" "e2e-local=$EL" "e2e-browser=$EB" "legal-cross-repo=$LG"; do
             name="${pair%=*}"; result="${pair#*=}"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "::error::$name failed: $result"
