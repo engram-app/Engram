@@ -25,7 +25,7 @@ export default function PaymentMethodCard({
 			<header className="flex items-center justify-between">
 				<h2 className="font-semibold text-foreground text-lg">Payment method</h2>
 				<Button variant="outline" size="sm" onClick={onUpdate} disabled={updating}>
-					{updating && <Loader2 aria-hidden className="size-3 animate-spin" />}
+					{Boolean(updating) && <Loader2 aria-hidden className="size-3 animate-spin" />}
 					{updating ? "Opening…" : "Update"}
 				</Button>
 			</header>

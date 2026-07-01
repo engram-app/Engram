@@ -63,7 +63,7 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 			</ul>
 			<div className="flex gap-2">
 				<Button variant="destructive" onClick={confirm} disabled={cancel.isPending}>
-					{cancel.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
+					{Boolean(cancel.isPending) && <Loader2 aria-hidden className="size-4 animate-spin" />}
 					{cancel.isPending ? "Canceling…" : "Cancel at period end"}
 				</Button>
 				<Button variant="ghost" onClick={onClose} disabled={cancel.isPending}>

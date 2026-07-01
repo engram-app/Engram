@@ -52,7 +52,9 @@ function ReverseCancelButton() {
 
 	return (
 		<Button size="sm" onClick={onReverse} disabled={reverseCancel.isPending}>
-			{reverseCancel.isPending && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
+			{Boolean(reverseCancel.isPending) && (
+				<Loader2 aria-hidden className="size-3.5 animate-spin" />
+			)}
 			{reverseCancel.isPending ? "Reversing…" : "Keep my subscription"}
 		</Button>
 	);

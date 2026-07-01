@@ -49,7 +49,7 @@ export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props)
 				onBlur={() => onCancel()}
 				className="w-full rounded border border-blue-400 bg-white px-1 py-0.5 text-gray-900 text-sm dark:bg-gray-900 dark:text-gray-100"
 			/>
-			{error && (
+			{Boolean(error) && (
 				<span className="text-red-600 text-xs dark:text-red-400" role="alert">
 					{error}
 				</span>

@@ -204,7 +204,7 @@ function SourceScreen({
 				/>
 			</div>
 
-			{pickError && (
+			{Boolean(pickError) && (
 				<p role="alert" className="text-destructive text-sm">
 					{pickError}
 				</p>

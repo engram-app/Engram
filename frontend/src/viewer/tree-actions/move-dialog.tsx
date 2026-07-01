@@ -81,7 +81,7 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 							i === active ? "bg-blue-50 dark:bg-blue-950" : ""
 						}`}
 					>
-						{name === "" ? "/ (root)" : name}
+						{name === "" ? "/ (root)" : `${name}`}
 					</div>
 				))}
 			</div>

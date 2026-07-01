@@ -578,7 +578,7 @@ export default function BillingPage({
 									open={openTier === "starter"}
 									onOpen={() => setOpenTier("starter")}
 								/>
-								{freeOption && (
+								{freeOption ? (
 									<PlanAccordionRow
 										name={FREE_TIER.name}
 										price={FREE_TIER.price}
@@ -591,7 +591,7 @@ export default function BillingPage({
 										open={openTier === "free"}
 										onOpen={() => setOpenTier("free")}
 									/>
-								)}
+								) : null}
 							</ul>
 						</>
 					)}
@@ -622,7 +622,7 @@ export default function BillingPage({
 							onClick={() => openPortal()}
 							disabled={portalLoading}
 						>
-							{portalLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
+							{Boolean(portalLoading) && <Loader2 aria-hidden className="size-4 animate-spin" />}
 							{portalLoading ? "Opening Paddle…" : "Open Paddle billing portal"}
 						</Button>
 						<p className="text-muted-foreground text-xs">

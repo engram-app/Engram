@@ -125,7 +125,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 					}
 				}}
 			/>
-			{dragging && (
+			{Boolean(dragging) && (
 				<div
 					aria-hidden
 					className="fixed inset-0 z-50 flex items-center justify-center bg-blue-500/10 ring-2 ring-blue-400 ring-inset backdrop-blur-sm"

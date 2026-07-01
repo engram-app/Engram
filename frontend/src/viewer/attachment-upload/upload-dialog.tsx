@@ -173,7 +173,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 								onClick={() => setFolder(name)}
 								className={`cursor-pointer px-3 py-1 text-sm ${name === folder ? "bg-blue-50 dark:bg-blue-950" : ""}`}
 							>
-								{name === "" ? "/ (root)" : name}
+								{name === "" ? "/ (root)" : `${name}`}
 							</div>
 						))}
 					</div>

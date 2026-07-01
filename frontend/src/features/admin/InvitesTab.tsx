@@ -112,7 +112,7 @@ export default function InvitesTab() {
 				</button>
 			</form>
 
-			{lastUrl && (
+			{lastUrl ? (
 				<aside
 					className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm"
 					role="status"
@@ -140,7 +140,7 @@ export default function InvitesTab() {
 						</button>
 					</div>
 				</aside>
-			)}
+			) : null}
 
 			{loading ? (
 				<p className="text-muted-foreground text-sm">Loading invites…</p>

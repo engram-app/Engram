@@ -58,7 +58,7 @@ export default function AdminPanel() {
 					Members
 				</h2>
 
-				{resetUrl && (
+				{Boolean(resetUrl) && (
 					<aside
 						className="rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm"
 						role="status"

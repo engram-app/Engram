@@ -55,20 +55,20 @@ export default function CurrentPlanCard({
 				</p>
 			)}
 
-			{sub && (
+			{sub ? (
 				<dl className="grid grid-cols-2 gap-4 text-sm">
 					<dt className="text-muted-foreground">Status</dt>
 					<dd className="font-medium capitalize">{sub.status.replace("_", " ")}</dd>
-					{periodEnd && (
+					{Boolean(periodEnd) && (
 						<>
 							<dt className="text-muted-foreground">{periodLabel}</dt>
 							<dd className="font-medium">{periodEnd}</dd>
 						</>
 					)}
 				</dl>
-			)}
+			) : null}
 
-			{children && <div className="border-border border-t pt-4">{children}</div>}
+			{Boolean(children) && <div className="border-border border-t pt-4">{children}</div>}
 		</section>
 	);
 }

@@ -107,7 +107,7 @@ export default function NotePage() {
 			)}
 			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
 				<h2 className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
-					{note.folder && (
+					{Boolean(note.folder) && (
 						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
 					)}
 					<span className="min-w-0 truncate font-medium">{note.title}</span>

@@ -57,7 +57,7 @@ function TransactionSection({
 		<div className="flex flex-col gap-3">
 			<div>
 				<h4 className="font-medium text-sm">{title}</h4>
-				{description && <p className="text-muted-foreground text-xs">{description}</p>}
+				{Boolean(description) && <p className="text-muted-foreground text-xs">{description}</p>}
 			</div>
 
 			<div className="flex flex-col gap-2">
@@ -71,13 +71,13 @@ function TransactionSection({
 							<span className="text-muted-foreground text-xs">
 								{item.quantity > 1 && `${item.quantity} \u00d7 `}
 								{formatMoney(item.unitPrice, currency)}
-								{item.isProrated && (
+								{Boolean(item.isProrated) && (
 									<Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">
 										Prorated
 									</Badge>
 								)}
 							</span>
-							{item.prorationPeriod && (
+							{Boolean(item.prorationPeriod) && (
 								<span className="text-muted-foreground text-xs">{item.prorationPeriod}</span>
 							)}
 						</div>
@@ -213,7 +213,7 @@ export function PlanChangeBreakdown({
 						</div>
 					)}
 
-				{immediateTransaction && (
+				{immediateTransaction ? (
 					<>
 						<Separator />
 						<TransactionSection
@@ -223,9 +223,9 @@ export function PlanChangeBreakdown({
 							currency={currency}
 						/>
 					</>
-				)}
+				) : null}
 
-				{nextTransaction && (
+				{nextTransaction ? (
 					<>
 						<Separator />
 						<TransactionSection
@@ -235,9 +235,9 @@ export function PlanChangeBreakdown({
 							currency={currency}
 						/>
 					</>
-				)}
+				) : null}
 
-				{recurringTransaction && (
+				{recurringTransaction ? (
 					<>
 						<Separator />
 						<TransactionSection
@@ -247,7 +247,7 @@ export function PlanChangeBreakdown({
 							currency={currency}
 						/>
 					</>
-				)}
+				) : null}
 			</CardContent>
 		</Card>
 	);

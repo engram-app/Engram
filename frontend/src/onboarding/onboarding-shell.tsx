@@ -50,7 +50,7 @@ function ShellInner({ children }: { children: ReactNode }) {
 	return (
 		<>
 			{children}
-			{tourActive && (
+			{Boolean(tourActive) && (
 				<TourController
 					active={tourActive}
 					reachedEnd={tourReachedEnd}
@@ -58,7 +58,9 @@ function ShellInner({ children }: { children: ReactNode }) {
 					onExit={onTourExit}
 				/>
 			)}
-			{showVaultModal && <CreateFirstVaultModal onCreated={() => setVaultModalHandled(true)} />}
+			{Boolean(showVaultModal) && (
+				<CreateFirstVaultModal onCreated={() => setVaultModalHandled(true)} />
+			)}
 			{!tourActive && <ChecklistWidget onStartTour={startTour} />}
 		</>
 	);

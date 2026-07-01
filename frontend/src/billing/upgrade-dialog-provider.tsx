@@ -26,7 +26,7 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 	return (
 		<UpgradeCtx.Provider value={{ showUpgrade }}>
 			{children}
-			{reason && (
+			{reason ? (
 				<UpgradeRequiredDialog
 					reason={reason}
 					open={true}
@@ -36,7 +36,7 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 						}
 					}}
 				/>
-			)}
+			) : null}
 		</UpgradeCtx.Provider>
 	);
 }

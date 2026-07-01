@@ -65,7 +65,7 @@ export function CheckoutSummary({
 						>
 							<div className="min-w-0 flex-1">
 								<span className="font-medium">{item.name}</span>
-								{item.priceName && (
+								{Boolean(item.priceName) && (
 									<span className="text-muted-foreground"> — {item.priceName}</span>
 								)}
 								{item.quantity > 1 && (
@@ -105,14 +105,14 @@ export function CheckoutSummary({
 					</div>
 				</dl>
 
-				{(recurringInfo || trialPeriod) && (
+				{Boolean(recurringInfo || trialPeriod) && (
 					<p className="text-muted-foreground text-xs">
-						{trialPeriod && <span>{trialPeriod} free trial. </span>}
-						{recurringInfo && <span>Then {recurringInfo}.</span>}
+						{Boolean(trialPeriod) && <span>{trialPeriod} free trial. </span>}
+						{Boolean(recurringInfo) && <span>Then {recurringInfo}.</span>}
 					</p>
 				)}
 
-				{policyUrl && (
+				{Boolean(policyUrl) && (
 					<a
 						href={policyUrl}
 						target="_blank"

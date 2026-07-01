@@ -42,7 +42,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 						{a.label}
 					</button>
 				))}
-				{onSelectMore && (
+				{onSelectMore ? (
 					<button
 						type="button"
 						onClick={() => {
@@ -53,7 +53,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 					>
 						Select more
 					</button>
-				)}
+				) : null}
 			</div>
 		</>
 	);
