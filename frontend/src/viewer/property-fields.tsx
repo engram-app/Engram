@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import type { PropertyType } from './property-types'
@@ -38,7 +38,10 @@ export function PropertyField({ type, value, onCommit, onFocusChange }: FieldPro
 function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
   const initial = value == null ? '' : String(value)
   const [draft, setDraft] = useState(initial)
-  useEffect(() => setDraft(initial), [initial])
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(initial)
+  }, [initial])
 
   const htmlType =
     type === 'number'
@@ -60,6 +63,7 @@ function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
 
   return (
     <input
+      ref={inputRef}
       type={htmlType}
       className={inputCls}
       value={draft}
