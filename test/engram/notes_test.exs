@@ -3,6 +3,7 @@ defmodule Engram.NotesTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
+  alias Engram.Notes.CrdtBridge
 
   setup do
     user = insert(:user)
@@ -1904,13 +1905,13 @@ defmodule Engram.NotesTest do
       refute is_nil(note.crdt_state_ciphertext)
 
       {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
-      doc = Engram.Notes.CrdtBridge.new_doc()
+      doc = CrdtBridge.new_doc()
       :ok = Yex.apply_update(doc, state)
 
-      assert Engram.Notes.CrdtBridge.frontmatter_of(doc) ==
+      assert CrdtBridge.frontmatter_of(doc) ==
                {["title"], %{"title" => "\"Batched\""}}
 
-      assert Engram.Notes.CrdtBridge.body_of(doc) == "body\n"
+      assert CrdtBridge.body_of(doc) == "body\n"
     end
   end
 
