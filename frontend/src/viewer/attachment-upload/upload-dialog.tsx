@@ -152,9 +152,9 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 
 			{candidates.length > 1 && (
 				<section className="px-4 py-3">
-					<label className="mb-1 block font-medium text-muted-foreground text-xs">
+					<span className="mb-1 block font-medium text-muted-foreground text-xs">
 						Destination folder
-					</label>
+					</span>
 					<ul
 						role="listbox"
 						aria-label="Destination folder"
