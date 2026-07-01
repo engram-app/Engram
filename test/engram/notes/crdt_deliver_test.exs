@@ -6,7 +6,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
   # unbind; a no-op room avoids it).
   use Engram.DataCase, async: false
 
-  alias Engram.Notes.{CrdtDeliver, CrdtRegistry}
+  alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtRegistry}
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -69,6 +69,25 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # The room's owned text converged to the incoming plaintext.
       doc = SharedDoc.get_doc(room)
       assert Engram.Notes.CrdtBridge.text_of(doc) == "base updated"
+    end
+
+    test "delivering a frontmatter change updates the live room's Y.Map, not just the body",
+         %{user: user, vault: vault} do
+      note_id = Ecto.UUID.generate()
+      room = start_bare_room(note_id, "old body\n")
+
+      :ok =
+        CrdtDeliver.deliver_out(
+          user.id,
+          vault.id,
+          "n.md",
+          note_id,
+          "---\ntitle: Hi\n---\nnew body\n"
+        )
+
+      doc = SharedDoc.get_doc(room)
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"Hi\""}}
+      assert CrdtBridge.body_of(doc) == "new body\n"
     end
 
     test "no-op when incoming equals the room's current text (still announces)",
