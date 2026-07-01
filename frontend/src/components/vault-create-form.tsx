@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateVault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { useAutofocus } from "@/hooks/use-autofocus";
 
 const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
@@ -23,6 +24,7 @@ export function VaultCreateForm({
 }: Props) {
 	const create = useCreateVault();
 	const [name, setName] = useState("");
+	const nameRef = useAutofocus<HTMLInputElement>(autoFocus);
 
 	function submit(e: React.FormEvent) {
 		e.preventDefault();
@@ -56,9 +58,9 @@ export function VaultCreateForm({
 			<label className="block font-medium text-foreground text-sm">
 				Vault name
 				<input
+					ref={nameRef}
 					className={inputClass}
 					aria-label="Vault name"
-					autoFocus={autoFocus}
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					disabled={create.isPending}

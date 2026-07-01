@@ -2,6 +2,7 @@ import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw
 import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { useAutofocus } from "@/hooks/use-autofocus";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
 import { setActiveVaultId } from "../api/active-vault";
@@ -357,6 +358,7 @@ interface FreshInlinePanelProps {
 function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 	const [name, setName] = useState("My Vault");
 	const [error, setError] = useState<string | null>(null);
+	const nameRef = useAutofocus<HTMLInputElement>();
 
 	async function submit() {
 		setError(null);
@@ -379,10 +381,10 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 			<label className="flex flex-col gap-2 text-sm">
 				<span className="font-medium text-foreground">Vault name</span>
 				<input
+					ref={nameRef}
 					type="text"
 					value={name}
 					onChange={(e) => setName(e.target.value)}
-					autoFocus
 					maxLength={100}
 					className="rounded-lg border border-border bg-background px-3 py-2 text-base text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
 				/>

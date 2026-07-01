@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { VaultCreateForm } from "@/components/vault-create-form";
+import { useAutofocus } from "@/hooks/use-autofocus";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
 
@@ -95,6 +96,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 	const update = useUpdateVault();
 	const [renaming, setRenaming] = useState(false);
 	const [name, setName] = useState(vault.name);
+	const nameRef = useAutofocus<HTMLInputElement>(renaming);
 
 	function saveName() {
 		const next = name.trim();
@@ -109,7 +111,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 			<td className="py-3">
 				{renaming ? (
 					<input
-						autoFocus
+						ref={nameRef}
 						className={inputClass}
 						value={name}
 						aria-label={`Rename ${vault.name}`}

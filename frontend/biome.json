@@ -65,7 +65,6 @@
 			"linter": {
 				"rules": {
 					"a11y": {
-						"noAutofocus": "off",
 						"noLabelWithoutControl": {
 							"level": "error",
 							"options": { "inputComponents": ["Checkbox"] }
