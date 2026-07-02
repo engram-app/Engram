@@ -31,7 +31,9 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 		// Warm-up failure is non-fatal (the lazy() render path + the
 		// vite:preloadError reload handle a real one); catch only prevents an
 		// unhandled rejection.
-		import("./upgrade-required-dialog").catch(() => {});
+		import("./upgrade-required-dialog").catch((err) => {
+			console.warn("[upgrade-dialog] chunk warm-up failed (non-fatal):", err);
+		});
 		return () => setUpgradeHandler(null);
 	}, [showUpgrade]);
 
