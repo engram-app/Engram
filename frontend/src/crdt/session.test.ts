@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	closeDoc,
 	docPathFromDocId,
@@ -11,6 +11,7 @@ import {
 	notifyCrdtChannelJoined,
 	openDoc,
 	resyncOpenDocs,
+	scheduleRehandshake,
 	startCrdtSession,
 	stopCrdtSession,
 	subscribeToCrdtSyncStatus,
@@ -231,6 +232,51 @@ describe("crdt session", () => {
 			enrollIfLive("notes/open.md");
 			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
 			closeDoc("notes/open.md");
+		});
+	});
+
+	describe("scheduleRehandshake", () => {
+		// Only fake setTimeout/clearTimeout — IndexedDB (happy-dom) breaks when
+		// all async APIs are faked, preventing vi.waitFor from resolving.
+		beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+		afterEach(() => vi.useRealTimers());
+
+		it("re-runs STEP1 for a live doc after the delay, deduped", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/rh.md");
+			enroll("notes/rh.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			const before = frames.length;
+			scheduleRehandshake("v1/notes/rh.md", 2000);
+			scheduleRehandshake("v1/notes/rh.md", 2000); // dedupe: second is a no-op
+			await vi.advanceTimersByTimeAsync(2000);
+			await vi.waitFor(() => expect(frames.length).toBe(before + 1)); // exactly one new STEP1
+			closeDoc("notes/rh.md");
+		});
+
+		it("is a no-op for a doc that is no longer live when the timer fires", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/gone.md");
+			enroll("notes/gone.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			scheduleRehandshake("v1/notes/gone.md", 1000);
+			closeDoc("notes/gone.md");
+			const before = frames.length;
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(before); // nothing sent for a closed doc
+		});
+
+		it("stopCrdtSession clears pending rehandshake timers", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/stop.md");
+			scheduleRehandshake("v1/notes/stop.md", 1000);
+			stopCrdtSession();
+			const before = frames.length;
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(before);
 		});
 	});
 

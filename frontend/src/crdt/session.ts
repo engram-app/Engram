@@ -31,6 +31,9 @@ let sessionStartWaiters: Array<() => void> = [];
  *  issued while no session exists still cancels a waiting openDoc. */
 const docEpochs = new Map<string, number>();
 
+/** Pending per-path rehandshake timers (error/timeout reply recovery). */
+const rehandshakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 function bumpEpoch(path: string): void {
 	docEpochs.set(path, (docEpochs.get(path) ?? 0) + 1);
 }
@@ -128,6 +131,10 @@ export function stopCrdtSession(): void {
 	for (const a of session.awareness.values()) {
 		a.destroy();
 	}
+	for (const t of rehandshakeTimers.values()) {
+		clearTimeout(t);
+	}
+	rehandshakeTimers.clear();
 	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -194,6 +201,29 @@ export function enrollIfLive(path: string): void {
 		return;
 	}
 	session.enrollment.enroll(path);
+}
+
+/** Recover from a failed/unacknowledged crdt_msg push by re-running the STEP1
+ *  handshake after a delay. The Yjs sync protocol makes this loss-proof: the
+ *  server answers STEP2 with exactly the diff it is missing, so a dropped
+ *  update is re-derived rather than re-sent (no duplication, no queue).
+ *  Deduped per path — bursts of error replies collapse into one handshake. */
+export function scheduleRehandshake(docId: string, delayMs: number): void {
+	const path = docPathFromDocId(docId);
+	if (rehandshakeTimers.has(path)) {
+		return;
+	}
+	rehandshakeTimers.set(
+		path,
+		setTimeout(() => {
+			rehandshakeTimers.delete(path);
+			if (!session?.manager.hasDoc(path)) {
+				return; // closed since — reopen re-handshakes on its own
+			}
+			session.enrollment.reset(path);
+			session.enrollment.enroll(path);
+		}, delayMs),
+	);
 }
 
 export async function handleFrame(path: string, b64: string): Promise<void> {

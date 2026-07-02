@@ -7,6 +7,7 @@ import {
 	notifyCrdtChannelError,
 	notifyCrdtChannelJoined,
 	resyncOpenDocs,
+	scheduleRehandshake as scheduleCrdtRehandshake,
 	startCrdtSession,
 	stopCrdtSession,
 } from "../crdt/session";
@@ -287,7 +288,19 @@ export async function connectChannel({
 	startCrdtSession({
 		vaultId,
 		push: (docId, b64) => {
-			crdtChannel?.push("crdt_msg", { doc_id: docId, b64 });
+			crdtChannel
+				?.push("crdt_msg", { doc_id: docId, b64 })
+				.receive("error", (resp: { reason?: string }) => {
+					if (resp?.reason === "frame_too_large") {
+						// Retrying would re-send the same oversized diff and loop.
+						console.error(`CRDT frame rejected (frame_too_large) for ${docId} — edit not synced`);
+						return;
+					}
+					// rate_limited or unknown error: a STEP1 re-handshake after a
+					// backoff re-derives whatever the server missed.
+					scheduleCrdtRehandshake(docId, resp?.reason === "rate_limited" ? 2000 : 1000);
+				})
+				.receive("timeout", () => scheduleCrdtRehandshake(docId, 1000));
 		},
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
