@@ -115,7 +115,7 @@ defmodule Engram.VaultIsolationTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, changes_a} = Notes.list_changes(user, vault_a, past)
+      {:ok, %{changes: changes_a}} = Notes.list_changes_page(user, vault_a, past)
       paths_a = Enum.map(changes_a, & &1.path)
 
       assert "vault-a-note.md" in paths_a
@@ -143,7 +143,7 @@ defmodule Engram.VaultIsolationTest do
           "mtime" => 1_000.0
         })
 
-      {:ok, changes_b} = Notes.list_changes(user, vault_b, past)
+      {:ok, %{changes: changes_b}} = Notes.list_changes_page(user, vault_b, past)
       paths_b = Enum.map(changes_b, & &1.path)
 
       assert "vault-b-note.md" in paths_b

@@ -338,48 +338,15 @@ defmodule EngramWeb.SyncChannelTest do
   # pull_changes
   # ---------------------------------------------------------------------------
 
-  describe "pull_changes" do
-    test "returns changes since timestamp", %{socket: socket, user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Recent.md",
-        "content" => "# Recent",
-        "mtime" => 1_000.0
-      })
-
+  describe "pull_changes (removed op)" do
+    # The op never shipped in any plugin release or the SPA (HTTP cursor sync
+    # at GET /api/sync/changes is the catch-up path). The handler was
+    # unbounded: it loaded + decrypted the entire vault change set into one
+    # channel frame. A stub reply keeps a stray legacy caller from crashing
+    # the channel.
+    test "replies gone with the HTTP replacement", %{socket: socket} do
       ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
-
-      assert_reply ref, :ok, %{"changes" => changes, "server_time" => _}
-      assert Enum.any?(changes, &(&1["path"] == "Test/Recent.md"))
-    end
-
-    test "returns empty changes for future timestamp", %{socket: socket} do
-      ref = push(socket, "pull_changes", %{"since" => "2099-01-01T00:00:00Z"})
-      assert_reply ref, :ok, %{"changes" => []}
-    end
-
-    test "returns error for invalid timestamp", %{socket: socket} do
-      ref = push(socket, "pull_changes", %{"since" => "not-a-date"})
-      assert_reply ref, :error, %{"reason" => _}
-    end
-
-    test "returns error when since is missing", %{socket: socket} do
-      ref = push(socket, "pull_changes", %{})
-      assert_reply ref, :error, %{"reason" => _}
-    end
-
-    test "carries note id in each change", %{socket: socket, user: user, vault: vault} do
-      {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/WithId.md",
-          "content" => "# WithId",
-          "mtime" => 1_000.0
-        })
-
-      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
-      assert_reply ref, :ok, %{"changes" => changes}
-
-      change = Enum.find(changes, &(&1["path"] == "Test/WithId.md"))
-      assert change["id"] == note.id
+      assert_reply ref, :error, %{"reason" => "gone", "use" => "GET /api/sync/changes"}
     end
   end
 
@@ -449,11 +416,6 @@ defmodule EngramWeb.SyncChannelTest do
           "new_path" => "Lock/New.md"
         })
 
-      assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
-    end
-
-    test "pull_changes replies rotation_in_progress when user is locked", %{socket: socket} do
-      ref = push(socket, "pull_changes", %{"since" => "2020-01-01T00:00:00Z"})
       assert_reply ref, :error, %{reason: "rotation_in_progress", retry_after_seconds: 60}
     end
   end

@@ -1675,43 +1675,6 @@ defmodule Engram.Notes do
     end
   end
 
-  @doc """
-  Returns notes changed (upserted or deleted) since the given datetime.
-  Deleted notes are included with deleted: true.
-
-  Options:
-
-    * `fields: :meta` — project out `content_ciphertext` and return
-      `content: nil`. Used by the sync channel's `pull_changes`, whose
-      reply never includes content; skips the dominant column read and
-      its decrypt.
-  """
-  @spec list_changes(map(), map(), DateTime.t(), keyword()) :: {:ok, [map()]}
-  def list_changes(user, vault, since, opts \\ []) do
-    base =
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and n.updated_at >= ^since and
-            n.kind == "note",
-        order_by: [asc: n.updated_at]
-      )
-
-    query =
-      case Keyword.get(opts, :fields, :all) do
-        :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> base
-      end
-
-    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
-
-    changes =
-      notes
-      |> decrypt_or_raise!(user)
-      |> Enum.map(&change_map/1)
-
-    {:ok, changes}
-  end
-
   @changes_page_max_limit 500
 
   @doc """
