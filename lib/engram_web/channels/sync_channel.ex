@@ -113,15 +113,14 @@ defmodule EngramWeb.SyncChannel do
   # pull_changes
   # ---------------------------------------------------------------------------
 
+  # Removed op (#862): the handler was unbounded — it loaded + decrypted the
+  # entire vault change set (Pro = uncapped) into ONE channel frame. No client
+  # ever shipped calling it (plugin + SPA use the keyset-paginated HTTP feed
+  # at GET /api/sync/changes), so it goes away rather than growing pagination.
+  # The stub keeps a stray legacy caller from crashing the channel.
   @impl true
-  def handle_in("pull_changes", %{"since" => since_str}, socket) do
-    span_sync(:pull_changes, fn -> do_pull_changes(since_str, socket) end)
-  end
-
   def handle_in("pull_changes", _params, socket) do
-    # T3.7 — missing `since` key; no need to gate (no DEK access before param parse).
-    # The since-required check is purely structural validation — not a DEK write path.
-    {:reply, {:error, %{"reason" => "since is required"}}, socket}
+    {:reply, {:error, %{"reason" => "gone", "use" => "GET /api/sync/changes"}}, socket}
   end
 
   # ---------------------------------------------------------------------------
@@ -227,63 +226,7 @@ defmodule EngramWeb.SyncChannel do
     end
   end
 
-  defp do_pull_changes(since_str, socket) do
-    # T3.7 — re-read the lock state; stale snapshot from connect/3. Reads are
-    # also blocked: between a sweep batch writing dek_version=new and final_flip
-    # invalidating the DekCache, the old DEK in cache cannot decrypt the new
-    # ciphertext — reads during this window fail with :decrypt_failed.
-    case RotationGate.check(socket.assigns.current_user.id) do
-      {:error, :rotation_in_progress} ->
-        :telemetry.execute(
-          [:engram, :crypto, :rotate, :dek, :gate_blocked],
-          %{count: 1},
-          %{gate_path: :channel, op: :pull_changes}
-        )
-
-        {:reply, {:error, %{reason: "rotation_in_progress", retry_after_seconds: 60}}, socket}
-
-      {:error, :user_not_found} ->
-        {:reply, {:error, %{reason: "user_not_found"}}, socket}
-
-      :ok ->
-        user = socket.assigns.current_user
-        vault = socket.assigns.vault
-
-        case DateTime.from_iso8601(since_str) do
-          {:ok, since, _} ->
-            # :meta — this reply never includes content (clients pull
-            # bodies separately), so skip the content fetch + decrypt.
-            {:ok, changes} = Notes.list_changes(user, vault, since, fields: :meta)
-
-            serialized =
-              Enum.map(changes, fn c ->
-                %{
-                  "id" => c.id,
-                  "path" => c.path,
-                  "title" => c.title,
-                  "folder" => c.folder,
-                  "tags" => c.tags,
-                  "version" => c.version,
-                  "mtime" => c.mtime,
-                  "deleted" => c.deleted,
-                  "updated_at" => DateTime.to_iso8601(c.updated_at)
-                }
-              end)
-
-            reply = %{
-              "changes" => serialized,
-              "server_time" => DateTime.utc_now() |> DateTime.to_iso8601()
-            }
-
-            {:reply, {:ok, reply}, socket}
-
-          {:error, _} ->
-            {:reply, {:error, %{"reason" => "invalid since timestamp"}}, socket}
-        end
-    end
-  end
-
-  # ---------------------------------------------------------------------------
+  # -----------------------------------------------------------------------------
   # Telemetry helpers — engram-app/engram-infra#340
   # ---------------------------------------------------------------------------
 

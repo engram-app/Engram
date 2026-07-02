@@ -37,6 +37,7 @@ defmodule Engram.Crypto.AadRebindTest do
         |> Ecto.Changeset.cast(
           %{
             content_hash: "h",
+            seq: 1,
             mtime: 0.0,
             user_id: user.id,
             vault_id: vault.id,
@@ -57,6 +58,7 @@ defmodule Engram.Crypto.AadRebindTest do
           },
           [
             :content_hash,
+            :seq,
             :mtime,
             :user_id,
             :vault_id,

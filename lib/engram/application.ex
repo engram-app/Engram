@@ -52,7 +52,6 @@ defmodule Engram.Application do
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
-        {Engram.Idempotency, []},
         # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
         # cluster-wide singletons via :global; this supervisor is the local
         # owner when a room is started on this node (see CrdtRegistry).

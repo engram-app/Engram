@@ -289,7 +289,13 @@ defmodule EngramWeb.FoldersController do
         case Folders.batch_delete(user, vault, ids) do
           {:ok, %{notes: n, attachments: a}} ->
             body = %{deleted: n, deleted_attachments: a}
-            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+            Engram.Idempotency.remember(
+              conn.assigns.current_user,
+              conn.assigns.idempotency_key,
+              %{status: 200, body: body}
+            )
+
             broadcast_batch(user, vault, %{op: "delete", ids: ids})
             json(conn, body)
 
@@ -377,7 +383,12 @@ defmodule EngramWeb.FoldersController do
     case result do
       {:ok, %{notes: n, attachments: a}} ->
         body = %{moved: n, moved_attachments: a}
-        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+          status: 200,
+          body: body
+        })
+
         broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
         json(conn, body)
 

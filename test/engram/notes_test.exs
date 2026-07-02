@@ -639,7 +639,7 @@ defmodule Engram.NotesTest do
         })
 
       past = DateTime.add(note.updated_at, -60, :second)
-      {:ok, changes} = Notes.list_changes(user, vault, past)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, past)
 
       assert Enum.any?(changes, &(&1.path == "Test/Recent.md"))
     end
@@ -654,7 +654,7 @@ defmodule Engram.NotesTest do
       Notes.delete_note(user, vault, "Test/Deleted.md")
 
       past = ~U[2020-01-01 00:00:00Z]
-      {:ok, changes} = Notes.list_changes(user, vault, past)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, past)
 
       deleted = Enum.find(changes, &(&1.path == "Test/Deleted.md"))
       assert deleted != nil
@@ -674,13 +674,13 @@ defmodule Engram.NotesTest do
       })
 
       past = ~U[2020-01-01 00:00:00Z]
-      {:ok, changes} = Notes.list_changes(user, vault, past)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, past)
 
       refute Enum.any?(changes, &(&1.path == "Test/Other.md"))
     end
 
     test "returns empty list when no changes since timestamp", %{user: user, vault: vault} do
-      {:ok, changes} = Notes.list_changes(user, vault, ~U[2099-01-01 00:00:00Z])
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, ~U[2099-01-01 00:00:00Z])
       assert changes == []
     end
 
@@ -698,7 +698,7 @@ defmodule Engram.NotesTest do
         })
 
       past = DateTime.add(note.updated_at, -60, :second)
-      {:ok, changes} = Notes.list_changes(user, vault, past)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, past)
 
       paths = Enum.map(changes, & &1.path)
       assert paths == ["Real.md"]
@@ -716,7 +716,7 @@ defmodule Engram.NotesTest do
       # Changes must still appear when queried with that truncated value.
       # This guards against > vs >= regressions in the list_changes query.
       since_truncated = DateTime.truncate(note.updated_at, :second)
-      {:ok, changes} = Notes.list_changes(user, vault, since_truncated)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, since_truncated)
 
       assert Enum.any?(changes, &(&1.path == "Test/SameSecond.md")),
              "Changes in the same second as truncated server_time must be included"
@@ -734,7 +734,7 @@ defmodule Engram.NotesTest do
         })
 
       past = DateTime.add(note.updated_at, -60, :second)
-      {:ok, changes} = Notes.list_changes(user, vault, past, fields: :meta)
+      {:ok, %{changes: changes}} = Notes.list_changes_page(user, vault, past, fields: :meta)
 
       change = Enum.find(changes, &(&1.path == "Meta/Sparse.md"))
       assert change != nil
