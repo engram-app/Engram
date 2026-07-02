@@ -148,6 +148,50 @@ describe("crdt session", () => {
 		expect(after).toBeTruthy();
 	});
 
+	describe("openDoc lifecycle hardening", () => {
+		it("openDoc called before startCrdtSession resolves once the session starts", async () => {
+			stopCrdtSession();
+			const p = openDoc("notes/a.md"); // no session yet — must NOT resolve null immediately
+			let settled = false;
+			p.then(() => {
+				settled = true;
+			});
+			await Promise.resolve();
+			expect(settled).toBe(false); // still waiting
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const h = await p;
+			expect(h).not.toBeNull();
+			expect(h?.ytext).toBeDefined();
+		});
+
+		it("closeDoc during in-flight openDoc yields null and leaves no ghost state", async () => {
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const p = openDoc("notes/b.md");
+			closeDoc("notes/b.md"); // races the await inside openDoc
+			const h = await p;
+			expect(h).toBeNull();
+			// no ghost: a fresh open must produce a working handle whose awareness
+			// is bound to the SAME doc as its ytext (the ghost bug bound awareness
+			// to a destroyed doc)
+			const h2 = await openDoc("notes/b.md");
+			expect(h2).not.toBeNull();
+			expect(h2?.awareness.doc).toBe(h2?.doc);
+			closeDoc("notes/b.md");
+		});
+
+		it("stopCrdtSession during in-flight openDoc yields null", async () => {
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const p = openDoc("notes/c.md");
+			stopCrdtSession();
+			// openDoc must not hang forever after stop: it re-waits for a session;
+			// start a new session so the waiter resolves, then the epoch check
+			// (bumped by stop) must return null for the stale call.
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const h = await p;
+			expect(h).toBeNull();
+		});
+	});
+
 	// Finding 2: CRDT sync status observable
 	it("sync status starts as connecting, flips to synced on join ok, error on join failure", () => {
 		startCrdtSession({ vaultId: VAULT, push: () => {} });

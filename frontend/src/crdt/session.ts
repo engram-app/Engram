@@ -17,6 +17,31 @@ interface Session {
 
 let session: Session | null = null;
 
+/** Monotonically-increasing counter bumped on every stopCrdtSession call.
+ *  openDoc captures it at entry and bails if it changes across any await,
+ *  covering paths that are parked in waitForSessionStart when the stop fires. */
+let sessionGeneration = 0;
+
+/** Resolvers parked by openDoc calls that arrived before the session started. */
+let sessionStartWaiters: Array<() => void> = [];
+
+/** Per-path cancellation epochs. Bumped by closeDoc/stopCrdtSession; an
+ *  in-flight openDoc captures the epoch at entry and bails (cleaning up any
+ *  partial state) if it changed across an await. Module-level so a closeDoc
+ *  issued while no session exists still cancels a waiting openDoc. */
+const docEpochs = new Map<string, number>();
+
+function bumpEpoch(path: string): void {
+	docEpochs.set(path, (docEpochs.get(path) ?? 0) + 1);
+}
+
+function waitForSessionStart(): Promise<void> {
+	if (session) {
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => sessionStartWaiters.push(resolve));
+}
+
 let syncStatus: CrdtSyncStatus = "connecting";
 const syncStatusListeners = new Set<(s: CrdtSyncStatus) => void>();
 
@@ -82,11 +107,23 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 		awareness: new Map(),
 		openPaths,
 	};
+	const waiters = sessionStartWaiters;
+	sessionStartWaiters = [];
+	for (const w of waiters) {
+		w();
+	}
 }
 
 export function stopCrdtSession(): void {
 	if (!session) {
 		return;
+	}
+	sessionGeneration++;
+	for (const path of session.openPaths) {
+		bumpEpoch(path);
+	}
+	for (const path of session.awareness.keys()) {
+		bumpEpoch(path);
 	}
 	for (const a of session.awareness.values()) {
 		a.destroy();
@@ -98,20 +135,35 @@ export function stopCrdtSession(): void {
 export async function openDoc(
 	path: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness; doc: Y.Doc } | null> {
-	if (!(session && path.endsWith(".md"))) {
+	if (!path.endsWith(".md")) {
 		return null;
 	}
-	session.openPaths.add(path);
-	const ytext = await session.manager.getSharedText(path);
-	let awareness = session.awareness.get(path);
+	const epoch = docEpochs.get(path) ?? 0;
+	const gen = sessionGeneration;
+	await waitForSessionStart();
+	const s = session;
+	if (!s || sessionGeneration !== gen || (docEpochs.get(path) ?? 0) !== epoch) {
+		return null; // closed or torn down while waiting
+	}
+	s.openPaths.add(path);
+	const ytext = await s.manager.getSharedText(path);
+	if (session !== s || sessionGeneration !== gen || (docEpochs.get(path) ?? 0) !== epoch) {
+		// closeDoc/stop ran during the await: undo the partial open. closeDoc
+		// already destroyed the doc/awareness; just make sure we don't hold the
+		// open marker for a handle nobody received.
+		s.openPaths.delete(path);
+		return null;
+	}
+	let awareness = s.awareness.get(path);
 	if (!awareness) {
 		awareness = new Awareness(ytext.doc!);
-		session.awareness.set(path, awareness);
+		s.awareness.set(path, awareness);
 	}
 	return { ytext, awareness, doc: ytext.doc! };
 }
 
 export function closeDoc(path: string): void {
+	bumpEpoch(path);
 	if (!session) {
 		return;
 	}
