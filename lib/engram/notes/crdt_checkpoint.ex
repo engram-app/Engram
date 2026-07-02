@@ -133,6 +133,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
         :ok
     end
+  rescue
+    err ->
+      Logger.error(
+        "crdt checkpoint raised note_id=#{note_id} error=#{Exception.format(:error, err, __STACKTRACE__)}",
+        Engram.Logger.Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+
+      :ok
   end
 
   defp encode(doc) do

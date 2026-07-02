@@ -383,6 +383,16 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     Application.delete_env(:engram, CrdtCheckpointTimer)
   end
 
+  # ── No-raise: deleted user row must not crash terminate path ─────────────
+
+  test "checkpoint returns :ok instead of raising when the user row is gone", ctx do
+    %{vault: vault, note: note} = ctx
+    doc = CrdtBridge.new_doc()
+
+    assert :ok ==
+             CrdtCheckpoint.checkpoint(Ecto.UUID.generate(), vault.id, note.id, doc)
+  end
+
   test "CrdtCheckpointTimer exits when room exits", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
