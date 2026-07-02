@@ -31,9 +31,27 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   Never called per-keystroke — driven by `CrdtCheckpointTimer`.
   """
-  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t()) :: :ok
-  def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc) do
+  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t(), keyword()) :: :ok
+  def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc, opts \\ []) do
     user = Accounts.get_user!(user_id)
+
+    # Capture the prune watermark BEFORE reading/encoding the doc. Any tail row
+    # inserted while we encode is NOT necessarily in the snapshot, so it must
+    # survive the prune (it replays on next bind — apply_update is idempotent).
+    watermark =
+      case Keyword.fetch(opts, :watermark) do
+        {:ok, wm} ->
+          wm
+
+        :error ->
+          # A capture failure degrades to nil: prune becomes a no-op, which is the
+          # safe direction (rows are kept and replayed on next bind).
+          case Repo.with_tenant(user_id, fn -> tail_watermark(note_id) end) do
+            {:ok, wm} -> wm
+            _ -> nil
+          end
+      end
+
     text = CrdtBridge.text_of(doc)
 
     with {:ok, raw_state} <- encode(doc),
@@ -45,14 +63,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       {:ok, prev_hash} =
         Repo.with_tenant(user_id, fn ->
-          # Capture a watermark BEFORE encoding, so any update-log rows
-          # that arrive after this point are not deleted by prune_tail/2.
-          # The doc already reflects all rows up to (and including) the
-          # watermark, so the snapshot is correct for exactly those rows.
-          # Prune only rows at/below the watermark; later-arriving updates
-          # survive for the next checkpoint/replay.
-          watermark = tail_watermark(note_id)
-
           # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
           # Repo.get! leaves them nil. Materialize through the decrypt path so
           # they are populated BEFORE we re-derive title + re-HMAC path/folder.
@@ -139,7 +149,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # The existing index on (note_id, inserted_at) makes this a fast index scan.
   # Called at the START of the checkpoint so the watermark marks the exact
   # boundary the snapshot covers.
-  defp tail_watermark(note_id) do
+  @doc false
+  def tail_watermark(note_id) do
     CrdtUpdateLog
     |> where([l], l.note_id == ^note_id)
     |> select([l], max(l.inserted_at))
