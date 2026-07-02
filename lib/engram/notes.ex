@@ -645,8 +645,18 @@ defmodule Engram.Notes do
   end
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
-  # Loads the row's encrypted crdt_state (nil → fresh doc), diffs the incoming
-  # plaintext onto the Y.Text (never full-replace), re-encodes + re-encrypts.
+  #
+  # Implements a three-way convergent merge: builds the snapshot doc (ancestor)
+  # and the tail doc (snapshot + replayed update-log tail) separately, then
+  # applies the incoming change as a Yjs operation computed relative to the
+  # snapshot. This preserves concurrent tail edits (live typing in the settle
+  # window) alongside the incoming REST/MCP plaintext — neither side loses
+  # keystrokes when they modify non-overlapping regions.
+  #
+  # Without tail replay (the old two-way diff), the converge-diff would delete
+  # tail keystrokes from the doc and deliver_out would push those deletions to
+  # open editors — the stale-snapshot window bug.
+  #
   # Returns the merged text so callers compute content_hash + tags from the
   # MERGED result — the public-API contract is "server merges, never clobbers."
   defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
@@ -662,8 +672,61 @@ defmodule Engram.Notes do
           nil
       end
 
-    with {:ok, %{state: new_state, text: merged_text}} <-
-           Engram.Notes.CrdtBridge.merge_plaintext(prior_state, incoming_content),
+    # When the note has no snapshot (prior_state == nil), the three-way path
+    # would build an empty snapshot_doc ancestor while replay_tail fills
+    # tail_doc with the bind-time seed of the full text. The incoming REST diff
+    # is then computed against the empty ancestor ("insert everything") and
+    # applied onto the already-full tail — producing a full-body duplication
+    # ("shared base + LIVEshared base + REST"). Concurrency preservation is lost
+    # only in this legacy/pre-CRDT window, but that is strictly better than
+    # duplicating the body.
+    #
+    # Two sub-cases share prior_state == nil:
+    # - Brand-new insert (existing == nil): no tail rows can exist yet; skip
+    #   replay entirely and call merge_plaintext/2 directly.
+    # - Pre-CRDT update (existing is a %Note{} with nil crdt_state columns):
+    #   tail rows MAY exist (bind/3 could have seeded the full text into the
+    #   tail-log before any checkpoint ran). Replay the tail, then two-way-diff
+    #   the incoming text against the tail-inclusive doc to avoid duplication.
+    merge_result =
+      cond do
+        is_nil(prior_state) and is_nil(existing) ->
+          # Brand-new insert: no note row, no tail rows can exist yet. Skip the
+          # replay entirely and call merge_plaintext/2 directly (restores the
+          # simple two-way path that predates tail-aware merging).
+          Engram.Notes.CrdtBridge.merge_plaintext(nil, incoming_content)
+
+        is_nil(prior_state) ->
+          # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
+          # rows MAY exist (bind/3 seeds the full text into the tail-log before
+          # any checkpoint). Replay the tail, then two-way-diff the incoming
+          # text against the tail-inclusive doc to avoid full-body duplication.
+          with {:ok, doc} <- Engram.Notes.CrdtBridge.doc_from_state(nil) do
+            _count = Engram.Notes.CrdtPersistence.replay_tail(doc, user, note_id)
+            Engram.Notes.CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+          end
+
+        true ->
+          # Two independent docs from the same snapshot:
+          # - snapshot_doc: the shared ancestor; the incoming diff is applied here to
+          #   capture the minimal Yjs operations that encode the incoming change.
+          # - tail_doc: snapshot + replayed tail; the captured incoming operations are
+          #   applied here so Yjs merges them convergently with the tail operations.
+          with {:ok, snapshot_doc} <- Engram.Notes.CrdtBridge.doc_from_state(prior_state),
+               {:ok, tail_doc} <- Engram.Notes.CrdtBridge.doc_from_state(prior_state) do
+            # Fold in updates logged since the last checkpoint. Runs inside the
+            # caller's with_tenant txn — no nested tenant context needed.
+            _count = Engram.Notes.CrdtPersistence.replay_tail(tail_doc, user, note_id)
+
+            Engram.Notes.CrdtBridge.merge_plaintext_relative_to_snapshot(
+              snapshot_doc,
+              tail_doc,
+              incoming_content
+            )
+          end
+      end
+
+    with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {:ok,
