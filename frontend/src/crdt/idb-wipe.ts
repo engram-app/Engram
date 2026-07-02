@@ -1,14 +1,31 @@
 import { CRDT_IDB_PREFIX } from "./manager";
 
-function deleteDb(name: string): Promise<void> {
+const BLOCKED_RETRY_ATTEMPTS = 5;
+const BLOCKED_RETRY_DELAY_MS = 300;
+
+function deleteDb(name: string, attempt = 1): Promise<void> {
 	return new Promise((resolve) => {
 		const req = indexedDB.deleteDatabase(name);
-		// Resolve on all outcomes: onblocked can fire while a connection is
-		// still closing during teardown; the caller retries on the next
-		// user-change and the DB is inert (no live session) meanwhile.
 		req.onsuccess = () => resolve();
 		req.onerror = () => resolve();
-		req.onblocked = () => resolve();
+		req.onblocked = () => {
+			// onblocked fires when another connection (e.g. manager.destroy hasn't
+			// closed the IDB handle yet) is still open.  stopCrdtSession closes
+			// connections within milliseconds in the common case, so a short retry
+			// window closes the race.  We retry here so the caller does not need
+			// a second chance — the logout → login transition guard in the hook
+			// would skip a retry anyway.
+			if (attempt < BLOCKED_RETRY_ATTEMPTS) {
+				setTimeout(() => {
+					deleteDb(name, attempt + 1).then(resolve);
+				}, BLOCKED_RETRY_DELAY_MS);
+			} else {
+				console.warn(
+					`[engram] wipeCrdtIndexedDb: "${name}" still blocked after ${BLOCKED_RETRY_ATTEMPTS} attempts — giving up`,
+				);
+				resolve();
+			}
+		};
 	});
 }
 
