@@ -141,7 +141,17 @@ defmodule Engram.Notes.CrdtDeliverTest do
         name: CrdtRegistry.global_name(note_id)
       )
 
-    on_exit(fn -> if Process.alive?(room), do: GenServer.stop(room) end)
+    on_exit(fn ->
+      # The room can terminate on its own between the alive? check and the
+      # stop (SharedDoc auto-exits when its last observer leaves), so a bare
+      # GenServer.stop races and exits with :noproc. Tolerate an already-dead
+      # process rather than crash the on_exit callback.
+      try do
+        if Process.alive?(room), do: GenServer.stop(room)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
 
     if seed_text do
       SharedDoc.update_doc(room, fn doc ->
