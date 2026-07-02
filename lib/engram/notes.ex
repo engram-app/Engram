@@ -336,7 +336,7 @@ defmodule Engram.Notes do
               )
 
             existing ->
-              do_update_note(existing, base_attrs, user, sanitized_path, folder, tags)
+              do_update_note(existing, base_attrs, user, sanitized_path, folder, tags, opts)
           end
         end)
 
@@ -349,7 +349,16 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+
+          # Hash equality means do_update_note short-circuited (no version/seq
+          # change persisted) — broadcasting would fan a phantom change out to
+          # every connected device. Inserts (prev_hash nil) and real updates
+          # always differ, so they broadcast as before; forced rewrites may
+          # keep the same hash (e.g. a tags repair) but did persist a change.
+          _ =
+            if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
+              :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+            end
 
           if is_nil(prev_hash) do
             # FTUX vault page listens for this — fires when an empty vault
@@ -535,7 +544,30 @@ defmodule Engram.Notes do
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags) do
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts \\ []) do
+    if is_binary(existing.content_hash) and
+         existing.content_hash == base_attrs.content_hash and
+         not Keyword.get(opts, :force, false) do
+      # Idempotent re-push (plugin retry, offline-queue replay, MCP re-write):
+      # the incoming content hashes identically to the stored merged content,
+      # so the CRDT diff is a provable no-op. Skip the whole pipeline — CRDT
+      # decrypt/merge/re-encrypt, field re-encryption, the row rewrite (TOAST
+      # + WAL churn on the content blob), the version bump, and the seq
+      # allocation — and return the row unchanged. The caller skips the
+      # note_changed broadcast on hash equality, so other devices don't
+      # reconcile a phantom change. Tradeoff: a same-content push with a newer
+      # mtime keeps the stored mtime; sync state is hash/seq-based, so nothing
+      # keys off it. Tombstones never reach here (note_by_path_query filters
+      # deleted_at), so delete → re-push still resurrects via the insert path.
+      # Repair paths that re-derive persisted fields from unchanged content
+      # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
+      {:ok, {existing.content_hash, existing}}
+    else
+      do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
+    end
+  end
+
+  defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder) do
     with {:ok, crdt} <- maybe_merge_crdt(existing, base_attrs.content, user, existing.id) do
       merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
 
@@ -1505,10 +1537,18 @@ defmodule Engram.Notes do
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
 
+    # Same hash gate as the embed jobs: entries whose update short-circuited
+    # (idempotent re-push, no version/seq persisted) must not appear in the
+    # digest, or every batch re-sync fans a phantom change to all devices.
+    changed_entries =
+      Enum.filter(ok_entries, fn %{hash: hash, result: {:ok, info}} ->
+        info.prev_hash != hash
+      end)
+
     _ =
-      if ok_entries != [] do
+      if changed_entries != [] do
         digest =
-          Enum.map(ok_entries, fn %{result: {:ok, info}} = entry ->
+          Enum.map(changed_entries, fn %{result: {:ok, info}} = entry ->
             %{
               "event_type" => "upsert",
               "id" => info.id,

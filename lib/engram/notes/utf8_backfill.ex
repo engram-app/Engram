@@ -148,12 +148,20 @@ defmodule Engram.Notes.Utf8Backfill do
   #     the scrubbed content by upsert.
   defp fix_note(user, %Note{} = decrypted, acc) do
     with {:ok, vault} <- Vaults.get_vault(user, decrypted.vault_id),
+         # force: the #741 scenario is corrupt TAGS under byte-identical
+         # content — without it the idempotent-upsert short-circuit would
+         # skip the rewrite and never re-derive the tags.
          {:ok, _note} <-
-           Notes.upsert_note(user, vault, %{
-             "path" => decrypted.path,
-             "content" => Helpers.scrub_utf8(decrypted.content || "", :backfill),
-             "mtime" => decrypted.mtime
-           }) do
+           Notes.upsert_note(
+             user,
+             vault,
+             %{
+               "path" => decrypted.path,
+               "content" => Helpers.scrub_utf8(decrypted.content || "", :backfill),
+               "mtime" => decrypted.mtime
+             },
+             force: true
+           ) do
       bump(acc, :fixed)
     else
       other ->
