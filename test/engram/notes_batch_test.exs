@@ -445,15 +445,6 @@ defmodule Engram.NotesBatchSetBasedTest do
     %{user: user, vault: vault}
   end
 
-  defp raw_row(user, id) do
-    {:ok, row} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.get(Notes.Note, id)
-      end)
-
-    row
-  end
-
   test "batch delete stamps ONE shared seq across all tombstones", %{
     user: user,
     vault: vault
@@ -464,7 +455,7 @@ defmodule Engram.NotesBatchSetBasedTest do
 
     assert {:ok, %{deleted: 3}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id, n3.id])
 
-    seqs = for id <- [n1.id, n2.id, n3.id], do: raw_row(user, id).seq
+    seqs = for id <- [n1.id, n2.id, n3.id], do: Engram.Fixtures.raw_note_row!(user, id).seq
     assert [_] = Enum.uniq(seqs)
     assert hd(seqs) > n3.seq
   end
@@ -512,15 +503,9 @@ defmodule Engram.NotesBatchSetBasedTest do
     assert Engram.UsageMeters.notes_count(user.id) == before - 2
   end
 
-  test "failed batch move emits NO broadcasts", %{user: user, vault: vault} do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "sub/a.md", "content" => "# A2"})
-
-    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
-
-    # a.md → sub/a.md collides; the single-item batch fails and rolls back.
-    assert {:error, _} = Notes.batch_move_notes(user, vault, [n1.id], {:path, "sub"})
-
-    refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
-  end
+  # NOTE deliberately absent: a "batch move emits no broadcasts on failure"
+  # test would assert a guarantee batch_move_notes does NOT provide — moves
+  # still broadcast mid-transaction per item (see its moduledoc caveat), so
+  # a multi-item batch that fails late leaks events for rolled-back renames.
+  # The after-commit buffer for move/folder ops is the tracked follow-up.
 end

@@ -297,6 +297,19 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Raw (encrypted, un-decrypted) note row straight from the DB — for tests
+  asserting persisted column state (seq, ciphertext bytes, deleted_at).
+  """
+  def raw_note_row!(user, id) do
+    {:ok, row} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        Engram.Repo.get(Engram.Notes.Note, id)
+      end)
+
+    row
+  end
+
+  @doc """
   Inserts an active subscription for a user.
 
   Accepts optional attribute overrides (status, tier, etc.).

@@ -810,37 +810,29 @@ defmodule Engram.Notes do
   """
   @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note_by_id(user, vault, id) when is_binary(id) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      {:ok, result} =
-        Repo.with_tenant(user.id, fn ->
-          case Repo.get(Note, id) do
-            %Note{user_id: uid, vault_id: vid, deleted_at: nil} = note
-            when uid == user.id and vid == vault.id ->
-              {:ok, decrypt_or_raise!(note, user)}
-
-            _ ->
-              {:error, :not_found}
-          end
-        end)
-
-      result
-    end
+    fetch_note_by_id(user, vault, id, :all)
   end
 
-  # Like get_note_by_id/3 but meta-projected: no content read, no content
-  # decrypt. For callers that only need path/folder/tags (#863).
-  defp get_note_meta_by_id(user, vault, id) when is_binary(id) do
+  # Shared shell for by-id fetches; `fields: :meta` skips the content column
+  # and its decrypt for callers that only need path/folder/tags (#863) —
+  # same projection pattern the changes feeds use.
+  defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      base =
+        from(n in Note,
+          where:
+            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
+              is_nil(n.deleted_at)
+        )
+
+      query =
+        case fields do
+          :meta -> from(n in base, select: struct(n, @note_meta_fields))
+          :all -> base
+        end
+
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
-          query =
-            from(n in Note,
-              where:
-                n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                  is_nil(n.deleted_at),
-              select: struct(n, @note_meta_fields)
-            )
-
           case Repo.one(query) do
             %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
             nil -> {:error, :not_found}
@@ -1152,17 +1144,7 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        # T3.2 — pass path_hmac (base64), never plaintext path. The note row
-        # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
-        Enqueue.enqueue(
-          DeleteNoteIndex.new(%{
-            note_id: note.id,
-            user_id: note.user_id,
-            vault_id: note.vault_id,
-            path_hmac: Base.encode64(note.path_hmac)
-          }),
-          "delete_note_index"
-        )
+        Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
       end
 
     broadcast_change(user.id, vault.id, "delete", path)
@@ -1201,11 +1183,15 @@ defmodule Engram.Notes do
   rollback of partial work.
 
   Broadcasts fire AFTER the transaction commits — the old per-id
-  composition leaked `note_changed` events for work that later rolled back
-  (the caveat its moduledoc documented; this is the promised fix).
+  composition leaked `note_changed` events for work that later rolled back.
+  NOTE: this fixes batch DELETE only; `batch_move_notes/4` and the folder
+  batch ops still broadcast mid-transaction (their moduledocs carry the
+  caveat) — the systemic after-commit buffer remains a follow-up.
 
-  Returns `{:ok, %{deleted: n}}` (n = distinct live notes deleted) or
-  `{:error, {:not_found, id}}` identifying the first unresolvable id.
+  Duplicate ids collapse to a single delete (idempotent-delete semantics);
+  folder-marker ids are NOT deletable here (use the folder APIs) and read
+  as not_found. Returns `{:ok, %{deleted: n}}` (n = distinct live notes
+  deleted) or `{:error, {:not_found, id}}` for the first unresolvable id.
   """
   @spec batch_delete_notes(map(), map(), [String.t()]) ::
           {:ok, %{deleted: non_neg_integer()}}
@@ -1214,16 +1200,22 @@ defmodule Engram.Notes do
 
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
     now = DateTime.utc_now()
+    # Duplicate ids collapse to one delete (idempotent-delete semantics);
+    # `deleted` counts DISTINCT notes, documented in the @doc above.
+    ids = Enum.uniq(ids)
 
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
+          # kind filter: folder-marker rows share the notes table but have
+          # nil path_hmac and their own delete API — a marker id here must
+          # read as not_found, not tombstone the marker + crash on encode64.
           notes =
             Repo.all(
               from(n in Note,
                 where:
                   n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                    is_nil(n.deleted_at),
+                    is_nil(n.deleted_at) and n.kind == "note",
                 select: struct(n, @note_meta_fields)
               )
             )
@@ -1242,18 +1234,11 @@ defmodule Engram.Notes do
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
 
-              # T3.2 — base64 path_hmac, never plaintext. Jobs insert inside
-              # the txn, so a failure rolls them back with the tombstones.
-              jobs =
-                Enum.map(notes, fn n ->
-                  DeleteNoteIndex.new(%{
-                    note_id: n.id,
-                    user_id: n.user_id,
-                    vault_id: n.vault_id,
-                    path_hmac: Base.encode64(n.path_hmac)
-                  })
-                end)
-
+              # Jobs insert inside the txn, so a failure rolls them back with
+              # the tombstones. insert_all trades Enqueue.enqueue's per-job
+              # telemetry for one statement; {_count, _} match keeps failures
+              # loud (insert_all raises on error).
+              jobs = Enum.map(notes, &delete_note_index_job/1)
               _ = if jobs != [], do: Oban.insert_all(jobs)
 
               {:ok, %{deleted: updated, notes: notes}}
@@ -1269,9 +1254,25 @@ defmodule Engram.Notes do
           # Meta rows decrypt cheaply (path envelope only — no content).
           notes
           |> Crypto.decrypt_notes_batch(user)
+          |> Enum.zip(notes)
           |> Enum.each(fn
-            {:ok, note} -> broadcast_change(user.id, vault.id, "delete", note.path)
-            {:error, _} -> :ok
+            {{:ok, note}, _raw} ->
+              broadcast_change(user.id, vault.id, "delete", note.path)
+
+            {{:error, reason}, raw} ->
+              # The tombstone committed; only the broadcast is lost. Fail
+              # LOUD in logs (read paths raise on decrypt failures) so a
+              # corrupt path envelope doesn't vanish silently — other
+              # devices reconcile on their next pull via the seq feed.
+              Logger.error(
+                "batch_delete broadcast skipped: undecryptable path envelope",
+                Metadata.with_category(:error, :crypto,
+                  user_id: user.id,
+                  vault_id: vault.id,
+                  note_id: raw.id,
+                  reason: inspect(reason)
+                )
+              )
           end)
 
           {:ok, %{deleted: deleted}}
@@ -1280,6 +1281,18 @@ defmodule Engram.Notes do
           err
       end
     end
+  end
+
+  # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
+  # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
+  # arg change cannot drift between sites (silently orphaning Qdrant points).
+  defp delete_note_index_job(note) do
+    DeleteNoteIndex.new(%{
+      note_id: note.id,
+      user_id: note.user_id,
+      vault_id: note.vault_id,
+      path_hmac: Base.encode64(note.path_hmac)
+    })
   end
 
   @doc """
@@ -1867,7 +1880,7 @@ defmodule Engram.Notes do
     # Meta fetch (#863): only note.path is needed to build the destination —
     # the previous get_note_by_id decrypted the full content per id, and
     # rename_note's inner path decrypts the row AGAIN for the re-encrypt.
-    case get_note_meta_by_id(user, vault, id) do
+    case fetch_note_by_id(user, vault, id, :meta) do
       {:ok, note} ->
         new_path =
           case target_folder do
@@ -2550,17 +2563,15 @@ defmodule Engram.Notes do
   # envelope; real notes go through the parallel batch decryptor instead
   # of one-at-a-time. `:meta` skips the content column entirely for flows
   # that never rewrite content (delete cascades).
-  defp fetch_decrypted_live_rows(user, vault, fields) do
-    base =
-      from(n in Note,
-        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at)
-      )
-
+  # Always meta-projected (#863): both callers (folder rename + folder-delete
+  # cascade) only need path/folder/kind; content decrypt is targeted per-id
+  # where actually required (fetch_v1_contents).
+  defp fetch_decrypted_live_rows(user, vault) do
     query =
-      case fields do
-        :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> base
-      end
+      from(n in Note,
+        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
+        select: struct(n, @note_meta_fields)
+      )
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
@@ -2572,8 +2583,38 @@ defmodule Engram.Notes do
     Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
   end
 
+  # Targeted content fetch for legacy (pre-AAD) rows in a folder rename —
+  # the only rows whose rename path re-encrypts content. Returns
+  # %{note_id => plaintext content}; empty when the folder is all-v2.
+  defp fetch_v1_contents(user, notes) do
+    v1_ids =
+      for n <- notes,
+          n.kind == "note",
+          n.dek_version != Crypto.row_version_aad_bound(),
+          do: n.id
+
+    if v1_ids == [] do
+      %{}
+    else
+      {:ok, rows} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(n in Note, where: n.id in ^v1_ids))
+        end)
+
+      rows
+      |> decrypt_or_raise!(user)
+      |> Map.new(fn n -> {n.id, n.content || ""} end)
+    end
+  end
+
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
-    decrypted = fetch_decrypted_live_rows(user, vault, :all)
+    # :meta scan (#863 review): the v2 branch below never reads content —
+    # a folder rename preserves the basename so the title can't change and
+    # content/tags AADs key on note_id. Decrypting every content blob in
+    # the vault kept rename O(vault-content-size); only legacy v1 rows
+    # (full AAD rebind, needs content + recomputed title) fetch content,
+    # targeted by id below.
+    decrypted = fetch_decrypted_live_rows(user, vault)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -2585,6 +2626,7 @@ defmodule Engram.Notes do
     else
       now = DateTime.utc_now()
       old_len = String.length(old_folder)
+      content_by_id = fetch_v1_contents(user, notes)
 
       # Build bulk updates — compute new paths/folders/titles in Elixir,
       # then apply as a single update per note (avoids N+1 per-row queries).
@@ -2613,7 +2655,15 @@ defmodule Engram.Notes do
                   new_note_folder <>
                     String.slice(note.path, String.length(note.folder)..-1//1)
 
-                {np, Helpers.extract_title(note.content || "", np)}
+                # Title recompute is only meaningful for the v1 full rebind;
+                # v2 rows never rewrite the title (basename unchanged).
+                title =
+                  case Map.fetch(content_by_id, note.id) do
+                    {:ok, content} -> Helpers.extract_title(content, np)
+                    :error -> nil
+                  end
+
+                {np, title}
             end
 
           {note, note.path, new_path, new_note_folder, new_title}
@@ -2669,7 +2719,7 @@ defmodule Engram.Notes do
                     full_aad_bound_kw(
                       user,
                       note.id,
-                      note.content || "",
+                      Map.get(content_by_id, note.id, ""),
                       new_title,
                       new_path,
                       new_note_folder,
@@ -2791,7 +2841,7 @@ defmodule Engram.Notes do
   # naturally dedupe through the union filter.
   defp do_delete_folders(user, vault, folders) do
     prefixes = Enum.map(folders, &(&1 <> "/"))
-    decrypted = fetch_decrypted_live_rows(user, vault, :meta)
+    decrypted = fetch_decrypted_live_rows(user, vault)
 
     matches =
       Enum.filter(decrypted, fn r ->
@@ -2827,16 +2877,7 @@ defmodule Engram.Notes do
       # Side effects outside the transaction context — Qdrant cleanup + broadcasts.
       # Markers carry no embedding and no path, so skip them.
       Enum.each(real_notes, fn note ->
-        _ =
-          Enqueue.enqueue(
-            DeleteNoteIndex.new(%{
-              note_id: note.id,
-              user_id: user.id,
-              vault_id: vault.id,
-              path_hmac: Base.encode64(note.path_hmac)
-            }),
-            "delete_note_index"
-          )
+        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
         :ok = broadcast_change(user.id, vault.id, "delete", note.path)
       end)

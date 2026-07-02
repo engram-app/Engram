@@ -22,11 +22,6 @@ defmodule Engram.NotesFolderRenameCryptoTest do
     %{user: user, vault: vault}
   end
 
-  defp raw_row(user, id) do
-    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get(Notes.Note, id) end)
-    row
-  end
-
   test "rename does not rewrite content/tags ciphertext on AAD-bound rows", %{
     user: user,
     vault: vault
@@ -37,12 +32,12 @@ defmodule Engram.NotesFolderRenameCryptoTest do
         "content" => "---\ntags: [keep]\n---\n# Heading\n\nbody"
       })
 
-    before = raw_row(user, note.id)
+    before = Engram.Fixtures.raw_note_row!(user, note.id)
     assert before.dek_version == Engram.Crypto.row_version_aad_bound()
 
     {:ok, _} = Notes.rename_folder(user, vault, "Old", "New")
 
-    after_row = raw_row(user, note.id)
+    after_row = Engram.Fixtures.raw_note_row!(user, note.id)
     assert after_row.content_ciphertext == before.content_ciphertext
     assert after_row.tags_ciphertext == before.tags_ciphertext
     # Path + folder envelopes DID rotate.
