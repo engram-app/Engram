@@ -118,6 +118,26 @@ Intent lives in #812 and commit messages.
   bug); and necessary `?.` on `| null`/`| undefined` operands flagged "unnecessary".
   Enabling it would need ~15 `biome-ignore` on correct code. Treat like the framework-wrong
   rules in `overrides[0]`, not a deferred target.
+- **`useExhaustiveDependencies` — enabled with 5 real fixes + 7 justified `biome-ignore`
+  (#840).** This is the only React-hook dep checker (there is **no eslint** here; `lint` is
+  Biome-only, so the pre-existing `// eslint-disable-next-line react-hooks/exhaustive-deps`
+  comments were **dead** and were replaced). Four site shapes:
+  1. **Narrowed dep** ("more specific than its captures"): effect uses `user.id` but lists
+     `user?.id`. Fix honestly by **hoisting the primitive** (`const userId = user?.id;` then
+     dep `[userId]`) so capture == dep, preserving the narrow-refire intent (`use-channel`,
+     `note-page`). Watch `noEqualsToNull`: a hoisted `X | undefined` guard is `=== undefined`,
+     not `== null`.
+  2. **Mount-only fetch** (`refresh()` in `[]`): wrap `refresh` in `useCallback` with its
+     real deps, then dep `[refresh]` (`InvitesTab`; `MembersTab` needed a `useCallback`
+     cascade because its `sortUsers` captured `currentUserId`).
+  3. **Proxy key** Biome can't see (`discountIdKey = discountId ?? ""` used as the dep while
+     `discountId` is read inside): just add the real dep — behavior-neutral.
+  4. **Genuine intentional / false positive** → `biome-ignore` with a reason: stabilization
+     memos keyed on sub-fields or `JSON.stringify`, open-once effects guarded by a ref
+     (`inline-checkout` — live Paddle money-path, do NOT add deps), mount-only cache reads via
+     ref (`billing-page`), imperative `ref.current` handles (`app-layout`), and **trigger
+     deps** like `pathname` where the body only calls setters (`mobile-layout` — Biome calls
+     it "extra" but removing it breaks the feature).
 
 **Measure with the rule's REAL group.** `--only=<group>/<rule>` silently reports zero for a
 wrong group (e.g. `--only=style/noShadow` → 0, but the rule is `suspicious/noShadow` → 41).
@@ -145,9 +165,10 @@ Mechanical tier **complete**: `noLeakedRender` (#826), `useNamedCaptureGroup` (#
 `useDestructuring` (#828), `useImportsFirst` (#830), `useExportsLast` (#831), on top of
 the earlier a11y tier.
 
-Behavioral tier in progress: `noEqualsToNull` (#833), `noReturnAssign` (#834) merged,
-`noVoid` this PR. `noUnnecessaryConditions` dropped as permanently-off (see per-rule
-note above). Remaining in #812: `useExhaustiveDependencies` (~29, highest bug-value,
-riskiest autofix), `useAwait` (~31), `noShadow` (~41), `noEmptyBlockStatements` (~116) —
-all hand-review; plus config-gated `useAtIndex` (its `.at(-1)` autofix needs a tsconfig
-`lib` → es2022 bump in the same PR).
+Behavioral tier: `noEqualsToNull` (#833), `noReturnAssign` (#834), `noVoid` (#835),
+`useAwait` (#836), `noShadow` (#837), `noEmptyBlockStatements` (#838), and
+`useExhaustiveDependencies` (#840) merged. `noUnnecessaryConditions` dropped as
+permanently-off (see per-rule note above).
+
+Remaining in #812: config-gated `useAtIndex` (its `.at(-1)` autofix needs a tsconfig
+`lib` → es2022 bump in the same PR). With that, the behavioral tier is otherwise done.

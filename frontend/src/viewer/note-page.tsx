@@ -76,14 +76,19 @@ export default function NotePage() {
 	}, [note?.path]);
 
 	// ToC reads the materialized REST content (refreshed by note_changed).
+	// Hoist the two primitives the effect actually depends on so the captured
+	// values match the dependency list (a new `note` object identity each
+	// render would otherwise rebuild the ToC needlessly).
+	const notePath = note?.path;
+	const noteContent = note?.content;
 	useEffect(() => {
-		if (!note) {
+		if (notePath === undefined) {
 			setRightContent(null);
 			return;
 		}
-		setRightContent(<NoteToc content={note.content} />);
+		setRightContent(<NoteToc content={noteContent ?? ""} />);
 		return () => setRightContent(null);
-	}, [note?.path, note?.content, setRightContent]);
+	}, [notePath, noteContent, setRightContent]);
 
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;

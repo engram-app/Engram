@@ -274,6 +274,7 @@ export default function BillingPage({
 	// onboarding mode. Skipped for Free users who deliberately re-visit
 	// /onboard/billing to upgrade — bouncing them back to the next step
 	// defeats the upgrade affordance.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only synchronous cache check; qc identity is stable and onActivated is read via ref, and billing?.active is intentionally sampled on first paint only (the page renders Loading first anyway).
 	useEffect(() => {
 		if (!onActivatedRef.current) {
 			return;
@@ -286,10 +287,6 @@ export default function BillingPage({
 			onActivatedFiredRef.current = true;
 			onActivatedRef.current(cached);
 		}
-		// mount-only — qc identity is stable, onActivated read via ref.
-		// billing?.active read on first paint; the page renders Loading first
-		// anyway and we only want the synchronous case (cache hit).
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	useEffect(() => {
