@@ -101,6 +101,27 @@ defmodule Engram.Notes.FrontmatterTest do
       block = Frontmatter.emit(order, values)
       assert {:ok, ^order, ^values} = Frontmatter.parse(block)
     end
+
+    test "emit tolerates a non-JSON string value (degrades to raw string)" do
+      out = Frontmatter.emit(["k"], %{"k" => "not json"})
+      assert out == "k: not json\n"
+    end
+
+    test "degraded non-JSON string round-trips stably" do
+      out = Frontmatter.emit(["k"], %{"k" => "not json"})
+      {:ok, order, values} = Frontmatter.parse(out)
+      assert Frontmatter.emit(order, values) == out
+    end
+
+    test "emit degrades an unserializable value instead of raising" do
+      out = Frontmatter.emit(["k"], %{"k" => {:tuple, :not_yaml}})
+      assert out =~ "k:"
+    end
+
+    test "emit tolerates a non-binary value" do
+      out = Frontmatter.emit(["k"], %{"k" => 42})
+      assert out =~ "k:"
+    end
   end
 
   describe "encode_values/1" do
