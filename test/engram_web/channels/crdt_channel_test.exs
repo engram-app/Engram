@@ -4,7 +4,9 @@ defmodule EngramWeb.CrdtChannelTest do
   import ExUnit.CaptureLog
 
   alias Engram.{Crypto, Notes, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
+  alias Engram.Repo
+  alias Yex.Sync.SharedDoc
 
   setup do
     EngramWeb.RateLimiter.reset_buckets!()
@@ -267,7 +269,7 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, room_pid} =
         Engram.Notes.CrdtRegistry.ensure_started(user.id, vault.id, note.id)
 
-      doc = Yex.Sync.SharedDoc.get_doc(room_pid)
+      doc = SharedDoc.get_doc(room_pid)
       assert CrdtBridge.text_of(doc) == "base updated"
 
       # notify_activity wiring: if the timer pid was stored in the room's
@@ -275,6 +277,63 @@ defmodule EngramWeb.CrdtChannelTest do
       # does not exit the room — it's linked the other way). The room being
       # alive confirms the full update→persist→notify path ran.
       assert Process.alive?(room_pid)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Rapid REST writes with a live room (e2e test_49/test_78 regression)
+  #
+  # Deliver-out used to re-diff the merged PLAINTEXT into the room doc,
+  # re-encoding the same textual change on the room's own Yjs lineage. The
+  # next REST write then replayed those room-lineage ops from the update-log
+  # tail onto the snapshot (which carries the SAME change on the merge
+  # lineage) — Yjs unions both encodings and the stored content duplicates
+  # ("Version 2" + tail replay → "Version 22", cascading to the "Iteration 67"
+  # interleave seen in e2e).
+  # ---------------------------------------------------------------------------
+
+  describe "rapid REST writes with a live room" do
+    test "sequential REST updates stay verbatim and the room converges", %{
+      socket: socket,
+      doc_id: doc_id,
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      # 1. A client enrolls the note — the room binds from the "base" snapshot.
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, step1_frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(step1_frame)})
+      assert_push "crdt_msg", %{"b64" => _b64_step2}, 3000
+
+      {:ok, room_pid} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+
+      # 2. First REST write lands while the room is live. Deliver-out is async
+      #    (SharedDoc.update_doc is a cast) — synchronize on the room having
+      #    converged AND the delivery having reached the update-log tail, the
+      #    exact preconditions of the e2e failure window.
+      v2 = "# Stale Check\nIteration 2"
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v2})
+
+      wait_until(fn ->
+        CrdtBridge.text_of(SharedDoc.get_doc(room_pid)) == v2 and
+          tail_count(user) >= 1
+      end)
+
+      # 3. The next REST write replays the tail. It must come through verbatim —
+      #    not doubled/interleaved with the delivered ops ("Iteration 22" / "23").
+      v3 = "# Stale Check\nIteration 3"
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v3})
+
+      {:ok, stored} = Notes.get_note(user, vault, "p.md")
+      assert stored.content == v3
+
+      # 4. The room converges to the same text (delivery shares the merge
+      #    lineage instead of re-encoding the change).
+      wait_until(fn ->
+        CrdtBridge.text_of(SharedDoc.get_doc(room_pid)) == v3
+      end)
     end
   end
 
@@ -376,6 +435,16 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # Poll `condition` every 10ms for up to 500ms, then assert it's truthy.
+  # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
+  defp tail_count(user) do
+    {:ok, n} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(CrdtUpdateLog, :count)
+      end)
+
+    n
+  end
+
   defp wait_until(condition, deadline \\ nil) do
     deadline = deadline || System.monotonic_time(:millisecond) + 500
 
