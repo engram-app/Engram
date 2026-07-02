@@ -13,12 +13,6 @@ import {
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
 import { copyFor } from "./limit-copy";
 
-export interface UpgradeRequiredDialogProps {
-	reason: string;
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-}
-
 function isConnectionCap(reason: string): "mcp" | "obsidian" | null {
 	if (reason === "mcp_connections_exceeded") {
 		return "mcp";
@@ -33,6 +27,12 @@ function isConnectionCap(reason: string): "mcp" | "obsidian" | null {
 		return "obsidian";
 	}
 	return null;
+}
+
+export interface UpgradeRequiredDialogProps {
+	reason: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
 }
 
 export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeRequiredDialogProps) {

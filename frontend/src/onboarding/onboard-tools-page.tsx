@@ -9,41 +9,6 @@ import LoadingScreen from "../layout/loading-screen";
 import { TOOL_ASSISTANTS, TOOL_CODING, TOOL_OTHER, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
 
-export default function OnboardToolsPage() {
-	const navigate = useNavigate();
-	const { data: status, isLoading } = useOnboardingStatus();
-	const setProfile = useSetOnboardingProfile();
-	const isFree = useIsFreeTier();
-
-	if (isLoading || !status) {
-		return <LoadingScreen />;
-	}
-
-	// Honor backend ordering. Agreement/billing must come first; :done means
-	// we shouldn't be in the wizard. :tools (own step) and :vault (re-edit
-	// allowed for users who already picked tools and want to revise) both
-	// render this page.
-	if (status.next_step !== "tools" && status.next_step !== "vault" && status.next_step !== "done") {
-		return <Navigate to={`/onboard/${status.next_step}`} replace />;
-	}
-	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
-	}
-
-	return (
-		<ToolsForm
-			initialTools={status.profile?.tools ?? []}
-			isPending={setProfile.isPending}
-			hasError={setProfile.isError}
-			isFree={isFree}
-			onSubmit={async (tools) => {
-				await setProfile.mutateAsync({ tools });
-				navigate("/onboard/vault", { replace: true });
-			}}
-		/>
-	);
-}
-
 interface ToolsFormProps {
 	initialTools: string[];
 	isPending: boolean;
@@ -190,5 +155,40 @@ function ToolColumn({ title, options, selected, onToggle, layout = "stack" }: To
 				))}
 			</div>
 		</fieldset>
+	);
+}
+
+export default function OnboardToolsPage() {
+	const navigate = useNavigate();
+	const { data: status, isLoading } = useOnboardingStatus();
+	const setProfile = useSetOnboardingProfile();
+	const isFree = useIsFreeTier();
+
+	if (isLoading || !status) {
+		return <LoadingScreen />;
+	}
+
+	// Honor backend ordering. Agreement/billing must come first; :done means
+	// we shouldn't be in the wizard. :tools (own step) and :vault (re-edit
+	// allowed for users who already picked tools and want to revise) both
+	// render this page.
+	if (status.next_step !== "tools" && status.next_step !== "vault" && status.next_step !== "done") {
+		return <Navigate to={`/onboard/${status.next_step}`} replace />;
+	}
+	if (status.next_step === "done") {
+		return <Navigate to="/" replace />;
+	}
+
+	return (
+		<ToolsForm
+			initialTools={status.profile?.tools ?? []}
+			isPending={setProfile.isPending}
+			hasError={setProfile.isError}
+			isFree={isFree}
+			onSubmit={async (tools) => {
+				await setProfile.mutateAsync({ tools });
+				navigate("/onboard/vault", { replace: true });
+			}}
+		/>
 	);
 }

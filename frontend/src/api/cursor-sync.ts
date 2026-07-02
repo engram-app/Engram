@@ -29,23 +29,6 @@ const MAX_PAGES = 10_000;
 // Single-flight: reconnect + focus can fire together; one run per vault.
 const inflight = new Map<string, Promise<void>>();
 
-/**
- * Reconcile this device against the ordered change feed. On a fresh device
- * (no stored cursor) it seeds the cursor at the manifest head and applies
- * nothing (current state is already on screen via the normal queries). With a
- * cursor it pulls metadata-only deltas and feeds each note row through the
- * socket's invalidation pipeline. Single-flight per vault.
- */
-export function runCursorSync(vaultId: string, queryClient: QueryClient): Promise<void> {
-	const existing = inflight.get(vaultId);
-	if (existing) {
-		return existing;
-	}
-	const run = doCursorSync(vaultId, queryClient).finally(() => inflight.delete(vaultId));
-	inflight.set(vaultId, run);
-	return run;
-}
-
 // The cursor-sync requests carry the AMBIENT X-Vault-ID (client.authFetch reads
 // the active vault, not vaultId). An in-flight run isn't cancelled on a vault
 // switch, so a response can arrive belonging to a different vault. Guard every
@@ -154,6 +137,23 @@ function applyRow(row: ChangeRow, queryClient: QueryClient, vaultId: string): vo
 		folder: row.folder,
 	};
 	handleNoteChanged(payload, queryClient, vaultId);
+}
+
+/**
+ * Reconcile this device against the ordered change feed. On a fresh device
+ * (no stored cursor) it seeds the cursor at the manifest head and applies
+ * nothing (current state is already on screen via the normal queries). With a
+ * cursor it pulls metadata-only deltas and feeds each note row through the
+ * socket's invalidation pipeline. Single-flight per vault.
+ */
+export function runCursorSync(vaultId: string, queryClient: QueryClient): Promise<void> {
+	const existing = inflight.get(vaultId);
+	if (existing) {
+		return existing;
+	}
+	const run = doCursorSync(vaultId, queryClient).finally(() => inflight.delete(vaultId));
+	inflight.set(vaultId, run);
+	return run;
 }
 
 /**

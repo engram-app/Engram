@@ -1,11 +1,3 @@
-export type ActionId = "rename" | "move" | "duplicate" | "copy-wikilink" | "delete";
-
-export interface Action {
-	id: ActionId;
-	label: string;
-	destructive?: boolean;
-}
-
 const FILE_ACTIONS: readonly Action[] = [
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
@@ -26,6 +18,14 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "move", label: "Move to…" },
 	{ id: "delete", label: "Delete", destructive: true },
 ];
+
+export type ActionId = "rename" | "move" | "duplicate" | "copy-wikilink" | "delete";
+
+export interface Action {
+	id: ActionId;
+	label: string;
+	destructive?: boolean;
+}
 
 export function actionsFor({
 	kind,

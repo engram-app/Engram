@@ -5,13 +5,6 @@ import type { SubscriptionAlertData } from "@/lib/paddle-types";
 import { type AlertVariant, deriveSubscriptionAlert } from "@/lib/subscription-alert-utils";
 import { cn } from "@/lib/utils";
 
-/** Props for the `SubscriptionAlert` component. */
-export interface SubscriptionAlertProps {
-	subscription?: SubscriptionAlertData;
-	onDismiss?: () => void;
-	className?: string;
-}
-
 const VARIANT_CONFIG: Record<AlertVariant, { icon: React.ElementType; className: string }> = {
 	destructive: {
 		icon: AlertCircle,
@@ -27,6 +20,13 @@ const VARIANT_CONFIG: Record<AlertVariant, { icon: React.ElementType; className:
 		className: "border-info/40 bg-info/15 text-info-foreground [&>svg]:text-info-foreground",
 	},
 };
+
+/** Props for the `SubscriptionAlert` component. */
+export interface SubscriptionAlertProps {
+	subscription?: SubscriptionAlertData;
+	onDismiss?: () => void;
+	className?: string;
+}
 
 export function SubscriptionAlert({ subscription, onDismiss, className }: SubscriptionAlertProps) {
 	const alert = deriveSubscriptionAlert(subscription);

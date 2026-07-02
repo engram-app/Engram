@@ -1,6 +1,13 @@
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 
+interface Entry {
+	doc: Y.Doc;
+	persistence: IndexeddbPersistence;
+	text: Y.Text;
+	ready: Promise<void>;
+}
+
 /**
  * Origin stamped on remotely-applied updates. The single update listener skips
  * these (the server already has them); web has no local file, so there is no
@@ -15,13 +22,6 @@ export interface CrdtManagerOptions {
 	onUpdate: (docId: string, update: Uint8Array, origin: unknown) => void;
 	/** IndexedDB persistence failure (e.g. quota). Sync continues over the WS. */
 	onPersistError?: (path: string, err: unknown) => void;
-}
-
-interface Entry {
-	doc: Y.Doc;
-	persistence: IndexeddbPersistence;
-	text: Y.Text;
-	ready: Promise<void>;
 }
 
 export class CrdtManager {

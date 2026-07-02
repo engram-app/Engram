@@ -23,7 +23,7 @@ interface Vault {
 
 type Step = "enter-code" | "pick-vault" | "success" | "error";
 
-export default function DeviceLinkPage() {
+function DeviceLinkPage() {
 	const { isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
 	const qc = useQueryClient();
@@ -585,3 +585,5 @@ function relativeTime(iso: string | null): string | null {
 	const years = Math.floor(months / 12);
 	return `${years} year${years === 1 ? "" : "s"} ago`;
 }
+
+export default DeviceLinkPage;

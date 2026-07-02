@@ -11,14 +11,6 @@ import { formatBillingCycle, formatTrialPeriod } from "@/lib/paddle-format";
 import { getOrCreatePaddle } from "@/lib/paddle-instance";
 import type { PriceData } from "@/lib/paddle-types";
 
-export interface UsePaddlePricesArgs {
-	clientToken: string;
-	environment?: Environments;
-	priceIds: string[];
-	countryCode?: string;
-	discountId?: string;
-}
-
 type PaddlePrices = Record<string, PriceData>;
 
 function getPriceAmounts(prices: PricePreviewResponse): PaddlePrices {
@@ -32,6 +24,14 @@ function getPriceAmounts(prices: PricePreviewResponse): PaddlePrices {
 		};
 		return acc;
 	}, {});
+}
+
+export interface UsePaddlePricesArgs {
+	clientToken: string;
+	environment?: Environments;
+	priceIds: string[];
+	countryCode?: string;
+	discountId?: string;
 }
 
 export function usePaddlePrices(args: UsePaddlePricesArgs): {

@@ -47,23 +47,6 @@ function deriveCurrentCadence(detail: SubscriptionDetail | undefined): BillingCa
 	return detail?.billing_cycle?.interval === "year" ? "annual" : "monthly";
 }
 
-export default function PlanChangePanel({
-	billing,
-	onClose,
-	onSwitchToCancel,
-}: PlanChangePanelProps) {
-	// Paddle refuses any items-array mutation on a trialing subscription —
-	// both tier swaps (`subscription_trialing_items_update_invalid_options`)
-	// AND cadence swaps (`subscription_new_items_not_valid`). We can't work
-	// around it client-side; the trial has to end first. Render an
-	// explanatory state instead of a picker that's guaranteed to 422.
-	if (billing.subscription?.status === "trialing") {
-		return <TrialNotice billing={billing} onClose={onClose} onSwitchToCancel={onSwitchToCancel} />;
-	}
-
-	return <PlanChangePicker billing={billing} onClose={onClose} />;
-}
-
 function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClose: () => void }) {
 	const { data: config } = useBillingConfig();
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
@@ -297,4 +280,21 @@ function formatProration(data: {
 	const direction = data.immediate_charge_or_credit > 0 ? "Charged" : "Credited";
 	const amount = formatCents(Math.abs(data.immediate_charge_or_credit));
 	return `${direction} ${amount} today; next bill ${newTotal} on ${renewal}`;
+}
+
+export default function PlanChangePanel({
+	billing,
+	onClose,
+	onSwitchToCancel,
+}: PlanChangePanelProps) {
+	// Paddle refuses any items-array mutation on a trialing subscription —
+	// both tier swaps (`subscription_trialing_items_update_invalid_options`)
+	// AND cadence swaps (`subscription_new_items_not_valid`). We can't work
+	// around it client-side; the trial has to end first. Render an
+	// explanatory state instead of a picker that's guaranteed to 422.
+	if (billing.subscription?.status === "trialing") {
+		return <TrialNotice billing={billing} onClose={onClose} onSwitchToCancel={onSwitchToCancel} />;
+	}
+
+	return <PlanChangePicker billing={billing} onClose={onClose} />;
 }

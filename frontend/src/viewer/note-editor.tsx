@@ -10,11 +10,6 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useTheme } from "../theme/theme-provider";
 
-export interface NoteEditorProps {
-	ytext: Y.Text;
-	awareness: Awareness;
-}
-
 // Fill the parent so the editor spans the full pane height. 16px on .cm-content
 // prevents iOS Safari auto-zoom. Transparent background so the card shows through.
 const editorTheme = EditorView.theme({
@@ -37,6 +32,11 @@ const editorTheme = EditorView.theme({
 	".cm-gutters": { backgroundColor: "transparent", border: "none" },
 	".cm-content": { fontSize: "16px", padding: "20px 20px 30vh" },
 });
+
+export interface NoteEditorProps {
+	ytext: Y.Text;
+	awareness: Awareness;
+}
 
 /**
  * Build the initial EditorState for a CRDT-bound editor.

@@ -1,28 +1,3 @@
-export interface EngramConfig {
-	authProvider: "local" | "clerk";
-	clerkPublishableKey: string;
-	billingEnabled: boolean;
-	// Mirrors Clerk Dashboard "Waitlist" sign-up mode. UI flips "Sign up"
-	// CTAs to /waitlist and passes waitlistUrl to <SignIn />. The dashboard
-	// flag is the actual enforcement; this is presentational only.
-	clerkWaitlistMode: boolean;
-	// Runtime API base URL. Empty string = same-origin (selfhost, Phoenix
-	// serves both API and SPA). A full URL = saas (CF Pages serves SPA,
-	// backend hosted elsewhere — e.g. https://api.engram.page).
-	apiBase: string;
-	// Runtime WebSocket base URL. Empty string = same-origin (selfhost).
-	// A full wss:// URL points Phoenix Socket at the cross-origin backend.
-	wsBase: string;
-	// Self-host SSR-injected bootstrap state. `null` under Clerk; `undefined`
-	// when the config didn't ship one (CF Pages serves static config.json
-	// without a bootstrap block; Vite dev; older Phoenix build), in which
-	// case useBootstrap() falls back to fetching /api/auth/bootstrap.
-	bootstrap?: {
-		bootstrap_pending: boolean;
-		registration_mode: "open" | "invite_only" | "closed";
-	} | null;
-}
-
 const VALID_PROVIDERS = ["local", "clerk"] as const;
 
 function normalize(raw: Record<string, unknown>): EngramConfig {
@@ -50,6 +25,31 @@ function defaultConfig(): EngramConfig {
 		apiBase: import.meta.env.VITE_API_BASE ?? "",
 		wsBase: import.meta.env.VITE_WS_BASE ?? "",
 	};
+}
+
+export interface EngramConfig {
+	authProvider: "local" | "clerk";
+	clerkPublishableKey: string;
+	billingEnabled: boolean;
+	// Mirrors Clerk Dashboard "Waitlist" sign-up mode. UI flips "Sign up"
+	// CTAs to /waitlist and passes waitlistUrl to <SignIn />. The dashboard
+	// flag is the actual enforcement; this is presentational only.
+	clerkWaitlistMode: boolean;
+	// Runtime API base URL. Empty string = same-origin (selfhost, Phoenix
+	// serves both API and SPA). A full URL = saas (CF Pages serves SPA,
+	// backend hosted elsewhere — e.g. https://api.engram.page).
+	apiBase: string;
+	// Runtime WebSocket base URL. Empty string = same-origin (selfhost).
+	// A full wss:// URL points Phoenix Socket at the cross-origin backend.
+	wsBase: string;
+	// Self-host SSR-injected bootstrap state. `null` under Clerk; `undefined`
+	// when the config didn't ship one (CF Pages serves static config.json
+	// without a bootstrap block; Vite dev; older Phoenix build), in which
+	// case useBootstrap() falls back to fetching /api/auth/bootstrap.
+	bootstrap?: {
+		bootstrap_pending: boolean;
+		registration_mode: "open" | "invite_only" | "closed";
+	} | null;
 }
 
 // Selfhost no-op contract: when Phoenix SSR-injects __ENGRAM_CONFIG__ this

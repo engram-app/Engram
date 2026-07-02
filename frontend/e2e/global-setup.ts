@@ -7,81 +7,6 @@ import { cleanupTestUsers } from "./db-cleanup";
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
 
-export default async function globalSetup() {
-	// Clean up stale test users from previous runs (in case teardown didn't run)
-	await cleanupTestUsers("setup");
-
-	const secretKey = process.env.E2E_CLERK_SECRET_KEY;
-	if (!secretKey) {
-		console.log("E2E_CLERK_SECRET_KEY not set — Clerk browser tests will be skipped");
-		fs.writeFileSync(AUTH_STATE_PATH, JSON.stringify({ skipped: true }));
-		return;
-	}
-
-	// Set CLERK_SECRET_KEY for @clerk/testing (it reads this env var)
-	process.env.CLERK_SECRET_KEY = secretKey;
-	await clerkSetup();
-
-	// Clean up orphaned Clerk users from previous failed runs
-	await cleanupOrphanedClerkUsers(secretKey);
-
-	const ts = Date.now();
-	const email = `e2e-browser-${ts}@test.com`;
-	const password = crypto.randomBytes(12).toString("base64url");
-
-	const resp = await fetch(`${CLERK_API}/users`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${secretKey}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			email_address: [email],
-			username: `e2e-browser-${ts}`,
-			password,
-			skip_password_checks: true,
-		}),
-	});
-
-	if (!resp.ok) {
-		const body = await resp.text();
-		throw new Error(`Clerk user creation failed: ${resp.status} ${body}`);
-	}
-
-	const user = await resp.json();
-	console.log(`Clerk test user created: ${email} (${user.id})`);
-
-	// Stamp the state file IMMEDIATELY so globalTeardown can clean up the
-	// Clerk user even if a subsequent setup step throws. Previously the file
-	// wasn't written until AFTER waitUntilSignInReady + preCompleteOnboarding,
-	// which meant any flake in those probes leaked a user into Clerk's dev
-	// instance — the main cause of the 100-user-cap hits we've been seeing.
-	fs.writeFileSync(
-		AUTH_STATE_PATH,
-		JSON.stringify({
-			email,
-			password,
-			clerk_user_id: user.id,
-			skipped: false,
-		}),
-	);
-
-	// Block until BOTH endpoints @clerk/testing's signIn helper uses can see
-	// this user. Splitting the probe in two because Clerk's user-list-by-email
-	// lookup (called FIRST by signIn) and sign-in-tokens (called second) can
-	// sit on different read replicas — the existing tokens probe alone was
-	// insufficient and we still hit "No user found with email" deep in test
-	// code (issue #193 recurrence post-#415). Concentrates the wait into one
-	// site so test code doesn't need retries.
-	await waitUntilSignInReady(user.id, secretKey);
-	await waitUntilEmailResolvable(email, user.id, secretKey);
-
-	// Pre-complete onboarding for the Clerk test user against the clerk backend.
-	// RequireOnboarding gates /api/* with 403 `onboarding_required` until the
-	// user has a profile. uses_obsidian=true short-circuits the vault step too.
-	await preCompleteOnboarding(user.id, secretKey);
-}
-
 const CLERK_BACKEND_PORT = process.env.PW_CLERK_BACKEND_PORT ?? "4001";
 const CLERK_API_BASE = `http://localhost:${CLERK_BACKEND_PORT}/api`;
 
@@ -323,4 +248,79 @@ async function cleanupOrphanedClerkUsers(secretKey: string) {
 	if (deleted) {
 		console.log(`Cleaned up ${deleted} orphaned Clerk test user(s)`);
 	}
+}
+
+export default async function globalSetup() {
+	// Clean up stale test users from previous runs (in case teardown didn't run)
+	await cleanupTestUsers("setup");
+
+	const secretKey = process.env.E2E_CLERK_SECRET_KEY;
+	if (!secretKey) {
+		console.log("E2E_CLERK_SECRET_KEY not set — Clerk browser tests will be skipped");
+		fs.writeFileSync(AUTH_STATE_PATH, JSON.stringify({ skipped: true }));
+		return;
+	}
+
+	// Set CLERK_SECRET_KEY for @clerk/testing (it reads this env var)
+	process.env.CLERK_SECRET_KEY = secretKey;
+	await clerkSetup();
+
+	// Clean up orphaned Clerk users from previous failed runs
+	await cleanupOrphanedClerkUsers(secretKey);
+
+	const ts = Date.now();
+	const email = `e2e-browser-${ts}@test.com`;
+	const password = crypto.randomBytes(12).toString("base64url");
+
+	const resp = await fetch(`${CLERK_API}/users`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${secretKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			email_address: [email],
+			username: `e2e-browser-${ts}`,
+			password,
+			skip_password_checks: true,
+		}),
+	});
+
+	if (!resp.ok) {
+		const body = await resp.text();
+		throw new Error(`Clerk user creation failed: ${resp.status} ${body}`);
+	}
+
+	const user = await resp.json();
+	console.log(`Clerk test user created: ${email} (${user.id})`);
+
+	// Stamp the state file IMMEDIATELY so globalTeardown can clean up the
+	// Clerk user even if a subsequent setup step throws. Previously the file
+	// wasn't written until AFTER waitUntilSignInReady + preCompleteOnboarding,
+	// which meant any flake in those probes leaked a user into Clerk's dev
+	// instance — the main cause of the 100-user-cap hits we've been seeing.
+	fs.writeFileSync(
+		AUTH_STATE_PATH,
+		JSON.stringify({
+			email,
+			password,
+			clerk_user_id: user.id,
+			skipped: false,
+		}),
+	);
+
+	// Block until BOTH endpoints @clerk/testing's signIn helper uses can see
+	// this user. Splitting the probe in two because Clerk's user-list-by-email
+	// lookup (called FIRST by signIn) and sign-in-tokens (called second) can
+	// sit on different read replicas — the existing tokens probe alone was
+	// insufficient and we still hit "No user found with email" deep in test
+	// code (issue #193 recurrence post-#415). Concentrates the wait into one
+	// site so test code doesn't need retries.
+	await waitUntilSignInReady(user.id, secretKey);
+	await waitUntilEmailResolvable(email, user.id, secretKey);
+
+	// Pre-complete onboarding for the Clerk test user against the clerk backend.
+	// RequireOnboarding gates /api/* with 403 `onboarding_required` until the
+	// user has a profile. uses_obsidian=true short-circuits the vault step too.
+	await preCompleteOnboarding(user.id, secretKey);
 }

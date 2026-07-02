@@ -1,5 +1,22 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
+interface DemoVaultData {
+	vault: DemoVault;
+	folders: DemoFolder[];
+	notes: DemoNote[];
+}
+
+interface DemoVaultCtx {
+	active: boolean;
+	vault: DemoVault | null;
+	folders: DemoFolder[];
+	notes: DemoNote[];
+	activate: () => Promise<void>;
+	deactivate: () => void;
+}
+
+const Ctx = createContext<DemoVaultCtx | null>(null);
+
 export interface DemoNote {
 	id: string;
 	folder_id: string;
@@ -18,23 +35,6 @@ export interface DemoVault {
 	id: string;
 	name: string;
 }
-
-interface DemoVaultData {
-	vault: DemoVault;
-	folders: DemoFolder[];
-	notes: DemoNote[];
-}
-
-interface DemoVaultCtx {
-	active: boolean;
-	vault: DemoVault | null;
-	folders: DemoFolder[];
-	notes: DemoNote[];
-	activate: () => Promise<void>;
-	deactivate: () => void;
-}
-
-const Ctx = createContext<DemoVaultCtx | null>(null);
 
 export function DemoVaultProvider({ children }: { children: ReactNode }) {
 	const [data, setData] = useState<DemoVaultData | null>(null);

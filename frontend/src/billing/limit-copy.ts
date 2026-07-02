@@ -1,27 +1,3 @@
-export type LimitReason =
-	| "notes_cap_exceeded"
-	| "vaults_cap_exceeded"
-	| "attachments_disabled"
-	| "attachments_quota_exceeded"
-	| "file_too_large"
-	| "concurrent_devices_exceeded"
-	| "device_swap_cooldown"
-	| "ai_conversations_per_day_exceeded"
-	| "ai_queries_per_conversation_exceeded"
-	| "ai_queries_per_day_exceeded"
-	| "external_ai_searches_per_day_exceeded"
-	| "inapp_searches_per_day_exceeded"
-	| "attachment_must_be_text"
-	| "mcp_connections_exceeded"
-	| "obsidian_connections_exceeded"
-	| "account_suspended"
-	| "no_tier";
-
-export interface LimitCopy {
-	title: string;
-	body: string;
-}
-
 const TABLE: Record<LimitReason, LimitCopy> = {
 	notes_cap_exceeded: {
 		title: "You've hit your note limit",
@@ -97,6 +73,30 @@ const FALLBACK: LimitCopy = {
 	title: "Limit reached",
 	body: "Upgrade to continue.",
 };
+
+export type LimitReason =
+	| "notes_cap_exceeded"
+	| "vaults_cap_exceeded"
+	| "attachments_disabled"
+	| "attachments_quota_exceeded"
+	| "file_too_large"
+	| "concurrent_devices_exceeded"
+	| "device_swap_cooldown"
+	| "ai_conversations_per_day_exceeded"
+	| "ai_queries_per_conversation_exceeded"
+	| "ai_queries_per_day_exceeded"
+	| "external_ai_searches_per_day_exceeded"
+	| "inapp_searches_per_day_exceeded"
+	| "attachment_must_be_text"
+	| "mcp_connections_exceeded"
+	| "obsidian_connections_exceeded"
+	| "account_suspended"
+	| "no_tier";
+
+export interface LimitCopy {
+	title: string;
+	body: string;
+}
 
 export function copyFor(reason: string): LimitCopy {
 	return TABLE[reason as LimitReason] ?? FALLBACK;

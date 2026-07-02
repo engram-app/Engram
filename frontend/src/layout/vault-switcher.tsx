@@ -11,7 +11,7 @@ import {
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
 import { useVaults, type Vault } from "../api/queries";
 
-export default function VaultSwitcher() {
+function VaultSwitcher() {
 	const { data: vaults, isLoading } = useVaults();
 	const activeId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -106,3 +106,5 @@ function VaultLabel({ vault }: { vault: Vault }) {
 		</section>
 	);
 }
+
+export default VaultSwitcher;

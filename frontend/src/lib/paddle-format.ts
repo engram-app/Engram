@@ -1,15 +1,26 @@
+// Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
+interface TimePeriodLike {
+	frequency: number;
+	interval: string;
+}
+
+// Paddle-supported zero-decimal currencies — amounts are already whole units.
+// https://developer.paddle.com/concepts/payment-methods/currencies
+const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
+
+const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
+	day: { noun: "Daily", adjective: "daily" },
+	week: { noun: "Weekly", adjective: "weekly" },
+	month: { noun: "Monthly", adjective: "monthly" },
+	year: { noun: "Annually", adjective: "annual" },
+};
+
 export function formatDate(isoString: string, locale = "en-US"): string {
 	return new Intl.DateTimeFormat(locale, {
 		year: "numeric",
 		month: "short",
 		day: "numeric",
 	}).format(new Date(isoString));
-}
-
-// Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
-interface TimePeriodLike {
-	frequency: number;
-	interval: string;
 }
 
 /**
@@ -67,10 +78,6 @@ export function formatMoney(amount: number, currencyCode: string, locale = "en-U
 	}).format(amount);
 }
 
-// Paddle-supported zero-decimal currencies — amounts are already whole units.
-// https://developer.paddle.com/concepts/payment-methods/currencies
-const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
-
 /**
  * Parses a Paddle API monetary amount string (lowest denomination, e.g. "1500")
  * to a decimal number suitable for `formatMoney` (e.g. 15.00).
@@ -116,13 +123,6 @@ export function formatProrationMode(mode: string): string {
 	};
 	return labels[mode] ?? mode;
 }
-
-const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
-	day: { noun: "Daily", adjective: "daily" },
-	week: { noun: "Weekly", adjective: "weekly" },
-	month: { noun: "Monthly", adjective: "monthly" },
-	year: { noun: "Annually", adjective: "annual" },
-};
 
 /**
  * Returns a human-readable label for a Paddle billing interval.

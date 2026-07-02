@@ -1,6 +1,15 @@
 import type * as Y from "yjs";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
 
+const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
+	text: "",
+	list: [],
+	number: null,
+	checkbox: false,
+	date: "",
+	datetime: "",
+};
+
 export const CONTENT_KEY = "content";
 export const FRONTMATTER_KEY = "frontmatter";
 export const ORDER_KEY = "frontmatter_order";
@@ -41,15 +50,6 @@ export function readRows(doc: Y.Doc): PropertyRow[] {
 		return { key, value, typeOverride: types.get(key) ?? null };
 	});
 }
-
-const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
-	text: "",
-	list: [],
-	number: null,
-	checkbox: false,
-	date: "",
-	datetime: "",
-};
 
 export function setValue(doc: Y.Doc, key: string, value: unknown): void {
 	const { values } = frontmatterMaps(doc);

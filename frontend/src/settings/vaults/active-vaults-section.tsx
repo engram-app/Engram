@@ -11,87 +11,6 @@ import { DeleteVaultDialog } from "./delete-vault-dialog";
 const inputClass =
 	"block w-full rounded-md border border-input bg-card px-2 py-1 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
-export function ActiveVaultsSection() {
-	const { data: vaults, isLoading } = useVaults();
-	const { data: billing } = useBillingStatus();
-	const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null);
-	const [createOpen, setCreateOpen] = useState(false);
-
-	const vaultsCap = billing?.caps.vaults ?? null;
-	const vaultCount = vaults?.length ?? 0;
-	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
-	const titleSuffix = vaultsCap == null ? "" : ` (${vaultCount} / ${vaultsCap})`;
-
-	return (
-		<SettingsSectionCard
-			title={`Vaults${titleSuffix}`}
-			description="Rename, set a default, or delete your vaults."
-			headerAction={
-				atCap ? undefined : (
-					<Button onClick={() => setCreateOpen((o) => !o)}>
-						{createOpen ? "Cancel" : "New vault"}
-					</Button>
-				)
-			}
-		>
-			{Boolean(atCap) && (
-				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-					<p className="text-foreground text-sm">
-						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
-					</p>
-					<a
-						href="/settings/billing"
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
-					>
-						Upgrade
-					</a>
-				</aside>
-			)}
-			{createOpen && !atCap && (
-				<section className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
-					<VaultCreateForm
-						autoFocus
-						showCancel
-						onCancel={() => setCreateOpen(false)}
-						onCreated={() => setCreateOpen(false)}
-					/>
-				</section>
-			)}
-			{Boolean(isLoading) && <p className="text-muted-foreground text-sm">Loading…</p>}
-			<table className="w-full text-sm">
-				<thead>
-					<tr className="border-border border-b text-left text-muted-foreground text-xs">
-						<th className="py-2 font-medium">Name</th>
-						<th className="py-2 text-right font-medium">Files</th>
-						<th className="py-2 text-right font-medium">Attachments</th>
-						<th className="py-2" aria-label="Actions" />
-					</tr>
-				</thead>
-				<tbody className="divide-y divide-border">
-					{(vaults ?? []).map((v) => (
-						<VaultRow key={v.id} vault={v} onDelete={() => setDeleteTarget(v)} />
-					))}
-					{!isLoading && (vaults ?? []).length === 0 && (
-						<tr>
-							<td colSpan={4} className="py-3 text-muted-foreground">
-								No vaults yet.
-							</td>
-						</tr>
-					)}
-				</tbody>
-			</table>
-
-			{deleteTarget ? (
-				<DeleteVaultDialog
-					vault={deleteTarget}
-					open={deleteTarget !== null}
-					onOpenChange={(open) => !open && setDeleteTarget(null)}
-				/>
-			) : null}
-		</SettingsSectionCard>
-	);
-}
-
 function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 	const update = useUpdateVault();
 	const [renaming, setRenaming] = useState(false);
@@ -175,5 +94,86 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 				</span>
 			</td>
 		</tr>
+	);
+}
+
+export function ActiveVaultsSection() {
+	const { data: vaults, isLoading } = useVaults();
+	const { data: billing } = useBillingStatus();
+	const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null);
+	const [createOpen, setCreateOpen] = useState(false);
+
+	const vaultsCap = billing?.caps.vaults ?? null;
+	const vaultCount = vaults?.length ?? 0;
+	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
+	const titleSuffix = vaultsCap == null ? "" : ` (${vaultCount} / ${vaultsCap})`;
+
+	return (
+		<SettingsSectionCard
+			title={`Vaults${titleSuffix}`}
+			description="Rename, set a default, or delete your vaults."
+			headerAction={
+				atCap ? undefined : (
+					<Button onClick={() => setCreateOpen((o) => !o)}>
+						{createOpen ? "Cancel" : "New vault"}
+					</Button>
+				)
+			}
+		>
+			{Boolean(atCap) && (
+				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+					<p className="text-foreground text-sm">
+						Your Free plan allows {vaultsCap} vault. Upgrade to Starter for more vaults.
+					</p>
+					<a
+						href="/settings/billing"
+						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
+					>
+						Upgrade
+					</a>
+				</aside>
+			)}
+			{createOpen && !atCap && (
+				<section className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
+					<VaultCreateForm
+						autoFocus
+						showCancel
+						onCancel={() => setCreateOpen(false)}
+						onCreated={() => setCreateOpen(false)}
+					/>
+				</section>
+			)}
+			{Boolean(isLoading) && <p className="text-muted-foreground text-sm">Loading…</p>}
+			<table className="w-full text-sm">
+				<thead>
+					<tr className="border-border border-b text-left text-muted-foreground text-xs">
+						<th className="py-2 font-medium">Name</th>
+						<th className="py-2 text-right font-medium">Files</th>
+						<th className="py-2 text-right font-medium">Attachments</th>
+						<th className="py-2" aria-label="Actions" />
+					</tr>
+				</thead>
+				<tbody className="divide-y divide-border">
+					{(vaults ?? []).map((v) => (
+						<VaultRow key={v.id} vault={v} onDelete={() => setDeleteTarget(v)} />
+					))}
+					{!isLoading && (vaults ?? []).length === 0 && (
+						<tr>
+							<td colSpan={4} className="py-3 text-muted-foreground">
+								No vaults yet.
+							</td>
+						</tr>
+					)}
+				</tbody>
+			</table>
+
+			{deleteTarget ? (
+				<DeleteVaultDialog
+					vault={deleteTarget}
+					open={deleteTarget !== null}
+					onOpenChange={(open) => !open && setDeleteTarget(null)}
+				/>
+			) : null}
+		</SettingsSectionCard>
 	);
 }

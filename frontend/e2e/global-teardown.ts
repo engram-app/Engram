@@ -5,14 +5,6 @@ import { cleanupTestUsers } from "./db-cleanup";
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
 
-export default async function globalTeardown() {
-	// 1. Clean up e2e test users from backend DB (both local + clerk tests)
-	await cleanupTestUsers("teardown");
-
-	// 2. Clean up Clerk test user via API
-	await cleanupClerkUser();
-}
-
 async function cleanupClerkUser() {
 	if (!fs.existsSync(AUTH_STATE_PATH)) {
 		return;
@@ -43,4 +35,12 @@ async function cleanupClerkUser() {
 	}
 
 	fs.unlinkSync(AUTH_STATE_PATH);
+}
+
+export default async function globalTeardown() {
+	// 1. Clean up e2e test users from backend DB (both local + clerk tests)
+	await cleanupTestUsers("teardown");
+
+	// 2. Clean up Clerk test user via API
+	await cleanupClerkUser();
 }

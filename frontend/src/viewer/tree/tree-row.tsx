@@ -15,6 +15,74 @@ interface Props {
 	onFolderHover?: (folderId: string) => void;
 }
 
+function rowClass(instance: ItemInstance<LoaderItem>): string {
+	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
+	// rendered without it (tests).
+	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
+	return [
+		// w-full so the folder <button> stretches like the note <a> (form controls
+		// shrink to content by default) — gives both the same full-width hover hit.
+		// relative anchors the absolutely-positioned indent guides.
+		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
+		instance.isSelected()
+			? "bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300"
+			: "text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800",
+		dragOver ? "ring-1 ring-inset ring-blue-400 bg-blue-100/60 dark:bg-blue-900/40" : "",
+	].join(" ");
+}
+
+function leafName(item: TreeItem): string {
+	if (item.kind === "folder") {
+		return item.name;
+	}
+	return item.path.split("/").pop() ?? item.path;
+}
+
+function noteLabel(item: Extract<TreeItem, { kind: "note" }>): string {
+	return item.title || item.path.split("/").pop() || item.path;
+}
+
+// Obsidian-style vertical indentation guides. A row at depth d draws one line
+// per ancestor level, each in the 4px gutter just left of that level's chevron.
+// Each line spans the full row height, so stacked rows form continuous lines
+// down a folder's children without tracking where the folder ends.
+const INDENT_STEP = 12;
+
+// The guide spans for a given depth are static, so build them once per depth
+// and reuse — every visible row re-renders on rebuild/hover/selection, and the
+// elements are immutable.
+const guideCache = new Map<number, React.ReactNode>();
+
+function IndentGuides({ depth }: { depth: number }) {
+	if (depth <= 0) {
+		return null;
+	}
+	let guides = guideCache.get(depth);
+	if (!guides) {
+		guides = Array.from({ length: depth }, (_, i) => i).map((level) => (
+			<span
+				key={`indent-${level}`}
+				aria-hidden="true"
+				className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
+				style={{ left: `${(level + 1) * INDENT_STEP}px` }}
+			/>
+		));
+		guideCache.set(depth, guides);
+	}
+	return <>{guides}</>;
+}
+
+function Chevron({ open }: { open: boolean }) {
+	return (
+		<ChevronRight
+			aria-hidden="true"
+			className={`h-4 w-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500 ${
+				open ? "rotate-90" : ""
+			}`}
+		/>
+	);
+}
+
 export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }: Props) {
 	const itemId = instance.getId();
 	const longPressHandlers = useLongPress({
@@ -162,73 +230,5 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				</span>
 			)}
 		</Link>
-	);
-}
-
-function rowClass(instance: ItemInstance<LoaderItem>): string {
-	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
-	// rendered without it (tests).
-	const dragOver = (instance as { isDragTarget?: () => boolean }).isDragTarget?.() ?? false;
-	return [
-		// w-full so the folder <button> stretches like the note <a> (form controls
-		// shrink to content by default) — gives both the same full-width hover hit.
-		// relative anchors the absolutely-positioned indent guides.
-		"relative flex w-full items-center gap-1 rounded py-0.5 pl-1 pr-3 text-left",
-		instance.isSelected()
-			? "bg-blue-50 dark:bg-blue-950 font-medium text-blue-700 dark:text-blue-300"
-			: "text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800",
-		dragOver ? "ring-1 ring-inset ring-blue-400 bg-blue-100/60 dark:bg-blue-900/40" : "",
-	].join(" ");
-}
-
-function leafName(item: TreeItem): string {
-	if (item.kind === "folder") {
-		return item.name;
-	}
-	return item.path.split("/").pop() ?? item.path;
-}
-
-function noteLabel(item: Extract<TreeItem, { kind: "note" }>): string {
-	return item.title || item.path.split("/").pop() || item.path;
-}
-
-// Obsidian-style vertical indentation guides. A row at depth d draws one line
-// per ancestor level, each in the 4px gutter just left of that level's chevron.
-// Each line spans the full row height, so stacked rows form continuous lines
-// down a folder's children without tracking where the folder ends.
-const INDENT_STEP = 12;
-
-// The guide spans for a given depth are static, so build them once per depth
-// and reuse — every visible row re-renders on rebuild/hover/selection, and the
-// elements are immutable.
-const guideCache = new Map<number, React.ReactNode>();
-
-function IndentGuides({ depth }: { depth: number }) {
-	if (depth <= 0) {
-		return null;
-	}
-	let guides = guideCache.get(depth);
-	if (!guides) {
-		guides = Array.from({ length: depth }, (_, i) => i).map((level) => (
-			<span
-				key={`indent-${level}`}
-				aria-hidden="true"
-				className="pointer-events-none absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
-				style={{ left: `${(level + 1) * INDENT_STEP}px` }}
-			/>
-		));
-		guideCache.set(depth, guides);
-	}
-	return <>{guides}</>;
-}
-
-function Chevron({ open }: { open: boolean }) {
-	return (
-		<ChevronRight
-			aria-hidden="true"
-			className={`h-4 w-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500 ${
-				open ? "rotate-90" : ""
-			}`}
-		/>
 	);
 }

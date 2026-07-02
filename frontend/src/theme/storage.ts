@@ -1,7 +1,7 @@
-export type ThemeChoice = "system" | "light" | "dark";
-
 const KEY = "engram:theme";
 const VALID: readonly ThemeChoice[] = ["system", "light", "dark"];
+
+export type ThemeChoice = "system" | "light" | "dark";
 
 export function getStoredTheme(): ThemeChoice {
 	try {

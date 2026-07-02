@@ -8,7 +8,7 @@ import { type SearchResult, useSearch } from "../api/queries";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
-export default function SearchPanel() {
+function SearchPanel() {
 	const { setView } = useRailView();
 	const [input, setInput] = useState("");
 	// True debounce, not useDeferredValue: deferral only delays rendering —
@@ -143,3 +143,5 @@ function ResultRow({ result }: { result: SearchResult }) {
 function lastSegment(path: string): string {
 	return (path.split("/").pop() ?? path).replace(/\.md$/u, "");
 }
+
+export default SearchPanel;
