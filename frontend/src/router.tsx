@@ -7,20 +7,37 @@ import SignUpPage from "./auth/sign-up";
 import WaitlistPage from "./auth/waitlist";
 import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
-import AppLayout from "./layout/app-layout";
-import OnboardLayout from "./onboarding/onboard-layout";
-import OnboardRedirect from "./onboarding/onboard-redirect";
-import OnboardingGate from "./onboarding/onboarding-gate";
-import { OnboardingShell } from "./onboarding/onboarding-shell";
+import LoadingScreen from "./layout/loading-screen";
 import { ROUTES } from "./routes";
-import SettingsLayout from "./settings/settings-layout";
 import LoadingPane from "./viewer/loading-pane";
 
 // Route-level code splitting. The viewer stack alone (remark/rehype +
 // KaTeX wiring + CodeMirror behind NotePage) dominated a 1.78 MB main
 // chunk that even the sign-in page had to parse. Entry surfaces
-// (sign-in/up, layouts, guards) stay eager; everything behind navigation
-// loads on demand.
+// (sign-in/up, guards) stay eager; everything behind navigation —
+// including the authenticated app shell — loads on demand.
+
+// The app-shell layouts all resolve through ONE barrel module so they share a
+// single async chunk (no gate → shell → layout chunk waterfall). This is what
+// keeps yjs / phoenix / react-joyride / react-resizable-panels / the folder
+// tree out of the eager bundle that gates the sign-in page.
+const AppLayout = lazy(() => import("./layout/app-shell").then((m) => ({ default: m.AppLayout })));
+const OnboardingGate = lazy(() =>
+	import("./layout/app-shell").then((m) => ({ default: m.OnboardingGate })),
+);
+const OnboardingShell = lazy(() =>
+	import("./layout/app-shell").then((m) => ({ default: m.OnboardingShell })),
+);
+const SettingsLayout = lazy(() =>
+	import("./layout/app-shell").then((m) => ({ default: m.SettingsLayout })),
+);
+// Onboarding entry surface — same one-chunk barrel pattern.
+const OnboardLayout = lazy(() =>
+	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardLayout })),
+);
+const OnboardRedirect = lazy(() =>
+	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
+);
 const Dashboard = lazy(() => import("./viewer/dashboard"));
 // /note/:id resolves to the note OR attachment viewer (VaultItemPage owns the
 // lazy NotePage/AttachmentPage chunks).
@@ -41,6 +58,13 @@ const routeFallback = <LoadingPane />;
 
 function suspended(el: ReactNode) {
 	return <Suspense fallback={routeFallback}>{el}</Suspense>;
+}
+
+// Layout-level boundary: full-screen fallback matching AuthGuard's own
+// loading state, so the auth-resolve → shell-chunk-fetch handoff doesn't
+// flash between two different spinners.
+function suspendedScreen(el: ReactNode) {
+	return <Suspense fallback={<LoadingScreen />}>{el}</Suspense>;
 }
 
 // Root layout — mounts the UpgradeDialogProvider INSIDE the router so the
@@ -105,9 +129,9 @@ export function createAppRouter(config: EngramConfig): AppRouter {
 						// OnboardingGate (would redirect-loop).
 						{
 							path: "/onboard",
-							element: <OnboardLayout />,
+							element: suspendedScreen(<OnboardLayout />),
 							children: [
-								{ index: true, element: <OnboardRedirect /> },
+								{ index: true, element: suspended(<OnboardRedirect />) },
 								{ path: "agreement", element: suspended(<AgreementPage />) },
 								{ path: "billing", element: suspended(<OnboardBillingPage />) },
 								{ path: "tools", element: suspended(<OnboardToolsPage />) },
@@ -127,26 +151,26 @@ export function createAppRouter(config: EngramConfig): AppRouter {
 
 						// Dashboard tree — gated by OnboardingGate.
 						{
-							element: <OnboardingGate />,
+							element: suspendedScreen(<OnboardingGate />),
 							children: [
 								{
 									// OnboardingShell wraps the dashboard tree so the tour offer,
 									// first-vault modal, and checklist only mount on the main app
 									// surface — NOT on /settings/*, /device-link, or /oauth.
-									element: (
+									element: suspendedScreen(
 										<OnboardingShell>
 											<Outlet />
-										</OnboardingShell>
+										</OnboardingShell>,
 									),
 									children: [
 										{
-											element: <AppLayout />,
+											element: suspendedScreen(<AppLayout />),
 											children: [
 												{ path: ROUTES.HOME, element: suspended(<Dashboard />) },
 												{ path: "/note/:id", element: suspended(<VaultItemPage />) },
 												{
 													path: "settings",
-													element: <SettingsLayout />,
+													element: suspended(<SettingsLayout />),
 													children: [
 														{
 															index: true,

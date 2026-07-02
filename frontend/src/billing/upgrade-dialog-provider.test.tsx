@@ -36,7 +36,11 @@ describe("UpgradeDialogProvider", () => {
 			</UpgradeDialogProvider>,
 		);
 		fireEvent.click(screen.getByText("show"));
-		await waitFor(() => expect(screen.getByText(/note limit/iu)).toBeInTheDocument());
+		// Generous timeout: the dialog is lazy() now, and the FIRST test to touch
+		// it pays vitest's cold on-demand transform of the chunk (>1s).
+		expect(
+			await screen.findByText(/note limit/iu, undefined, { timeout: 5000 }),
+		).toBeInTheDocument();
 	});
 
 	it("dialog closes when onOpenChange(false) fires", async () => {

@@ -3,7 +3,6 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, use, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
-import { Toaster } from "@/components/ui/sonner";
 import { setApiBase, setWsBase } from "./api/base";
 import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
@@ -81,6 +80,12 @@ if (posthogKey) {
 const ClerkAuthProvider = lazy(() => import("./auth/clerk-auth-provider"));
 const LocalAuthProvider = lazy(() => import("./auth/local-auth-provider"));
 
+// sonner (~32 KB) is toast plumbing, not first-paint UI — lazy so it loads in
+// parallel after mount instead of inside the eager bundle that gates the
+// sign-in page. Worst case a toast fired before the chunk lands is dropped;
+// toasts are interaction-driven, so that window is effectively unreachable.
+const Toaster = lazy(() => import("@/components/ui/sonner").then((m) => ({ default: m.Toaster })));
+
 // Bootstrap chain: `use(configPromise)` suspends until config resolves
 // (window injection → /config.json → defaults). Once resolved, build the
 // runtime router (route shape depends on auth provider + billingEnabled)
@@ -112,7 +117,11 @@ function AppShell({ config }: { config: EngramConfig }) {
 					<AuthProvider>
 						<QueryClientProvider client={queryClient}>
 							<RouterProvider router={router} />
-							<Toaster richColors closeButton />
+							{/* Own boundary — a suspending Toaster must not trip the outer
+							    fallback and blank the app to LoadingScreen. */}
+							<Suspense fallback={null}>
+								<Toaster richColors closeButton />
+							</Suspense>
 						</QueryClientProvider>
 					</AuthProvider>
 				</Suspense>
