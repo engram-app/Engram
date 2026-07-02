@@ -1,6 +1,5 @@
-import * as Sentry from "@sentry/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { lazy, StrictMode, Suspense, use, useMemo } from "react";
+import { Component, lazy, type ReactNode, StrictMode, Suspense, use, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
 import { setApiBase, setWsBase } from "./api/base";
@@ -17,19 +16,28 @@ import "./main.css";
 // network calls) when the env var is unset, so dev / self-host
 // builds are unaffected. Tracing + replay stay off in Tier 1;
 // OpenTelemetry → Tempo lands in Tier 2 with explicit sampling.
+//
+// Dynamically imported (like posthog below) so the SDK stays out of the eager
+// bundle that gates the sign-in page. Tradeoff, named: a non-render error in
+// the few-hundred-ms window before the chunk lands goes unreported (the SDK's
+// global handlers install at init). Render crashes are NOT lost —
+// RootErrorBoundary awaits `sentryReady` before capturing.
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
-if (sentryDsn) {
-	Sentry.init({
-		dsn: sentryDsn,
-		environment: import.meta.env.MODE,
-		release: import.meta.env.VITE_GIT_SHA,
-		integrations: [],
-		// sendDefaultPii=false (SDK default) keeps cookies + the
-		// Authorization header out of breadcrumbs even if the SDK's
-		// own scrubbing misses something. Restated for documentation.
-		sendDefaultPii: false,
-	});
-}
+const sentryReady = sentryDsn
+	? import("@sentry/react").then((Sentry) => {
+			Sentry.init({
+				dsn: sentryDsn,
+				environment: import.meta.env.MODE,
+				release: import.meta.env.VITE_GIT_SHA,
+				integrations: [],
+				// sendDefaultPii=false (SDK default) keeps cookies + the
+				// Authorization header out of breadcrumbs even if the SDK's
+				// own scrubbing misses something. Restated for documentation.
+				sendDefaultPii: false,
+			});
+			return Sentry;
+		})
+	: null;
 
 // Cloudflare Web Analytics — cookieless RUM beacon. Opt-in via
 // VITE_CF_BEACON_TOKEN at build time; no-op when unset so dev /
@@ -94,7 +102,7 @@ const Toaster = lazy(() => import("@/components/ui/sonner").then((m) => ({ defau
 function AppShell({ config }: { config: EngramConfig }) {
 	// Dev-only crash trigger for eyeballing ErrorFallback. Throws HERE, above
 	// RouterProvider, on purpose: a throwing *route* would be caught by React
-	// Router's own error boundary, not the outer Sentry.ErrorBoundary we're
+	// Router's own error boundary, not the outer RootErrorBoundary we're
 	// styling. Visit `?boom` to see the real crash page. Stripped from prod
 	// builds by the import.meta.env.DEV gate.
 	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("boom")) {
@@ -141,12 +149,50 @@ function BootstrapGate() {
 	return <AppShell config={config} />;
 }
 
+// Replaces Sentry.ErrorBoundary so the SDK can load lazily. Capture waits on
+// `sentryReady`, then surfaces the eventId + an honest `reported` flag to
+// ErrorFallback (only claimed once captureException actually dispatched).
+interface RootErrorBoundaryState {
+	hasError: boolean;
+	error: unknown;
+	eventId?: string;
+	reported: boolean;
+}
+
+class RootErrorBoundary extends Component<{ children: ReactNode }, RootErrorBoundaryState> {
+	state: RootErrorBoundaryState = { hasError: false, error: null, reported: false };
+
+	static getDerivedStateFromError(error: unknown): Partial<RootErrorBoundaryState> {
+		return { hasError: true, error };
+	}
+
+	componentDidCatch(error: unknown) {
+		sentryReady?.then((Sentry) => {
+			const eventId = Sentry.captureException(error);
+			this.setState({ eventId, reported: true });
+		});
+	}
+
+	render() {
+		if (this.state.hasError) {
+			return (
+				<ErrorFallback
+					error={this.state.error}
+					eventId={this.state.eventId}
+					reported={this.state.reported}
+				/>
+			);
+		}
+		return this.props.children;
+	}
+}
+
 createRoot(document.getElementById("root")!).render(
-	<Sentry.ErrorBoundary fallback={ErrorFallback}>
+	<RootErrorBoundary>
 		<StrictMode>
 			<Suspense fallback={<LoadingScreen />}>
 				<BootstrapGate />
 			</Suspense>
 		</StrictMode>
-	</Sentry.ErrorBoundary>,
+	</RootErrorBoundary>,
 );
