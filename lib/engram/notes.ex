@@ -827,6 +827,30 @@ defmodule Engram.Notes do
     end
   end
 
+  # Like get_note_by_id/3 but meta-projected: no content read, no content
+  # decrypt. For callers that only need path/folder/tags (#863).
+  defp get_note_meta_by_id(user, vault, id) when is_binary(id) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      {:ok, result} =
+        Repo.with_tenant(user.id, fn ->
+          query =
+            from(n in Note,
+              where:
+                n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
+                  is_nil(n.deleted_at),
+              select: struct(n, @note_meta_fields)
+            )
+
+          case Repo.one(query) do
+            %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
+            nil -> {:error, :not_found}
+          end
+        end)
+
+      result
+    end
+  end
+
   # Phase B.2: single normalization helper for path lookups.
   # All callers route through here so post-B.3 column drop is mechanical.
   # Opens its own tenant context — use note_by_path_query/3 directly when
@@ -1166,49 +1190,96 @@ defmodule Engram.Notes do
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
   user + vault. All-or-nothing: if any id fails to resolve to a live note
-  owned by the caller, the entire batch rolls back and no notes are
-  deleted.
+  owned by the caller, nothing is deleted.
 
-  Returns `{:ok, %{deleted: n}}` on success (n = `length(ids)`), or
-  `{:error, {:not_found, id}}` identifying the first offending id when
-  one or more ids don't resolve.
+  Set-based (#863): ONE meta-projected `id IN (...)` fetch (no content read
+  or decrypt), ONE shared seq for the whole batch (the previous per-id
+  `next_seq!` composition took the vault row lock N times and held it to
+  commit — a serialization point for every concurrent write to the vault),
+  ONE `update_all`, and a bulk `Oban.insert_all` for the index cleanup jobs.
+  The missing-id check runs BEFORE any write, so all-or-nothing needs no
+  rollback of partial work.
 
-  Empty list short-circuits to `{:ok, %{deleted: 0}}` without opening a
-  transaction. Composed on top of `delete_note_by_id/3` — each per-id
-  delete runs inside the outer `Repo.transaction`, so a later `:not_found`
-  reverts prior successful deletes (Qdrant/Oban side-effects enqueued
-  during the rolled-back transaction are still inserted via Oban's
-  `Repo.insert`, but only become visible after commit; on rollback they
-  vanish with the transaction).
+  Broadcasts fire AFTER the transaction commits — the old per-id
+  composition leaked `note_changed` events for work that later rolled back
+  (the caveat its moduledoc documented; this is the promised fix).
 
-  Note: `delete_note/3` fires a `note_changed` event via `Phoenix.PubSub`
-  during each per-id iteration. PubSub broadcasts are NOT transactional —
-  subscribers may receive events for items that ultimately get rolled back
-  when a later id in the batch fails. This is consistent with the
-  single-target delete behavior and acceptable because the typical batch
-  caller (the same client that initiated the batch) sees the synchronous
-  `{:error, _}` return value and can reconcile. The systemic fix
-  (after-commit hooks so broadcasts only fire post-commit) is tracked as a
-  follow-up issue and will land before more batch ops are added.
+  Returns `{:ok, %{deleted: n}}` (n = distinct live notes deleted) or
+  `{:error, {:not_found, id}}` identifying the first unresolvable id.
   """
-  @spec batch_delete_notes(map(), map(), [integer()]) ::
+  @spec batch_delete_notes(map(), map(), [String.t()]) ::
           {:ok, %{deleted: non_neg_integer()}}
-          | {:error, {:not_found, integer()} | term()}
+          | {:error, {:not_found, String.t()} | term()}
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(ids, %{deleted: 0}, fn id, acc ->
-        case delete_note_by_id(user, vault, id) do
-          :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
-          {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-        end
-      end)
-      |> case do
-        {:rollback, reason} -> Repo.rollback(reason)
-        acc -> acc
+    now = DateTime.utc_now()
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      {:ok, result} =
+        Repo.with_tenant(user.id, fn ->
+          notes =
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at),
+                select: struct(n, @note_meta_fields)
+              )
+            )
+
+          found = MapSet.new(notes, & &1.id)
+
+          case Enum.find(ids, &(not MapSet.member?(found, &1))) do
+            nil ->
+              seq = Engram.Vaults.next_seq!(vault.id)
+
+              {updated, _} =
+                from(n in Note,
+                  where: n.id in ^Enum.map(notes, & &1.id) and is_nil(n.deleted_at)
+                )
+                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+
+              :ok = UsageMeters.dec_notes_count(user.id, updated)
+
+              # T3.2 — base64 path_hmac, never plaintext. Jobs insert inside
+              # the txn, so a failure rolls them back with the tombstones.
+              jobs =
+                Enum.map(notes, fn n ->
+                  DeleteNoteIndex.new(%{
+                    note_id: n.id,
+                    user_id: n.user_id,
+                    vault_id: n.vault_id,
+                    path_hmac: Base.encode64(n.path_hmac)
+                  })
+                end)
+
+              _ = if jobs != [], do: Oban.insert_all(jobs)
+
+              {:ok, %{deleted: updated, notes: notes}}
+
+            missing ->
+              {:error, {:not_found, missing}}
+          end
+        end)
+
+      case result do
+        {:ok, %{deleted: deleted, notes: notes}} ->
+          # Post-commit: same per-note delete events clients already handle.
+          # Meta rows decrypt cheaply (path envelope only — no content).
+          notes
+          |> Crypto.decrypt_notes_batch(user)
+          |> Enum.each(fn
+            {:ok, note} -> broadcast_change(user.id, vault.id, "delete", note.path)
+            {:error, _} -> :ok
+          end)
+
+          {:ok, %{deleted: deleted}}
+
+        {:error, _} = err ->
+          err
       end
-    end)
+    end
   end
 
   @doc """
@@ -1793,7 +1864,10 @@ defmodule Engram.Notes do
   # (user, vault, path_hmac) constraint, surfacing {:error, :conflict}
   # instead of crashing on a Postgrex unique_violation.
   defp move_note_into_folder(user, vault, id, target_folder) do
-    case get_note_by_id(user, vault, id) do
+    # Meta fetch (#863): only note.path is needed to build the destination —
+    # the previous get_note_by_id decrypted the full content per id, and
+    # rename_note's inner path decrypts the row AGAIN for the re-encrypt.
+    case get_note_meta_by_id(user, vault, id) do
       {:ok, note} ->
         new_path =
           case target_folder do
@@ -2581,16 +2655,27 @@ defmodule Engram.Notes do
                 )
 
               _ ->
-                full_kw =
-                  full_aad_bound_kw(
-                    user,
-                    note.id,
-                    note.content || "",
-                    new_title,
-                    new_path,
-                    new_note_folder,
-                    note.tags || []
-                  )
+                # AAD-bound rows (#863): content/tags AADs key on note_id only
+                # and a folder rename preserves the basename (title cannot
+                # change), so only the path + folder envelopes need rotating.
+                # The old full re-encrypt rewrote the content blob (largest
+                # column) on every note in the folder — pure TOAST/WAL churn.
+                # Legacy v1 rows keep the full rebind: the rename is their
+                # upgrade to AAD-bound encryption.
+                kw =
+                  if note.dek_version == Crypto.row_version_aad_bound() do
+                    phase_b_path_folder_for(user, note.id, new_path, new_note_folder)
+                  else
+                    full_aad_bound_kw(
+                      user,
+                      note.id,
+                      note.content || "",
+                      new_title,
+                      new_path,
+                      new_note_folder,
+                      note.tags || []
+                    )
+                  end
 
                 from(n in Note, where: n.id == ^note.id)
                 |> Repo.update_all(
@@ -2598,7 +2683,7 @@ defmodule Engram.Notes do
                     [
                       updated_at: now,
                       seq: seq
-                    ] ++ full_kw
+                    ] ++ kw
                 )
             end
           end)
