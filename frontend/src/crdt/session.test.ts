@@ -48,7 +48,7 @@ describe("crdt session", () => {
 		const handle = await openDoc("note.md");
 		handle!.ytext.insert(0, "abc");
 		await vi.waitFor(() => expect(push).toHaveBeenCalled());
-		expect(push.mock.calls[push.mock.calls.length - 1]![0]).toBe(`${VAULT}/note.md`);
+		expect(push.mock.calls.at(-1)![0]).toBe(`${VAULT}/note.md`);
 	});
 
 	it("docPathFromDocId strips the vault prefix", () => {
@@ -75,7 +75,7 @@ describe("crdt session", () => {
 		const a = await openDoc("note.md");
 		a!.ytext.insert(0, "ghost-content");
 		await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
-		const [, b64] = frames[frames.length - 1]!;
+		const [, b64] = frames.at(-1)!;
 		stopCrdtSession();
 
 		// New session — do NOT open ghost.md
@@ -94,7 +94,7 @@ describe("crdt session", () => {
 		const a = await openDoc("note.md");
 		a!.ytext.insert(0, "payload");
 		await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
-		const [, b64] = frames[frames.length - 1]!;
+		const [, b64] = frames.at(-1)!;
 		stopCrdtSession();
 		startCrdtSession({ vaultId: VAULT, push: () => {} });
 		await openDoc("note.md");

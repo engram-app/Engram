@@ -130,7 +130,6 @@
 						"noNestedTernary": "off",
 						"noNonNullAssertion": "off",
 						"noParameterProperties": "off",
-						"useAtIndex": "off",
 						"useComponentExportOnlyModules": "off",
 						"useConsistentMemberAccessibility": "off",
 						"useConsistentMethodSignatures": "off"
