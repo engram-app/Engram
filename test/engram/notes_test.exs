@@ -505,6 +505,67 @@ defmodule Engram.NotesTest do
       assert note.id == existing.id
       assert note.content == "# hi"
     end
+
+    test "does not resurrect a soft-deleted path", %{user: user, vault: vault} do
+      # A stale CRDT STEP1 for a deleted (or renamed-away) path must be refused,
+      # not re-bootstrapped: the partial unique index (deleted_at IS NULL) lets
+      # the empty-content insert through, silently recreating the note server-side
+      # — the e2e "RenameOld.md still on server" / empty-ghost-file failures.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Bootstrap/Gone.md", "content" => "# bye"})
+
+      Notes.delete_note(user, vault, "Bootstrap/Gone.md")
+
+      assert {:error, :not_found} = Notes.get_or_bootstrap_note(user, vault, "Bootstrap/Gone.md")
+
+      # No live row was created at the deleted path.
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Bootstrap/Gone.md")
+    end
+
+    test "recovers the concurrent creator's note instead of dropping the frame", %{
+      user: user,
+      vault: vault
+    } do
+      # Race: STEP1 bootstrap loses the insert to the same device's REST push
+      # (get_note misses, then the insert hits the winner's row). The loser must
+      # return the winner's live note — an error here drops the crdt frame and,
+      # because plugin enrollment is once-per-session, pins the receiver's file
+      # empty forever (the e2e "assert 'X' in ''" cluster).
+      for i <- 1..40 do
+        path = "Bootstrap/Race#{i}.md"
+        parent = self()
+
+        racer =
+          spawn_link(fn ->
+            receive do
+              :go ->
+                # The REST push may itself lose the insert race to the bootstrap
+                # and get the 409-conflict it reconciles from — both are fine here.
+                case Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"}) do
+                  {:ok, _} -> :ok
+                  {:error, :version_conflict, _} -> :ok
+                end
+
+                send(parent, :raced)
+            end
+          end)
+
+        Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), racer)
+        send(racer, :go)
+
+        result = Notes.get_or_bootstrap_note(user, vault, path)
+        assert_receive :raced, 5_000
+
+        # Whatever the interleave, the frame must resolve to a live note —
+        # never a leaked conflict tuple, never a changeset error.
+        assert {:ok, %Notes.Note{}} = result
+
+        # And the bootstrap's empty write must never clobber the real body.
+        assert {:ok, final} = Notes.get_note(user, vault, path)
+        assert final.content in ["# body", ""]
+        refute final.deleted_at
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------
