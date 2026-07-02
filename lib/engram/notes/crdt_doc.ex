@@ -77,7 +77,12 @@ defmodule Engram.Notes.CrdtDoc do
     %{
       id: {__MODULE__, Keyword.fetch!(opts, :note_id)},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :transient
+      # :temporary — a crashed room must NOT be auto-restarted: the restarted
+      # process would have zero observers and (auto_exit being :DOWN-driven)
+      # never exit — an immortal orphan. Rooms are ephemeral; channels restart
+      # them on demand via CrdtRegistry.ensure_observed (stale pids are evicted
+      # by the channel's monitor).
+      restart: :temporary
     }
   end
 end

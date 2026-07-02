@@ -29,6 +29,14 @@ defmodule Engram.Notes.CrdtPersistence do
   # `Accounts.get_user!` DB round-trip on every keystroke.
   @impl true
   def bind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
+    # bind/3 runs INSIDE the room (SharedDoc.init). Trapping exits here makes
+    # gen_server intercept the supervisor's :shutdown on deploys and run
+    # terminate/2 → unbind → full checkpoint, instead of dying unflushed.
+    # Guarded on :"$initial_call" (set by proc_lib for GenServers) so a direct
+    # bind/3 call from a bare test process does not leak trap_exit=true into
+    # the test, where it would swallow linked-process crashes.
+    if Process.get(:"$initial_call") != nil, do: Process.flag(:trap_exit, true)
+
     user = Accounts.get_user!(user_id)
 
     _ =
