@@ -140,7 +140,6 @@
 						"noReactSpecificProps": "off",
 						"noAlert": "off",
 						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
-						"noEmptyBlockStatements": "off",
 						"noSkippedTests": "off",
 						"noUnnecessaryConditions": "off"
 					}
@@ -181,7 +180,8 @@
 						"noConsole": "off",
 						"noExplicitAny": "off",
 						"useAwait": "off",
-						"noShadow": "off"
+						"noShadow": "off",
+						"noEmptyBlockStatements": "off"
 					},
 					"performance": { "noDelete": "off" },
 					"nursery": {
