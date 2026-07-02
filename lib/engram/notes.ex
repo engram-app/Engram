@@ -604,7 +604,10 @@ defmodule Engram.Notes do
       # deleted_at), so delete → re-push still resurrects via the insert path.
       # Repair paths that re-derive persisted fields from unchanged content
       # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
-      {:ok, {existing.content_hash, existing}}
+      # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
+      # incoming content (hash-equal to the stored merged content by the guard
+      # above), so callers thread the same digest fields either way.
+      {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
     else
       do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
     end
