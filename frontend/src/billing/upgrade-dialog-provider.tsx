@@ -28,7 +28,10 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 		// Warm the lazy dialog chunk off the critical path (module cache dedupes
 		// with the lazy() import) — a 402 on a slow connection should open the
 		// dialog immediately, not after a cold chunk round trip of dead air.
-		void import("./upgrade-required-dialog");
+		// Warm-up failure is non-fatal (the lazy() render path + the
+		// vite:preloadError reload handle a real one); catch only prevents an
+		// unhandled rejection.
+		import("./upgrade-required-dialog").catch(() => {});
 		return () => setUpgradeHandler(null);
 	}, [showUpgrade]);
 
