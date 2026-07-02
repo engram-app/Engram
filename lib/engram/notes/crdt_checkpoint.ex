@@ -61,6 +61,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       content_hash = Crypto.hmac_content_hash(key, text)
       tags = Helpers.extract_tags(text)
 
+      # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction) — the fun returns the bare hash.
       {:ok, prev_hash} =
         Repo.with_tenant(user_id, fn ->
           # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
@@ -72,32 +73,49 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {:ok, note} = Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note_id), user)
           prev = note.content_hash
 
-          # Re-derive title from the note's decrypted (sanitized-at-write) path.
-          title = Helpers.extract_title(text, note.path)
+          if prev == content_hash do
+            # Text unchanged: compact the snapshot + prune, but do NOT touch
+            # version/seq/content — legacy /changes pullers must not see phantom edits.
+            {1, _} =
+              Repo.update_all(
+                from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+                set: [
+                  crdt_state_ciphertext: ct,
+                  crdt_state_nonce: nonce,
+                  dek_version: Crypto.row_version_aad_bound()
+                ]
+              )
 
-          merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
-          {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
+            prune_tail(note_id, watermark)
+            prev
+          else
+            # Re-derive title from the note's decrypted (sanitized-at-write) path.
+            title = Helpers.extract_title(text, note.path)
 
-          phase_b =
-            Notes.inject_phase_b_fields_pub(
-              encrypted,
-              user,
-              note_id,
-              note.path,
-              note.folder,
-              tags
-            )
-            |> Map.put(:crdt_state_ciphertext, ct)
-            |> Map.put(:crdt_state_nonce, nonce)
-            |> Map.put(:content_hash, content_hash)
+            merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
+            {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
 
-          note
-          |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
-          |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-          |> Repo.update!()
+            phase_b =
+              Notes.inject_phase_b_fields_pub(
+                encrypted,
+                user,
+                note_id,
+                note.path,
+                note.folder,
+                tags
+              )
+              |> Map.put(:crdt_state_ciphertext, ct)
+              |> Map.put(:crdt_state_nonce, nonce)
+              |> Map.put(:content_hash, content_hash)
 
-          prune_tail(note_id, watermark)
-          {:ok, prev}
+            note
+            |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
+            |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+            |> Repo.update!()
+
+            prune_tail(note_id, watermark)
+            prev
+          end
         end)
 
       _ =

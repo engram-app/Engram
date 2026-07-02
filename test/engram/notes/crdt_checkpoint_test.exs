@@ -164,6 +164,28 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "checkpoint should not enqueue embed when content is unchanged"
   end
 
+  test "checkpoint with unchanged content compacts crdt_state without bumping version/seq", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    # No text mutation — doc projects the same content the row already has.
+
+    # Clear all pre-existing embed jobs so Oban uniqueness cannot mask a wrong enqueue.
+    Repo.delete_all(Oban.Job)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_note.version == raw_note.version
+    assert after_note.seq == raw_note.seq
+
+    # No embed job must exist — Oban uniqueness cannot mask a wrong enqueue because
+    # we cleared the table above.
+    refute_enqueued(worker: EmbedNote)
+  end
+
   # ── Race fix: prune respects watermark — post-snapshot rows survive ────────
 
   test "prune_tail keeps rows inserted AFTER the watermark was captured", ctx do
