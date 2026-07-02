@@ -11,7 +11,18 @@ defmodule Engram.Notes do
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Enqueue, Helpers, Note, PathSanitizer}
+
+  alias Engram.Notes.{
+    Chunk,
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtPersistence,
+    Enqueue,
+    Helpers,
+    Note,
+    PathSanitizer
+  }
+
   alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Telemetry
@@ -373,7 +384,7 @@ defmodule Engram.Notes do
         end)
 
       case result do
-        {:ok, {:ok, {prev_hash, note}}} ->
+        {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
               Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
@@ -518,7 +529,7 @@ defmodule Engram.Notes do
               case Repo.one(lookup_query) do
                 %Note{id: ^note_id} = inserted ->
                   :ok = UsageMeters.inc_notes_count(user.id, 1)
-                  {:ok, {nil, inserted}}
+                  {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
 
                 %Note{} = existing ->
                   # Concurrent create won; report a version conflict (→ 409) the
@@ -593,7 +604,10 @@ defmodule Engram.Notes do
       # deleted_at), so delete → re-push still resurrects via the insert path.
       # Repair paths that re-derive persisted fields from unchanged content
       # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
-      {:ok, {existing.content_hash, existing}}
+      # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
+      # incoming content (hash-equal to the stored merged content by the guard
+      # above), so callers thread the same digest fields either way.
+      {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
     else
       do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
     end
@@ -631,16 +645,32 @@ defmodule Engram.Notes do
         |> Ecto.Changeset.put_change(:seq, seq)
         |> Repo.update()
         |> case do
-          {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-          {:error, changeset} -> {:error, changeset}
+          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+          # so callers can include the stored hash in broadcast digests without
+          # re-deriving it.
+          {:ok, updated} ->
+            {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+          {:error, changeset} ->
+            {:error, changeset}
         end
       end
     end
   end
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
-  # Loads the row's encrypted crdt_state (nil → fresh doc), diffs the incoming
-  # plaintext onto the Y.Text (never full-replace), re-encodes + re-encrypts.
+  #
+  # Implements a three-way convergent merge: builds the snapshot doc (ancestor)
+  # and the tail doc (snapshot + replayed update-log tail) separately, then
+  # applies the incoming change as a Yjs operation computed relative to the
+  # snapshot. This preserves concurrent tail edits (live typing in the settle
+  # window) alongside the incoming REST/MCP plaintext — neither side loses
+  # keystrokes when they modify non-overlapping regions.
+  #
+  # Without tail replay (the old two-way diff), the converge-diff would delete
+  # tail keystrokes from the doc and deliver_out would push those deletions to
+  # open editors — the stale-snapshot window bug.
+  #
   # Returns the merged text so callers compute content_hash + tags from the
   # MERGED result — the public-API contract is "server merges, never clobbers."
   defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
@@ -656,8 +686,61 @@ defmodule Engram.Notes do
           nil
       end
 
-    with {:ok, %{state: new_state, text: merged_text}} <-
-           Engram.Notes.CrdtBridge.merge_plaintext(prior_state, incoming_content),
+    # When the note has no snapshot (prior_state == nil), the three-way path
+    # would build an empty snapshot_doc ancestor while replay_tail fills
+    # tail_doc with the bind-time seed of the full text. The incoming REST diff
+    # is then computed against the empty ancestor ("insert everything") and
+    # applied onto the already-full tail — producing a full-body duplication
+    # ("shared base + LIVEshared base + REST"). Concurrency preservation is lost
+    # only in this legacy/pre-CRDT window, but that is strictly better than
+    # duplicating the body.
+    #
+    # Two sub-cases share prior_state == nil:
+    # - Brand-new insert (existing == nil): no tail rows can exist yet; skip
+    #   replay entirely and call merge_plaintext/2 directly.
+    # - Pre-CRDT update (existing is a %Note{} with nil crdt_state columns):
+    #   tail rows MAY exist (bind/3 could have seeded the full text into the
+    #   tail-log before any checkpoint ran). Replay the tail, then two-way-diff
+    #   the incoming text against the tail-inclusive doc to avoid duplication.
+    merge_result =
+      cond do
+        is_nil(prior_state) and is_nil(existing) ->
+          # Brand-new insert: no note row, no tail rows can exist yet. Skip the
+          # replay entirely and call merge_plaintext/2 directly (restores the
+          # simple two-way path that predates tail-aware merging).
+          CrdtBridge.merge_plaintext(nil, incoming_content)
+
+        is_nil(prior_state) ->
+          # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
+          # rows MAY exist (bind/3 seeds the full text into the tail-log before
+          # any checkpoint). Replay the tail, then two-way-diff the incoming
+          # text against the tail-inclusive doc to avoid full-body duplication.
+          with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
+            _count = CrdtPersistence.replay_tail(doc, user, note_id)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+          end
+
+        true ->
+          # Two independent docs from the same snapshot:
+          # - snapshot_doc: the shared ancestor; the incoming diff is applied here to
+          #   capture the minimal Yjs operations that encode the incoming change.
+          # - tail_doc: snapshot + replayed tail; the captured incoming operations are
+          #   applied here so Yjs merges them convergently with the tail operations.
+          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state),
+               {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
+            # Fold in updates logged since the last checkpoint. Runs inside the
+            # caller's with_tenant txn — no nested tenant context needed.
+            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+
+            CrdtBridge.merge_plaintext_relative_to_snapshot(
+              snapshot_doc,
+              tail_doc,
+              incoming_content
+            )
+          end
+      end
+
+    with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {:ok,
@@ -1456,8 +1539,16 @@ defmodule Engram.Notes do
     case Map.get(existing_by_hmac, entry.path_hmac) do
       nil ->
         case build_batch_insert_row(entry, user, vault, now) do
-          {:ok, id, row} ->
-            info = %{id: id, version: 1, prev_hash: nil, updated_at: now}
+          {:ok, id, row, merged_text, content_hash} ->
+            info = %{
+              id: id,
+              version: 1,
+              prev_hash: nil,
+              updated_at: now,
+              content: merged_text,
+              content_hash: content_hash
+            }
+
             {%{entry | result: {:ok, info}}, [row | rows]}
 
           {:error, errors} ->
@@ -1476,13 +1567,15 @@ defmodule Engram.Notes do
     base_attrs = batch_base_attrs(entry, user)
 
     case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
-      {:ok, {prev_hash, updated}} ->
+      {:ok, {prev_hash, updated, merged_text, content_hash}} ->
         {:ok,
          %{
            id: updated.id,
            version: updated.version,
            prev_hash: prev_hash,
-           updated_at: updated.updated_at
+           updated_at: updated.updated_at,
+           content: merged_text,
+           content_hash: content_hash
          }}
 
       {:error, changeset} ->
@@ -1499,24 +1592,46 @@ defmodule Engram.Notes do
 
     base_attrs = batch_base_attrs(entry, user, vault)
 
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id),
-         {:ok, crdt} <- build_crdt_state(entry, user, note_id) do
-      phase_b =
-        inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, entry.tags)
+    with {:ok, crdt} <- build_crdt_state(entry, user, note_id),
+         # Finding 1 fix: move key derivation into the `with` head so a DEK
+         # error propagates as {:error, _} rather than raising MatchError.
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      # Mirror the single-note insert path (upsert_note/3 ~line 441): derive
+      # content, title, tags, and content_hash from the CRDT-projected text so
+      # the DB row and the seeded doc are byte-for-byte consistent from birth.
+      merged_tags = Helpers.extract_tags(crdt.merged_text)
+      content_hash = Crypto.hmac_content_hash(key, crdt.merged_text)
 
-      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: Helpers.extract_title(crdt.merged_text, entry.path),
+          tags: merged_tags,
+          content_hash: content_hash
+      }
 
-      if changeset.valid? do
-        row =
-          changeset
-          |> Ecto.Changeset.apply_changes()
-          |> Map.take(@batch_insert_columns)
-          |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
-          |> Map.merge(crdt)
+      crdt_row_fields = Map.take(crdt, [:crdt_state_ciphertext, :crdt_state_nonce])
 
-        {:ok, note_id, row}
-      else
-        {:error, changeset}
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+        phase_b =
+          inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
+
+        changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+        if changeset.valid? do
+          row =
+            changeset
+            |> Ecto.Changeset.apply_changes()
+            |> Map.take(@batch_insert_columns)
+            |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
+            |> Map.merge(crdt_row_fields)
+
+          # Finding 2 fix: return the PROJECTION hash so the digest can use the
+          # stored value (not entry.hash which is HMAC of raw submitted content).
+          {:ok, note_id, row, crdt.merged_text, content_hash}
+        else
+          {:error, changeset}
+        end
       end
     end
   end
@@ -1528,9 +1643,10 @@ defmodule Engram.Notes do
     # frontmatter fence out of the body into the Y.Map at insert time, so the
     # seeded state already satisfies the invariant. No normalize_doc is needed
     # on this path (unlike bind/3, which heals legacy at-rest state).
-    with {:ok, %{state: state}} <- Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
+    with {:ok, %{state: state, text: merged_text}} <-
+           CrdtBridge.merge_plaintext(nil, content),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
-      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce}}
+      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce, merged_text: merged_text}}
     end
   end
 
@@ -1560,7 +1676,7 @@ defmodule Engram.Notes do
 
     embed_jobs =
       ok_entries
-      |> Enum.filter(fn %{hash: hash, result: {:ok, info}} -> info.prev_hash != hash end)
+      |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
       # clamp: false — Oban.insert_all ignores unique/replace, so the settle
       # ceiling is moot here; skip the per-note burst-start SELECT.
       |> Enum.map(fn %{result: {:ok, info}} ->
@@ -1591,7 +1707,12 @@ defmodule Engram.Notes do
               "mtime" => entry.mtime,
               "version" => info.version,
               "updated_at" => info.updated_at,
-              "content_hash" => entry.hash
+              # Finding 2 fix: use the hash of the CRDT projection (stored row),
+              # not entry.hash (HMAC of raw submitted content). For frontmatter
+              # notes the projection re-serializes YAML so these diverge; using
+              # entry.hash caused the plugin's syncedHashes to see a phantom
+              # server change and re-pull on every batch push of tagged notes.
+              "content_hash" => info.content_hash
             }
           end)
 
@@ -1619,6 +1740,19 @@ defmodule Engram.Notes do
         PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
     end)
 
+    # Deliver-out to live CRDT rooms — without this, a room that has the note
+    # open never sees the batch merge and its next checkpoint REVERTS it.
+    Enum.each(ok_entries, fn %{result: {:ok, info}} = entry ->
+      _ =
+        CrdtDeliver.deliver_out(
+          user.id,
+          vault.id,
+          entry.path,
+          info.id,
+          info.content
+        )
+    end)
+
     :ok
   end
 
@@ -1631,7 +1765,10 @@ defmodule Engram.Notes do
             status: :ok,
             id: info.id,
             version: info.version,
-            content_hash: entry.hash,
+            # The STORED hash (of the CRDT projection), matching the digest
+            # broadcast — the raw submitted content's hash diverges for
+            # frontmatter-bearing notes and would poison client syncedHashes.
+            content_hash: info.content_hash,
             # Canonical (sanitized) path — differs from `path` when the
             # sanitizer rewrote the input; clients rename local files to it.
             server_path: entry.path
@@ -2984,7 +3121,7 @@ defmodule Engram.Notes do
     # post-commit, best-effort. CRDT-origin writes never reach here (the
     # checkpoint writes the DB directly), so this fires solely for
     # REST/MCP/web/cascade writes — no double-delivery.
-    _ = Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    _ = CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
 
     :ok
   end

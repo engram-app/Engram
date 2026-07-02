@@ -9,8 +9,10 @@ defmodule Engram.Notes.CrdtPersistence do
     (cheap, frequent). The full snapshot is rewritten on debounced checkpoints
     (`Engram.Notes.CrdtCheckpoint`), NOT here — keeps the hot path O(append).
   * `unbind/3` — on graceful room exit (last observer disconnect with
-    `auto_exit: true`), flush a compacted snapshot to the notes row. Done
-    asynchronously so it does not block channel teardown.
+    `auto_exit: true`), run a full synchronous checkpoint: materializes
+    content/content_hash/seq into the notes row and enqueues a debounced
+    embed. When text is unchanged the checkpoint degrades to a
+    snapshot-compaction write with no version/seq churn.
   """
   @behaviour Yex.Sync.SharedDoc.PersistenceBehaviour
 
@@ -27,6 +29,14 @@ defmodule Engram.Notes.CrdtPersistence do
   # `Accounts.get_user!` DB round-trip on every keystroke.
   @impl true
   def bind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
+    # bind/3 runs INSIDE the room (SharedDoc.init). Trapping exits here makes
+    # gen_server intercept the supervisor's :shutdown on deploys and run
+    # terminate/2 → unbind → full checkpoint, instead of dying unflushed.
+    # Guarded on :"$initial_call" (set by proc_lib for GenServers) so a direct
+    # bind/3 call from a bare test process does not leak trap_exit=true into
+    # the test, where it would swallow linked-process crashes.
+    if Process.get(:"$initial_call") != nil, do: Process.flag(:trap_exit, true)
+
     user = Accounts.get_user!(user_id)
 
     _ =
@@ -110,51 +120,28 @@ defmodule Engram.Notes.CrdtPersistence do
     state
   end
 
-  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Flushes the
-  # compacted snapshot to the notes row so the next bind/3 starts from a recent
-  # checkpoint rather than replaying the full tail-log. A single Postgres UPDATE
-  # is fast enough to run inline — avoids a Task.start race in tests and keeps
-  # the channel teardown path simple.
+  # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Delegates to
+  # CrdtCheckpoint.checkpoint/5, which runs synchronously: it materializes
+  # content/content_hash/seq into the notes row and enqueues a debounced embed.
+  # When text is unchanged, checkpoint degrades to a snapshot-compaction write
+  # with no version/seq churn (the content_hash no-op guard). Any raise inside
+  # checkpoint is caught and logged there, so unbind always returns :ok.
   @impl true
-  def unbind(%{user_id: user_id, note_id: note_id} = state, _doc_name, doc) do
-    user = state[:user] || Accounts.get_user!(user_id)
-
-    case Yex.encode_state_as_update(doc) do
-      {:ok, snapshot} ->
-        case Crypto.encrypt_crdt_state(snapshot, user, note_id) do
-          {:ok, {ct, nonce}} ->
-            Repo.with_tenant(user_id, fn ->
-              Repo.update_all(
-                from(n in Note, where: n.id == ^note_id and n.kind == "note"),
-                set: [
-                  crdt_state_ciphertext: ct,
-                  crdt_state_nonce: nonce,
-                  dek_version: Crypto.row_version_aad_bound()
-                ]
-              )
-            end)
-
-          {:error, reason} ->
-            Logger.error(
-              "crdt unbind encrypt failed note_id=#{note_id} reason=#{inspect(reason)}",
-              Metadata.with_category(:error, :sync, note_id: note_id)
-            )
-        end
-
-      {:error, reason} ->
-        Logger.error(
-          "crdt unbind encode_state_as_update failed note_id=#{note_id} reason=#{inspect(reason)}",
-          Metadata.with_category(:error, :sync, note_id: note_id)
-        )
-    end
-
+  def unbind(%{user_id: user_id, vault_id: vault_id, note_id: note_id}, _doc_name, doc) do
+    Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
     :ok
   end
 
   # Replays the encrypted tail-log onto `doc` and returns the number of rows
   # found (whether or not each decrypted) so bind/3 can tell a fresh room (0
   # rows) from one that already carries CRDT history.
-  defp replay_tail(doc, user, note_id) do
+  #
+  # Public so `maybe_merge_crdt/4` in `Engram.Notes` can reuse this function
+  # when building the REST merge base: snapshot + tail ≡ bind/3's recipe.
+  # Must be called inside the caller's `Repo.with_tenant` transaction — it
+  # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
+  @doc false
+  def replay_tail(doc, user, note_id) do
     rows =
       CrdtUpdateLog
       |> where([l], l.note_id == ^note_id)

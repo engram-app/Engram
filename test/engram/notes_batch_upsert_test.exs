@@ -347,4 +347,123 @@ defmodule Engram.NotesBatchUpsertTest do
       assert {:ok, _} = Notes.get_note(user, vault, "escape.md")
     end
   end
+
+  describe "batch_upsert_notes/3 — digest hash coherence" do
+    test "batch digest content_hash matches the stored row hash for frontmatter notes", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      raw = "---\ntags: [x]\n---\nbody"
+
+      assert {:ok, %{results: [r]}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "fm.md", "content" => raw, "mtime" => 1.0}
+               ])
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "notes.batch",
+        payload: %{op: "upsert", notes: digest}
+      }
+
+      [digest_note] = digest
+      digest_hash = digest_note["content_hash"]
+
+      {:ok, stored_hash} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          row = Engram.Repo.get!(Engram.Notes.Note, r.id)
+          row.content_hash
+        end)
+
+      assert digest_hash == stored_hash,
+             "digest content_hash (#{inspect(digest_hash)}) must equal stored row hash (#{inspect(stored_hash)})"
+    end
+
+    test "no-op batch re-push of a frontmatter note enqueues no embed", %{
+      user: user,
+      vault: vault
+    } do
+      raw = "---\ntags: [x]\n---\nbody"
+      entry = %{"path" => "noop.md", "content" => raw, "mtime" => 1.0}
+
+      assert {:ok, _} = Notes.batch_upsert_notes(user, vault, [entry])
+
+      # Clear the insert's embed job so Oban uniqueness cannot mask a spurious
+      # enqueue from the re-push.
+      Engram.Repo.delete_all(Oban.Job)
+
+      # Same content again: the stored projection hash is unchanged, so the
+      # embed gate (prev_hash != content_hash, BOTH projection hashes) must
+      # skip. Comparing against the RAW entry hash would always mismatch for
+      # frontmatter notes and re-embed on every push.
+      assert {:ok, _} = Notes.batch_upsert_notes(user, vault, [entry])
+
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+    end
+
+    test "batch REST response content_hash equals the stored row hash", %{
+      user: user,
+      vault: vault
+    } do
+      raw = "---\ntags: [x]\n---\nbody"
+
+      assert {:ok, %{results: [r]}} =
+               Notes.batch_upsert_notes(user, vault, [
+                 %{"path" => "resp.md", "content" => raw, "mtime" => 1.0}
+               ])
+
+      {:ok, stored_hash} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.get!(Engram.Notes.Note, r.id).content_hash
+        end)
+
+      assert r.content_hash == stored_hash
+    end
+  end
+
+  describe "batch_upsert_notes/3 — CRDT deliver-out" do
+    # Verifies that batch_upsert_side_effects calls CrdtDeliver.deliver_out for
+    # each ok entry: deliver_out always broadcasts crdt_doc_ready on the vault
+    # crdt topic (even when no live room exists), which is the observable
+    # post-commit signal clients use to pull the merged state.
+    test "batch update reaches a live CRDT room (deliver-out)", ctx do
+      %{user: user, vault: vault} = ctx
+      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "live.md", "content" => "base"})
+
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      {:ok, _} =
+        Notes.batch_upsert_notes(user, vault, [
+          %{"path" => "live.md", "content" => "base plus batch edit"}
+        ])
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "crdt_doc_ready",
+                       payload: %{"doc_id" => doc_id}
+                     },
+                     500
+
+      assert doc_id == "#{vault.id}/live.md"
+    end
+
+    test "batch insert stores the doc's projected text as content", ctx do
+      %{user: user, vault: vault} = ctx
+      raw = "---\ntags: [x]\n---\nbody"
+
+      {:ok, _} = Notes.batch_upsert_notes(user, vault, [%{"path" => "fm.md", "content" => raw}])
+
+      {:ok, note} = Notes.get_note(user, vault, "fm.md")
+
+      {:ok, {:ok, state}} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Crypto.decrypt_crdt_state(Engram.Repo.get!(Engram.Notes.Note, note.id), user)
+        end)
+
+      {:ok, doc} = Engram.Notes.CrdtBridge.doc_from_state(state)
+
+      assert note.content == Engram.Notes.CrdtBridge.text_of(doc),
+             "row content must equal the doc projection, byte for byte"
+    end
+  end
 end

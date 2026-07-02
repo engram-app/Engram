@@ -422,4 +422,63 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # After tail replay the doc has content from both sources
     assert String.length(text) > 0
   end
+
+  # ── unbind/3 materializes trailing edits ─────────────────────────────────
+
+  test "unbind materializes trailing edits into notes.content and bumps seq", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Bind first to populate the crdt_state snapshot from notes.content
+    st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+    st1 = CrdtPersistence.bind(st, note.id, doc)
+
+    # Record the original seq
+    {:ok, raw_note} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.get!(Note, note.id)
+      end)
+
+    original_seq = raw_note.seq
+
+    # Make a trailing edit that is NOT checkpointed
+    :ok =
+      CrdtBridge.diff_into_text(
+        Yex.Doc.get_text(doc, CrdtBridge.text_name()),
+        "trailing edit never checkpointed"
+      )
+
+    # unbind should materialize this trailing edit
+    :ok = CrdtPersistence.unbind(st1, note.id, doc)
+
+    # Verify the trailing edit made it into notes.content and seq was bumped
+    {:ok, {:ok, updated}} =
+      Repo.with_tenant(user.id, fn ->
+        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id), user)
+      end)
+
+    assert updated.content =~ "trailing edit never checkpointed"
+    assert updated.seq > original_seq
+  end
+
+  # ── bind/3 does NOT leak trap_exit into a bare test process ───────────────
+
+  test "bind/3 called directly from a test process does not set trap_exit", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    # The guard relies on :"$initial_call" being absent in a bare test process.
+    # Confirm the predicate holds: if this is nil, the guard will NOT set the flag.
+    assert Process.get(:"$initial_call") == nil
+
+    # Confirm the test process is not trapping exits before the call.
+    assert Process.info(self(), :trap_exit) == {:trap_exit, false}
+
+    # Call bind/3 directly (bare ExUnit test process — no :"$initial_call" in dict).
+    _returned = CrdtPersistence.bind(st, note.id, doc)
+
+    # The guard must have prevented the flag from being set.
+    assert Process.info(self(), :trap_exit) == {:trap_exit, false}
+  end
 end
