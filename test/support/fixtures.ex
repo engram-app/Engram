@@ -121,6 +121,11 @@ defmodule Engram.Fixtures do
 
     {:ok, inserted} =
       Repo.with_tenant(user.id, fn ->
+        # DB-enforced NOT NULL (NULL-seq rows vanish from the sync feed) —
+        # stamp a real per-vault seq inside the tenant txn (next_seq!'s
+        # row-lock contract) unless the caller overrode it.
+        note_attrs = Map.put_new(note_attrs, :seq, Engram.Vaults.next_seq!(vault.id))
+
         %Note{}
         |> Note.changeset(note_attrs)
         |> Repo.insert!()
@@ -253,6 +258,9 @@ defmodule Engram.Fixtures do
     att_id = Ecto.UUID.generate()
     storage_key = Engram.Storage.key(user.id, vault.id, path)
 
+    # DB-enforced NOT NULL on seq (NULL rows vanish from the sync feed).
+    {:ok, seq} = Repo.with_tenant(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)
+
     # Legacy v1 encrypt: empty AAD
     {content_ct, content_nonce} = Envelope.encrypt(content, dek, <<>>)
     {path_ct, path_nonce} = Envelope.encrypt(path, dek, <<>>)
@@ -273,6 +281,7 @@ defmodule Engram.Fixtures do
       mime_type: mime_type,
       size_bytes: byte_size(content),
       mtime: mtime,
+      seq: seq,
       encryption_version: 1,
       dek_version: 1
     }

@@ -59,6 +59,9 @@ defmodule Engram.Factory do
     %Engram.Notes.Note{
       id: Ecto.UUID.generate(),
       version: 1,
+      # DB-enforced NOT NULL (NULL-seq rows vanish from the sync feed); a
+      # monotone placeholder is fine — seq-semantics tests use app paths.
+      seq: sequence(:note_seq, & &1),
       content_hash: :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower),
       embed_hash: nil,
       user: user,
@@ -84,6 +87,7 @@ defmodule Engram.Factory do
 
     %Engram.Attachments.Attachment{
       id: Ecto.UUID.generate(),
+      seq: sequence(:attachment_seq, & &1),
       content: <<0, 1, 2, 3>>,
       content_hash: :crypto.hash(:sha256, <<0, 1, 2, 3>>) |> Base.encode16(case: :lower),
       mime_type: "image/png",
