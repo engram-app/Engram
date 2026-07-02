@@ -93,7 +93,10 @@ function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null
 				// The notes are now in the cache, but HT cached the empty children
 				// list when it first asked. Tell it to refetch this branch.
 				.then(() => deps.onChildrenLoaded?.(folderId))
-				.catch(() => {});
+				.catch(() => {
+					// Best-effort background prefetch: a failed refetch just leaves the
+					// branch to load lazily on next expand, so swallow the error.
+				});
 		}
 		return null;
 	}
