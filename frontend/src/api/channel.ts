@@ -293,7 +293,7 @@ export async function connectChannel({
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
 	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 });
 	crdtChannel.on("crdt_msg", (p: { doc_id: string; b64: string }) => {
-		void crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64).catch((err) =>
+		crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64).catch((err) =>
 			console.warn("CRDT frame handling error (dropped)", err),
 		);
 	});

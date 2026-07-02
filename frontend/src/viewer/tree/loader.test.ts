@@ -237,7 +237,7 @@ describe("buildLoader", () => {
 		const call = fetchSpy.mock.calls[0]?.[0] as unknown as {
 			queryFn: (ctx?: unknown) => Promise<NoteSummary[]>;
 		};
-		void call.queryFn();
+		call.queryFn();
 		expect(fetchFolderNotes).toHaveBeenCalledWith("2");
 	});
 
@@ -261,7 +261,7 @@ describe("buildLoader", () => {
 		const call = fetchSpy.mock.calls[0]?.[0] as unknown as {
 			queryFn: () => Promise<NoteSummary[]>;
 		};
-		void call.queryFn();
+		call.queryFn();
 		expect(fetchFolderNotes).toHaveBeenCalledWith("root");
 	});
 

@@ -182,12 +182,11 @@ test.describe("FTUX happy path", () => {
 		await expect(page.getByRole("heading", { name: /first vault/iu })).toHaveCount(0);
 	});
 
-	test("completing device-link flow ticks the plugin checklist item", async ({ page }) => {
+	test("completing device-link flow ticks the plugin checklist item", async () => {
 		// This test requires triggering the backend device-flow exchange end-to-end.
 		// No harness helper exists yet — skipping with a clear signal so the rest of
 		// the suite still runs. File a follow-up issue to add a device-flow helper
 		// and unskip this test.
-		void page;
 		test.skip(true, "requires device-flow helper — see follow-up issue");
 
 		// Sketch:

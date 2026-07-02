@@ -176,7 +176,7 @@ export default function FolderTree() {
 	// so we don't fetch twice if the user clicks before the hover resolves.
 	const prefetchFolderNotes = useCallback(
 		(folderId: string) => {
-			void qc.prefetchQuery({
+			qc.prefetchQuery({
 				queryKey: ["folder-notes-by-id", vaultId, folderId],
 				queryFn: () => fetchFolderNotes(folderId),
 				staleTime: FOLDER_NOTES_STALE_MS,

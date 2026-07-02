@@ -97,11 +97,32 @@ Intent lives in #812 and commit messages.
   `interface`/`type` are compile-erased (safe). Guard: after reordering run
   `tsc --noEmit` and grep for `error TS2448|2454|2449` (use-before-declaration) — must
   be zero — plus a full `vitest run`.
-- **`noVoid` is behavioral here, not mechanical** — every site is the deliberate
-  floating-promise idiom (`void promise().catch(...)`, `void logout()`,
-  `void import(...)`). Removing `void` either leaves an unhandled floating promise or
-  forces `await` (changes the caller). Handle it in the behavioral tier, not as a
-  mechanical sweep.
+- **`noVoid`** — every site was the fire-and-forget idiom (`void promise().catch(...)`,
+  `void logout()`, `void import(...)`). Biome has **no** type-aware floating-promise
+  rule, so simply dropping `void` is behavior-identical (`void expr` and `expr` both
+  evaluate + discard the promise) and trips nothing. For `() => void logout()` in a
+  `() => void`-typed handler, use a block body (`() => { logout(); }`) to keep the
+  undefined return. One `void page;` unused-param marker in a skipped e2e test was fixed
+  by dropping the unused `{ page }` param instead.
+- **`noEqualsToNull` needs per-operand types, NOT the `=== null` autofix** — the loose
+  `x == null` idiom matches null AND undefined; Biome's unsafe fix rewrites to `=== null`
+  (null only), a silent bug wherever the operand can be `undefined`. Fix by type:
+  `=== null` for `X | null`, `=== undefined` for `X | undefined` (optional props,
+  `?.` reads), explicit `x === null || x === undefined` for `X | null | undefined` /
+  `unknown` / `ReactNode`. `tsc` won't catch a wrong choice. Done (#833).
+- **`suspicious/noUnnecessaryConditions` is PERMANENTLY OFF — do not ratchet it.** Biome's
+  flow/type analysis is weaker than `tsc`'s and produces ~15/17 false positives here:
+  loop-mutated counters (`if (deleted)` where `deleted++`) flagged "always falsy";
+  `RegExp.exec()` null guards flagged constant; closure-captured mutable flags flagged
+  "always falsy"; a reachable `switch (x: string)` flagged "unreachable case" (Biome type
+  bug); and necessary `?.` on `| null`/`| undefined` operands flagged "unnecessary".
+  Enabling it would need ~15 `biome-ignore` on correct code. Treat like the framework-wrong
+  rules in `overrides[0]`, not a deferred target.
+
+**Measure with the rule's REAL group.** `--only=<group>/<rule>` silently reports zero for a
+wrong group (e.g. `--only=style/noShadow` → 0, but the rule is `suspicious/noShadow` → 41).
+The group in `biome.json`'s override is authoritative; confirm the count is non-zero before
+concluding a rule is already satisfied.
 
 ## Re-enabling a ratchet rule (the workflow)
 
@@ -122,8 +143,11 @@ Intent lives in #812 and commit messages.
 
 Mechanical tier **complete**: `noLeakedRender` (#826), `useNamedCaptureGroup` (#827),
 `useDestructuring` (#828), `useImportsFirst` (#830), `useExportsLast` (#831), on top of
-the earlier a11y tier. Remaining in #812: the **behavioral tier** (`noVoid`,
-`useExhaustiveDependencies`, `noEqualsToNull`, `noUnnecessaryConditions`, `useAwait`,
-`noShadow`, `noEmptyBlockStatements`, `noReturnAssign` — autofixes change semantics,
-hand-review each) and config-gated `useAtIndex` (its `.at(-1)` autofix needs a tsconfig
+the earlier a11y tier.
+
+Behavioral tier in progress: `noEqualsToNull` (#833), `noReturnAssign` (#834) merged,
+`noVoid` this PR. `noUnnecessaryConditions` dropped as permanently-off (see per-rule
+note above). Remaining in #812: `useExhaustiveDependencies` (~29, highest bug-value,
+riskiest autofix), `useAwait` (~31), `noShadow` (~41), `noEmptyBlockStatements` (~116) —
+all hand-review; plus config-gated `useAtIndex` (its `.at(-1)` autofix needs a tsconfig
 `lib` → es2022 bump in the same PR).

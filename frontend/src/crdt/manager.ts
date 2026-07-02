@@ -77,7 +77,7 @@ export class CrdtManager {
 			return;
 		}
 		e.doc.destroy();
-		void e.persistence.destroy();
+		e.persistence.destroy();
 		this.docs.delete(id);
 	}
 
