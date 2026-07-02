@@ -101,6 +101,13 @@ if _WORKER > 0:
 # run instead of nuking sibling runs' users mid-flight (issue #160).
 _RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
 
+# Per-JOB namespace. GITHUB_RUN_ID alone is NOT enough: all parallel jobs of
+# one workflow run share it, and the worker-0 setup sweep scoped to run-only
+# deleted sibling jobs' live Clerk users mid-suite (issue #869 — e2e-api's
+# sweep killed e2e-clerk's users; only test_49 noticed because it is the one
+# mid-suite Clerk session minter). "localjob" outside CI.
+_JOB_ID = os.environ.get("GITHUB_JOB", "localjob")
+
 
 # ---------------------------------------------------------------------------
 # Unique timestamp for this test run
@@ -110,10 +117,12 @@ _RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
 def ts():
     """Per-worker, per-run unique suffix for e2e-* emails.
 
-    Format: ``{YYYYMMDDHHMMSSffffff}r{RUN_ID}w{WORKER}`` — the ``r{RUN_ID}``
-    segment scopes cleanup to this CI run (see issue #160).
+    Format: ``{YYYYMMDDHHMMSSffffff}r{RUN_ID}j{JOB_ID}w{WORKER}`` — the
+    ``r{RUN_ID}j{JOB_ID}`` segment scopes cleanup to this CI run AND job
+    (issues #160 + #869: parallel jobs share GITHUB_RUN_ID, so run-only
+    scoping let one job's sweep delete a sibling job's live users).
     """
-    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}r{_RUN_ID}w{_WORKER}"
+    return f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}r{_RUN_ID}j{_JOB_ID}w{_WORKER}"
 
 
 # ---------------------------------------------------------------------------
@@ -132,10 +141,10 @@ def auth_provider():
     """
     provider = get_auth_provider(API_URL)
     if _WORKER == 0:
-        # Scope sweep to THIS run's namespace — never touch sibling runs'
-        # users. Orphans from crashed runs are reaped out-of-band by
-        # .github/workflows/clerk-orphans.yml (issue #160).
-        provider.cleanup_all_e2e_users(run_id=_RUN_ID)
+        # Scope sweep to THIS run+job namespace — never touch sibling runs'
+        # OR sibling jobs' users (issues #160, #869). Orphans from crashed
+        # runs are reaped out-of-band by .github/workflows/clerk-orphans.yml.
+        provider.cleanup_all_e2e_users(run_id=_RUN_ID, job_id=_JOB_ID)
     return provider
 
 

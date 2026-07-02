@@ -94,14 +94,24 @@ def cleanup_clerk_users(clerk_client, clerk_user_ids: list[str]) -> None:
             logger.warning("Failed to delete Clerk user %s: %s", user_id, e)
 
 
-def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
+def cleanup_all_e2e_clerk_users(
+    clerk_client, run_id: str | None = None, job_id: str | None = None
+) -> int:
     """Find and delete e2e-* users in the Clerk instance.
 
-    By default scopes the sweep to ``run_id`` — only emails containing
-    ``r{run_id}`` are deleted. This prevents the cross-run cascade
-    documented in issue #160: a CI run's worker-0 fixture used to nuke
-    every e2e-* user, including ones being actively used by sibling CI
-    runs, causing HTTP 401 storms in those runs.
+    By default scopes the sweep to ``run_id`` + ``job_id`` — only emails
+    containing ``r{run_id}j{job_id}w`` are deleted. Weaker scoping caused
+    two cascades:
+
+    - issue #160: no scoping — a run's worker-0 fixture nuked every e2e-*
+      user, including sibling RUNS' active users (401 storms).
+    - issue #869 (2026-07-02): run-only scoping — GITHUB_RUN_ID is shared
+      by all parallel JOBS of one workflow run, so the e2e-api job's setup
+      sweep deleted the e2e-clerk job's live users mid-suite (POST
+      /sessions 404 in test_49; every e2e-clerk teardown delete already 404).
+
+    ``job_id`` distinguishes sibling jobs; a job re-run (same run id, same
+    job id) still reaps its own previous attempt's leftovers.
 
     Passing ``run_id=None`` restores the legacy nuclear behavior — useful
     only from the standalone reaper script (``scripts/cleanup_clerk_users.py``)
@@ -113,7 +123,12 @@ def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
     offset = 0
     # Anchor on the trailing ``w`` so that run id "123" never substring-matches
     # into another run's "r12345w0" segment. Worker suffix is always present.
-    run_marker = f"r{run_id}w" if run_id else None
+    if run_id and job_id:
+        run_marker = f"r{run_id}j{job_id}w"
+    elif run_id:
+        run_marker = f"r{run_id}w"
+    else:
+        run_marker = None
     while True:
         try:
             batch = clerk_client.list_users(limit=100, offset=offset)
@@ -137,7 +152,12 @@ def cleanup_all_e2e_clerk_users(clerk_client, run_id: str | None = None) -> int:
             break
         offset += 100
     if deleted:
-        scope = f"run {run_id}" if run_id else "ALL runs"
+        if run_id and job_id:
+            scope = f"run {run_id} job {job_id}"
+        elif run_id:
+            scope = f"run {run_id}"
+        else:
+            scope = "ALL runs"
         logger.info("Cleaned up %d orphaned e2e Clerk users (%s)", deleted, scope)
     return deleted
 
