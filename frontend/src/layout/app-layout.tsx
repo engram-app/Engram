@@ -41,6 +41,7 @@ function DesktopLayout() {
 		}
 	};
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: rightRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on rightContent alone.
 	useEffect(() => {
 		if (rightContent === null || rightContent === undefined) {
 			rightRef.current?.collapse();

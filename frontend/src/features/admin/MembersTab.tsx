@@ -1,5 +1,5 @@
 import { ChevronRight, Loader2 } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -66,19 +66,21 @@ export default function MembersTab({
 		{},
 	);
 
-	function sortUsers(list: AdminUser[]): AdminUser[] {
-		return [...list].sort((a, b) => {
-			if (a.id === currentUserId) {
-				return -1;
-			}
-			if (b.id === currentUserId) {
-				return 1;
-			}
-			return 0;
-		});
-	}
+	const sortUsers = useCallback(
+		(list: AdminUser[]): AdminUser[] =>
+			[...list].sort((a, b) => {
+				if (a.id === currentUserId) {
+					return -1;
+				}
+				if (b.id === currentUserId) {
+					return 1;
+				}
+				return 0;
+			}),
+		[currentUserId],
+	);
 
-	async function refresh() {
+	const refresh = useCallback(async () => {
 		try {
 			const res = await adminApi.listUsers();
 			setUsers(sortUsers(res.users));
@@ -87,11 +89,11 @@ export default function MembersTab({
 		} finally {
 			setLoading(false);
 		}
-	}
+	}, [sortUsers]);
 
 	useEffect(() => {
 		refresh();
-	}, []);
+	}, [refresh]);
 
 	// Optimistic mutation: patch the local row immediately so the UI
 	// reflects the intent on the next paint. On success we refresh from

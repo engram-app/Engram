@@ -23,13 +23,18 @@ export function useChannel() {
 		getTokenRef.current = getToken;
 	}, [getToken]);
 
+	// Key the socket effect on the primitive id, not the whole `user` object: a
+	// new `user` identity on every `useMe` refetch would needlessly tear the
+	// socket down and back up. Hoisting `user?.id` makes the captured value and
+	// the dependency the same narrow primitive.
+	const userId = user?.id;
 	useEffect(() => {
-		if (!user || vaultId === null) {
+		if (userId === undefined || vaultId === null) {
 			return;
 		}
 
 		connectChannel({
-			userId: user.id,
+			userId,
 			vaultId,
 			getToken: () => getTokenRef.current(),
 			queryClient,
@@ -51,5 +56,5 @@ export function useChannel() {
 			removeTriggers();
 			removeCrdtResync();
 		};
-	}, [user?.id, vaultId]);
+	}, [userId, vaultId]);
 }

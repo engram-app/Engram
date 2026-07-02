@@ -80,7 +80,6 @@
 						"useQwikValidLexicalScope": "off",
 						"noInvalidPositionAtImportRule": "off",
 						"noUndeclaredDependencies": "off",
-						"useExhaustiveDependencies": "off",
 						"useImageSize": "off",
 						"useUniqueElementIds": "off"
 					},

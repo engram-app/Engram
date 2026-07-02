@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { adminApi, type Invite } from "./api";
@@ -13,7 +13,7 @@ export default function InvitesTab() {
 	// The raw URL is shown ONCE — backend never returns it again. Don't persist.
 	const [lastUrl, setLastUrl] = useState<string | null>(null);
 
-	async function refresh() {
+	const refresh = useCallback(async () => {
 		try {
 			const res = await adminApi.listInvites();
 			setInvites(res.invites);
@@ -23,11 +23,11 @@ export default function InvitesTab() {
 		} finally {
 			setLoading(false);
 		}
-	}
+	}, []);
 
 	useEffect(() => {
 		refresh();
-	}, []);
+	}, [refresh]);
 
 	async function create(e: React.FormEvent) {
 		e.preventDefault();

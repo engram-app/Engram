@@ -105,7 +105,7 @@ export function usePaddlePrices(args: UsePaddlePricesArgs): {
 		} finally {
 			setLoading(false);
 		}
-	}, [paddle, priceIdsKey, countryCode, discountIdKey]);
+	}, [paddle, priceIdsKey, countryCode, discountId, discountIdKey]);
 
 	useEffect(() => {
 		fetchPrices();

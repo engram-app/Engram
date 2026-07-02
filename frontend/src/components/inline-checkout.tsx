@@ -109,10 +109,10 @@ export function InlineCheckout({
 		},
 	});
 
-	// Stable ref — effects re-run only when actual values change
+	// Stable ref so effects re-run only when an actual value changes.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on individual customer sub-fields so the memo recomputes only when a real value changes, not on every new `customer` object identity from props.
 	const stableCustomer = React.useMemo(
 		() => customer,
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[
 			customer?.id,
 			customer?.email,
@@ -128,11 +128,8 @@ export function InlineCheckout({
 		],
 	);
 
-	const stableCustomData = React.useMemo(
-		() => customData,
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[JSON.stringify(customData)],
-	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on JSON.stringify(customData) to stabilize by value; the raw `customData` object identity changes every render.
+	const stableCustomData = React.useMemo(() => customData, [JSON.stringify(customData)]);
 
 	const itemsKey = React.useMemo(
 		() => items.map((i) => `${i.priceId}:${i.quantity ?? 1}`).join(","),
@@ -145,7 +142,8 @@ export function InlineCheckout({
 	// cycle as openCheckout when isReady first becomes true.
 	const prevItemsKeyRef = React.useRef<string | null>(null);
 
-	// Open checkout once Paddle is ready
+	// Open checkout once Paddle is ready.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: opens the Paddle checkout exactly once (guarded by isOpenRef); intentionally keyed on isReady only so later prop churn cannot re-open or re-initialize the live checkout.
 	React.useEffect(() => {
 		if (!isReady || items.length === 0) {
 			return;
@@ -163,10 +161,10 @@ export function InlineCheckout({
 				...(successUrl && { successUrl }),
 			});
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isReady]);
 
-	// Update items reactively after mount
+	// Update items reactively after mount.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the memoized itemsKey, not the `items` array (new identity each render); items/updateItems are read fresh inside the effect.
 	React.useEffect(() => {
 		if (!(isReady && isOpenRef.current)) {
 			return;
@@ -185,7 +183,6 @@ export function InlineCheckout({
 		}
 		prevItemsKeyRef.current = itemsKey;
 		updateItems(items.map((i) => ({ priceId: i.priceId, quantity: i.quantity ?? 1 })));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [itemsKey, isReady]);
 
 	// Subscribe to all Paddle events: update summary + forward to onEvent
