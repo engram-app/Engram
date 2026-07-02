@@ -114,19 +114,46 @@ defmodule Engram.Notes.Frontmatter do
   Each value in `values` is a JSON string (as produced by `parse/1`); it is
   decoded before handing to the YAML emitter so the output is canonical YAML,
   not a string-of-JSON-literal.
+
+  Y.Map values are client-controlled: a buggy or hostile peer can store a value
+  that cannot be YAML-serialized (e.g. a Yex container-ref struct). This function
+  degrades gracefully rather than raising, keeping emit/2 total — every checkpoint
+  and REST write projects through emit, so a single unserializable value would
+  otherwise brick the note.
   """
-  @spec emit([String.t()], %{String.t() => String.t()}) :: String.t()
+  @spec emit([String.t()], %{String.t() => term()}) :: String.t()
   def emit([], _values), do: ""
 
   def emit(order, values) when is_list(order) and is_map(values) do
     order
     |> Enum.filter(&Map.has_key?(values, &1))
     |> Enum.map_join("", fn key ->
-      decoded = Jason.decode!(values[key])
-      Ymlr.document!(%{key => decoded}, sort_maps: false) |> String.replace_prefix("---\n", "")
+      decoded = decode_value(values[key])
+
+      try do
+        Ymlr.document!(%{key => decoded}, sort_maps: false)
+        |> String.replace_prefix("---\n", "")
+      rescue
+        # Last resort for values Ymlr cannot serialize (e.g. Yex container
+        # refs): degrade to the inspected form rather than bricking the note.
+        _ -> "#{key}: #{inspect(decoded)}\n"
+      end
     end)
     |> ensure_trailing_newline()
   end
+
+  # Y.Map values are client-controlled: a buggy or hostile peer can store a
+  # non-JSON string (or a non-string). Degrading to the raw value keeps emit/2
+  # total — a decode raise here would brick the note (every checkpoint and REST
+  # write projects through emit).
+  defp decode_value(v) when is_binary(v) do
+    case Jason.decode(v) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> v
+    end
+  end
+
+  defp decode_value(v), do: v
 
   defp ensure_trailing_newline(""), do: ""
 
