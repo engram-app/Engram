@@ -40,7 +40,7 @@ function stillActive(vaultId: string): boolean {
 
 async function doCursorSync(vaultId: string, queryClient: QueryClient): Promise<void> {
 	const cursor = getCursor(vaultId);
-	if (cursor == null) {
+	if (cursor === null) {
 		const seeded = await bootstrap();
 		if (stillActive(vaultId)) {
 			setCursor(vaultId, seeded);

@@ -8,7 +8,7 @@ export function useActiveFolder(): string {
 	const id = params.id ?? null;
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
-	if (id == null || id === "") {
+	if (id === null || id === "") {
 		return "";
 	}
 	const note = qc.getQueryData<Note>(["note", vaultId, id]);

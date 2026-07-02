@@ -106,7 +106,7 @@ export function ActiveVaultsSection() {
 	const vaultsCap = billing?.caps.vaults ?? null;
 	const vaultCount = vaults?.length ?? 0;
 	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
-	const titleSuffix = vaultsCap == null ? "" : ` (${vaultCount} / ${vaultsCap})`;
+	const titleSuffix = vaultsCap === null ? "" : ` (${vaultCount} / ${vaultsCap})`;
 
 	return (
 		<SettingsSectionCard

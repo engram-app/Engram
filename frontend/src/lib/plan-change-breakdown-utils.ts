@@ -85,7 +85,7 @@ interface BreakdownPreviewResponse {
 
 function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineItemData[] {
 	return items.map((item) => {
-		const hasProration = item.proration != null;
+		const hasProration = item.proration !== undefined;
 		let prorationPeriod: string | undefined;
 
 		if (hasProration && item.proration) {

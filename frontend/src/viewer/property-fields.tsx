@@ -14,7 +14,7 @@ const inputCls =
 	"w-full rounded border border-border bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
 function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
-	const initial = value == null ? "" : String(value);
+	const initial = value === null || value === undefined ? "" : String(value);
 	const [draft, setDraft] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {

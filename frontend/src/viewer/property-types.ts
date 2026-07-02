@@ -8,7 +8,7 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
 
 function scalarToString(v: unknown): string {
-	if (v == null) {
+	if (v === null || v === undefined) {
 		return "";
 	}
 	if (typeof v === "string") {
@@ -55,7 +55,7 @@ export function coerceValue(value: unknown, to: PropertyType): unknown {
 			if (Array.isArray(value)) {
 				return value;
 			}
-			if (value === "" || value == null) {
+			if (value === "" || value === null || value === undefined) {
 				return [];
 			}
 			return [scalarToString(value)];
@@ -63,7 +63,7 @@ export function coerceValue(value: unknown, to: PropertyType): unknown {
 			if (Array.isArray(value)) {
 				return value.map(scalarToString).join(", ");
 			}
-			if (value == null) {
+			if (value === null || value === undefined) {
 				return "";
 			}
 			return scalarToString(value);
@@ -78,7 +78,7 @@ export function coerceValue(value: unknown, to: PropertyType): unknown {
 			return Boolean(value) && scalarToString(value) !== "false" && scalarToString(value) !== "";
 		case "date":
 		case "datetime":
-			return value == null ? "" : scalarToString(value);
+			return value === null || value === undefined ? "" : scalarToString(value);
 		default:
 			return value;
 	}

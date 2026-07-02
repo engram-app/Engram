@@ -62,7 +62,7 @@ function ConnectionCard({
 	onRevoke: () => void;
 }) {
 	const vaultLabel =
-		connection.vault_id == null
+		connection.vault_id === null
 			? "All vaults"
 			: (connection.vault_name ?? `#${connection.vault_id}`);
 
@@ -609,8 +609,8 @@ export default function ConnectionsPage() {
 	const pats = list.filter((c) => c.kind === "pat");
 
 	const obsCount =
-		caps.obsidianCap == null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap == null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
+		caps.obsidianCap === null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
+	const mcpCount = caps.mcpCap === null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
 
 	return (
 		<article className="space-y-8">

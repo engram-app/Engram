@@ -20,7 +20,7 @@ function VaultSwitcher() {
 		if (!vaults || vaults.length === 0) {
 			return;
 		}
-		const stillValid = activeId != null && vaults.some((v) => v.id === activeId);
+		const stillValid = activeId !== null && vaults.some((v) => v.id === activeId);
 		if (stillValid) {
 			return;
 		}

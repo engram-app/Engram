@@ -20,7 +20,7 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 		headers.set("Authorization", `Bearer ${token}`);
 	}
 	const vaultId = getActiveVaultId();
-	if (vaultId != null) {
+	if (vaultId !== null) {
 		headers.set("X-Vault-ID", String(vaultId));
 	}
 	headers.set("X-Device-Id", getDeviceId());

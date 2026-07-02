@@ -243,7 +243,7 @@ export default function FolderTree() {
 	// where they are after navigation. Mirrors the old recursive
 	// `containsSelected` behaviour but driven by HT's expand API.
 	useEffect(() => {
-		if (selectedNoteId == null || !folders) {
+		if (selectedNoteId === null || !folders) {
 			return;
 		}
 		const note = qc.getQueryData<Note>(["note", vaultId, selectedNoteId]);

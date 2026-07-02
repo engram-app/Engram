@@ -35,7 +35,7 @@ function encodePathSegments(path: string): string {
 const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
 	data.folders
 		.filter((f) => f.name !== "")
-		.map((f) => (f.id == null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
+		.map((f) => (f.id === null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
 
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
@@ -215,7 +215,7 @@ function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<str
 	while (changed) {
 		changed = false;
 		for (const f of folders) {
-			if (f.parent_id != null && result.has(f.parent_id) && !result.has(f.id)) {
+			if (f.parent_id !== null && result.has(f.parent_id) && !result.has(f.id)) {
 				result.add(f.id);
 				changed = true;
 			}
@@ -454,7 +454,7 @@ export function useFolderNotesById(folderId: string | null, opts: { enabled?: bo
 	return useQuery({
 		queryKey: ["folder-notes-by-id", vaultId, folderId],
 		queryFn: () => fetchNotesForFolderId(folderId as string),
-		enabled: folderId != null && (opts.enabled ?? true),
+		enabled: folderId !== null && (opts.enabled ?? true),
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
 }
@@ -464,7 +464,7 @@ export function useNote(id: string | null) {
 	return useQuery({
 		queryKey: ["note", vaultId, id],
 		queryFn: () => fetchNoteById(id as string),
-		enabled: id != null,
+		enabled: id !== null,
 	});
 }
 
@@ -484,7 +484,7 @@ export function useUpdateNote() {
 			// path. Invalidate the specific id when the server returns it,
 			// and refresh folder listings so the title/mtime stay current.
 			const id = data?.note?.id;
-			if (id != null) {
+			if (id !== undefined) {
 				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -539,7 +539,7 @@ export function useCreateNote() {
 		onMutate: async ({ folder }) => {
 			const folderId = folderIdForPath(qc, vaultId, folder);
 			// Unknown non-root folder not in the cache yet — skip; surfaces on expand.
-			if (folderId == null) {
+			if (folderId === null) {
 				return;
 			}
 			const key = ["folder-notes-by-id", vaultId, folderId] as const;
@@ -1368,7 +1368,7 @@ export function useRenameNote() {
 			const fromList = oldFolderNotes?.notes.find((n) => n.path === old_path);
 			let noteId: string | null = fromList?.id ?? null;
 			let prevNote: Note | undefined;
-			if (noteId == null) {
+			if (noteId === null) {
 				const cached = qc
 					.getQueryCache()
 					.findAll({ queryKey: ["note", vaultId] })
@@ -1414,7 +1414,9 @@ export function useRenameNote() {
 			// Remove from old list (by id when we have it, by path otherwise).
 			if (oldFolderNotes) {
 				updateCachedList<NoteSummary>(qc, oldListKey, (prev) => ({
-					notes: prev.notes.filter((n) => (noteId == null ? n.path !== old_path : n.id !== noteId)),
+					notes: prev.notes.filter((n) =>
+						noteId === null ? n.path !== old_path : n.id !== noteId,
+					),
 				}));
 			}
 
@@ -1422,7 +1424,7 @@ export function useRenameNote() {
 			if (renamedSummary && newFolderNotes) {
 				updateCachedList<NoteSummary>(qc, newListKey, (prev) => ({
 					notes: [
-						...prev.notes.filter((n) => (noteId == null ? n.path !== new_path : n.id !== noteId)),
+						...prev.notes.filter((n) => (noteId === null ? n.path !== new_path : n.id !== noteId)),
 						renamedSummary,
 					],
 				}));
@@ -1467,7 +1469,7 @@ export function useRenameNote() {
 			// change. Update those fields in place under the SAME cache key
 			// (`['note', vaultId, id]`). No key shuffle: any subscriber to
 			// useNote(id) sees the new fields without remounting.
-			if (noteId != null && prevNote) {
+			if (noteId !== null && prevNote) {
 				qc.setQueryData<Note>(["note", vaultId, noteId], {
 					...prevNote,
 					path: new_path,
@@ -1493,7 +1495,7 @@ export function useRenameNote() {
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
 			}
-			if (ctx.noteId != null && ctx.prevNote !== undefined) {
+			if (ctx.noteId !== null && ctx.prevNote !== undefined) {
 				qc.setQueryData(["note", vaultId, ctx.noteId], ctx.prevNote);
 			}
 			renameErrorToast(err, "file");
@@ -1829,7 +1831,7 @@ export function useDuplicateNote() {
 			// Drop the placeholder into the id-keyed list the tree reads (root or
 			// subfolder). Only patch when cached; otherwise it lands on the next
 			// expand fetch. Cancel first so an in-flight refetch can't clobber it.
-			if (targetId != null) {
+			if (targetId !== null) {
 				const key = ["folder-notes-by-id", vaultId, targetId] as const;
 				await qc.cancelQueries({ queryKey: key });
 				const snapshot = qc.getQueryData<NoteSummary[]>(key);

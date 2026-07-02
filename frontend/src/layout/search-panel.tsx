@@ -120,7 +120,7 @@ function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) 
 
 function ResultRow({ result }: { result: SearchResult }) {
 	// Orphan hits (no id) are unreachable — render nothing.
-	if (result.id == null) {
+	if (result.id === null) {
 		return null;
 	}
 	const href = `/note/${result.id}`;
