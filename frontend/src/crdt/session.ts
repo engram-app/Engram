@@ -168,6 +168,7 @@ export function closeDoc(path: string): void {
 		return;
 	}
 	session.openPaths.delete(path);
+	session.enrollment.reset(path); // next open re-runs the STEP1 handshake
 	const a = session.awareness.get(path);
 	if (a) {
 		a.destroy();
@@ -178,6 +179,21 @@ export function closeDoc(path: string): void {
 
 export function enroll(path: string): void {
 	session?.enrollment.enroll(path);
+}
+
+/** Enroll only when the doc is actually live on this client (open in an
+ *  editor, or an entry already exists). `crdt_doc_ready` fan-in goes through
+ *  here: background notes must NOT materialize Y.Docs — non-open notes are
+ *  read via REST, and an open re-handshakes on its own. Keeps client memory
+ *  independent of vault size. */
+export function enrollIfLive(path: string): void {
+	if (!session) {
+		return;
+	}
+	if (!(session.openPaths.has(path) || session.manager.hasDoc(path))) {
+		return;
+	}
+	session.enrollment.enroll(path);
 }
 
 export async function handleFrame(path: string, b64: string): Promise<void> {

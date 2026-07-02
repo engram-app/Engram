@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
 import {
-	enroll as crdtEnroll,
+	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
 	docPathFromDocId,
 	notifyCrdtChannelError,
@@ -298,7 +298,7 @@ export async function connectChannel({
 		);
 	});
 	crdtChannel.on("crdt_doc_ready", (p: { doc_id: string }) => {
-		crdtEnroll(docPathFromDocId(p.doc_id));
+		crdtEnrollIfLive(docPathFromDocId(p.doc_id));
 	});
 	crdtChannel
 		.join()

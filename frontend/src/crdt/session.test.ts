@@ -3,6 +3,7 @@ import {
 	closeDoc,
 	docPathFromDocId,
 	enroll,
+	enrollIfLive,
 	getCrdtSyncStatus,
 	handleFrame,
 	installCrdtResyncTriggers,
@@ -189,6 +190,47 @@ describe("crdt session", () => {
 			startCrdtSession({ vaultId: "v1", push: () => {} });
 			const h = await p;
 			expect(h).toBeNull();
+		});
+	});
+
+	describe("enrollment lifecycle", () => {
+		it("reopening a closed doc re-sends STEP1", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/r.md");
+			enroll("notes/r.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0)); // STEP1 went out
+			const afterFirst = frames.length;
+			closeDoc("notes/r.md");
+			await openDoc("notes/r.md");
+			enroll("notes/r.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(afterFirst)); // STEP1 re-sent
+			closeDoc("notes/r.md");
+		});
+
+		it("enrollIfLive ignores paths that are neither open nor live", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			enrollIfLive("notes/background.md"); // crdt_doc_ready for an unopened note
+			await Promise.resolve();
+			expect(frames).toHaveLength(0);
+			// and no Y.Doc was materialized: openDoc-then-close then enrollIfLive
+			// must also stay silent
+			await openDoc("notes/bg2.md");
+			closeDoc("notes/bg2.md");
+			frames.length = 0;
+			enrollIfLive("notes/bg2.md");
+			await Promise.resolve();
+			expect(frames).toHaveLength(0);
+		});
+
+		it("enrollIfLive enrolls an open doc", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/open.md");
+			enrollIfLive("notes/open.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			closeDoc("notes/open.md");
 		});
 	});
 

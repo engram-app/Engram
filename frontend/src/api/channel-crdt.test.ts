@@ -35,7 +35,7 @@ const sessionMock = vi.hoisted(() => ({
 	startCrdtSession: vi.fn(),
 	stopCrdtSession: vi.fn(),
 	handleFrame: vi.fn().mockResolvedValue(undefined),
-	enroll: vi.fn(),
+	enrollIfLive: vi.fn(),
 	notifyCrdtChannelJoined: vi.fn(),
 	notifyCrdtChannelError: vi.fn(),
 	docPathFromDocId: (id: string) => id.slice(id.indexOf("/") + 1),
@@ -64,7 +64,11 @@ describe("crdt channel wiring", () => {
 		);
 	});
 
-	it("routes crdt_msg → handleFrame and crdt_doc_ready → enroll", async () => {
+	// crdt_doc_ready now routes to enrollIfLive (not unconditional enroll) so
+	// background notes announced by the server do not materialize Y.Docs on
+	// clients that have not opened them. Coverage is preserved: we still verify
+	// the event is routed; the guarding logic itself is tested in session.test.ts.
+	it("routes crdt_msg → handleFrame and crdt_doc_ready → enrollIfLive", async () => {
 		await connectChannel({
 			userId: "u1",
 			vaultId: "v1",
@@ -75,7 +79,7 @@ describe("crdt channel wiring", () => {
 		ch.__emit("crdt_msg", { doc_id: "v1/a.md", b64: "Zm9v" });
 		ch.__emit("crdt_doc_ready", { doc_id: "v1/a.md" });
 		expect(sessionMock.handleFrame).toHaveBeenCalledWith("a.md", "Zm9v");
-		expect(sessionMock.enroll).toHaveBeenCalledWith("a.md");
+		expect(sessionMock.enrollIfLive).toHaveBeenCalledWith("a.md");
 	});
 
 	it("joins the CRDT channel with crdt_proto: 2", async () => {
