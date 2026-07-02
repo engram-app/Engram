@@ -2,7 +2,7 @@ defmodule EngramWeb.CrdtChannelTest do
   use EngramWeb.ChannelCase, async: false
 
   alias Engram.{Crypto, Notes, Vaults}
-  alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry}
 
   setup do
     user = insert(:user)
@@ -243,4 +243,69 @@ defmodule EngramWeb.CrdtChannelTest do
   # path is therefore covered by the CRDT-on e2e suite (device-B receive),
   # not here. The plugin-side receive/dispatch is unit-tested in
   # channel-crdt.test.ts (`NoteChannel inbound crdt_doc_ready`).
+
+  # ---------------------------------------------------------------------------
+  # Room pid monitoring — dead rooms must be evicted from the channel cache
+  # ---------------------------------------------------------------------------
+
+  describe "room pid monitoring" do
+    test "room death evicts the cached pid and the next crdt_msg lands in a fresh room", %{
+      socket: socket,
+      doc_id: doc_id,
+      note: note
+    } do
+      # 1. Send a sync step-1 to spin up and cache the room.
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+      assert_push "crdt_msg", %{"doc_id" => ^doc_id}, 3000
+
+      # 2. Grab the live room pid and hard-kill it (`:kill` bypasses trap_exit).
+      room = CrdtRegistry.lookup(note.id)
+      assert is_pid(room)
+      Process.exit(room, :kill)
+
+      # 3. Wait for :global to drop the registration (the DOWN message must have
+      #    been processed by the channel) — poll up to ~500ms.
+      wait_until(fn -> CrdtRegistry.lookup(note.id) == nil end)
+
+      # Give the channel process a moment to handle the :DOWN message so it
+      # evicts the stale entry from its assigns before we push the next frame.
+      Process.sleep(50)
+
+      # 4. Push another sync step-1 (simulates a fresh client opening the doc).
+      client2 = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv2}} = Yex.Sync.get_sync_step1(client2)
+      {:ok, frame2} = Yex.Sync.message_encode({:sync, {:sync_step1, sv2}})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame2)})
+      assert_push "crdt_msg", %{"doc_id" => ^doc_id}, 3000
+
+      # 5. A new room must have been created — different pid from the killed one.
+      #    Poll briefly: ensure_observed may have started the room just before the
+      #    step2 was pushed back, and :global registration might lag by one tick.
+      wait_until(fn -> CrdtRegistry.lookup(note.id) != nil end)
+      new_room = CrdtRegistry.lookup(note.id)
+      assert is_pid(new_room)
+      refute new_room == room
+    end
+  end
+
+  # Poll `condition` every 10ms for up to 500ms, then assert it's truthy.
+  defp wait_until(condition, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 500
+
+    if condition.() do
+      :ok
+    else
+      now = System.monotonic_time(:millisecond)
+
+      if now >= deadline do
+        flunk("wait_until: condition never became true within 500ms")
+      else
+        Process.sleep(10)
+        wait_until(condition, deadline)
+      end
+    end
+  end
 end

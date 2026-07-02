@@ -95,6 +95,22 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
+    case Map.get(socket.assigns.room_doc, pid) do
+      nil ->
+        {:noreply, socket}
+
+      doc_id ->
+        socket =
+          socket
+          |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
+          |> assign(:room_doc, Map.delete(socket.assigns.room_doc, pid))
+
+        {:noreply, socket}
+    end
+  end
+
   # Lazily start + observe the room for `doc_id`, caching it in assigns. On the
   # first reference, resolves doc_id → note_id via path_hmac lookup, then calls
   # CrdtRegistry.ensure_started and SharedDoc.observe so {:yjs, frame, room}
@@ -110,6 +126,11 @@ defmodule EngramWeb.CrdtChannel do
 
         with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
              {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id) do
+          # Watch the room: if it dies (crash, node loss), evict it from the cache so
+          # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
+          # dead pid return :ok and every subsequent edit is silently dropped.
+          _ref = Process.monitor(room)
+
           entry = %{room: room, note_id: note_id}
 
           socket =
