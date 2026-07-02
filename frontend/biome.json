@@ -142,7 +142,6 @@
 						"noAlert": "off",
 						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
 						"noEmptyBlockStatements": "off",
-						"noReturnAssign": "off",
 						"noShadow": "off",
 						"noSkippedTests": "off",
 						"noUnnecessaryConditions": "off",

@@ -330,7 +330,11 @@ describe("useDuplicateNote", () => {
 
 		get.mockResolvedValue({ content: "x" });
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useDuplicateNote(), { wrapper });
 		act(() => {
@@ -434,7 +438,11 @@ describe("optimistic rename note", () => {
 
 		// Hold the POST so we can inspect the optimistic state.
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
@@ -507,7 +515,11 @@ describe("optimistic delete note", () => {
 		seedFolders([{ name: "", count: 2 }]);
 
 		let resolveDel!: (v: unknown) => void;
-		del.mockReturnValue(new Promise((r) => (resolveDel = r)));
+		del.mockReturnValue(
+			new Promise((r) => {
+				resolveDel = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		act(() => {
@@ -579,7 +591,11 @@ describe("optimistic rename note — id-stable cache", () => {
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
 		act(() => {
@@ -644,7 +660,11 @@ describe("optimistic rename folder — rewrites cached notes under old prefix", 
 		seedNoteById("99", { id: "99", path: "other/c.md", folder: "other" });
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useRenameFolder(), { wrapper });
 		act(() => {
@@ -831,7 +851,11 @@ describe("useBatchDeleteNotes", () => {
 		seedFolderNotesById("6", [{ id: "4" }]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		act(() => {
@@ -887,7 +911,11 @@ describe("useBatchDeleteNotes", () => {
 		]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
 		act(() => {
@@ -926,7 +954,11 @@ describe("useCreateNote — optimistic placeholder", () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
@@ -959,7 +991,11 @@ describe("useCreateNote — optimistic placeholder", () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "f9"], []);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
 		act(() => {
@@ -1006,7 +1042,11 @@ describe("useBatchMoveNotes", () => {
 		seedFolderNotesById("9", [{ id: "4" }]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1049,7 +1089,11 @@ describe("useBatchMoveNotes", () => {
 		seedFolderNotesById("9", [{ id: "4" }]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1100,7 +1144,11 @@ describe("useBatchMoveNotes", () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1130,7 +1178,11 @@ describe("useBatchMoveNotes", () => {
 		seedFolderNotesById("root", [{ id: "1", path: "a.md", folder: "" }]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1161,7 +1213,11 @@ describe("useBatchMoveNotes", () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "syn:Derived"], []);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1204,7 +1260,11 @@ describe("useBatchMoveNotes", () => {
 		qc.setQueryData(["folder-notes-by-id", "42", "9"], []);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
 		act(() => {
@@ -1258,7 +1318,11 @@ describe("useBatchDeleteFolders", () => {
 		seedFolderNotesById("8", [{ id: "2" }]);
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchDeleteFolders(), { wrapper });
 		act(() => {
@@ -1332,7 +1396,11 @@ describe("useBatchMoveFolders", () => {
 		});
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveFolders(), { wrapper });
 		act(() => {
@@ -1368,7 +1436,11 @@ describe("useBatchMoveFolders", () => {
 		});
 
 		let resolvePost!: (v: unknown) => void;
-		post.mockReturnValue(new Promise((r) => (resolvePost = r)));
+		post.mockReturnValue(
+			new Promise((r) => {
+				resolvePost = r;
+			}),
+		);
 
 		const { result } = renderHook(() => useBatchMoveFolders(), { wrapper });
 		act(() => {

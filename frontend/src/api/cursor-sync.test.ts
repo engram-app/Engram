@@ -145,7 +145,11 @@ describe("runCursorSync — single-flight per vault", () => {
 	it("coalesces concurrent runs for the same vault into one", async () => {
 		setCursor("v1", "tok-0");
 		let resolve!: (v: unknown) => void;
-		get.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+		get.mockReturnValueOnce(
+			new Promise((r) => {
+				resolve = r;
+			}),
+		);
 		const qc = mockQueryClient();
 
 		const a = runCursorSync("v1", qc);
