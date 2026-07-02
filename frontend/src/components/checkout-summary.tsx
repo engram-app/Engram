@@ -124,7 +124,7 @@ export function CheckoutSummary({
 						<dd className="tabular-nums">{formatMoney(subtotal, currency)}</dd>
 					</div>
 
-					{discount != null && discount > 0 && (
+					{discount !== null && discount !== undefined && discount > 0 && (
 						<div className="flex justify-between text-success-foreground">
 							<dt>Discount</dt>
 							<dd className="tabular-nums">−{formatMoney(discount, currency)}</dd>

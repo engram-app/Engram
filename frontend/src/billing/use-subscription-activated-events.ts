@@ -28,7 +28,7 @@ export function useSubscriptionActivatedEvents({ userId, enabled, onActivated }:
 	const { getToken } = useAuthAdapter();
 
 	useEffect(() => {
-		if (!enabled || userId == null) {
+		if (!enabled || userId === null || userId === undefined) {
 			return;
 		}
 

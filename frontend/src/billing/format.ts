@@ -7,7 +7,12 @@ export function formatMoney(
 	currency: string | null | undefined,
 	locale?: string,
 ): string | null {
-	if (minorUnits == null || currency == null) {
+	if (
+		minorUnits === null ||
+		minorUnits === undefined ||
+		currency === null ||
+		currency === undefined
+	) {
 		return null;
 	}
 

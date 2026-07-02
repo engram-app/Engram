@@ -72,9 +72,11 @@ export function mapCheckoutEventsToSummary(data: CheckoutEventsInput): CheckoutS
 	let recurringTotal: number | undefined;
 	let recurringInterval: string | undefined;
 	let recurringFrequency: number | undefined;
-	const firstRecurringItem = data.items?.find((item) => item.billing_cycle != null);
+	const firstRecurringItem = data.items?.find(
+		(item) => item.billing_cycle !== null && item.billing_cycle !== undefined,
+	);
 	const billingCycle = firstRecurringItem?.billing_cycle;
-	if (billingCycle && recurringTotals?.total != null) {
+	if (billingCycle && recurringTotals?.total !== null && recurringTotals?.total !== undefined) {
 		recurringTotal = recurringTotals.total;
 		recurringInterval = billingCycle.interval;
 		recurringFrequency = billingCycle.frequency;
@@ -82,7 +84,9 @@ export function mapCheckoutEventsToSummary(data: CheckoutEventsInput): CheckoutS
 
 	// Build trial period label from the first item that has a trial period.
 	let trialPeriod: string | undefined;
-	const firstTrialItem = data.items?.find((item) => item.trial_period != null);
+	const firstTrialItem = data.items?.find(
+		(item) => item.trial_period !== null && item.trial_period !== undefined,
+	);
 	if (firstTrialItem?.trial_period) {
 		trialPeriod = formatTrialPeriod(firstTrialItem.trial_period);
 	}

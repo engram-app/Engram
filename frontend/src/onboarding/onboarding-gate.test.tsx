@@ -13,7 +13,7 @@ vi.mock("../api/queries", () => ({
 // wrap each onboarding status under `data.onboarding`.
 function renderWith(onboarding: unknown, rest: Record<string, unknown> = {}) {
 	vi.mocked(useAppBootstrap).mockReturnValue({
-		data: onboarding == null ? undefined : { onboarding },
+		data: onboarding === null || onboarding === undefined ? undefined : { onboarding },
 		isLoading: false,
 		isError: false,
 		...rest,

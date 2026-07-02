@@ -170,7 +170,7 @@ export function handleNoteChanged(
 		return;
 	}
 
-	if (payload.id != null) {
+	if (payload.id !== undefined) {
 		queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.id] });
 	}
 	// Legacy path-keyed key still in use by some hooks; keep invalidating it.

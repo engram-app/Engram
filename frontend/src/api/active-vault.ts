@@ -19,7 +19,7 @@ function readStored(): string | null {
 
 function writeStored(id: string | null) {
 	try {
-		if (id == null) {
+		if (id === null) {
 			localStorage.removeItem(STORAGE_KEY);
 		} else {
 			localStorage.setItem(STORAGE_KEY, id);

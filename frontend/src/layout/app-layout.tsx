@@ -42,14 +42,14 @@ function DesktopLayout() {
 	};
 
 	useEffect(() => {
-		if (rightContent == null) {
+		if (rightContent === null || rightContent === undefined) {
 			rightRef.current?.collapse();
 		} else if (rightRef.current?.isCollapsed()) {
 			rightRef.current?.expand();
 		}
 	}, [rightContent]);
 
-	const hasRight = rightContent != null;
+	const hasRight = rightContent !== null && rightContent !== undefined;
 
 	return (
 		<section className="flex h-screen bg-background text-foreground">

@@ -216,7 +216,7 @@ function DeviceLinkPage() {
 					{step === "pick-vault" ? "Choose a vault to sync" : "Link Obsidian Vault"}
 				</h1>
 
-				{capCheck.swapCooldownHours != null && step !== "success" ? (
+				{capCheck.swapCooldownHours !== null && step !== "success" ? (
 					// Cooldown gates the Sync button (line 319) regardless of whether
 					// an active device still exists — the backend rejects a new family
 					// inside the swap window. Render the banner on cooldown alone, not
@@ -316,7 +316,7 @@ function DeviceLinkPage() {
 						<Button
 							type="button"
 							onClick={handleAuthorize}
-							disabled={loading || !canAuthorize || capCheck.swapCooldownHours != null}
+							disabled={loading || !canAuthorize || capCheck.swapCooldownHours !== null}
 							className="w-full"
 						>
 							{loading ? "Syncing…" : "Sync"}
@@ -354,7 +354,7 @@ function SuccessStep({ linkedVaultId, onForward }: SuccessStepProps) {
 	// on `linkedVaultId` so we only forward for THIS link session — broadcasts
 	// from an unrelated vault won't shove us anywhere.
 	useEffect(() => {
-		if (vaultPopulated && vaultId != null && vaultId === linkedVaultId) {
+		if (vaultPopulated && vaultId !== null && vaultId === linkedVaultId) {
 			onForward();
 		}
 	}, [vaultPopulated, vaultId, linkedVaultId, onForward]);

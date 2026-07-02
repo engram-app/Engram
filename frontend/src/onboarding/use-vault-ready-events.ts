@@ -32,7 +32,7 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
 	const [state, setState] = useState<State>(INITIAL);
 
 	useEffect(() => {
-		if (!enabled || userId == null) {
+		if (!enabled || userId === null || userId === undefined) {
 			return;
 		}
 

@@ -237,7 +237,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 	// Auto-commit + activate once the plugin has actually written notes, so
 	// the user is hands-off the moment their first sync lands.
 	useEffect(() => {
-		if (vaultPopulated && vaultId != null && !isCommitting) {
+		if (vaultPopulated && vaultId !== null && !isCommitting) {
 			setActiveVaultId(vaultId);
 			void onCommit();
 		}

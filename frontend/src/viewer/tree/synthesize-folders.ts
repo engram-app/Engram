@@ -75,7 +75,7 @@ export function synthesizeFolders(real: Folder[], attachments: AttachmentSummary
 			const parentName = slash < 0 ? null : name.slice(0, slash);
 			return {
 				id: idFor(name),
-				parent_id: parentName == null ? null : idFor(parentName),
+				parent_id: parentName === null ? null : idFor(parentName),
 				name,
 				count: real ? real.count : 0,
 			};
