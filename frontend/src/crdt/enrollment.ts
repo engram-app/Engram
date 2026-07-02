@@ -23,7 +23,7 @@ export class CrdtEnrollment {
 			return;
 		}
 		this.enrolled.add(path);
-		void this.startSync(path).then(() => this.onAfterEnroll?.(path));
+		this.startSync(path).then(() => this.onAfterEnroll?.(path));
 	}
 
 	reset(path: string): void {

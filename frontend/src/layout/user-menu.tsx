@@ -70,7 +70,12 @@ export default function UserMenu() {
 					))}
 				</DropdownMenuRadioGroup>
 				<DropdownMenuSeparator />
-				<DropdownMenuItem className="gap-2.5 px-3 py-2.5 text-sm" onSelect={() => void logout()}>
+				<DropdownMenuItem
+					className="gap-2.5 px-3 py-2.5 text-sm"
+					onSelect={() => {
+						logout();
+					}}
+				>
 					<LogOut className="h-4 w-4" />
 					Sign out
 				</DropdownMenuItem>

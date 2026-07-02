@@ -91,7 +91,7 @@ export function stopCrdtSession(): void {
 	for (const a of session.awareness.values()) {
 		a.destroy();
 	}
-	void session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
+	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
 

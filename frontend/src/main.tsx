@@ -62,7 +62,7 @@ if (cfBeaconToken) {
 const posthogKey = import.meta.env.VITE_POSTHOG_KEY;
 const posthogHost = import.meta.env.VITE_POSTHOG_HOST ?? "https://us.i.posthog.com";
 if (posthogKey) {
-	void import("posthog-js").then(({ default: posthog }) => {
+	import("posthog-js").then(({ default: posthog }) => {
 		posthog.init(posthogKey, {
 			api_host: posthogHost,
 			persistence: "memory",

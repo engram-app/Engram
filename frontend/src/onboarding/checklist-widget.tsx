@@ -98,7 +98,7 @@ export function ChecklistWidget({ onStartTour }: Props) {
 			return { ...prev, actions: [...prev.actions, action] };
 		});
 
-		void ob.recordAsync(action).catch(() => {
+		ob.recordAsync(action).catch(() => {
 			// The mutation hook already retries 3× — reaching here means the
 			// server rejected. Roll back by invalidating so the next refetch
 			// restores the real cache state.

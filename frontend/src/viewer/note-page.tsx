@@ -50,7 +50,7 @@ export default function NotePage() {
 			return;
 		}
 		let cancelled = false;
-		void openDoc(path).then((h) => {
+		openDoc(path).then((h) => {
 			if (cancelled || !h) {
 				return;
 			}

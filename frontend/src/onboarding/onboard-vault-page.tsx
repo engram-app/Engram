@@ -239,7 +239,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 	useEffect(() => {
 		if (vaultPopulated && vaultId !== null && !isCommitting) {
 			setActiveVaultId(vaultId);
-			void onCommit();
+			onCommit();
 		}
 	}, [vaultPopulated, vaultId, isCommitting, onCommit]);
 
