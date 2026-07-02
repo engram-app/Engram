@@ -123,8 +123,8 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 		});
 
 		if (!res.ok) {
-			const body = await res.json().catch(() => ({}));
-			throw new Error(body.error ?? "Registration failed");
+			const errorBody = await res.json().catch(() => ({}));
+			throw new Error(errorBody.error ?? "Registration failed");
 		}
 
 		const data = await res.json();

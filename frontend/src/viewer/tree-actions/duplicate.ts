@@ -6,7 +6,8 @@ export function nextCopyName(path: string, existing: Set<string>): string {
 	const stem = dot > 0 ? name.slice(0, dot) : name;
 	const ext = dot > 0 ? name.slice(dot) : "";
 
-	const candidate = (n: number) => `${folder}${stem} (${n === 1 ? "copy" : `copy ${n}`})${ext}`;
+	const candidate = (attempt: number) =>
+		`${folder}${stem} (${attempt === 1 ? "copy" : `copy ${attempt}`})${ext}`;
 
 	let n = 1;
 	while (existing.has(candidate(n))) {

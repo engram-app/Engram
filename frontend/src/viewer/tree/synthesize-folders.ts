@@ -70,14 +70,14 @@ export function synthesizeFolders(real: Folder[], attachments: AttachmentSummary
 	return [...paths]
 		.sort((x, y) => x.split("/").length - y.split("/").length)
 		.map((name) => {
-			const real = realByName.get(name);
+			const realFolder = realByName.get(name);
 			const slash = name.lastIndexOf("/");
 			const parentName = slash < 0 ? null : name.slice(0, slash);
 			return {
 				id: idFor(name),
 				parent_id: parentName === null ? null : idFor(parentName),
 				name,
-				count: real ? real.count : 0,
+				count: realFolder ? realFolder.count : 0,
 			};
 		});
 }
