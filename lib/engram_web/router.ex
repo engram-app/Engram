@@ -431,6 +431,8 @@ defmodule EngramWeb.Router do
     get "/settings/*path", SpaController, :index
     get "/note/*path", SpaController, :index
     get "/oauth/consent", SpaController, :index
-    get "/share/*path", SpaController, :index
+    # NOTE: no /share/* route: sharing doesn't exist yet (no /api/share*,
+    # no schema, no SPA page). Removed 2026-07-02 (#858) after shipping as a
+    # vestigial whitelist entry; re-add alongside the actual feature.
   end
 end

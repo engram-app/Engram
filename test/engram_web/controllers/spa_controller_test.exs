@@ -22,16 +22,14 @@ defmodule EngramWeb.SpaControllerTest do
     assert response(conn, 200) =~ "<!DOCTYPE html>"
   end
 
-  test "GET /share/abc123 returns index.html (SPA fallback)", %{conn: conn} do
-    conn = get(conn, "/share/abc123")
-    assert conn.status == 200
-    assert response(conn, 200) =~ "<!DOCTYPE html>"
-  end
-
-  test "GET /share/abc123/folder/note returns index.html (SPA fallback)", %{conn: conn} do
-    conn = get(conn, "/share/abc123/folder/note")
-    assert conn.status == 200
-    assert response(conn, 200) =~ "<!DOCTYPE html>"
+  test "GET /share/* is gone: no share feature exists behind it (#858)", %{conn: conn} do
+    # The whitelist entry was vestigial: no /api/share* endpoints, no share
+    # schema, no SPA route. Advertising the path without the feature ships
+    # ambiguous intent; re-add the route when sharing is actually designed.
+    # Nested path asserted too so a future narrower route (e.g. /share/:id)
+    # can't silently change deep-link behavior without touching this test.
+    assert conn |> get("/share/abc123") |> response(404)
+    assert conn |> get("/share/abc123/folder/note") |> response(404)
   end
 
   test "GET / injects runtime config script", %{conn: conn} do
