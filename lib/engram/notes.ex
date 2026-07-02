@@ -20,6 +20,38 @@ defmodule Engram.Notes do
 
   require Logger
 
+  # Every persisted Note column except content_ciphertext/content_nonce —
+  # the metadata projection for reads that never serialize content (changes
+  # feeds `fields=meta`, search rehydration). Skipping the big column saves
+  # its I/O AND its AES-GCM decrypt (the phase-4 helpers short-circuit
+  # per-field on nil ciphertext).
+  @note_meta_fields [
+    :id,
+    :seq,
+    :version,
+    :kind,
+    :dek_version,
+    :content_hash,
+    :embed_hash,
+    :mtime,
+    :deleted_at,
+    :title_ciphertext,
+    :title_nonce,
+    :tags_ciphertext,
+    :tags_nonce,
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac,
+    :tags_hmac,
+    :user_id,
+    :vault_id,
+    :created_at,
+    :updated_at
+  ]
+
   @doc """
   Composable query scope that restricts a `Note` query to kind='note' rows.
   Every site that wants real notes (excluding folder markers) should
@@ -59,7 +91,7 @@ defmodule Engram.Notes do
             join: n in ^notes_only(),
             on: n.id == c.note_id,
             where: c.qdrant_point_id in ^uuids,
-            select: {c.qdrant_point_id, n}
+            select: {c.qdrant_point_id, struct(n, @note_meta_fields)}
           )
         )
       end)
@@ -1642,37 +1674,6 @@ defmodule Engram.Notes do
         {:error, {:not_found, id}}
     end
   end
-
-  # Every persisted Note column except content_ciphertext/content_nonce —
-  # the metadata projection for listings that never serialize content.
-  # Skipping the big column saves its I/O AND its AES-GCM decrypt (the
-  # phase-4 helpers short-circuit per-field on nil ciphertext).
-  @note_meta_fields [
-    :id,
-    :seq,
-    :version,
-    :kind,
-    :dek_version,
-    :content_hash,
-    :embed_hash,
-    :mtime,
-    :deleted_at,
-    :title_ciphertext,
-    :title_nonce,
-    :tags_ciphertext,
-    :tags_nonce,
-    :path_ciphertext,
-    :path_nonce,
-    :path_hmac,
-    :folder_ciphertext,
-    :folder_nonce,
-    :folder_hmac,
-    :tags_hmac,
-    :user_id,
-    :vault_id,
-    :created_at,
-    :updated_at
-  ]
 
   @doc """
   Returns notes changed (upserted or deleted) since the given datetime.

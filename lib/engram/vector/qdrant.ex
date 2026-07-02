@@ -45,21 +45,42 @@ defmodule Engram.Vector.Qdrant do
   defp qdrant_status({:ok, _}), do: :ok
   defp qdrant_status({:error, _}), do: :error
 
-  defp req_opts do
+  # Per-purpose Req options. `:indexing` (default) is patient — 30s timeout +
+  # transient retries; callers are Oban workers where an in-call retry is
+  # cheaper than burning a job attempt. `:search` backs the synchronous
+  # `/api/search` request path and must fail fast: with the indexing opts a
+  # Qdrant brownout pins each request up to ~2min (30s x 4 attempts), holding
+  # Bandit processes and cascading into pool pressure. Same split the Voyage
+  # embedder already has (`request_defaults(:query)` = 5s, no retry).
+  @doc false
+  def req_opts(purpose \\ :indexing)
+
+  def req_opts(:search) do
+    put_api_key(
+      receive_timeout: 5_000,
+      retry: false,
+      max_retries: 0,
+      connect_options: [protocols: [:http1]]
+    )
+  end
+
+  def req_opts(:indexing) do
     {retry, max_retries} =
       case ServiceConfig.get(:qdrant_retry, :transient) do
         false -> {false, 0}
         mode -> {mode, 3}
       end
 
-    base = [
+    put_api_key(
       receive_timeout: 30_000,
       retry: retry,
       max_retries: max_retries,
       retry_log_level: :warning,
       connect_options: [protocols: [:http1]]
-    ]
+    )
+  end
 
+  defp put_api_key(base) do
     case ServiceConfig.get(:qdrant_api_key) do
       nil -> base
       key -> Keyword.put(base, :headers, [{"api-key", key}])
@@ -478,7 +499,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     instrument(:search, fn ->
-      do_search(col, [json: search_body(vector, search_opts)] ++ req_opts())
+      do_search(col, [json: search_body(vector, search_opts)] ++ req_opts(:search))
     end)
   end
 
@@ -548,7 +569,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     instrument(:sparse_search, fn ->
-      do_search(col, [json: sparse_search_body(sparse, search_opts)] ++ req_opts())
+      do_search(col, [json: sparse_search_body(sparse, search_opts)] ++ req_opts(:search))
     end)
   end
 
@@ -573,7 +594,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     instrument(:hybrid_search, fn ->
-      do_search(col, [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts())
+      do_search(col, [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search))
     end)
   end
 

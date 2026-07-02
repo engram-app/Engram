@@ -14,13 +14,36 @@ defmodule Engram.KeywordIndex.Stats do
 
   import Ecto.Query
 
+  alias Engram.KeywordIndex.Stats.Cache
   alias Engram.Notes.Chunk
   alias Engram.Repo
 
   @default_avgdl 100.0
 
+  @doc """
+  Per-vault avgdl, cached per node (#861): every EmbedNote job reads this,
+  and the uncached AVG over the vault's whole chunk set made initial
+  indexing O(N^2) in DB row visits. Staleness inside the cache TTL is
+  harmless — see `Engram.KeywordIndex.Stats.Cache`.
+  """
   @spec avgdl(Ecto.UUID.t()) :: float()
   def avgdl(vault_id) do
+    case Cache.get(vault_id) do
+      {:ok, value} ->
+        value
+
+      :miss ->
+        value = compute_avgdl(vault_id)
+        :ok = Cache.put(vault_id, value)
+        value
+    end
+  end
+
+  @doc "Drops the cached avgdl for a vault (e.g. before a bulk re-normalize)."
+  @spec evict(Ecto.UUID.t()) :: :ok
+  defdelegate evict(vault_id), to: Cache
+
+  defp compute_avgdl(vault_id) do
     Chunk
     |> where([c], c.vault_id == ^vault_id and not is_nil(c.token_count))
     |> select([c], avg(c.token_count))
