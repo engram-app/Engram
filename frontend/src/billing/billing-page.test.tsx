@@ -242,7 +242,12 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED restores the plan picker", async () => {
+	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED keeps Paddle's frame open so the decline reason + retry stay visible", async () => {
+		// A declined card is a normal, retryable state: Paddle keeps its inline
+		// frame open and shows the reason ("card declined" etc.) with a retry.
+		// We must NOT tear the frame down — doing so bounced the user back to the
+		// plan picker with no explanation. (Genuine checkout.error / payment.error
+		// events still close; see the next test.)
 		mockBillingApi();
 		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
 		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
@@ -269,7 +274,37 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			await Promise.resolve();
 		});
 
-		// Mount target gone, plan cards back
+		// Frame stays mounted; user is NOT bounced to the plan picker.
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+		expect(queryAllByText("Starter").length).toBe(0);
+	});
+
+	it("onboarding (inline): a genuine CHECKOUT_ERROR closes the frame and surfaces a message", async () => {
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+
+		await act(async () => {
+			captured!({ name: "checkout.error", data: {} });
+			await Promise.resolve();
+		});
+
+		// Fatal checkout error: frame gone, plan picker restored.
 		expect(container.querySelector(".paddle-checkout")).toBeNull();
 		expect(queryAllByText("Starter").length).toBeGreaterThan(0);
 	});
@@ -355,6 +390,84 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() => expect(onActivated).toHaveBeenCalled());
 		expect(closeMock).toHaveBeenCalled();
+	});
+
+	it("onboarding (inline): the activation bridge survives billing.active flipping true (no blank flash)", async () => {
+		// The activation push both (a) raises the "Setting up your account…" bridge
+		// and (b) flips billing.active true server-side. If the bridge lives behind
+		// the `needsSubscription = !billing.active` gate, (b) unmounts it before the
+		// wizard navigates → a blank panel flashes. The bridge must persist.
+		let billingActive = false;
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				return billingActive
+					? { tier: "starter", active: true, trial_days_remaining: 0, subscription: null, caps: {} }
+					: { tier: "free", active: false, trial_days_remaining: 0, subscription: null, caps: {} };
+			}
+			if (url === "/billing/config") {
+				return {
+					client_token: "tok",
+					environment: "sandbox",
+					price_ids: {
+						starter: { monthly: "p1", annual: "p2" },
+						pro: { monthly: "p3", annual: "p4" },
+					},
+					customer_email: "u@example.com",
+					custom_data: { user_id: "1" },
+					vaults_cap: null,
+				};
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return { next_step: "tools", enabled: true };
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		}));
+
+		// no-op onActivated: mirrors the wizard NOT yet navigating, so the steady
+		// bridge must hold on its own instead of relying on an unmount.
+		const onActivated = vi.fn();
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={qc}>
+				<AuthContext.Provider value={authAdapter}>
+					<ThemeProvider>
+						<MemoryRouter>
+							<BillingPage hideHeading onActivated={onActivated} />
+						</MemoryRouter>
+					</ThemeProvider>
+				</AuthContext.Provider>
+			</QueryClientProvider>,
+		);
+
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		// Server flips the subscription active; mirror it so the handler's refetch
+		// returns active and needsSubscription goes false mid-activation.
+		billingActive = true;
+		await act(async () => {
+			channelHandlers.subscription_activated!({
+				tier: "starter",
+				status: "trialing",
+				subscription_id: "sub_1",
+			});
+			await Promise.resolve();
+		});
+
+		await waitFor(() => expect(onActivated).toHaveBeenCalled());
+		// Until the wizard navigates, the steady bridge must still be on screen —
+		// not a blank panel.
+		expect(screen.getByText(/Setting up your account/iu)).toBeInTheDocument();
 	});
 
 	it("invalidates billing/status on subscription_activated channel event (settings flow)", async () => {

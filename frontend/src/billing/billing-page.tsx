@@ -328,13 +328,26 @@ export default function BillingPage({
 						invalidateBillingState(qc);
 						break;
 					}
-					case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED:
+					case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED: {
+						// A declined card is a normal, retryable state: Paddle keeps its
+						// inline frame open and shows the reason ("card declined",
+						// "insufficient funds", …) with a retry. Leave the frame mounted
+						// (do NOT setCheckingOut(false)) so the user sees WHY and can try
+						// another card, instead of being bounced back to the plan picker
+						// with no explanation. Only clear the completion cooldown/recovery
+						// state so a stale COMPLETED/INITIATED timer can't fire.
+						setCompletedAt(null);
+						setSlow(false);
+						break;
+					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
 					case CheckoutEventNames.CHECKOUT_ERROR: {
+						// Genuine checkout-level error (not a routine decline) — the frame
+						// may be in a broken state, so close it and surface a message.
 						setCheckingOut(false);
 						setCompletedAt(null);
 						setSlow(false);
-						toast.error("Payment did not go through. Please try again.");
+						toast.error("Something went wrong with checkout. Please try again.");
 						break;
 					}
 					default:
@@ -347,7 +360,12 @@ export default function BillingPage({
 							displayMode: "inline",
 							frameTarget: INLINE_FRAME_TARGET,
 							frameInitialHeight: 450,
-							frameStyle: "width:100%; min-height:450px; background:transparent; border:none;",
+							// No fixed min-height: Paddle auto-resizes the iframe to fit its
+							// content, and a hard floor overrode the downward resize — so the
+							// short post-payment success screen was stranded in a tall 450px
+							// box. frameInitialHeight covers the initial paint before Paddle
+							// reports the real height. (min-width matches Paddle's own sample.)
+							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
 							theme: resolved === "dark" ? "dark" : "light",
 							locale: "en",
 						}
@@ -439,6 +457,9 @@ export default function BillingPage({
 	}
 
 	const needsSubscription = !billing.active;
+	// Keep the panel mounted across the activation flip: the push that raises the
+	// `finalizing` bridge also flips billing.active → needsSubscription false.
+	const showPlanSection = needsSubscription || finalizing;
 	const checkoutReady = Boolean(paddle && config);
 
 	async function openPortal(action?: string) {
@@ -525,7 +546,10 @@ export default function BillingPage({
 				</CurrentPlanCard>
 			)}
 
-			{needsSubscription && (
+			{/* showPlanSection = needsSubscription || finalizing — keeps the bridge
+			    mounted across the activation flip so it doesn't flash blank before
+			    the wizard navigates to the next step. */}
+			{showPlanSection ? (
 				<section className="space-y-4">
 					{finalizing ? (
 						<section
@@ -672,7 +696,7 @@ export default function BillingPage({
 						</>
 					)}
 				</section>
-			)}
+			) : null}
 
 			{!hideHeading && billing.subscription && (
 				<>

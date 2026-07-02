@@ -8,7 +8,7 @@ import { SessionsSection } from "./account/sessions-section";
 
 // OAuth providers enabled on this Clerk instance. Confirm against the instance
 // before adjusting (see note below).
-const OAUTH_PROVIDERS = ["oauth_apple", "oauth_google", "oauth_github"] as const;
+const OAUTH_PROVIDERS = ["oauth_google", "oauth_github", "oauth_discord"] as const;
 
 export default function AccountPage() {
 	return (
