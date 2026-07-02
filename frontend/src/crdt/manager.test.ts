@@ -53,4 +53,13 @@ describe("CrdtManager", () => {
 		expect(sink.getText("content").toJSON()).toBe("abc");
 		expect(sv.length).toBeGreaterThan(0);
 	});
+
+	it("flattenIfBloated on a non-live path is a no-op and does not create a doc", async () => {
+		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		await m.getDoc("notes/x.md");
+		m.closeDoc("notes/x.md");
+		const flattened = await m.flattenIfBloated("notes/x.md");
+		expect(flattened).toBe(false);
+		expect(m.hasDoc("notes/x.md")).toBe(false); // must NOT have been resurrected
+	});
 });

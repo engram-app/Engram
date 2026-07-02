@@ -37,6 +37,10 @@ export class CrdtChannel {
 		}
 		this.initiated.add(id);
 		const doc = await this.mgr.getDoc(path);
+		if (!this.mgr.hasDoc(path)) {
+			this.initiated.delete(id); // closed mid-await: re-arm for the next open
+			return;
+		}
 		const encoder = encoding.createEncoder();
 		encoding.writeVarUint(encoder, MESSAGE_SYNC);
 		syncProtocol.writeSyncStep1(encoder, doc);

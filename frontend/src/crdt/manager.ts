@@ -95,6 +95,9 @@ export class CrdtManager {
 	 * LOCAL origin so the server adopts the reset lineage. Returns true if flattened.
 	 */
 	async flattenIfBloated(path: string): Promise<boolean> {
+		if (!this.docs.has(this.docId(path))) {
+			return false; // doc not live (closed or never opened) — never resurrect
+		}
 		const e = await this.entry(path);
 		const encoded = Y.encodeStateAsUpdate(e.doc);
 		const clientIds = Y.decodeStateVector(Y.encodeStateVector(e.doc)).size;
