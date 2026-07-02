@@ -19,6 +19,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   import Ecto.Query
 
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.EmbedNote
 
@@ -26,10 +27,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
-  state, re-materializes plaintext columns, prunes the tail-log, bumps seq,
-  and enqueues a debounced embed when content changed.
+  state, prunes the tail-log, and — when the projected text actually changed —
+  re-materializes plaintext columns, bumps version/seq, and enqueues a
+  debounced embed. When the text is unchanged (hash match) it degrades to a
+  snapshot-compaction write with NO version/seq churn, so calling it on every
+  room exit is cheap.
 
-  Never called per-keystroke — driven by `CrdtCheckpointTimer`.
+  Options: `:watermark` — a pre-captured prune boundary (max inserted_at of
+  the tail rows the doc already reflects). When omitted, it is captured here
+  BEFORE the doc is encoded, so rows landing mid-encode survive the prune.
+
+  Never called per-keystroke — driven by `CrdtCheckpointTimer` (debounced)
+  and by `CrdtPersistence.unbind/3` on room exit. Never raises: any internal
+  failure is logged and returns `:ok` (safe in the room's terminate path).
   """
   @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t(), keyword()) :: :ok
   def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc, opts \\ []) do
@@ -128,7 +138,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       err ->
         Logger.error(
           "crdt checkpoint failed note_id=#{note_id} reason=#{inspect(err)}",
-          Engram.Logger.Metadata.with_category(:error, :sync, note_id: note_id)
+          Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
         :ok
@@ -137,7 +147,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     err ->
       Logger.error(
         "crdt checkpoint raised note_id=#{note_id} error=#{Exception.format(:error, err, __STACKTRACE__)}",
-        Engram.Logger.Metadata.with_category(:error, :sync, note_id: note_id)
+        Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
       :ok
@@ -157,7 +167,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     if CrdtBridge.should_flatten?(state, doc) do
       Logger.info(
         "crdt flatten note_id=#{note_id} state_bytes=#{byte_size(state)} clients=#{CrdtBridge.client_count(doc)}",
-        Engram.Logger.Metadata.with_category(:info, :sync, note_id: note_id)
+        Metadata.with_category(:info, :sync, note_id: note_id)
       )
 
       case CrdtBridge.flatten(doc) do
