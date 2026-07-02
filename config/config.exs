@@ -89,6 +89,9 @@ config :engram, Oban,
        # Daily expired idempotency_keys sweep (#862) — expired rows read as
        # :miss already; this reclaims the encrypted response-body storage.
        {"45 4 * * *", Engram.Workers.IdempotencyPrune},
+       # Daily expired-export sweep (#859) — deletes S3 archive blobs past
+       # the 7-day download window and flips rows to :expired.
+       {"20 5 * * *", Engram.Workers.ExportExpirySweep},
        # Cross-store orphan sweep — weekly safety net for failed
        # event-driven Qdrant/S3 deletes. Sun 05:00 UTC, off-peak.
        {"0 5 * * 0", Engram.Workers.OrphanSweep}
