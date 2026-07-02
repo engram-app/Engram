@@ -17,6 +17,34 @@ interface Session {
 
 let session: Session | null = null;
 
+/** Monotonically-increasing counter bumped on every stopCrdtSession call.
+ *  openDoc captures it at entry and bails if it changes across any await,
+ *  covering paths that are parked in waitForSessionStart when the stop fires. */
+let sessionGeneration = 0;
+
+/** Resolvers parked by openDoc calls that arrived before the session started. */
+let sessionStartWaiters: Array<() => void> = [];
+
+/** Per-path cancellation epochs. Bumped by closeDoc/stopCrdtSession; an
+ *  in-flight openDoc captures the epoch at entry and bails (cleaning up any
+ *  partial state) if it changed across an await. Module-level so a closeDoc
+ *  issued while no session exists still cancels a waiting openDoc. */
+const docEpochs = new Map<string, number>();
+
+/** Pending per-path rehandshake timers (error/timeout reply recovery). */
+const rehandshakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function bumpEpoch(path: string): void {
+	docEpochs.set(path, (docEpochs.get(path) ?? 0) + 1);
+}
+
+function waitForSessionStart(): Promise<void> {
+	if (session) {
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => sessionStartWaiters.push(resolve));
+}
+
 let syncStatus: CrdtSyncStatus = "connecting";
 const syncStatusListeners = new Set<(s: CrdtSyncStatus) => void>();
 
@@ -82,15 +110,31 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 		awareness: new Map(),
 		openPaths,
 	};
+	const waiters = sessionStartWaiters;
+	sessionStartWaiters = [];
+	for (const w of waiters) {
+		w();
+	}
 }
 
 export function stopCrdtSession(): void {
 	if (!session) {
 		return;
 	}
+	sessionGeneration++;
+	for (const path of session.openPaths) {
+		bumpEpoch(path);
+	}
+	for (const path of session.awareness.keys()) {
+		bumpEpoch(path);
+	}
 	for (const a of session.awareness.values()) {
 		a.destroy();
 	}
+	for (const t of rehandshakeTimers.values()) {
+		clearTimeout(t);
+	}
+	rehandshakeTimers.clear();
 	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -98,24 +142,40 @@ export function stopCrdtSession(): void {
 export async function openDoc(
 	path: string,
 ): Promise<{ ytext: Y.Text; awareness: Awareness; doc: Y.Doc } | null> {
-	if (!(session && path.endsWith(".md"))) {
+	if (!path.endsWith(".md")) {
 		return null;
 	}
-	session.openPaths.add(path);
-	const ytext = await session.manager.getSharedText(path);
-	let awareness = session.awareness.get(path);
+	const epoch = docEpochs.get(path) ?? 0;
+	const gen = sessionGeneration;
+	await waitForSessionStart();
+	const s = session;
+	if (!s || sessionGeneration !== gen || (docEpochs.get(path) ?? 0) !== epoch) {
+		return null; // closed or torn down while waiting
+	}
+	s.openPaths.add(path);
+	const ytext = await s.manager.getSharedText(path);
+	if (session !== s || sessionGeneration !== gen || (docEpochs.get(path) ?? 0) !== epoch) {
+		// closeDoc/stop ran during the await. Do NOT delete the open marker: an
+		// epoch bump means closeDoc already removed it (or the session is dead),
+		// and a same-path reopen (openDoc B) may have re-added its OWN marker in
+		// between — deleting here would strip B's flattenIfBloated protection.
+		return null;
+	}
+	let awareness = s.awareness.get(path);
 	if (!awareness) {
 		awareness = new Awareness(ytext.doc!);
-		session.awareness.set(path, awareness);
+		s.awareness.set(path, awareness);
 	}
 	return { ytext, awareness, doc: ytext.doc! };
 }
 
 export function closeDoc(path: string): void {
+	bumpEpoch(path);
 	if (!session) {
 		return;
 	}
 	session.openPaths.delete(path);
+	session.enrollment.reset(path); // next open re-runs the STEP1 handshake
 	const a = session.awareness.get(path);
 	if (a) {
 		a.destroy();
@@ -126,6 +186,44 @@ export function closeDoc(path: string): void {
 
 export function enroll(path: string): void {
 	session?.enrollment.enroll(path);
+}
+
+/** Enroll only when the doc is actually live on this client (open in an
+ *  editor, or an entry already exists). `crdt_doc_ready` fan-in goes through
+ *  here: background notes must NOT materialize Y.Docs — non-open notes are
+ *  read via REST, and an open re-handshakes on its own. Keeps client memory
+ *  independent of vault size. */
+export function enrollIfLive(path: string): void {
+	if (!session) {
+		return;
+	}
+	if (!(session.openPaths.has(path) || session.manager.hasDoc(path))) {
+		return;
+	}
+	session.enrollment.enroll(path);
+}
+
+/** Recover from a failed/unacknowledged crdt_msg push by re-running the STEP1
+ *  handshake after a delay. The Yjs sync protocol makes this loss-proof: the
+ *  server answers STEP2 with exactly the diff it is missing, so a dropped
+ *  update is re-derived rather than re-sent (no duplication, no queue).
+ *  Deduped per path — bursts of error replies collapse into one handshake. */
+export function scheduleRehandshake(docId: string, delayMs: number): void {
+	const path = docPathFromDocId(docId);
+	if (rehandshakeTimers.has(path)) {
+		return;
+	}
+	rehandshakeTimers.set(
+		path,
+		setTimeout(() => {
+			rehandshakeTimers.delete(path);
+			if (!session?.manager.hasDoc(path)) {
+				return; // closed since — reopen re-handshakes on its own
+			}
+			session.enrollment.reset(path);
+			session.enrollment.enroll(path);
+		}, delayMs),
+	);
 }
 
 export async function handleFrame(path: string, b64: string): Promise<void> {
@@ -186,6 +284,11 @@ export function notifyCrdtChannelJoined(): void {
 /** Called by the transport layer when the CRDT Phoenix channel join fails. */
 export function notifyCrdtChannelError(): void {
 	setCrdtSyncStatus("error");
+}
+
+/** Test seam: is `path` currently tracked as open in the session? */
+export function __isPathOpen(path: string): boolean {
+	return session?.openPaths.has(path) ?? false;
 }
 
 export function docPathFromDocId(docId: string): string {

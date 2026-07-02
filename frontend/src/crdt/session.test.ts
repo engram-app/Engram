@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	__isPathOpen,
 	closeDoc,
 	docPathFromDocId,
 	enroll,
+	enrollIfLive,
 	getCrdtSyncStatus,
 	handleFrame,
 	installCrdtResyncTriggers,
@@ -10,6 +12,7 @@ import {
 	notifyCrdtChannelJoined,
 	openDoc,
 	resyncOpenDocs,
+	scheduleRehandshake,
 	startCrdtSession,
 	stopCrdtSession,
 	subscribeToCrdtSyncStatus,
@@ -146,6 +149,158 @@ describe("crdt session", () => {
 		// Both accesses must return valid doc objects (not null/destroyed)
 		expect(before).toBeTruthy();
 		expect(after).toBeTruthy();
+	});
+
+	describe("openDoc lifecycle hardening", () => {
+		it("openDoc called before startCrdtSession resolves once the session starts", async () => {
+			stopCrdtSession();
+			const p = openDoc("notes/a.md"); // no session yet — must NOT resolve null immediately
+			let settled = false;
+			p.then(() => {
+				settled = true;
+			});
+			await Promise.resolve();
+			expect(settled).toBe(false); // still waiting
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const h = await p;
+			expect(h).not.toBeNull();
+			expect(h?.ytext).toBeDefined();
+		});
+
+		it("closeDoc during in-flight openDoc yields null and leaves no ghost state", async () => {
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const p = openDoc("notes/b.md");
+			closeDoc("notes/b.md"); // races the await inside openDoc
+			const h = await p;
+			expect(h).toBeNull();
+			// no ghost: a fresh open must produce a working handle whose awareness
+			// is bound to the SAME doc as its ytext (the ghost bug bound awareness
+			// to a destroyed doc)
+			const h2 = await openDoc("notes/b.md");
+			expect(h2).not.toBeNull();
+			expect(h2?.awareness.doc).toBe(h2?.doc);
+			closeDoc("notes/b.md");
+		});
+
+		it("rapid close→reopen mid-load keeps the reopened doc's open marker", async () => {
+			// openDoc A is mid-load; closeDoc bumps the epoch + drops A's marker;
+			// openDoc B re-adds its OWN marker. When A resumes and bails on the
+			// epoch mismatch, it must NOT delete B's marker (that would strip B's
+			// flattenIfBloated open-editor protection).
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const a = openDoc("notes/race.md"); // A: awaits the initial load
+			// Let A pass its FIRST guard (waitForSessionStart) and mark the path
+			// open, so it is suspended INSIDE getSharedText when we close. That is
+			// the interleaving that reaches openDoc's post-await abort path.
+			await Promise.resolve();
+			closeDoc("notes/race.md"); // bumps epoch, removes A's marker
+			const b = openDoc("notes/race.md"); // B: re-adds its own marker
+			const [hA, hB] = await Promise.all([a, b]);
+			expect(hA).toBeNull(); // A bailed on the epoch mismatch
+			expect(hB).not.toBeNull(); // B produced a working handle
+			// The marker B added must survive A's late abort path.
+			expect(__isPathOpen("notes/race.md")).toBe(true);
+			closeDoc("notes/race.md");
+			expect(__isPathOpen("notes/race.md")).toBe(false);
+		});
+
+		it("stopCrdtSession during in-flight openDoc yields null", async () => {
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const p = openDoc("notes/c.md");
+			stopCrdtSession();
+			// openDoc must not hang forever after stop: it re-waits for a session;
+			// start a new session so the waiter resolves, then the epoch check
+			// (bumped by stop) must return null for the stale call.
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const h = await p;
+			expect(h).toBeNull();
+		});
+	});
+
+	describe("enrollment lifecycle", () => {
+		it("reopening a closed doc re-sends STEP1", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/r.md");
+			enroll("notes/r.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0)); // STEP1 went out
+			const afterFirst = frames.length;
+			closeDoc("notes/r.md");
+			await openDoc("notes/r.md");
+			enroll("notes/r.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(afterFirst)); // STEP1 re-sent
+			closeDoc("notes/r.md");
+		});
+
+		it("enrollIfLive ignores paths that are neither open nor live", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			enrollIfLive("notes/background.md"); // crdt_doc_ready for an unopened note
+			await Promise.resolve();
+			expect(frames).toHaveLength(0);
+			// and no Y.Doc was materialized: openDoc-then-close then enrollIfLive
+			// must also stay silent
+			await openDoc("notes/bg2.md");
+			closeDoc("notes/bg2.md");
+			frames.length = 0;
+			enrollIfLive("notes/bg2.md");
+			await Promise.resolve();
+			expect(frames).toHaveLength(0);
+		});
+
+		it("enrollIfLive enrolls an open doc", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/open.md");
+			enrollIfLive("notes/open.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			closeDoc("notes/open.md");
+		});
+	});
+
+	describe("scheduleRehandshake", () => {
+		// Only fake setTimeout/clearTimeout — IndexedDB (happy-dom) breaks when
+		// all async APIs are faked, preventing vi.waitFor from resolving.
+		beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+		afterEach(() => vi.useRealTimers());
+
+		it("re-runs STEP1 for a live doc after the delay, deduped", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/rh.md");
+			enroll("notes/rh.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			const before = frames.length;
+			scheduleRehandshake("v1/notes/rh.md", 2000);
+			scheduleRehandshake("v1/notes/rh.md", 2000); // dedupe: second is a no-op
+			await vi.advanceTimersByTimeAsync(2000);
+			await vi.waitFor(() => expect(frames.length).toBe(before + 1)); // exactly one new STEP1
+			closeDoc("notes/rh.md");
+		});
+
+		it("is a no-op for a doc that is no longer live when the timer fires", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/gone.md");
+			enroll("notes/gone.md");
+			await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+			scheduleRehandshake("v1/notes/gone.md", 1000);
+			closeDoc("notes/gone.md");
+			const before = frames.length;
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(before); // nothing sent for a closed doc
+		});
+
+		it("stopCrdtSession clears pending rehandshake timers", async () => {
+			const frames: string[] = [];
+			startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+			await openDoc("notes/stop.md");
+			scheduleRehandshake("v1/notes/stop.md", 1000);
+			stopCrdtSession();
+			const before = frames.length;
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(frames.length).toBe(before);
+		});
 	});
 
 	// Finding 2: CRDT sync status observable

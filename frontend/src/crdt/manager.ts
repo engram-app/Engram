@@ -15,6 +15,12 @@ interface Entry {
  */
 export const REMOTE_ORIGIN = "remote";
 
+/** Local IndexedDB namespace for CRDT docs. The wire doc_id stays
+ *  `${vaultId}/${path}` — only the local DB name carries this prefix, so a
+ *  logout wipe can enumerate-and-delete without touching other same-origin
+ *  DBs (Clerk, etc.). */
+export const CRDT_IDB_PREFIX = "engram-crdt/";
+
 export interface CrdtManagerOptions {
 	/** Namespaces IndexedDB store names and doc ids per vault. */
 	dbPrefix: string;
@@ -95,6 +101,9 @@ export class CrdtManager {
 	 * LOCAL origin so the server adopts the reset lineage. Returns true if flattened.
 	 */
 	async flattenIfBloated(path: string): Promise<boolean> {
+		if (!this.docs.has(this.docId(path))) {
+			return false; // doc not live (closed or never opened) — never resurrect
+		}
 		const e = await this.entry(path);
 		const encoded = Y.encodeStateAsUpdate(e.doc);
 		const clientIds = Y.decodeStateVector(Y.encodeStateVector(e.doc)).size;
@@ -120,7 +129,7 @@ export class CrdtManager {
 			return cached;
 		}
 		const doc = new Y.Doc();
-		const persistence = new IndexeddbPersistence(id, doc);
+		const persistence = new IndexeddbPersistence(CRDT_IDB_PREFIX + id, doc);
 		const text = doc.getText("content");
 		persistence.on("error", (err: unknown) => this.opts.onPersistError?.(path, err));
 		// Single listener: local updates go to the channel; remote-origin updates
@@ -131,7 +140,15 @@ export class CrdtManager {
 			}
 			this.opts.onUpdate(id, update, origin);
 		});
-		const ready: Promise<void> = persistence.whenSynced.then(() => undefined);
+		// y-indexeddb (9.0.12) never fires `synced` once destroy() runs, so a
+		// bare whenSynced would hang every awaiter if the doc is closed mid-load.
+		// Race it against the doc's "destroy" event (closeDoc/destroy call
+		// doc.destroy() before persistence.destroy()) so awaiters ALWAYS resume.
+		const destroyed = new Promise<void>((resolve) => doc.on("destroy", () => resolve()));
+		const ready: Promise<void> = Promise.race([
+			persistence.whenSynced.then(() => undefined),
+			destroyed,
+		]);
 		const entry: Entry = { doc, persistence, text, ready };
 		this.docs.set(id, entry);
 		await ready;

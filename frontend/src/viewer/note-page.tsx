@@ -18,6 +18,7 @@ import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
+import { useLiveContent } from "./use-live-content";
 
 const NoteEditor = lazy(() => import("./note-editor"));
 
@@ -81,14 +82,15 @@ export default function NotePage() {
 	// render would otherwise rebuild the ToC needlessly).
 	const notePath = note?.path;
 	const noteContent = note?.content;
+	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
 	useEffect(() => {
 		if (notePath === undefined) {
 			setRightContent(null);
 			return;
 		}
-		setRightContent(<NoteToc content={noteContent ?? ""} />);
+		setRightContent(<NoteToc content={liveContent} />);
 		return () => setRightContent(null);
-	}, [notePath, noteContent, setRightContent]);
+	}, [notePath, liveContent, setRightContent]);
 
 	if (validId === null) {
 		return <p className="p-6 text-destructive">Invalid note id.</p>;
@@ -134,7 +136,7 @@ export default function NotePage() {
 			{mode === "reading" ? (
 				<ScrollArea className="min-h-0 flex-1">
 					<div className="w-full px-5 py-5">
-						<NoteView content={note.content} tags={note.tags} />
+						<NoteView content={liveContent} tags={note.tags} />
 					</div>
 				</ScrollArea>
 			) : (

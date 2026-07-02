@@ -51,4 +51,24 @@ describe("PropertyField", () => {
 		expect(onFocusChange).toHaveBeenNthCalledWith(1, true);
 		expect(onFocusChange).toHaveBeenNthCalledWith(2, false);
 	});
+
+	test("blur without an edit commits the unchanged value verbatim", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="hello" onCommit={onCommit} />);
+		const input = screen.getByRole("textbox");
+		fireEvent.focus(input);
+		fireEvent.blur(input);
+		expect(onCommit).toHaveBeenCalledWith("hello");
+	});
+
+	test("datetime value with a zone suffix survives focus+blur untouched", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="datetime" value="2026-06-30T14:05:00Z" onCommit={onCommit} />);
+		// datetime-local input doesn't report textbox role; query by type
+		const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+		expect(input).not.toBeNull();
+		fireEvent.focus(input);
+		fireEvent.blur(input);
+		expect(onCommit).toHaveBeenCalledWith("2026-06-30T14:05:00Z");
+	});
 });

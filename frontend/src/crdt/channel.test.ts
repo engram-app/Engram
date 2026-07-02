@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import { CrdtChannel } from "./channel";
 import { CrdtManager } from "./manager";
 
@@ -73,5 +74,34 @@ describe("CrdtChannel", () => {
 		// Valid base64 but only 1 byte -- readVarUint will throw on underrun.
 		const truncated = btoa(String.fromCharCode(0x00));
 		await expect(ch.handleFrame("n.md", truncated)).resolves.toBeUndefined();
+	});
+
+	it("startSync aborts (no STEP1) when the doc is closed during getDoc", async () => {
+		// Arrange a manager stub whose getDoc resolves only after we trigger it,
+		// and whose hasDoc flips false when closeDoc is called.
+		let resolveDoc!: (d: Y.Doc) => void;
+		const doc = new Y.Doc();
+		let live = true;
+		const sent: string[] = [];
+		const mgr = {
+			docId: (p: string) => `v1/${p}`,
+			getDoc: () =>
+				new Promise<Y.Doc>((r) => {
+					resolveDoc = r;
+				}),
+			hasDoc: () => live,
+		} as unknown as CrdtManager;
+		const ch = new CrdtChannel({ manager: mgr, send: (_id, frame) => sent.push(frame) });
+		const p = ch.startSync("notes/x.md");
+		live = false; // closeDoc happened mid-await
+		resolveDoc(doc);
+		await p;
+		expect(sent).toHaveLength(0);
+		// guard must be re-armed so a future open re-handshakes
+		live = true;
+		const p2 = ch.startSync("notes/x.md");
+		resolveDoc(doc);
+		await p2;
+		expect(sent).toHaveLength(1);
 	});
 });
