@@ -356,7 +356,7 @@ describe("OnboardBillingPage — push activation", () => {
 		expect(toolsPageMounts).toBe(1);
 	});
 
-	it("returns from inline Paddle frame back to plan picker on CHECKOUT_PAYMENT_FAILED", async () => {
+	it("keeps the inline Paddle frame open on CHECKOUT_PAYMENT_FAILED so the decline reason + retry stay visible", async () => {
 		get.mockImplementation(async (url: string) => {
 			if (url === "/billing/status") {
 				return BILLING_INACTIVE;
@@ -389,13 +389,17 @@ describe("OnboardBillingPage — push activation", () => {
 		});
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
-		// Payment fails — plan picker comes back.
+		// Payment fails (declined card): Paddle keeps its frame open and shows the
+		// reason with a retry. We must NOT bounce back to the plan picker.
 		await act(async () => {
 			capturedEventCallback!({ name: "checkout.payment.failed" });
+			await Promise.resolve();
 		});
 
-		await waitFor(() => expect(container.querySelector(".paddle-checkout")).toBeNull());
-		expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(0);
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+		expect(screen.queryAllByRole("button", { name: /start free trial/iu }).length).toBe(0);
+		// The user can still back out manually.
+		expect(screen.getByRole("button", { name: /choose a different plan/iu })).toBeInTheDocument();
 	});
 });
 

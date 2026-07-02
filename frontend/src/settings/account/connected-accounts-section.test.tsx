@@ -8,6 +8,7 @@ const googleAcct = {
 	id: "ext_1",
 	provider: "google",
 	emailAddress: "ada@gmail.com",
+	verification: { status: "verified" },
 	destroy: vi.fn().mockResolvedValue({}),
 };
 let user = makeUser({ externalAccounts: [googleAcct] });
@@ -43,6 +44,7 @@ describe("ConnectedAccountsSection", () => {
 			provider: "github",
 			emailAddress: "",
 			username: null,
+			verification: { status: "verified" },
 			destroy: vi.fn(),
 		};
 		user = makeUser({ externalAccounts: [bare] });
@@ -60,5 +62,27 @@ describe("ConnectedAccountsSection", () => {
 				expect.objectContaining({ strategy: "oauth_github" }),
 			),
 		);
+	});
+
+	it("does not treat an unverified/incomplete link as connected, and keeps the provider available", () => {
+		// createExternalAccount leaves an unverified record if the user abandons or
+		// the OAuth handshake fails. That must NOT show as connected.
+		const incomplete = {
+			id: "ext_x",
+			provider: "discord",
+			emailAddress: "",
+			verification: { status: "unverified" },
+			destroy: vi.fn(),
+		};
+		user = makeUser({ externalAccounts: [incomplete] });
+		render(<ConnectedAccountsSection providers={["oauth_discord"]} />);
+		expect(screen.queryByRole("button", { name: /disconnect discord/iu })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /connect discord/iu })).toBeInTheDocument();
+	});
+
+	it("offers Discord as a connectable provider", () => {
+		user = makeUser({ externalAccounts: [] });
+		render(<ConnectedAccountsSection providers={["oauth_discord"]} />);
+		expect(screen.getByRole("button", { name: /connect discord/iu })).toBeInTheDocument();
 	});
 });

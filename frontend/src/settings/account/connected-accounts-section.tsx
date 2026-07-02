@@ -33,16 +33,16 @@ const GoogleIcon = () => (
 	</svg>
 );
 
-const AppleIcon = () => (
+const DiscordIcon = () => (
 	<svg viewBox="0 0 16 16" aria-hidden="true" className="size-4 fill-current">
-		<path d="M11.18 8.46c-.02-1.62 1.32-2.4 1.38-2.44-.75-1.1-1.92-1.25-2.34-1.27-1-.1-1.95.59-2.45.59-.5 0-1.29-.57-2.12-.56-1.09.02-2.1.63-2.66 1.61-1.13 1.97-.29 4.88.81 6.48.54.78 1.18 1.66 2.02 1.63.81-.03 1.12-.52 2.1-.52.98 0 1.26.52 2.12.51.88-.02 1.43-.8 1.97-1.58.62-.91.88-1.79.89-1.83-.02-.01-1.71-.66-1.72-2.61ZM9.6 3.69c.44-.54.74-1.28.66-2.02-.64.03-1.41.43-1.87.96-.41.47-.77 1.23-.67 1.95.71.06 1.43-.36 1.88-.89Z" />
+		<path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.036a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.126-.093.246-.192a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.099.245.192a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041q.36.697.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612" />
 	</svg>
 );
 
 const PROVIDERS: Record<string, { name: string; icon: ReactNode }> = {
 	github: { name: "GitHub", icon: <GitHubIcon /> },
 	google: { name: "Google", icon: <GoogleIcon /> },
-	apple: { name: "Apple", icon: <AppleIcon /> },
+	discord: { name: "Discord", icon: <DiscordIcon /> },
 };
 
 function meta(raw: string) {
@@ -64,7 +64,15 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 	if (!(isLoaded && user)) {
 		return null;
 	}
-	const connected = new Set(user.externalAccounts.map((a) => `oauth_${a.provider}`));
+	// Only accounts Clerk has actually verified count as connected. An abandoned
+	// or failed OAuth link leaves an `unverified` externalAccount record behind;
+	// treating those as connected made the button flip to "connected" even when
+	// the handshake never completed. Filter them out so the provider stays
+	// offered and the user can retry.
+	const verifiedAccounts = user.externalAccounts.filter(
+		(a) => a.verification?.status === "verified",
+	);
+	const connected = new Set(verifiedAccounts.map((a) => `oauth_${a.provider}`));
 
 	async function onDisconnect(destroy: () => Promise<unknown>) {
 		try {
@@ -104,9 +112,9 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			title="Connected accounts"
 			description="Link third-party sign-in providers."
 		>
-			{user.externalAccounts.length > 0 && (
+			{verifiedAccounts.length > 0 && (
 				<ul className="divide-y divide-border">
-					{user.externalAccounts.map((a) => {
+					{verifiedAccounts.map((a) => {
 						const { name, icon } = meta(a.provider);
 						const secondary = a.emailAddress || a.username || "Connected";
 						return (

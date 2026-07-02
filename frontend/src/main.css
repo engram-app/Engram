@@ -435,3 +435,12 @@ html {
 		animation: none;
 	}
 }
+
+/* Paddle's overlay checkout iframe is appended to <body>. When it opens from
+   inside a Radix dialog (e.g. the Settings modal's change-plan / update-payment
+   flows), Radix sets `body { pointer-events: none }`, which the overlay inherits
+   — so its inputs can't be clicked despite its max z-index. Re-enable hit-testing
+   on Paddle's own overlay so it stays interactive above any dialog. */
+.paddle-frame-overlay {
+	pointer-events: auto;
+}
