@@ -1,15 +1,14 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 
-export type RailView = "files" | "search";
-
 const STORAGE_KEY = "engram:rail-view";
-const VALID: ReadonlySet<RailView> = new Set(["files", "search"]);
 
 interface Ctx {
 	view: RailView;
 	setView: (v: RailView) => void;
 }
 const RailViewCtx = createContext<Ctx | null>(null);
+
+const VALID: ReadonlySet<RailView> = new Set(["files", "search"]);
 
 function readStored(): RailView {
 	if (typeof window === "undefined") {
@@ -18,6 +17,8 @@ function readStored(): RailView {
 	const raw = window.localStorage.getItem(STORAGE_KEY);
 	return raw && VALID.has(raw as RailView) ? (raw as RailView) : "files";
 }
+
+export type RailView = "files" | "search";
 
 export function RailViewProvider({ children }: { children: ReactNode }) {
 	const [view, setViewState] = useState<RailView>(readStored);

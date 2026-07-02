@@ -2,18 +2,6 @@ import { useContext, useEffect, useState } from "react";
 import { getApiBase, joinApiUrl } from "../api/base";
 import { ConfigContext } from "../config-context";
 
-export interface Bootstrap {
-	bootstrap_pending: boolean;
-	registration_mode: "open" | "invite_only" | "closed";
-}
-
-// Discriminates "still fetching" from "loaded but no data". A `null` result
-// means we definitively know there is no self-host bootstrap (404 / Clerk /
-// network error → fall back to defaults). `undefined` means "don't render
-// mode-dependent UI yet" — UI shows a skeleton/placeholder until this
-// resolves, avoiding the default→correct flash on every navigation.
-export type BootstrapState = Bootstrap | null | undefined;
-
 // Module-level cache so concurrent hook callers share one fetch + result.
 // Seeded from config.bootstrap on first hook invocation (the seed is
 // stable per page load — config is resolved once during Suspense gate).
@@ -34,6 +22,18 @@ function fetchBootstrap(): Promise<Bootstrap | null> {
 		});
 	return inflight;
 }
+
+export interface Bootstrap {
+	bootstrap_pending: boolean;
+	registration_mode: "open" | "invite_only" | "closed";
+}
+
+// Discriminates "still fetching" from "loaded but no data". A `null` result
+// means we definitively know there is no self-host bootstrap (404 / Clerk /
+// network error → fall back to defaults). `undefined` means "don't render
+// mode-dependent UI yet" — UI shows a skeleton/placeholder until this
+// resolves, avoiding the default→correct flash on every navigation.
+export type BootstrapState = Bootstrap | null | undefined;
 
 export function useBootstrap(): BootstrapState {
 	// Read context directly (not via useConfig()) so test environments that

@@ -12,37 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 
-export function DeletedVaultsSection() {
-	const { data: deleted } = useDeletedVaults();
-	if (!deleted || deleted.length === 0) {
-		return null;
-	}
-
-	return (
-		<SettingsSectionCard
-			title="Recently deleted"
-			description="Deleted vaults are kept for 30 days. Restore them, or remove them permanently."
-		>
-			<table className="w-full text-sm">
-				<thead>
-					<tr className="border-border border-b text-left text-muted-foreground text-xs">
-						<th className="py-2 font-medium">Name</th>
-						<th className="py-2 text-right font-medium">Files</th>
-						<th className="py-2 text-right font-medium">Attachments</th>
-						<th className="py-2 font-medium">Purges</th>
-						<th className="py-2" aria-label="Actions" />
-					</tr>
-				</thead>
-				<tbody className="divide-y divide-border">
-					{deleted.map((v) => (
-						<DeletedRow key={v.id} vault={v} />
-					))}
-				</tbody>
-			</table>
-		</SettingsSectionCard>
-	);
-}
-
 function DeletedRow({ vault }: { vault: Vault }) {
 	const { data: active } = useVaults();
 	const { data: billing } = useBillingConfig();
@@ -111,5 +80,36 @@ function DeletedRow({ vault }: { vault: Vault }) {
 				</span>
 			</td>
 		</tr>
+	);
+}
+
+export function DeletedVaultsSection() {
+	const { data: deleted } = useDeletedVaults();
+	if (!deleted || deleted.length === 0) {
+		return null;
+	}
+
+	return (
+		<SettingsSectionCard
+			title="Recently deleted"
+			description="Deleted vaults are kept for 30 days. Restore them, or remove them permanently."
+		>
+			<table className="w-full text-sm">
+				<thead>
+					<tr className="border-border border-b text-left text-muted-foreground text-xs">
+						<th className="py-2 font-medium">Name</th>
+						<th className="py-2 text-right font-medium">Files</th>
+						<th className="py-2 text-right font-medium">Attachments</th>
+						<th className="py-2 font-medium">Purges</th>
+						<th className="py-2" aria-label="Actions" />
+					</tr>
+				</thead>
+				<tbody className="divide-y divide-border">
+					{deleted.map((v) => (
+						<DeletedRow key={v.id} vault={v} />
+					))}
+				</tbody>
+			</table>
+		</SettingsSectionCard>
 	);
 }

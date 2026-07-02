@@ -9,31 +9,6 @@ const ACTION_LABELS: Record<string, string> = {
 	resume: "Your plan resumes",
 };
 
-export default function PendingChangeBanner({
-	scheduledChange,
-}: {
-	scheduledChange: SubscriptionDetail["scheduled_change"];
-}) {
-	if (!scheduledChange) {
-		return null;
-	}
-
-	const label = ACTION_LABELS[scheduledChange.action] ?? "Your plan changes";
-	const date = new Date(scheduledChange.effective_at).toLocaleDateString();
-
-	return (
-		<aside
-			role="status"
-			className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
-		>
-			<p className="font-medium text-foreground">
-				{label} on {date}
-			</p>
-			{scheduledChange.action === "cancel" && <ReverseCancelButton />}
-		</aside>
-	);
-}
-
 // Hook isolated to its own component so the mutation state isn't allocated
 // for non-cancel scheduled changes (pause/resume) where the button never
 // renders. Tiny gain alone — pattern matters when the parent is in the
@@ -57,5 +32,30 @@ function ReverseCancelButton() {
 			)}
 			{reverseCancel.isPending ? "Reversing…" : "Keep my subscription"}
 		</Button>
+	);
+}
+
+export default function PendingChangeBanner({
+	scheduledChange,
+}: {
+	scheduledChange: SubscriptionDetail["scheduled_change"];
+}) {
+	if (!scheduledChange) {
+		return null;
+	}
+
+	const label = ACTION_LABELS[scheduledChange.action] ?? "Your plan changes";
+	const date = new Date(scheduledChange.effective_at).toLocaleDateString();
+
+	return (
+		<aside
+			role="status"
+			className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
+		>
+			<p className="font-medium text-foreground">
+				{label} on {date}
+			</p>
+			{scheduledChange.action === "cancel" && <ReverseCancelButton />}
+		</aside>
 	);
 }

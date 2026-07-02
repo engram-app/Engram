@@ -2,12 +2,22 @@
 // Values here are already-decoded JS values (the result of JSON.parse on a
 // Y.Map("frontmatter") entry), not YAML text.
 
-export type PropertyType = "text" | "list" | "number" | "checkbox" | "date" | "datetime";
-
 const ALL: readonly PropertyType[] = ["text", "list", "number", "checkbox", "date", "datetime"];
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+function scalarToString(v: unknown): string {
+	if (v == null) {
+		return "";
+	}
+	if (typeof v === "string") {
+		return v;
+	}
+	return String(v);
+}
+
+export type PropertyType = "text" | "list" | "number" | "checkbox" | "date" | "datetime";
 
 export function isPropertyType(s: unknown): s is PropertyType {
 	return typeof s === "string" && (ALL as readonly string[]).includes(s);
@@ -72,14 +82,4 @@ export function coerceValue(value: unknown, to: PropertyType): unknown {
 		default:
 			return value;
 	}
-}
-
-function scalarToString(v: unknown): string {
-	if (v == null) {
-		return "";
-	}
-	if (typeof v === "string") {
-		return v;
-	}
-	return String(v);
 }

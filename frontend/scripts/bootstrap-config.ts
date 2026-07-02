@@ -7,6 +7,8 @@
 //     before first render).
 // Keep this the ONLY place the saas env→config mapping lives.
 
+type Env = Record<string, string | undefined>;
+
 export interface BootstrapConfig {
 	authProvider: string;
 	clerkPublishableKey: string;
@@ -15,8 +17,6 @@ export interface BootstrapConfig {
 	apiBase: string;
 	wsBase: string;
 }
-
-type Env = Record<string, string | undefined>;
 
 export function bootstrapConfigFromEnv(env: Env): {
 	config: BootstrapConfig;

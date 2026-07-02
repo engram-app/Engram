@@ -17,20 +17,8 @@ interface Session {
 
 let session: Session | null = null;
 
-// ── Sync status ────────────────────────────────────────────────────────────
-export type CrdtSyncStatus = "connecting" | "synced" | "error";
-
 let syncStatus: CrdtSyncStatus = "connecting";
 const syncStatusListeners = new Set<(s: CrdtSyncStatus) => void>();
-
-export function getCrdtSyncStatus(): CrdtSyncStatus {
-	return syncStatus;
-}
-
-export function subscribeToCrdtSyncStatus(cb: (s: CrdtSyncStatus) => void): () => void {
-	syncStatusListeners.add(cb);
-	return () => syncStatusListeners.delete(cb);
-}
 
 function setCrdtSyncStatus(s: CrdtSyncStatus): void {
 	if (syncStatus === s) {
@@ -40,6 +28,18 @@ function setCrdtSyncStatus(s: CrdtSyncStatus): void {
 	for (const cb of syncStatusListeners) {
 		cb(s);
 	}
+}
+
+// ── Sync status ────────────────────────────────────────────────────────────
+export type CrdtSyncStatus = "connecting" | "synced" | "error";
+
+export function getCrdtSyncStatus(): CrdtSyncStatus {
+	return syncStatus;
+}
+
+export function subscribeToCrdtSyncStatus(cb: (s: CrdtSyncStatus) => void): () => void {
+	syncStatusListeners.add(cb);
+	return () => syncStatusListeners.delete(cb);
 }
 
 export interface StartSessionOpts {

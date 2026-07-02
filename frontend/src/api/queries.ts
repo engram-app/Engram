@@ -24,6 +24,213 @@ function encodePathSegments(path: string): string {
 	return path.split("/").map(encodeURIComponent).join("/");
 }
 
+// Hoisted so React Query treats the select identity as stable; otherwise an
+// inline arrow re-runs every render and returns a fresh array, breaking
+// memoized consumers (e.g. useEngramTree's rebuild useEffect).
+// The backend returns a null id for the synthetic root row (name === '') AND for
+// every *derived* folder (one that exists only because notes live in it — no
+// explicit marker row). Drop only the root row; give derived folders a stable
+// synthetic id keyed on their path so the `Folder.id: string` contract holds and
+// they aren't erased from the tree. synthesizeFolders then links parents/ancestors.
+const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
+	data.folders
+		.filter((f) => f.name !== "")
+		.map((f) => (f.id == null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
+
+const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
+
+const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.attachments;
+
+// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
+// id its note list is cached under. Root maps to the sentinel without a lookup;
+// every other folder resolves through the folders cache marker. Returns null
+// when an unknown non-root folder isn't in the cache yet — callers skip the
+// optimistic patch and let the list surface on its next fetch.
+function folderIdForPath(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	folder: string,
+): string | null {
+	if (folder === "") {
+		return ROOT_FOLDER_ID;
+	}
+	return (
+		qc
+			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
+			?.folders.find((f) => f.name === folder)?.id ?? null
+	);
+}
+
+// Single source for the by-id note fetch used by useNote's queryFn.
+function fetchNoteById(id: string): Promise<Note> {
+	return api.get<Note>(`/notes/by-id/${id}`);
+}
+
+interface CreateNoteContext {
+	key: readonly unknown[];
+	snapshot: NoteSummary[];
+	placeholderId: string;
+}
+
+// Replace the row whose id === `id` in an id-keyed note-list cache. Used to
+// swap an optimistic placeholder for the server row. No-op when the list isn't
+// cached.
+function patchRowInList(
+	qc: QueryClient,
+	key: readonly unknown[],
+	id: string,
+	patch: Partial<NoteSummary>,
+): void {
+	const cur = qc.getQueryData<NoteSummary[]>(key);
+	if (cur) {
+		qc.setQueryData<NoteSummary[]>(
+			key,
+			cur.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+		);
+	}
+}
+
+// Filenames in a note list, ignoring our own optimistic placeholders (so a
+// freshly-inserted placeholder doesn't bump the name the server picks).
+function realFilenames(notes: NoteSummary[]): Set<string> {
+	return new Set(
+		notes
+			.filter((n) => !n.id.startsWith("optimistic-"))
+			.map((n) => n.path.split("/").pop() ?? n.path),
+	);
+}
+
+// Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
+// rule the backend uses when computing `folder` on a NoteSummary.
+function folderOf(path: string): string {
+	const slash = path.lastIndexOf("/");
+	return slash < 0 ? "" : path.slice(0, slash);
+}
+
+// Apply `mut` to the entry at `key` only if it is currently cached.
+// Skipping uncached keys keeps optimistic edits cheap and avoids
+// pre-seeding caches that would otherwise refetch lazily on mount.
+function updateCachedList<T>(
+	qc: QueryClient,
+	key: readonly unknown[],
+	mut: (data: { notes: T[] }) => { notes: T[] },
+) {
+	const prev = qc.getQueryData<{ notes: T[] }>(key as readonly unknown[]);
+	if (!prev) {
+		return;
+	}
+	qc.setQueryData(key as readonly unknown[], mut(prev));
+}
+
+// 409/404/etc → human-grade toast copy. Centralised so all four
+// mutations (and the standalone drop handler) speak the same dialect.
+function renameErrorToast(err: ApiError, kind: "file" | "folder") {
+	const noun = kind === "file" ? "note" : "folder";
+	if (err.status === 409) {
+		toast.error(`A ${noun} with that name already exists.`);
+	} else if (err.status === 404) {
+		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
+	} else {
+		toast.error("Rename failed.");
+	}
+}
+
+function deleteErrorToast(err: ApiError, kind: "file" | "folder") {
+	const noun = kind === "file" ? "Note" : "Folder";
+	if (err.status === 404) {
+		toast.error(`${noun} no longer exists.`);
+	} else {
+		toast.error("Delete failed.");
+	}
+}
+
+interface RenameNoteContext {
+	oldFolder: string;
+	newFolder: string;
+	oldFolderNotes: { notes: NoteSummary[] } | undefined;
+	newFolderNotes: { notes: NoteSummary[] } | undefined;
+	folders: { folders: Folder[] } | undefined;
+	// The note id is stable across rename — only `path`/`folder` shift.
+	// We snapshot the previous note value so rollback restores those
+	// fields under the SAME cache key.
+	noteId: string | null;
+	prevNote: Note | undefined;
+}
+
+interface RenameFolderContext {
+	folders: { folders: Folder[] } | undefined;
+	// Snapshot of every cached folderNotes entry we touched, keyed by the
+	// joined query key. Folder rename is coarse (see below) — we DROP all
+	// child folderNotes entries to force refetch on next expand, which
+	// means rollback needs to restore them.
+	childLists: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>;
+	// Notes cached by id whose `folder` was under the old prefix. We
+	// rewrite path/folder in place under the same key (id is stable);
+	// snapshots capture the pre-rename value for rollback.
+	noteSnapshots: Array<{ id: string; note: Note }>;
+}
+
+interface DeleteNoteContext {
+	folder: string;
+	id: string;
+	folderNotes: { notes: NoteSummary[] } | undefined;
+	folders: { folders: Folder[] } | undefined;
+	note: Note | undefined;
+}
+
+interface DeleteFolderContext {
+	folders: { folders: Folder[] } | undefined;
+	folderList: { notes: NoteSummary[] } | undefined;
+}
+
+interface DuplicateNoteContext {
+	placeholderId: string;
+	// The id-keyed list the tree reads (set only when the target folder's list
+	// is cached), plus its snapshot for rollback.
+	key?: readonly unknown[];
+	snapshot?: NoteSummary[];
+}
+
+function idempotencyHeaders(): { headers: Record<string, string> } {
+	return { headers: { "X-Idempotency-Key": crypto.randomUUID() } };
+}
+
+interface BatchNotesContext {
+	// Every by-id list we patched (root included — it keys under ROOT_FOLDER_ID).
+	// We keep the snapshot map ordered by the QueryClient cache scan so rollback
+	// restores under the same key.
+	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
+	// Folders cache snapshot — present only when a move patched folder counts
+	// (so the tree's structure key changes and it rebuilds). Used for rollback.
+	folders?: { folders: Folder[] };
+}
+
+// Walk the folders cache and collect `id` plus every transitive
+// descendant by parent_id chain. Used by both batch folder mutations.
+function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<string> {
+	const result = new Set<string>(rootIds);
+	// Iterate until no new ids land in the set — folders are typically
+	// shallow, so this is cheap even with the naive scan.
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const f of folders) {
+			if (f.parent_id != null && result.has(f.parent_id) && !result.has(f.id)) {
+				result.add(f.id);
+				changed = true;
+			}
+		}
+	}
+	return result;
+}
+
+interface BatchFoldersContext {
+	folders: { folders: Folder[] } | undefined;
+	// Snapshot every by-id note list whose folder is being deleted so
+	// rollback can restore them. Move doesn't touch these lists.
+	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
+}
+
 // Types matching backend JSON responses
 //
 // `name` carries the FULL folder path (e.g. `'top/sub'`) — load-bearing
@@ -75,19 +282,6 @@ export interface User {
 
 // Query hooks
 
-// Hoisted so React Query treats the select identity as stable; otherwise an
-// inline arrow re-runs every render and returns a fresh array, breaking
-// memoized consumers (e.g. useEngramTree's rebuild useEffect).
-// The backend returns a null id for the synthetic root row (name === '') AND for
-// every *derived* folder (one that exists only because notes live in it — no
-// explicit marker row). Drop only the root row; give derived folders a stable
-// synthetic id keyed on their path so the `Folder.id: string` contract holds and
-// they aren't erased from the tree. synthesizeFolders then links parents/ancestors.
-const selectFolders = (data: { folders: Array<Folder & { id: string | null }> }): Folder[] =>
-	data.folders
-		.filter((f) => f.name !== "")
-		.map((f) => (f.id == null ? { ...f, id: syntheticFolderId(f.name) } : (f as Folder)));
-
 export function useFolders() {
 	const vaultId = useActiveVaultId();
 	const demo = useDemoVaultOptional();
@@ -127,8 +321,6 @@ export function useFolders() {
 	}
 	return query;
 }
-
-const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
 export function useFolderNotes(folder: string, options?: { enabled?: boolean }) {
 	const vaultId = useActiveVaultId();
@@ -185,8 +377,6 @@ export interface AttachmentSummary {
 	mtime: number;
 	updated_at: string;
 }
-
-const selectAttachments = (data: { attachments: AttachmentSummary[] }) => data.attachments;
 
 export function useAttachments() {
 	const vaultId = useActiveVaultId();
@@ -269,26 +459,6 @@ export function useFolderNotesById(folderId: string | null, opts: { enabled?: bo
 	});
 }
 
-// Resolve a folder PATH (a NoteSummary.folder, or '' for the vault root) to the
-// id its note list is cached under. Root maps to the sentinel without a lookup;
-// every other folder resolves through the folders cache marker. Returns null
-// when an unknown non-root folder isn't in the cache yet — callers skip the
-// optimistic patch and let the list surface on its next fetch.
-function folderIdForPath(
-	qc: QueryClient,
-	vaultId: string | null | undefined,
-	folder: string,
-): string | null {
-	if (folder === "") {
-		return ROOT_FOLDER_ID;
-	}
-	return (
-		qc
-			.getQueryData<{ folders: Folder[] }>(["folders", vaultId])
-			?.folders.find((f) => f.name === folder)?.id ?? null
-	);
-}
-
 export function useNote(id: string | null) {
 	const vaultId = useActiveVaultId();
 	return useQuery({
@@ -296,11 +466,6 @@ export function useNote(id: string | null) {
 		queryFn: () => fetchNoteById(id as string),
 		enabled: id != null,
 	});
-}
-
-// Single source for the by-id note fetch used by useNote's queryFn.
-function fetchNoteById(id: string): Promise<Note> {
-	return api.get<Note>(`/notes/by-id/${id}`);
 }
 
 export function useUpdateNote() {
@@ -325,40 +490,6 @@ export function useUpdateNote() {
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
 	});
-}
-
-interface CreateNoteContext {
-	key: readonly unknown[];
-	snapshot: NoteSummary[];
-	placeholderId: string;
-}
-
-// Replace the row whose id === `id` in an id-keyed note-list cache. Used to
-// swap an optimistic placeholder for the server row. No-op when the list isn't
-// cached.
-function patchRowInList(
-	qc: QueryClient,
-	key: readonly unknown[],
-	id: string,
-	patch: Partial<NoteSummary>,
-): void {
-	const cur = qc.getQueryData<NoteSummary[]>(key);
-	if (cur) {
-		qc.setQueryData<NoteSummary[]>(
-			key,
-			cur.map((n) => (n.id === id ? { ...n, ...patch } : n)),
-		);
-	}
-}
-
-// Filenames in a note list, ignoring our own optimistic placeholders (so a
-// freshly-inserted placeholder doesn't bump the name the server picks).
-function realFilenames(notes: NoteSummary[]): Set<string> {
-	return new Set(
-		notes
-			.filter((n) => !n.id.startsWith("optimistic-"))
-			.map((n) => n.path.split("/").pop() ?? n.path),
-	);
 }
 
 export function useCreateNote() {
@@ -1201,63 +1332,6 @@ export function useConfirmPlanChange() {
 // out-of-band changes (Phoenix channel push, other-tab edits) get
 // reconciled.
 
-// Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
-// rule the backend uses when computing `folder` on a NoteSummary.
-function folderOf(path: string): string {
-	const slash = path.lastIndexOf("/");
-	return slash < 0 ? "" : path.slice(0, slash);
-}
-
-// Apply `mut` to the entry at `key` only if it is currently cached.
-// Skipping uncached keys keeps optimistic edits cheap and avoids
-// pre-seeding caches that would otherwise refetch lazily on mount.
-function updateCachedList<T>(
-	qc: QueryClient,
-	key: readonly unknown[],
-	mut: (data: { notes: T[] }) => { notes: T[] },
-) {
-	const prev = qc.getQueryData<{ notes: T[] }>(key as readonly unknown[]);
-	if (!prev) {
-		return;
-	}
-	qc.setQueryData(key as readonly unknown[], mut(prev));
-}
-
-// 409/404/etc → human-grade toast copy. Centralised so all four
-// mutations (and the standalone drop handler) speak the same dialect.
-function renameErrorToast(err: ApiError, kind: "file" | "folder") {
-	const noun = kind === "file" ? "note" : "folder";
-	if (err.status === 409) {
-		toast.error(`A ${noun} with that name already exists.`);
-	} else if (err.status === 404) {
-		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
-	} else {
-		toast.error("Rename failed.");
-	}
-}
-
-function deleteErrorToast(err: ApiError, kind: "file" | "folder") {
-	const noun = kind === "file" ? "Note" : "Folder";
-	if (err.status === 404) {
-		toast.error(`${noun} no longer exists.`);
-	} else {
-		toast.error("Delete failed.");
-	}
-}
-
-interface RenameNoteContext {
-	oldFolder: string;
-	newFolder: string;
-	oldFolderNotes: { notes: NoteSummary[] } | undefined;
-	newFolderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
-	// The note id is stable across rename — only `path`/`folder` shift.
-	// We snapshot the previous note value so rollback restores those
-	// fields under the SAME cache key.
-	noteId: string | null;
-	prevNote: Note | undefined;
-}
-
 export function useRenameNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -1432,19 +1506,6 @@ export function useRenameNote() {
 	});
 }
 
-interface RenameFolderContext {
-	folders: { folders: Folder[] } | undefined;
-	// Snapshot of every cached folderNotes entry we touched, keyed by the
-	// joined query key. Folder rename is coarse (see below) — we DROP all
-	// child folderNotes entries to force refetch on next expand, which
-	// means rollback needs to restore them.
-	childLists: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>;
-	// Notes cached by id whose `folder` was under the old prefix. We
-	// rewrite path/folder in place under the same key (id is stable);
-	// snapshots capture the pre-rename value for rollback.
-	noteSnapshots: Array<{ id: string; note: Note }>;
-}
-
 export function useRenameFolder() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -1573,14 +1634,6 @@ export function useRenameFolder() {
 	});
 }
 
-interface DeleteNoteContext {
-	folder: string;
-	id: string;
-	folderNotes: { notes: NoteSummary[] } | undefined;
-	folders: { folders: Folder[] } | undefined;
-	note: Note | undefined;
-}
-
 // `path` rides along so optimistic onMutate can locate the row in the
 // folderNotes cache + adjust the parent folder's count without a round
 // trip. The URL itself only needs the id.
@@ -1656,11 +1709,6 @@ export function useDeleteNote() {
 	});
 }
 
-interface DeleteFolderContext {
-	folders: { folders: Folder[] } | undefined;
-	folderList: { notes: NoteSummary[] } | undefined;
-}
-
 export function useDeleteFolder() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
@@ -1729,14 +1777,6 @@ export function useDeleteFolder() {
 // folder's list immediately so the row appears in the tree. The GET+POST
 // happens in the background; on success the placeholder is replaced
 // (via onSettled refetch); on error the placeholder is pulled.
-
-interface DuplicateNoteContext {
-	placeholderId: string;
-	// The id-keyed list the tree reads (set only when the target folder's list
-	// is cached), plus its snapshot for rollback.
-	key?: readonly unknown[];
-	snapshot?: NoteSummary[];
-}
 
 export function useDuplicateNote() {
 	const qc = useQueryClient();
@@ -1866,20 +1906,6 @@ export function useDuplicateNote() {
 // for the legacy tree consumers that still read it; the batch onMutate
 // itself only patches the id-keyed list since headless-tree is the only
 // caller that issues batches.
-
-function idempotencyHeaders(): { headers: Record<string, string> } {
-	return { headers: { "X-Idempotency-Key": crypto.randomUUID() } };
-}
-
-interface BatchNotesContext {
-	// Every by-id list we patched (root included — it keys under ROOT_FOLDER_ID).
-	// We keep the snapshot map ordered by the QueryClient cache scan so rollback
-	// restores under the same key.
-	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
-	// Folders cache snapshot — present only when a move patched folder counts
-	// (so the tree's structure key changes and it rebuilds). Used for rollback.
-	folders?: { folders: Folder[] };
-}
 
 export function useBatchDeleteNotes() {
 	const qc = useQueryClient();
@@ -2099,32 +2125,6 @@ export function useBatchMoveNotes() {
 			qc.invalidateQueries({ queryKey: ["note", vaultId] });
 		},
 	});
-}
-
-// Walk the folders cache and collect `id` plus every transitive
-// descendant by parent_id chain. Used by both batch folder mutations.
-function collectFolderDescendants(folders: Folder[], rootIds: string[]): Set<string> {
-	const result = new Set<string>(rootIds);
-	// Iterate until no new ids land in the set — folders are typically
-	// shallow, so this is cheap even with the naive scan.
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const f of folders) {
-			if (f.parent_id != null && result.has(f.parent_id) && !result.has(f.id)) {
-				result.add(f.id);
-				changed = true;
-			}
-		}
-	}
-	return result;
-}
-
-interface BatchFoldersContext {
-	folders: { folders: Folder[] } | undefined;
-	// Snapshot every by-id note list whose folder is being deleted so
-	// rollback can restore them. Move doesn't touch these lists.
-	noteListSnapshots: Array<{ key: readonly unknown[]; data: NoteSummary[] | undefined }>;
 }
 
 export function useBatchDeleteFolders() {

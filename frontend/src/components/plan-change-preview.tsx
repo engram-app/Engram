@@ -15,6 +15,56 @@ import {
 import type { PlanChangePreviewData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
+function PlanChangePreviewSkeleton({ className }: { className?: string }) {
+	return (
+		<Card className={cn("gap-4", className)}>
+			<CardHeader>
+				<Skeleton className="h-4 w-40" />
+				<Skeleton className="h-3 w-52" />
+			</CardHeader>
+			<CardContent className="space-y-4">
+				<div className="flex items-stretch gap-3">
+					<div className="flex-1 space-y-2 rounded-lg border bg-muted/40 p-3">
+						<Skeleton className="h-3 w-20" />
+						<Skeleton className="h-4 w-24" />
+						<Skeleton className="h-3 w-16" />
+					</div>
+					<div className="flex items-center">
+						<Skeleton className="h-4 w-4 rounded" />
+					</div>
+					<div className="flex-1 space-y-2 rounded-lg border p-3">
+						<Skeleton className="h-3 w-16" />
+						<Skeleton className="h-4 w-20" />
+						<Skeleton className="h-3 w-16" />
+					</div>
+				</div>
+				<Separator />
+				<div className="space-y-2">
+					<div className="flex justify-between">
+						<Skeleton className="h-4 w-20" />
+						<Skeleton className="h-5 w-16" />
+					</div>
+					<div className="flex justify-between">
+						<Skeleton className="h-4 w-16" />
+						<Skeleton className="h-4 w-32" />
+					</div>
+				</div>
+				<Separator />
+				<div className="space-y-1.5">
+					<div className="flex justify-between">
+						<Skeleton className="h-4 w-16" />
+						<Skeleton className="h-4 w-20" />
+					</div>
+					<div className="flex justify-between">
+						<Skeleton className="h-4 w-8" />
+						<Skeleton className="h-4 w-20" />
+					</div>
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
 /** Props for the `PlanChangePreview` component. */
 export interface PlanChangePreviewProps {
 	preview?: PlanChangePreviewData;
@@ -268,56 +318,6 @@ export function PlanChangePreview({
 						An invoice will be created for this amount.
 					</p>
 				)}
-			</CardContent>
-		</Card>
-	);
-}
-
-function PlanChangePreviewSkeleton({ className }: { className?: string }) {
-	return (
-		<Card className={cn("gap-4", className)}>
-			<CardHeader>
-				<Skeleton className="h-4 w-40" />
-				<Skeleton className="h-3 w-52" />
-			</CardHeader>
-			<CardContent className="space-y-4">
-				<div className="flex items-stretch gap-3">
-					<div className="flex-1 space-y-2 rounded-lg border bg-muted/40 p-3">
-						<Skeleton className="h-3 w-20" />
-						<Skeleton className="h-4 w-24" />
-						<Skeleton className="h-3 w-16" />
-					</div>
-					<div className="flex items-center">
-						<Skeleton className="h-4 w-4 rounded" />
-					</div>
-					<div className="flex-1 space-y-2 rounded-lg border p-3">
-						<Skeleton className="h-3 w-16" />
-						<Skeleton className="h-4 w-20" />
-						<Skeleton className="h-3 w-16" />
-					</div>
-				</div>
-				<Separator />
-				<div className="space-y-2">
-					<div className="flex justify-between">
-						<Skeleton className="h-4 w-20" />
-						<Skeleton className="h-5 w-16" />
-					</div>
-					<div className="flex justify-between">
-						<Skeleton className="h-4 w-16" />
-						<Skeleton className="h-4 w-32" />
-					</div>
-				</div>
-				<Separator />
-				<div className="space-y-1.5">
-					<div className="flex justify-between">
-						<Skeleton className="h-4 w-16" />
-						<Skeleton className="h-4 w-20" />
-					</div>
-					<div className="flex justify-between">
-						<Skeleton className="h-4 w-8" />
-						<Skeleton className="h-4 w-20" />
-					</div>
-				</div>
 			</CardContent>
 		</Card>
 	);

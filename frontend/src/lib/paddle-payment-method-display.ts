@@ -1,42 +1,3 @@
-export type PaddlePaymentMethodType =
-	| "alipay"
-	| "apple_pay"
-	| "bancontact"
-	| "blik"
-	| "card"
-	| "google_pay"
-	| "ideal"
-	| "kakao_pay"
-	| "south_korea_local_card"
-	| "mb_way"
-	| "naver_pay"
-	| "offline"
-	| "payco"
-	| "paypal"
-	| "pix"
-	| "samsung_pay"
-	| "unknown"
-	| "upi"
-	| "wechat_pay"
-	| "wire_transfer"
-	/** @deprecated Returned on historical transactions but replaced by `south_korea_local_card` in newer transactions */
-	| "korea_local"
-	| (string & {});
-
-/** All Paddle card brand types from `transaction.payments[0].method_details.card.type` */
-export type PaddleCardType =
-	| "american_express"
-	| "diners_club"
-	| "discover"
-	| "jcb"
-	| "mada"
-	| "maestro"
-	| "mastercard"
-	| "union_pay"
-	| "unknown"
-	| "visa"
-	| (string & {});
-
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
 	alipay: "Alipay",
 	apple_pay: "Apple Pay",
@@ -80,6 +41,45 @@ function formatUnknownType(type: string): string {
 		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
 		.join(" ");
 }
+
+export type PaddlePaymentMethodType =
+	| "alipay"
+	| "apple_pay"
+	| "bancontact"
+	| "blik"
+	| "card"
+	| "google_pay"
+	| "ideal"
+	| "kakao_pay"
+	| "south_korea_local_card"
+	| "mb_way"
+	| "naver_pay"
+	| "offline"
+	| "payco"
+	| "paypal"
+	| "pix"
+	| "samsung_pay"
+	| "unknown"
+	| "upi"
+	| "wechat_pay"
+	| "wire_transfer"
+	/** @deprecated Returned on historical transactions but replaced by `south_korea_local_card` in newer transactions */
+	| "korea_local"
+	| (string & {});
+
+/** All Paddle card brand types from `transaction.payments[0].method_details.card.type` */
+export type PaddleCardType =
+	| "american_express"
+	| "diners_club"
+	| "discover"
+	| "jcb"
+	| "mada"
+	| "maestro"
+	| "mastercard"
+	| "union_pay"
+	| "unknown"
+	| "visa"
+	| (string & {});
 
 /**
  * Returns the full display label for a Paddle payment method.

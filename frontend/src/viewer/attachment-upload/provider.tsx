@@ -11,16 +11,16 @@ interface UploadApi {
 
 const Ctx = createContext<UploadApi | null>(null);
 
+function hasFiles(e: DragEvent): boolean {
+	return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+}
+
 export function useAttachmentUpload(): UploadApi {
 	const v = useContext(Ctx);
 	if (!v) {
 		throw new Error("useAttachmentUpload must be used within AttachmentUploadProvider");
 	}
 	return v;
-}
-
-function hasFiles(e: DragEvent): boolean {
-	return Array.from(e.dataTransfer?.types ?? []).includes("Files");
 }
 
 export function AttachmentUploadProvider({ children }: { children: React.ReactNode }) {

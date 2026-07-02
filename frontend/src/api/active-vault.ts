@@ -29,6 +29,13 @@ function writeStored(id: string | null) {
 	}
 }
 
+function subscribe(listener: () => void): () => void {
+	listeners.add(listener);
+	return () => {
+		listeners.delete(listener);
+	};
+}
+
 export function getActiveVaultId(): string | null {
 	return activeVaultId;
 }
@@ -42,13 +49,6 @@ export function setActiveVaultId(id: string | null) {
 	listeners.forEach((l) => {
 		l();
 	});
-}
-
-function subscribe(listener: () => void): () => void {
-	listeners.add(listener);
-	return () => {
-		listeners.delete(listener);
-	};
 }
 
 export function useActiveVaultId(): string | null {

@@ -9,14 +9,6 @@ import {
 import type { TreeItem } from "./types";
 import { formatItemId, parseItemId, ROOT_ID } from "./types";
 
-export type SortKey =
-	| "name-asc"
-	| "name-desc"
-	| "modified-asc"
-	| "modified-desc"
-	| "created-asc"
-	| "created-desc";
-
 interface LoaderDeps {
 	folders: Folder[];
 	qc: QueryClient;
@@ -25,44 +17,6 @@ interface LoaderDeps {
 	attachments?: AttachmentSummary[];
 	fetchFolderNotes?: (folderId: string) => Promise<NoteSummary[]>;
 	onChildrenLoaded?: (folderId: string) => void;
-}
-
-export interface LoaderItem {
-	itemId: string;
-	item: TreeItem;
-	isFolder: boolean;
-}
-
-export function buildLoader(deps: LoaderDeps) {
-	return {
-		getItem(itemId: string): LoaderItem | undefined {
-			if (itemId === ROOT_ID) {
-				return;
-			}
-			const p = parseItemId(itemId);
-			if (p.kind === "root") {
-				return;
-			}
-			if (p.kind === "folder") {
-				return folderLoaderItem(deps, p.id);
-			}
-			if (p.kind === "note") {
-				return noteLoaderItem(deps, p.id);
-			}
-			return attachmentLoaderItem(deps, p.path);
-		},
-
-		getChildren(itemId: string): LoaderItem[] {
-			if (itemId === ROOT_ID) {
-				return rootChildren(deps);
-			}
-			const p = parseItemId(itemId);
-			if (p.kind !== "folder") {
-				return [];
-			}
-			return folderChildren(deps, p.id);
-		},
-	};
 }
 
 function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
@@ -230,4 +184,50 @@ function noteToTreeItem(n: NoteSummary): Extract<TreeItem, { kind: "note" }> {
 	const dot = last.lastIndexOf(".");
 	const ext = dot > 0 ? last.slice(dot + 1).toLowerCase() : null;
 	return { kind: "note", id: n.id, path: n.path, title: n.title, ext };
+}
+
+export type SortKey =
+	| "name-asc"
+	| "name-desc"
+	| "modified-asc"
+	| "modified-desc"
+	| "created-asc"
+	| "created-desc";
+
+export interface LoaderItem {
+	itemId: string;
+	item: TreeItem;
+	isFolder: boolean;
+}
+
+export function buildLoader(deps: LoaderDeps) {
+	return {
+		getItem(itemId: string): LoaderItem | undefined {
+			if (itemId === ROOT_ID) {
+				return;
+			}
+			const p = parseItemId(itemId);
+			if (p.kind === "root") {
+				return;
+			}
+			if (p.kind === "folder") {
+				return folderLoaderItem(deps, p.id);
+			}
+			if (p.kind === "note") {
+				return noteLoaderItem(deps, p.id);
+			}
+			return attachmentLoaderItem(deps, p.path);
+		},
+
+		getChildren(itemId: string): LoaderItem[] {
+			if (itemId === ROOT_ID) {
+				return rootChildren(deps);
+			}
+			const p = parseItemId(itemId);
+			if (p.kind !== "folder") {
+				return [];
+			}
+			return folderChildren(deps, p.id);
+		},
+	};
 }

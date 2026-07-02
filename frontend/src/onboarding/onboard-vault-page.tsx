@@ -21,42 +21,6 @@ import { WELCOME_NOTE_CONTENT, WELCOME_NOTE_PATH } from "./welcome-note";
 
 type Source = "obsidian" | "fresh" | null;
 
-export default function OnboardVaultPage() {
-	const navigate = useNavigate();
-	const { data: status, isLoading } = useOnboardingStatus();
-	const { data: me } = useMe();
-	const setProfile = useSetOnboardingProfile();
-	const createVault = useCreateVault();
-	const updateNote = useUpdateNote();
-
-	// Block render until status arrives so the source toggle never flashes
-	// the wrong branch on first paint for a returning mid-flow user.
-	if (isLoading || !status) {
-		return <LoadingScreen />;
-	}
-
-	// Backend owns step ordering — if it says tools/agreement/billing should
-	// come first, honor that. `:done` means wizard complete; kick home.
-	if (status.next_step !== "vault" && status.next_step !== "done") {
-		return <Navigate to={`/onboard/${status.next_step}`} replace />;
-	}
-	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
-	}
-
-	return (
-		<VaultStep
-			profileSaved={status.profile_complete === true}
-			savedUsesObsidian={status.profile?.uses_obsidian === true}
-			userId={me?.id ?? null}
-			setProfile={setProfile}
-			createVault={createVault}
-			updateNote={updateNote}
-			navigate={navigate}
-		/>
-	);
-}
-
 interface VaultStepProps {
 	profileSaved: boolean;
 	savedUsesObsidian: boolean;
@@ -403,5 +367,41 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 				{isCommitting ? "Creating…" : "Create vault & continue"}
 			</button>
 		</div>
+	);
+}
+
+export default function OnboardVaultPage() {
+	const navigate = useNavigate();
+	const { data: status, isLoading } = useOnboardingStatus();
+	const { data: me } = useMe();
+	const setProfile = useSetOnboardingProfile();
+	const createVault = useCreateVault();
+	const updateNote = useUpdateNote();
+
+	// Block render until status arrives so the source toggle never flashes
+	// the wrong branch on first paint for a returning mid-flow user.
+	if (isLoading || !status) {
+		return <LoadingScreen />;
+	}
+
+	// Backend owns step ordering — if it says tools/agreement/billing should
+	// come first, honor that. `:done` means wizard complete; kick home.
+	if (status.next_step !== "vault" && status.next_step !== "done") {
+		return <Navigate to={`/onboard/${status.next_step}`} replace />;
+	}
+	if (status.next_step === "done") {
+		return <Navigate to="/" replace />;
+	}
+
+	return (
+		<VaultStep
+			profileSaved={status.profile_complete === true}
+			savedUsesObsidian={status.profile?.uses_obsidian === true}
+			userId={me?.id ?? null}
+			setProfile={setProfile}
+			createVault={createVault}
+			updateNote={updateNote}
+			navigate={navigate}
+		/>
 	);
 }

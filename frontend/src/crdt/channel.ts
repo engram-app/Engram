@@ -6,18 +6,18 @@ import { type CrdtManager, REMOTE_ORIGIN } from "./manager";
 /** Outer y-protocols message-type tag — we only speak `messageSync`. */
 const MESSAGE_SYNC = 0;
 
-export interface CrdtChannelOptions {
-	manager: CrdtManager;
-	/** Transport: send a base64-encoded y-protocols frame for `docId`. */
-	send: (docId: string, frame: string) => void;
-}
-
 function toB64(bytes: Uint8Array): string {
 	return btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
 }
 
 function fromB64(b64: string): Uint8Array {
 	return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+export interface CrdtChannelOptions {
+	manager: CrdtManager;
+	/** Transport: send a base64-encoded y-protocols frame for `docId`. */
+	send: (docId: string, frame: string) => void;
 }
 
 export class CrdtChannel {

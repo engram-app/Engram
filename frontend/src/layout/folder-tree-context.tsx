@@ -1,13 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
-export type SortKey =
-	| "name-asc"
-	| "name-desc"
-	| "created-desc"
-	| "created-asc"
-	| "modified-desc"
-	| "modified-asc";
-
 interface FolderTreeContextValue {
 	isOpen: (path: string) => boolean;
 	toggle: (path: string) => void;
@@ -17,6 +9,14 @@ interface FolderTreeContextValue {
 }
 
 const FolderTreeContext = createContext<FolderTreeContextValue | null>(null);
+
+export type SortKey =
+	| "name-asc"
+	| "name-desc"
+	| "created-desc"
+	| "created-asc"
+	| "modified-desc"
+	| "modified-asc";
 
 export function FolderTreeProvider({ children }: { children: ReactNode }) {
 	const [openSet, setOpenSet] = useState<Set<string>>(() => new Set());

@@ -1,6 +1,26 @@
 import { formatDate } from "@/lib/paddle-format";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
 
+// ---
+// Mapping utility — Paddle API → SubscriptionAlertData display contract
+// ---
+
+interface PaddleSubscription {
+	status: "active" | "canceled" | "past_due" | "paused" | "trialing";
+	canceledAt?: string | null;
+	scheduledChange?: {
+		action: "cancel" | "pause" | "resume";
+		effectiveAt: string;
+		resumeAt?: string | null;
+	} | null;
+	items?: Array<{
+		trialDates?: { endsAt?: string | null } | null;
+	}>;
+	managementUrls?: {
+		updatePaymentMethod?: string | null;
+	} | null;
+}
+
 export type AlertVariant = "destructive" | "warning" | "info";
 
 /**
@@ -133,26 +153,6 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 
 	// Priority 8: active — no alert
 	return null;
-}
-
-// ---
-// Mapping utility — Paddle API → SubscriptionAlertData display contract
-// ---
-
-interface PaddleSubscription {
-	status: "active" | "canceled" | "past_due" | "paused" | "trialing";
-	canceledAt?: string | null;
-	scheduledChange?: {
-		action: "cancel" | "pause" | "resume";
-		effectiveAt: string;
-		resumeAt?: string | null;
-	} | null;
-	items?: Array<{
-		trialDates?: { endsAt?: string | null } | null;
-	}>;
-	managementUrls?: {
-		updatePaymentMethod?: string | null;
-	} | null;
 }
 
 /**

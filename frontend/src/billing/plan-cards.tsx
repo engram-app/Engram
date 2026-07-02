@@ -3,6 +3,43 @@ import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { BillingCadence } from "../api/queries";
 
+// Feature checklist shared by the full card and the accordion row. `className`
+// merges extra layout (e.g. `flex-1` on the full card).
+function FeatureList({ features, className }: { features: string[]; className?: string }) {
+	return (
+		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
+			{features.map((f) => (
+				<li key={f} className="flex items-center gap-2">
+					<span className="text-primary" aria-hidden="true">
+						&#10003;
+					</span>
+					{f}
+				</li>
+			))}
+		</ul>
+	);
+}
+
+interface PlanCardProps {
+	name: string;
+	cadence: BillingCadence;
+	monthlyPrice: number;
+	annualPrice: number;
+	features: string[];
+	tier: PlanTier;
+	onAction: (tier: PlanTier) => void;
+	disabled?: boolean;
+	// Visual states — pick at most one (current beats selected which beats
+	// recommended). Only one card per panel should render any of these.
+	recommended?: boolean;
+	selected?: boolean;
+	current?: boolean;
+	ctaLabel?: string;
+	// ctaSubLabel is shown under the CTA only on the selected card — used by
+	// PlanChangePanel to surface inline proration without a separate strip.
+	ctaSubLabel?: string;
+}
+
 export type PlanTier = "starter" | "pro";
 
 export interface PlanCardCatalog {
@@ -31,23 +68,6 @@ export const FREE_TIER = {
 	summary: "10k notes · 1 vault · markdown only",
 	features: ["10k notes", "1 vault", "Markdown only", "Upgrade anytime"],
 } as const;
-
-// Feature checklist shared by the full card and the accordion row. `className`
-// merges extra layout (e.g. `flex-1` on the full card).
-function FeatureList({ features, className }: { features: string[]; className?: string }) {
-	return (
-		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
-			{features.map((f) => (
-				<li key={f} className="flex items-center gap-2">
-					<span className="text-primary" aria-hidden="true">
-						&#10003;
-					</span>
-					{f}
-				</li>
-			))}
-		</ul>
-	);
-}
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
@@ -131,26 +151,6 @@ export function CadenceToggle({
 			</div>
 		</div>
 	);
-}
-
-interface PlanCardProps {
-	name: string;
-	cadence: BillingCadence;
-	monthlyPrice: number;
-	annualPrice: number;
-	features: string[];
-	tier: PlanTier;
-	onAction: (tier: PlanTier) => void;
-	disabled?: boolean;
-	// Visual states — pick at most one (current beats selected which beats
-	// recommended). Only one card per panel should render any of these.
-	recommended?: boolean;
-	selected?: boolean;
-	current?: boolean;
-	ctaLabel?: string;
-	// ctaSubLabel is shown under the CTA only on the selected card — used by
-	// PlanChangePanel to surface inline proration without a separate strip.
-	ctaSubLabel?: string;
 }
 
 export function PlanCard({

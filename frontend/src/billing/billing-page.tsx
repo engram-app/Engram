@@ -74,6 +74,82 @@ interface BillingPageProps {
 	onCheckoutActiveChange?: (active: boolean) => void;
 }
 
+function SlowActivationBanner({
+	transactionId,
+	onRefresh,
+}: {
+	transactionId: string | null;
+	onRefresh: () => void;
+}) {
+	return (
+		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
+			<p className="font-medium text-foreground">
+				Payment received. We're finishing your activation in the background.
+			</p>
+			<p className="mt-1 text-muted-foreground">
+				This usually takes seconds. Refresh in a moment, or contact support if it persists.
+			</p>
+			<div className="mt-3 flex flex-wrap gap-2">
+				<Button size="sm" onClick={onRefresh}>
+					Refresh
+				</Button>
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={() => {
+						const subject = encodeURIComponent("Activation taking too long");
+						const body = encodeURIComponent(
+							`Hi — my payment went through but my account hasn't activated.\n\nReference: ${transactionId ?? "n/a"}`,
+						);
+						window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`;
+					}}
+				>
+					Contact support
+				</Button>
+			</div>
+			{transactionId ? (
+				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
+			) : null}
+		</div>
+	);
+}
+
+// Skeleton placeholder that matches the post-load layout so the page does
+// not jump when billing status + Paddle init resolve. Shape: optional
+// heading, cadence toggle row, two cards in the same grid as the real cards.
+function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
+	return (
+		<article className="space-y-6" aria-busy="true" aria-label="Loading billing">
+			{!hideHeading && (
+				<header className="space-y-2">
+					<Skeleton className="h-6 w-32" />
+					<Skeleton className="h-4 w-64" />
+				</header>
+			)}
+			<section className="space-y-4">
+				<Skeleton className="h-9 w-48" />
+				<ul className="grid items-stretch gap-4 sm:grid-cols-2">
+					{[0, 1].map((i) => (
+						<li key={i} className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6">
+							<Skeleton className="h-6 w-24" />
+							<Skeleton className="h-9 w-32" />
+							<Skeleton className="h-3 w-40" />
+							<ul className="space-y-2 pt-2">
+								{[0, 1, 2, 3].map((j) => (
+									<li key={j}>
+										<Skeleton className="h-4 w-full" />
+									</li>
+								))}
+							</ul>
+							<Skeleton className="mt-2 h-10 w-full" />
+						</li>
+					))}
+				</ul>
+			</section>
+		</article>
+	);
+}
+
 export default function BillingPage({
 	hideHeading = false,
 	onActivated,
@@ -632,82 +708,6 @@ export default function BillingPage({
 					</div>
 				</>
 			)}
-		</article>
-	);
-}
-
-function SlowActivationBanner({
-	transactionId,
-	onRefresh,
-}: {
-	transactionId: string | null;
-	onRefresh: () => void;
-}) {
-	return (
-		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
-			<p className="font-medium text-foreground">
-				Payment received. We're finishing your activation in the background.
-			</p>
-			<p className="mt-1 text-muted-foreground">
-				This usually takes seconds. Refresh in a moment, or contact support if it persists.
-			</p>
-			<div className="mt-3 flex flex-wrap gap-2">
-				<Button size="sm" onClick={onRefresh}>
-					Refresh
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					onClick={() => {
-						const subject = encodeURIComponent("Activation taking too long");
-						const body = encodeURIComponent(
-							`Hi — my payment went through but my account hasn't activated.\n\nReference: ${transactionId ?? "n/a"}`,
-						);
-						window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`;
-					}}
-				>
-					Contact support
-				</Button>
-			</div>
-			{transactionId ? (
-				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
-			) : null}
-		</div>
-	);
-}
-
-// Skeleton placeholder that matches the post-load layout so the page does
-// not jump when billing status + Paddle init resolve. Shape: optional
-// heading, cadence toggle row, two cards in the same grid as the real cards.
-function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
-	return (
-		<article className="space-y-6" aria-busy="true" aria-label="Loading billing">
-			{!hideHeading && (
-				<header className="space-y-2">
-					<Skeleton className="h-6 w-32" />
-					<Skeleton className="h-4 w-64" />
-				</header>
-			)}
-			<section className="space-y-4">
-				<Skeleton className="h-9 w-48" />
-				<ul className="grid items-stretch gap-4 sm:grid-cols-2">
-					{[0, 1].map((i) => (
-						<li key={i} className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6">
-							<Skeleton className="h-6 w-24" />
-							<Skeleton className="h-9 w-32" />
-							<Skeleton className="h-3 w-40" />
-							<ul className="space-y-2 pt-2">
-								{[0, 1, 2, 3].map((j) => (
-									<li key={j}>
-										<Skeleton className="h-4 w-full" />
-									</li>
-								))}
-							</ul>
-							<Skeleton className="mt-2 h-10 w-full" />
-						</li>
-					))}
-				</ul>
-			</section>
 		</article>
 	);
 }

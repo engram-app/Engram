@@ -9,17 +9,6 @@ import { formatDate, formatMoney } from "@/lib/paddle-format";
 import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
-/** Props for the `PlanChangeBreakdown` component. */
-export interface PlanChangeBreakdownProps {
-	breakdown?: PlanChangeBreakdownData;
-	/**
-	 * Payment collection mode. From `subscription.collection_mode`.
-	 * Affects section titles: "Charged Today" vs "Invoice Created" for immediate transactions.
-	 */
-	collectionMode?: "automatic" | "manual";
-	className?: string;
-}
-
 const SECTION_TITLES: Record<
 	"immediate" | "next" | "recurring",
 	{ automatic: string; manual: string }
@@ -128,6 +117,114 @@ function TransactionSection({
 			</dl>
 		</div>
 	);
+}
+
+function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
+	return (
+		<Card className={cn("flex flex-col", className)}>
+			<CardHeader>
+				<Skeleton className="h-4 w-32" />
+				<Skeleton className="h-3 w-56" />
+			</CardHeader>
+			<CardContent className="flex flex-col gap-6">
+				<div className="flex items-center justify-between rounded-lg bg-muted p-4">
+					<div className="flex items-center gap-2">
+						<Skeleton className="h-5 w-5 rounded" />
+						<Skeleton className="h-4 w-28" />
+					</div>
+					<Skeleton className="h-6 w-16" />
+				</div>
+
+				<div className="space-y-2">
+					<div className="flex justify-between gap-4">
+						<Skeleton className="h-3 w-36" />
+						<Skeleton className="h-3 w-16" />
+					</div>
+					<div className="flex justify-between gap-4">
+						<Skeleton className="h-3 w-32" />
+						<Skeleton className="h-3 w-16" />
+					</div>
+				</div>
+
+				<Separator />
+
+				<div className="space-y-3">
+					<div className="space-y-1">
+						<Skeleton className="h-4 w-24" />
+						<Skeleton className="h-3 w-48" />
+					</div>
+					<div className="space-y-2">
+						<div className="flex justify-between gap-4">
+							<div className="space-y-1">
+								<Skeleton className="h-4 w-20" />
+								<Skeleton className="h-3 w-16" />
+							</div>
+							<Skeleton className="h-4 w-14" />
+						</div>
+					</div>
+					<Separator />
+					<div className="space-y-1.5">
+						<div className="flex justify-between gap-4">
+							<Skeleton className="h-3 w-16" />
+							<Skeleton className="h-3 w-14" />
+						</div>
+						<div className="flex justify-between gap-4">
+							<Skeleton className="h-3 w-8" />
+							<Skeleton className="h-3 w-10" />
+						</div>
+						<div className="flex justify-between gap-4 border-t pt-1.5">
+							<Skeleton className="h-4 w-12" />
+							<Skeleton className="h-4 w-14" />
+						</div>
+					</div>
+				</div>
+
+				<Separator />
+
+				<div className="space-y-3">
+					<div className="space-y-1">
+						<Skeleton className="h-4 w-28" />
+						<Skeleton className="h-3 w-52" />
+					</div>
+					<div className="space-y-2">
+						<div className="flex justify-between gap-4">
+							<div className="space-y-1">
+								<Skeleton className="h-4 w-20" />
+								<Skeleton className="h-3 w-16" />
+							</div>
+							<Skeleton className="h-4 w-14" />
+						</div>
+					</div>
+					<Separator />
+					<div className="space-y-1.5">
+						<div className="flex justify-between gap-4">
+							<Skeleton className="h-3 w-16" />
+							<Skeleton className="h-3 w-14" />
+						</div>
+						<div className="flex justify-between gap-4">
+							<Skeleton className="h-3 w-8" />
+							<Skeleton className="h-3 w-10" />
+						</div>
+						<div className="flex justify-between gap-4 border-t pt-1.5">
+							<Skeleton className="h-4 w-12" />
+							<Skeleton className="h-4 w-14" />
+						</div>
+					</div>
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
+/** Props for the `PlanChangeBreakdown` component. */
+export interface PlanChangeBreakdownProps {
+	breakdown?: PlanChangeBreakdownData;
+	/**
+	 * Payment collection mode. From `subscription.collection_mode`.
+	 * Affects section titles: "Charged Today" vs "Invoice Created" for immediate transactions.
+	 */
+	collectionMode?: "automatic" | "manual";
+	className?: string;
 }
 
 export function PlanChangeBreakdown({
@@ -248,103 +345,6 @@ export function PlanChangeBreakdown({
 						/>
 					</>
 				) : null}
-			</CardContent>
-		</Card>
-	);
-}
-
-function PlanChangeBreakdownSkeleton({ className }: { className?: string }) {
-	return (
-		<Card className={cn("flex flex-col", className)}>
-			<CardHeader>
-				<Skeleton className="h-4 w-32" />
-				<Skeleton className="h-3 w-56" />
-			</CardHeader>
-			<CardContent className="flex flex-col gap-6">
-				<div className="flex items-center justify-between rounded-lg bg-muted p-4">
-					<div className="flex items-center gap-2">
-						<Skeleton className="h-5 w-5 rounded" />
-						<Skeleton className="h-4 w-28" />
-					</div>
-					<Skeleton className="h-6 w-16" />
-				</div>
-
-				<div className="space-y-2">
-					<div className="flex justify-between gap-4">
-						<Skeleton className="h-3 w-36" />
-						<Skeleton className="h-3 w-16" />
-					</div>
-					<div className="flex justify-between gap-4">
-						<Skeleton className="h-3 w-32" />
-						<Skeleton className="h-3 w-16" />
-					</div>
-				</div>
-
-				<Separator />
-
-				<div className="space-y-3">
-					<div className="space-y-1">
-						<Skeleton className="h-4 w-24" />
-						<Skeleton className="h-3 w-48" />
-					</div>
-					<div className="space-y-2">
-						<div className="flex justify-between gap-4">
-							<div className="space-y-1">
-								<Skeleton className="h-4 w-20" />
-								<Skeleton className="h-3 w-16" />
-							</div>
-							<Skeleton className="h-4 w-14" />
-						</div>
-					</div>
-					<Separator />
-					<div className="space-y-1.5">
-						<div className="flex justify-between gap-4">
-							<Skeleton className="h-3 w-16" />
-							<Skeleton className="h-3 w-14" />
-						</div>
-						<div className="flex justify-between gap-4">
-							<Skeleton className="h-3 w-8" />
-							<Skeleton className="h-3 w-10" />
-						</div>
-						<div className="flex justify-between gap-4 border-t pt-1.5">
-							<Skeleton className="h-4 w-12" />
-							<Skeleton className="h-4 w-14" />
-						</div>
-					</div>
-				</div>
-
-				<Separator />
-
-				<div className="space-y-3">
-					<div className="space-y-1">
-						<Skeleton className="h-4 w-28" />
-						<Skeleton className="h-3 w-52" />
-					</div>
-					<div className="space-y-2">
-						<div className="flex justify-between gap-4">
-							<div className="space-y-1">
-								<Skeleton className="h-4 w-20" />
-								<Skeleton className="h-3 w-16" />
-							</div>
-							<Skeleton className="h-4 w-14" />
-						</div>
-					</div>
-					<Separator />
-					<div className="space-y-1.5">
-						<div className="flex justify-between gap-4">
-							<Skeleton className="h-3 w-16" />
-							<Skeleton className="h-3 w-14" />
-						</div>
-						<div className="flex justify-between gap-4">
-							<Skeleton className="h-3 w-8" />
-							<Skeleton className="h-3 w-10" />
-						</div>
-						<div className="flex justify-between gap-4 border-t pt-1.5">
-							<Skeleton className="h-4 w-12" />
-							<Skeleton className="h-4 w-14" />
-						</div>
-					</div>
-				</div>
 			</CardContent>
 		</Card>
 	);

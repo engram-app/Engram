@@ -52,146 +52,6 @@ interface PendingRevoke {
 	onConfirm: () => Promise<unknown>;
 }
 
-export default function ConnectionsPage() {
-	const { data: connections, isLoading, error } = useConnections();
-	const caps = useTierCaps();
-	const revokeOauth = useRevokeOauthConnection();
-	const revokeDevice = useRevokeDeviceConnection();
-	const revokePat = useRevokePat();
-	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
-
-	if (isLoading) {
-		return <p className="text-muted-foreground text-sm">Loading…</p>;
-	}
-	if (error) {
-		return (
-			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm">
-				Failed to load: {error instanceof Error ? error.message : "unknown error"}
-			</p>
-		);
-	}
-
-	const list = connections ?? [];
-	const obs = list.filter((c) => c.kind === "obsidian");
-	const mcp = list.filter((c) => c.kind === "mcp");
-	const pats = list.filter((c) => c.kind === "pat");
-
-	const obsCount =
-		caps.obsidianCap == null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap == null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
-
-	return (
-		<article className="space-y-8">
-			<header>
-				<h1 className="font-semibold text-foreground text-xl">Connections</h1>
-				<p className="mt-1 text-muted-foreground text-sm">
-					Manage what's connected to your Engram account.
-				</p>
-				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
-					<a
-						href="https://engram.page/docs/integrations/"
-						target="_blank"
-						rel="noreferrer"
-						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
-					>
-						<p className="font-medium text-foreground text-sm group-hover:text-primary">
-							AI integrations →
-						</p>
-						<p className="mt-0.5 text-muted-foreground text-xs">
-							Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps that support
-							custom integrations.
-						</p>
-					</a>
-					<a
-						href="https://engram.page/docs/mcp/"
-						target="_blank"
-						rel="noreferrer"
-						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
-					>
-						<p className="font-medium text-foreground text-sm group-hover:text-primary">
-							MCP protocol →
-						</p>
-						<p className="mt-0.5 text-muted-foreground text-xs">
-							Connect Engram anywhere that supports MCP.
-						</p>
-					</a>
-				</nav>
-			</header>
-
-			<SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
-				{obs.length === 0 ? (
-					<EmptyState text="Install the Engram Vault Sync plugin in Obsidian to connect this vault." />
-				) : (
-					<ul className="space-y-3">
-						{obs.map((c) => (
-							<li key={`${c.kind}-${c.client_id}`}>
-								<ConnectionCard
-									connection={c}
-									onRevoke={() =>
-										setPendingRevoke({
-											name: c.name ?? "this connection",
-											description: "The plugin will lose access to your vault.",
-											// Obsidian uses device-flow exclusively today; route all
-											// Obsidian revocations through the device endpoint. When
-											// MCP-style Obsidian clients ship we will need a
-											// discriminator field from the backend.
-											onConfirm: () => revokeDevice.mutateAsync(c.client_id!),
-										})
-									}
-								/>
-							</li>
-						))}
-					</ul>
-				)}
-			</SettingsSectionCard>
-
-			<SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
-				{mcp.length === 0 ? (
-					<EmptyState text="Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool." />
-				) : (
-					<ul className="space-y-3">
-						{mcp.map((c) => (
-							<li key={`${c.kind}-${c.client_id}`}>
-								<ConnectionCard
-									connection={c}
-									onRevoke={() =>
-										setPendingRevoke({
-											name: c.name ?? "this connection",
-											description: "This client will lose access to your account.",
-											onConfirm: () => revokeOauth.mutateAsync(c.client_id!),
-										})
-									}
-								/>
-							</li>
-						))}
-					</ul>
-				)}
-			</SettingsSectionCard>
-
-			<PatSection
-				pats={pats}
-				canCreate={caps.apiWriteEnabled}
-				onRevoke={(p) =>
-					setPendingRevoke({
-						name: p.name ?? "this key",
-						description: "This API key will stop working immediately and cannot be restored.",
-						onConfirm: () => revokePat.mutateAsync(p.key_id!),
-					})
-				}
-			/>
-
-			{pendingRevoke ? (
-				<ConfirmRevokeModal
-					name={pendingRevoke.name}
-					description={pendingRevoke.description}
-					onConfirm={pendingRevoke.onConfirm}
-					onClose={() => setPendingRevoke(null)}
-				/>
-			) : null}
-		</article>
-	);
-}
-
 // ── ConnectionCard ────────────────────────────────────────────
 
 function ConnectionCard({
@@ -722,4 +582,144 @@ function formatDate(iso: string): string {
 		month: "short",
 		day: "numeric",
 	});
+}
+
+export default function ConnectionsPage() {
+	const { data: connections, isLoading, error } = useConnections();
+	const caps = useTierCaps();
+	const revokeOauth = useRevokeOauthConnection();
+	const revokeDevice = useRevokeDeviceConnection();
+	const revokePat = useRevokePat();
+	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
+
+	if (isLoading) {
+		return <p className="text-muted-foreground text-sm">Loading…</p>;
+	}
+	if (error) {
+		return (
+			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm">
+				Failed to load: {error instanceof Error ? error.message : "unknown error"}
+			</p>
+		);
+	}
+
+	const list = connections ?? [];
+	const obs = list.filter((c) => c.kind === "obsidian");
+	const mcp = list.filter((c) => c.kind === "mcp");
+	const pats = list.filter((c) => c.kind === "pat");
+
+	const obsCount =
+		caps.obsidianCap == null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
+	const mcpCount = caps.mcpCap == null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
+
+	return (
+		<article className="space-y-8">
+			<header>
+				<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+				<p className="mt-1 text-muted-foreground text-sm">
+					Manage what's connected to your Engram account.
+				</p>
+				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
+					<a
+						href="https://engram.page/docs/integrations/"
+						target="_blank"
+						rel="noreferrer"
+						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
+					>
+						<p className="font-medium text-foreground text-sm group-hover:text-primary">
+							AI integrations →
+						</p>
+						<p className="mt-0.5 text-muted-foreground text-xs">
+							Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps that support
+							custom integrations.
+						</p>
+					</a>
+					<a
+						href="https://engram.page/docs/mcp/"
+						target="_blank"
+						rel="noreferrer"
+						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
+					>
+						<p className="font-medium text-foreground text-sm group-hover:text-primary">
+							MCP protocol →
+						</p>
+						<p className="mt-0.5 text-muted-foreground text-xs">
+							Connect Engram anywhere that supports MCP.
+						</p>
+					</a>
+				</nav>
+			</header>
+
+			<SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
+				{obs.length === 0 ? (
+					<EmptyState text="Install the Engram Vault Sync plugin in Obsidian to connect this vault." />
+				) : (
+					<ul className="space-y-3">
+						{obs.map((c) => (
+							<li key={`${c.kind}-${c.client_id}`}>
+								<ConnectionCard
+									connection={c}
+									onRevoke={() =>
+										setPendingRevoke({
+											name: c.name ?? "this connection",
+											description: "The plugin will lose access to your vault.",
+											// Obsidian uses device-flow exclusively today; route all
+											// Obsidian revocations through the device endpoint. When
+											// MCP-style Obsidian clients ship we will need a
+											// discriminator field from the backend.
+											onConfirm: () => revokeDevice.mutateAsync(c.client_id!),
+										})
+									}
+								/>
+							</li>
+						))}
+					</ul>
+				)}
+			</SettingsSectionCard>
+
+			<SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
+				{mcp.length === 0 ? (
+					<EmptyState text="Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool." />
+				) : (
+					<ul className="space-y-3">
+						{mcp.map((c) => (
+							<li key={`${c.kind}-${c.client_id}`}>
+								<ConnectionCard
+									connection={c}
+									onRevoke={() =>
+										setPendingRevoke({
+											name: c.name ?? "this connection",
+											description: "This client will lose access to your account.",
+											onConfirm: () => revokeOauth.mutateAsync(c.client_id!),
+										})
+									}
+								/>
+							</li>
+						))}
+					</ul>
+				)}
+			</SettingsSectionCard>
+
+			<PatSection
+				pats={pats}
+				canCreate={caps.apiWriteEnabled}
+				onRevoke={(p) =>
+					setPendingRevoke({
+						name: p.name ?? "this key",
+						description: "This API key will stop working immediately and cannot be restored.",
+						onConfirm: () => revokePat.mutateAsync(p.key_id!),
+					})
+				}
+			/>
+
+			{pendingRevoke ? (
+				<ConfirmRevokeModal
+					name={pendingRevoke.name}
+					description={pendingRevoke.description}
+					onConfirm={pendingRevoke.onConfirm}
+					onClose={() => setPendingRevoke(null)}
+				/>
+			) : null}
+		</article>
+	);
 }

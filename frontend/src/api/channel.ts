@@ -13,53 +13,12 @@ import {
 import { getWsBase, joinWsUrl } from "./base";
 import { ROOT_FOLDER_ID } from "./queries";
 
-export const RECONNECT_JITTER_DEFAULT_MS = 5000;
-export const RECONNECT_JITTER_MAX_MS = 60_000;
-
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
 // freshly-booted node isn't stampeded.
 const PHX_RECONNECT_STEPS = [10, 50, 100, 150, 200, 250, 500, 1000, 2000];
 
 let serverJitterMs: number | null = null;
-
-export function clampReconnectJitter(raw: unknown): number | null {
-	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-		return null;
-	}
-	return Math.min(raw, RECONNECT_JITTER_MAX_MS);
-}
-
-export function computeReconnectMs(
-	tries: number,
-	jitterMaxMs: number | null,
-	rng: () => number = Math.random,
-): number {
-	if (tries <= 1) {
-		return rng() * (jitterMaxMs ?? RECONNECT_JITTER_DEFAULT_MS);
-	}
-	return PHX_RECONNECT_STEPS[tries - 1] ?? 5000;
-}
-
-/** Cache the server-advertised jitter window from the sync join reply.
- *  Clamped + validated so a malformed/hostile payload can't make the client
- *  hang or hammer. Non-positive windows (including 0) are rejected, forcing
- *  the client to fall back to the default floor rather than disabling jitter. */
-export function captureServerJitter(resp: unknown): void {
-	const raw = (resp as { reconnect_jitter_max_ms?: unknown })?.reconnect_jitter_max_ms;
-	const clamped = clampReconnectJitter(raw);
-	if (clamped !== null) {
-		serverJitterMs = clamped;
-	}
-}
-
-/** Test seams. */
-export function __getServerJitterMs(): number | null {
-	return serverJitterMs;
-}
-export function __resetServerJitterMs(): void {
-	serverJitterMs = null;
-}
 
 let socket: Socket | null = null;
 let channel: Channel | null = null;
@@ -71,22 +30,6 @@ interface ConnectOptions {
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
 	onSocketOpen?: () => void;
-}
-
-export interface NoteChangedPayload {
-	event_type: string;
-	path: string;
-	vault_id: string;
-	// Present since backend change_json adds note id. Always invalidate by id
-	// when available — useNote keys by id since the URL-by-id refactor.
-	id?: string;
-	content?: string;
-	title?: string;
-	folder?: string;
-	tags?: string[];
-	mtime?: number;
-	updated_at?: string;
-	version?: number;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -148,6 +91,63 @@ function flushBatch(batch: PendingBatch): void {
 	if (broadById) {
 		queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
 	}
+}
+
+export const RECONNECT_JITTER_DEFAULT_MS = 5000;
+export const RECONNECT_JITTER_MAX_MS = 60_000;
+
+export function clampReconnectJitter(raw: unknown): number | null {
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+		return null;
+	}
+	return Math.min(raw, RECONNECT_JITTER_MAX_MS);
+}
+
+export function computeReconnectMs(
+	tries: number,
+	jitterMaxMs: number | null,
+	rng: () => number = Math.random,
+): number {
+	if (tries <= 1) {
+		return rng() * (jitterMaxMs ?? RECONNECT_JITTER_DEFAULT_MS);
+	}
+	return PHX_RECONNECT_STEPS[tries - 1] ?? 5000;
+}
+
+/** Cache the server-advertised jitter window from the sync join reply.
+ *  Clamped + validated so a malformed/hostile payload can't make the client
+ *  hang or hammer. Non-positive windows (including 0) are rejected, forcing
+ *  the client to fall back to the default floor rather than disabling jitter. */
+export function captureServerJitter(resp: unknown): void {
+	const raw = (resp as { reconnect_jitter_max_ms?: unknown })?.reconnect_jitter_max_ms;
+	const clamped = clampReconnectJitter(raw);
+	if (clamped !== null) {
+		serverJitterMs = clamped;
+	}
+}
+
+/** Test seams. */
+export function __getServerJitterMs(): number | null {
+	return serverJitterMs;
+}
+export function __resetServerJitterMs(): void {
+	serverJitterMs = null;
+}
+
+export interface NoteChangedPayload {
+	event_type: string;
+	path: string;
+	vault_id: string;
+	// Present since backend change_json adds note id. Always invalidate by id
+	// when available — useNote keys by id since the URL-by-id refactor.
+	id?: string;
+	content?: string;
+	title?: string;
+	folder?: string;
+	tags?: string[];
+	mtime?: number;
+	updated_at?: string;
+	version?: number;
 }
 
 /** Test hook: drop any pending batch without flushing. */

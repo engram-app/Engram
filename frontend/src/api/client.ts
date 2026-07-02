@@ -5,42 +5,11 @@ import { getDeviceId } from "./device-id";
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null;
 
-export function setTokenGetter(getter: () => Promise<string | null>) {
-	tokenGetter = getter;
-}
-
 // Module-level upgrade handler — the UpgradeDialogProvider registers itself
 // on mount so the client (a plain module, no React) can fire the dialog when
 // the backend returns a 402 limit_exceeded. Kept as a setter (Option B) rather
 // than an event bus to stay simple and tree-shakeable.
 let upgradeHandler: ((reason: string) => void) | null = null;
-
-export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
-	upgradeHandler = fn;
-}
-
-export class ApiError extends Error {
-	constructor(
-		public status: number,
-		message: string,
-	) {
-		super(message);
-		this.name = "ApiError";
-	}
-}
-
-export class LimitExceededError extends Error {
-	readonly name = "LimitExceededError";
-	constructor(
-		public readonly reason: string,
-		public readonly limitKey: string | null,
-		public readonly limit: number | boolean | null,
-		public readonly current: number | null,
-		public readonly upgradeUrl: string | null,
-	) {
-		super(`Engram limit: ${reason}`);
-	}
-}
 
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = tokenGetter ? await tokenGetter() : null;
@@ -81,6 +50,37 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 	}
 
 	return response;
+}
+
+export function setTokenGetter(getter: () => Promise<string | null>) {
+	tokenGetter = getter;
+}
+
+export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
+	upgradeHandler = fn;
+}
+
+export class ApiError extends Error {
+	constructor(
+		public status: number,
+		message: string,
+	) {
+		super(message);
+		this.name = "ApiError";
+	}
+}
+
+export class LimitExceededError extends Error {
+	readonly name = "LimitExceededError";
+	constructor(
+		public readonly reason: string,
+		public readonly limitKey: string | null,
+		public readonly limit: number | boolean | null,
+		public readonly current: number | null,
+		public readonly upgradeUrl: string | null,
+	) {
+		super(`Engram limit: ${reason}`);
+	}
 }
 
 export const api = {

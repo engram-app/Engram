@@ -13,30 +13,6 @@ interface FieldProps {
 const inputCls =
 	"w-full rounded border border-border bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
-export function PropertyField({ type, value, onCommit, onFocusChange }: FieldProps) {
-	if (type === "checkbox") {
-		return (
-			<Checkbox
-				checked={Boolean(value)}
-				onCheckedChange={(c) => onCommit(c === true)}
-				aria-label="Toggle value"
-			/>
-		);
-	}
-	if (type === "list") {
-		return (
-			<ListField
-				value={Array.isArray(value) ? value.map(String) : []}
-				onCommit={onCommit}
-				onFocusChange={onFocusChange}
-			/>
-		);
-	}
-	return (
-		<ScalarField type={type} value={value} onCommit={onCommit} onFocusChange={onFocusChange} />
-	);
-}
-
 function ScalarField({ type, value, onCommit, onFocusChange }: FieldProps) {
 	const initial = value == null ? "" : String(value);
 	const [draft, setDraft] = useState(initial);
@@ -133,5 +109,29 @@ function ListField({ value, onCommit, onFocusChange }: ListFieldProps) {
 				}}
 			/>
 		</div>
+	);
+}
+
+export function PropertyField({ type, value, onCommit, onFocusChange }: FieldProps) {
+	if (type === "checkbox") {
+		return (
+			<Checkbox
+				checked={Boolean(value)}
+				onCheckedChange={(c) => onCommit(c === true)}
+				aria-label="Toggle value"
+			/>
+		);
+	}
+	if (type === "list") {
+		return (
+			<ListField
+				value={Array.isArray(value) ? value.map(String) : []}
+				onCommit={onCommit}
+				onFocusChange={onFocusChange}
+			/>
+		);
+	}
+	return (
+		<ScalarField type={type} value={value} onCommit={onCommit} onFocusChange={onFocusChange} />
 	);
 }

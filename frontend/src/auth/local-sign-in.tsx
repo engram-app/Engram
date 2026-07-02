@@ -20,6 +20,43 @@ function loginErrorMessage(code: string): string {
 	}
 }
 
+// Mode-aware sign-up prompt. While bootstrap is `undefined` we render an
+// invisible placeholder line of the same height — preserves layout and
+// avoids the default→correct copy flash on first paint. `null` means
+// Clerk / 404 / network error: fall back to the open-mode link.
+function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
+	if (bootstrap === undefined) {
+		return (
+			<p aria-hidden className="invisible text-center text-sm">
+				&nbsp;
+			</p>
+		);
+	}
+	const mode = bootstrap?.registration_mode;
+	if (mode === "invite_only") {
+		return (
+			<p className="text-center text-muted-foreground text-sm">
+				Sign-ups require an invite link. Contact your admin to request one.
+			</p>
+		);
+	}
+	if (mode === "closed") {
+		return (
+			<p className="text-center text-muted-foreground text-sm">
+				Sign-ups are closed on this instance.
+			</p>
+		);
+	}
+	return (
+		<p className="text-center text-muted-foreground text-sm">
+			Don't have an account?{" "}
+			<Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
+				Sign up
+			</Link>
+		</p>
+	);
+}
+
 export default function LocalSignIn() {
 	const { login, isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
@@ -110,42 +147,5 @@ export default function LocalSignIn() {
 				<SignUpFooter bootstrap={bootstrap} />
 			</form>
 		</AuthLayout>
-	);
-}
-
-// Mode-aware sign-up prompt. While bootstrap is `undefined` we render an
-// invisible placeholder line of the same height — preserves layout and
-// avoids the default→correct copy flash on first paint. `null` means
-// Clerk / 404 / network error: fall back to the open-mode link.
-function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
-	if (bootstrap === undefined) {
-		return (
-			<p aria-hidden className="invisible text-center text-sm">
-				&nbsp;
-			</p>
-		);
-	}
-	const mode = bootstrap?.registration_mode;
-	if (mode === "invite_only") {
-		return (
-			<p className="text-center text-muted-foreground text-sm">
-				Sign-ups require an invite link. Contact your admin to request one.
-			</p>
-		);
-	}
-	if (mode === "closed") {
-		return (
-			<p className="text-center text-muted-foreground text-sm">
-				Sign-ups are closed on this instance.
-			</p>
-		);
-	}
-	return (
-		<p className="text-center text-muted-foreground text-sm">
-			Don't have an account?{" "}
-			<Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
-				Sign up
-			</Link>
-		</p>
 	);
 }

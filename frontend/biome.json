@@ -135,8 +135,7 @@
 						"useAtIndex": "off",
 						"useComponentExportOnlyModules": "off",
 						"useConsistentMemberAccessibility": "off",
-						"useConsistentMethodSignatures": "off",
-						"useExportsLast": "off"
+						"useConsistentMethodSignatures": "off"
 					},
 					"suspicious": {
 						"noReactSpecificProps": "off",

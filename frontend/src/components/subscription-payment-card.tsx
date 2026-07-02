@@ -11,6 +11,59 @@ import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
 import { getPaymentMethodIcon } from "@/lib/payment-method-icons";
 import { cn } from "@/lib/utils";
 
+function PaymentInfoRow({
+	icon: Icon,
+	label,
+	children,
+}: {
+	icon: React.ElementType;
+	label: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<div className="flex items-start gap-3">
+			<div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
+				<Icon className="size-4 text-muted-foreground" />
+			</div>
+			<div className="min-w-0">
+				<div className="text-muted-foreground text-sm">{label}</div>
+				{children}
+			</div>
+		</div>
+	);
+}
+
+function SubscriptionPaymentCardSkeleton({ className }: { className?: string }) {
+	return (
+		<Card className={cn("gap-4", className)}>
+			<CardHeader>
+				<Skeleton className="h-4 w-20" />
+			</CardHeader>
+			<CardContent className="flex flex-col gap-4">
+				<div className="flex items-start gap-3">
+					<Skeleton className="size-8 shrink-0 rounded-md" />
+					<div className="space-y-1.5">
+						<Skeleton className="h-3 w-24" />
+						<Skeleton className="h-5 w-16" />
+						<Skeleton className="h-3 w-20" />
+					</div>
+				</div>
+				<Separator />
+				<div className="flex items-center justify-between gap-4">
+					<div className="flex items-center gap-3">
+						<Skeleton className="size-8 shrink-0 rounded-md" />
+						<div className="space-y-1.5">
+							<Skeleton className="h-3 w-28" />
+							<Skeleton className="h-4 w-20" />
+						</div>
+					</div>
+					<Skeleton className="h-4 w-14" />
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
 export interface SubscriptionPaymentCardProps {
 	/**
 	 * Next payment details. Absent when subscription is paused or canceled.
@@ -121,59 +174,6 @@ export function SubscriptionPaymentCard({
 						</a>
 					</>
 				)}
-			</CardContent>
-		</Card>
-	);
-}
-
-function PaymentInfoRow({
-	icon: Icon,
-	label,
-	children,
-}: {
-	icon: React.ElementType;
-	label: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="flex items-start gap-3">
-			<div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
-				<Icon className="size-4 text-muted-foreground" />
-			</div>
-			<div className="min-w-0">
-				<div className="text-muted-foreground text-sm">{label}</div>
-				{children}
-			</div>
-		</div>
-	);
-}
-
-function SubscriptionPaymentCardSkeleton({ className }: { className?: string }) {
-	return (
-		<Card className={cn("gap-4", className)}>
-			<CardHeader>
-				<Skeleton className="h-4 w-20" />
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4">
-				<div className="flex items-start gap-3">
-					<Skeleton className="size-8 shrink-0 rounded-md" />
-					<div className="space-y-1.5">
-						<Skeleton className="h-3 w-24" />
-						<Skeleton className="h-5 w-16" />
-						<Skeleton className="h-3 w-20" />
-					</div>
-				</div>
-				<Separator />
-				<div className="flex items-center justify-between gap-4">
-					<div className="flex items-center gap-3">
-						<Skeleton className="size-8 shrink-0 rounded-md" />
-						<div className="space-y-1.5">
-							<Skeleton className="h-3 w-28" />
-							<Skeleton className="h-4 w-20" />
-						</div>
-					</div>
-					<Skeleton className="h-4 w-14" />
-				</div>
 			</CardContent>
 		</Card>
 	);

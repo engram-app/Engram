@@ -3,16 +3,16 @@ import { useEffect } from "react";
 import { getWsBase, joinWsUrl } from "../api/base";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 
-export interface SubscriptionActivatedPayload {
-	tier: string;
-	status: string;
-	subscription_id: string;
-}
-
 interface Options {
 	userId: string | null | undefined;
 	enabled: boolean;
 	onActivated: (payload: SubscriptionActivatedPayload) => void;
+}
+
+export interface SubscriptionActivatedPayload {
+	tier: string;
+	status: string;
+	subscription_id: string;
 }
 
 /**

@@ -22,36 +22,6 @@ import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
-export interface SubscriptionStatusCardProps {
-	subscription?: SubscriptionStatusData;
-	/** Override the card title. Defaults to the first item's product name (single-item) or "Subscription" (multi-item). */
-	title?: string;
-	/** Position of the status badge: "inline" next to name, or "end" aligned to card end */
-	statusBadgePosition?: "inline" | "end";
-	/**
-	 * Called when the user clicks "Change plan".
-	 * Only rendered when status is not `paused` or `canceled` — paused
-	 * subscriptions must be resumed before items can be changed, and canceled
-	 * is a terminal state.
-	 */
-	onChangePlan?: () => void;
-	/**
-	 * Called when the user clicks "Update payment method".
-	 * Only rendered for automatically-collected subscriptions that are not
-	 * `paused` or `canceled` — manual subscriptions are invoice-based (no saved
-	 * payment method), paused subscriptions have no active billing, and canceled
-	 * is terminal.
-	 */
-	onUpdatePaymentMethod?: () => void;
-	/**
-	 * Called when the user clicks "Manage". Always rendered when provided —
-	 * the action is consumer-defined (portal link, modal, resubscribe flow, etc.)
-	 * and not restricted by Paddle subscription status.
-	 */
-	onManageSubscription?: () => void;
-	className?: string;
-}
-
 // --- Status badge ---
 
 type SubscriptionStatus = "active" | "canceled" | "past_due" | "paused" | "trialing";
@@ -172,7 +142,83 @@ function canShowUpdatePaymentMethod(
 	return status !== "canceled" && status !== "paused" && collectionMode !== "manual";
 }
 
+function SubscriptionStatusCardSkeleton({ className }: { className?: string }) {
+	return (
+		<Card className={cn("gap-4", className)}>
+			<CardHeader>
+				<div className="flex items-start justify-between gap-4">
+					<div className="flex-1 space-y-2">
+						<div className="flex items-center gap-2">
+							<Skeleton className="h-6 w-32" />
+							<Skeleton className="h-5 w-16" />
+						</div>
+						<Skeleton className="h-4 w-20" />
+					</div>
+					<Skeleton className="size-12 rounded-md" />
+				</div>
+			</CardHeader>
+			<CardContent className="space-y-3">
+				<div className="space-y-2">
+					<div className="flex items-center justify-between">
+						<div className="space-y-1">
+							<Skeleton className="h-4 w-24" />
+							<Skeleton className="h-4 w-16" />
+						</div>
+						<Skeleton className="h-4 w-16" />
+					</div>
+				</div>
+				<Separator />
+				<div className="space-y-1.5">
+					<div className="flex items-center justify-between">
+						<Skeleton className="h-4 w-12" />
+						<Skeleton className="h-4 w-20" />
+					</div>
+				</div>
+				<Separator />
+				<div className="flex items-center gap-4">
+					<Skeleton className="h-4 w-28" />
+					<Skeleton className="h-4 w-20" />
+				</div>
+				<div className="flex gap-2 pt-1">
+					<Skeleton className="h-8 w-24" />
+					<Skeleton className="h-8 w-20" />
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
 // --- Main component ---
+
+export interface SubscriptionStatusCardProps {
+	subscription?: SubscriptionStatusData;
+	/** Override the card title. Defaults to the first item's product name (single-item) or "Subscription" (multi-item). */
+	title?: string;
+	/** Position of the status badge: "inline" next to name, or "end" aligned to card end */
+	statusBadgePosition?: "inline" | "end";
+	/**
+	 * Called when the user clicks "Change plan".
+	 * Only rendered when status is not `paused` or `canceled` — paused
+	 * subscriptions must be resumed before items can be changed, and canceled
+	 * is a terminal state.
+	 */
+	onChangePlan?: () => void;
+	/**
+	 * Called when the user clicks "Update payment method".
+	 * Only rendered for automatically-collected subscriptions that are not
+	 * `paused` or `canceled` — manual subscriptions are invoice-based (no saved
+	 * payment method), paused subscriptions have no active billing, and canceled
+	 * is terminal.
+	 */
+	onUpdatePaymentMethod?: () => void;
+	/**
+	 * Called when the user clicks "Manage". Always rendered when provided —
+	 * the action is consumer-defined (portal link, modal, resubscribe flow, etc.)
+	 * and not restricted by Paddle subscription status.
+	 */
+	onManageSubscription?: () => void;
+	className?: string;
+}
 
 export function SubscriptionStatusCard({
 	subscription,
@@ -406,52 +452,6 @@ export function SubscriptionStatusCard({
 						)}
 					</div>
 				)}
-			</CardContent>
-		</Card>
-	);
-}
-
-function SubscriptionStatusCardSkeleton({ className }: { className?: string }) {
-	return (
-		<Card className={cn("gap-4", className)}>
-			<CardHeader>
-				<div className="flex items-start justify-between gap-4">
-					<div className="flex-1 space-y-2">
-						<div className="flex items-center gap-2">
-							<Skeleton className="h-6 w-32" />
-							<Skeleton className="h-5 w-16" />
-						</div>
-						<Skeleton className="h-4 w-20" />
-					</div>
-					<Skeleton className="size-12 rounded-md" />
-				</div>
-			</CardHeader>
-			<CardContent className="space-y-3">
-				<div className="space-y-2">
-					<div className="flex items-center justify-between">
-						<div className="space-y-1">
-							<Skeleton className="h-4 w-24" />
-							<Skeleton className="h-4 w-16" />
-						</div>
-						<Skeleton className="h-4 w-16" />
-					</div>
-				</div>
-				<Separator />
-				<div className="space-y-1.5">
-					<div className="flex items-center justify-between">
-						<Skeleton className="h-4 w-12" />
-						<Skeleton className="h-4 w-20" />
-					</div>
-				</div>
-				<Separator />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-4 w-28" />
-					<Skeleton className="h-4 w-20" />
-				</div>
-				<div className="flex gap-2 pt-1">
-					<Skeleton className="h-8 w-24" />
-					<Skeleton className="h-8 w-20" />
-				</div>
 			</CardContent>
 		</Card>
 	);

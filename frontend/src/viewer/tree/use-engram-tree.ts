@@ -51,14 +51,6 @@ type Data = LoaderItem;
  * covered separately by the QueryCache subscription below, so they don't need
  * to be fingerprinted here.
  */
-export function treeStructureKey(
-	folders: Pick<Folder, "id" | "count" | "parent_id">[],
-	sort: SortKey,
-): string {
-	const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ""}`).join("|");
-	return `${folderKey}::${sort}`;
-}
-
 function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
 	if (!attachments || attachments.length === 0) {
 		return "0";
@@ -72,6 +64,14 @@ function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
 		}
 	}
 	return `${attachments.length}:${max}`;
+}
+
+export function treeStructureKey(
+	folders: Pick<Folder, "id" | "count" | "parent_id">[],
+	sort: SortKey,
+): string {
+	const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ""}`).join("|");
+	return `${folderKey}::${sort}`;
 }
 
 export function useEngramTree(deps: Deps) {
