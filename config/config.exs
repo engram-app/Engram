@@ -86,6 +86,9 @@ config :engram, Oban,
        # Daily client_logs retention sweep (Engram#792 — the log sink was
        # unbounded at ~98% of the DB).
        {"15 4 * * *", Engram.Workers.ClientLogsPruner},
+       # Daily expired idempotency_keys sweep (#862) — expired rows read as
+       # :miss already; this reclaims the encrypted response-body storage.
+       {"45 4 * * *", Engram.Workers.IdempotencyPrune},
        # Cross-store orphan sweep — weekly safety net for failed
        # event-driven Qdrant/S3 deletes. Sun 05:00 UTC, off-peak.
        {"0 5 * * 0", Engram.Workers.OrphanSweep}

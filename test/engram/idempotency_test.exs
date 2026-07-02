@@ -1,53 +1,89 @@
 defmodule Engram.IdempotencyTest do
-  use ExUnit.Case, async: false
+  @moduledoc """
+  PG-backed idempotency store (#862). The previous ETS cache was node-local
+  (a retry routed to the other Fargate task re-executed the batch — the key
+  was defeated by the LB) and globally keyed (not user-scoped). Rows are
+  user-scoped, DEK-encrypted at rest (batch responses carry plaintext note
+  paths), and expire via the daily prune worker.
+  """
+  use Engram.DataCase, async: true
+
   alias Engram.Idempotency
 
   setup do
-    # Use a fresh table per test so we don't fight start_link/already_started across tests.
-    # The Idempotency GenServer is started in the supervision tree at app start
-    # for normal runs; in tests we want to verify the basic put/get behavior.
-    on_exit(fn ->
-      if :ets.whereis(:engram_idempotency) != :undefined,
-        do: :ets.delete_all_objects(:engram_idempotency)
-    end)
-
-    case Idempotency.start_link([]) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-    end
-
-    :ok
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    other = insert(:user)
+    {:ok, other} = Engram.Crypto.ensure_user_dek(other)
+    %{user: user, other: other}
   end
 
-  test "remember/2 stores; lookup/1 returns it" do
-    Idempotency.remember("key-1", %{status: 200, body: %{ok: true}})
-    assert {:ok, %{status: 200}} = Idempotency.lookup("key-1")
+  defp key, do: Ecto.UUID.generate()
+
+  test "remember/lookup round-trips through Postgres", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"results" => [%{"ok" => true}]}})
+
+    assert {:ok, %{status: 200, body: %{"results" => [%{"ok" => true}]}}} =
+             Idempotency.lookup(user, k)
   end
 
-  test "lookup/1 returns :miss for unknown keys" do
-    assert :miss = Idempotency.lookup("unknown")
+  test "lookup is user-scoped — another user cannot replay the key", %{
+    user: user,
+    other: other
+  } do
+    k = key()
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"secret" => true}})
+
+    assert :miss = Idempotency.lookup(other, k)
   end
 
-  test "expired entries return :miss" do
-    Idempotency.remember("key-2", %{status: 200, body: %{}}, ttl_ms: 0)
-    Process.sleep(5)
-    assert :miss = Idempotency.lookup("key-2")
+  test "unknown key misses", %{user: user} do
+    assert :miss = Idempotency.lookup(user, key())
   end
 
-  test "periodic sweep deletes expired rows from the table" do
-    # Entries cache full response bodies for batch endpoints; expired rows
-    # previously returned :miss but were never deleted — a certain (if
-    # slow) memory leak. Live entries must survive the sweep.
-    Idempotency.remember("dead-1", %{status: 200, body: %{big: "payload"}}, ttl_ms: 0)
-    Idempotency.remember("dead-2", %{status: 200, body: %{}}, ttl_ms: 0)
-    Idempotency.remember("alive", %{status: 200, body: %{}}, ttl_ms: 60_000)
-    Process.sleep(5)
+  test "expired entries miss", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    assert :miss = Idempotency.lookup(user, k)
+  end
 
-    send(Process.whereis(Idempotency), :sweep)
-    :sys.get_state(Idempotency)
+  test "response body is ciphertext at rest", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"path" => "Secret/plans.md"}})
 
-    assert :ets.lookup(:engram_idempotency, "dead-1") == []
-    assert :ets.lookup(:engram_idempotency, "dead-2") == []
-    assert [{"alive", _, _}] = :ets.lookup(:engram_idempotency, "alive")
+    {:ok, key_bin} = Ecto.UUID.dump(k)
+
+    %{rows: [[ciphertext]]} =
+      Repo.query!(
+        "SELECT response_ciphertext FROM idempotency_keys WHERE key = $1",
+        [key_bin]
+      )
+
+    refute ciphertext =~ "Secret/plans.md"
+    assert {:ok, %{body: %{"path" => "Secret/plans.md"}}} = Idempotency.lookup(user, k)
+  end
+
+  test "duplicate remember keeps the first response", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"attempt" => 1}})
+    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"attempt" => 2}})
+
+    assert {:ok, %{body: %{"attempt" => 1}}} = Idempotency.lookup(user, k)
+  end
+
+  test "prune_expired/0 deletes expired rows across users, keeps live ones", %{
+    user: user,
+    other: other
+  } do
+    dead_a = key()
+    dead_b = key()
+    alive = key()
+    :ok = Idempotency.remember(user, dead_a, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    :ok = Idempotency.remember(other, dead_b, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    :ok = Idempotency.remember(user, alive, %{status: 200, body: %{}})
+
+    assert {:ok, 2} = Idempotency.prune_expired()
+    assert {:ok, _} = Idempotency.lookup(user, alive)
   end
 end

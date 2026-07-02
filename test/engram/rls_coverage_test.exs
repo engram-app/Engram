@@ -11,9 +11,14 @@ defmodule Engram.RlsCoverageTest do
   # User-scoped tables that deliberately rely on application-layer `user_id`
   # filtering rather than a database RLS policy. Adding an entry here is a
   # conscious decision — prefer enabling RLS for anything holding tenant data.
+  # idempotency_keys: reads/writes always filter user_id app-side, the payload
+  # is DEK-encrypted + AAD-bound to (user_id, key) — cryptographic tenant
+  # isolation even on a scoping bug — and the daily prune worker needs cheap
+  # cross-tenant deletes (FORCE RLS would block the app-role sweep).
   @no_rls_allowlist ~w(
     account_exports
     client_logs
+    idempotency_keys
     client_origin_stats
     device_authorizations
     device_refresh_tokens

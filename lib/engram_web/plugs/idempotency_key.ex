@@ -24,7 +24,9 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
   end
 
   defp maybe_replay(conn, key) do
-    case Idempotency.lookup(key) do
+    # User-scoped: the key namespace is per authenticated user (Auth runs
+    # before this plug), so one tenant can never replay another's response.
+    case Idempotency.lookup(conn.assigns.current_user, key) do
       {:ok, %{status: status, body: body}} ->
         conn
         |> put_resp_content_type("application/json")
