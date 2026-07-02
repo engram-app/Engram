@@ -25,6 +25,10 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 	// leak between provider remounts (StrictMode, HMR, tests).
 	useEffect(() => {
 		setUpgradeHandler(showUpgrade);
+		// Warm the lazy dialog chunk off the critical path (module cache dedupes
+		// with the lazy() import) — a 402 on a slow connection should open the
+		// dialog immediately, not after a cold chunk round trip of dead air.
+		void import("./upgrade-required-dialog");
 		return () => setUpgradeHandler(null);
 	}, [showUpgrade]);
 

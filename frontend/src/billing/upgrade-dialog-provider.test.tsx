@@ -50,8 +50,10 @@ describe("UpgradeDialogProvider", () => {
 			</UpgradeDialogProvider>,
 		);
 		fireEvent.click(screen.getByText("show"));
-		// Radix Dialog provides only an X (sr-only "Close") to dismiss.
-		const dismiss = await screen.findByRole("button", { name: /close/iu });
+		// Radix Dialog provides only an X (sr-only "Close") to dismiss. Same 5s
+		// timeout as above: whichever test runs FIRST pays the cold transform of
+		// the lazy dialog chunk, so neither may assume a warm module cache.
+		const dismiss = await screen.findByRole("button", { name: /close/iu }, { timeout: 5000 });
 		fireEvent.click(dismiss);
 		await waitFor(() => expect(screen.queryByText(/note limit/iu)).not.toBeInTheDocument());
 	});
