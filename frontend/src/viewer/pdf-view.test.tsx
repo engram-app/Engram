@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { expect, it, vi } from "vitest";
+import PdfView from "./pdf-view";
 
 // pdf.js can't render in jsdom (canvas + worker), so stub react-pdf: Document
 // reports a fixed page count, Page renders a marker. This verifies PdfView's
@@ -21,8 +22,6 @@ vi.mock("react-pdf", () => ({
 		<div data-testid="pdf-page">page {pageNumber}</div>
 	),
 }));
-
-import PdfView from "./pdf-view";
 
 it("renders one Page per page reported by the document", async () => {
 	render(<PdfView url="blob:fake" filename="doc.pdf" />);

@@ -1,13 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AppearanceSection } from "./appearance-section";
 
 const setTheme = vi.fn();
 let theme = "system";
 vi.mock("@/theme/theme-provider", () => ({
 	useTheme: () => ({ theme, resolved: "dark", setTheme }),
 }));
-
-import { AppearanceSection } from "./appearance-section";
 
 describe("AppearanceSection", () => {
 	beforeEach(() => {

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PasswordSectionLocal } from "./password-section-local";
 
 const { logout, apiPost, navigate } = vi.hoisted(() => ({
 	logout: vi.fn().mockResolvedValue(undefined),
@@ -16,8 +17,6 @@ vi.mock("../../api/client", () => ({
 }));
 
 vi.mock("react-router", () => ({ useNavigate: () => navigate }));
-
-import { PasswordSectionLocal } from "./password-section-local";
 
 beforeEach(() => {
 	logout.mockReset().mockResolvedValue(undefined);

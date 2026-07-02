@@ -4,12 +4,6 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogOverlay } from "@/components/ui/dialog";
-
-// Keep this in sync with the duration-200 class on DialogPrimitive.Content
-// below — we hold the dialog mounted for one animation cycle after
-// onOpenChange(false) so Radix's exit transition plays before we navigate.
-const CLOSE_ANIMATION_MS = 200;
-
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
 	Sheet,
@@ -21,6 +15,11 @@ import {
 import { useMe } from "../api/queries";
 import { useConfig } from "../config-context";
 import { buildSettingsSections, type SettingsSection } from "./sections";
+
+// Keep this in sync with the duration-200 class on DialogPrimitive.Content
+// below — we hold the dialog mounted for one animation cycle after
+// onOpenChange(false) so Radix's exit transition plays before we navigate.
+const CLOSE_ANIMATION_MS = 200;
 
 function SettingsNavList({
 	sections,

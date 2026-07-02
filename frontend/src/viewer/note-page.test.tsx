@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import NotePage from "./note-page";
 
 const { openDoc, closeDoc, enroll } = vi.hoisted(() => ({
 	openDoc: vi.fn(),
@@ -24,8 +25,6 @@ vi.mock("react-router", () => ({ useParams: () => ({ id: "note-1" }) }));
 vi.mock("../layout/right-sidebar-context", () => ({
 	useRightSidebar: () => ({ setContent: () => {} }),
 }));
-
-import NotePage from "./note-page";
 
 const NOTE = {
 	id: "note-1",

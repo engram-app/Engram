@@ -5,6 +5,8 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider } from "../theme/theme-provider";
+// Import AFTER mocks so the hooks resolve against the mocked client.
+import OnboardBillingPage from "./onboard-billing-page";
 
 // Capture the Paddle eventCallback so the test can drive it (or refuse to).
 let capturedEventCallback: ((event: { name: string; data?: unknown }) => void) | undefined;
@@ -74,9 +76,6 @@ vi.mock("../api/client", () => ({
 	api: { get, post, patch, del },
 	setTokenGetter: vi.fn(),
 }));
-
-// Import AFTER mocks so the hooks resolve against the mocked client.
-import OnboardBillingPage from "./onboard-billing-page";
 
 const authAdapter: AuthAdapter = {
 	isLoaded: true,

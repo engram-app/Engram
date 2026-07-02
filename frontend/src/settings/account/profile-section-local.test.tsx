@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProfileSectionLocal } from "./profile-section-local";
 
 const { updateMutate } = vi.hoisted(() => ({
 	updateMutate: vi.fn(),
@@ -17,8 +18,6 @@ vi.mock("../../api/queries", () => ({
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn() },
 }));
-
-import { ProfileSectionLocal } from "./profile-section-local";
 
 function wrap(ui: React.ReactNode) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -2,6 +2,35 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { ApiError } from "./client";
+import {
+	type Folder,
+	type Note,
+	useAcceptTerms,
+	useAttachments,
+	useBatchDeleteAttachments,
+	useBatchDeleteFolders,
+	useBatchDeleteNotes,
+	useBatchMoveAttachments,
+	useBatchMoveFolders,
+	useBatchMoveNotes,
+	useCancelSubscription,
+	useConfirmPlanChange,
+	useCreateNote,
+	useDeleteFolder,
+	useDeleteNote,
+	useDuplicateNote,
+	useFolderNotesById,
+	useFolders,
+	useNote,
+	usePlanChangePreview,
+	useRenameAttachment,
+	useRenameFolder,
+	useRenameNote,
+	useReverseCancel,
+	useSearch,
+	useUploadAttachment,
+} from "./queries";
 
 vi.mock("sonner", () => ({
 	toast: {
@@ -37,36 +66,6 @@ vi.mock("./client", async () => {
 		setTokenGetter: vi.fn(),
 	};
 });
-
-import { ApiError } from "./client";
-import {
-	type Folder,
-	type Note,
-	useAcceptTerms,
-	useAttachments,
-	useBatchDeleteAttachments,
-	useBatchDeleteFolders,
-	useBatchDeleteNotes,
-	useBatchMoveAttachments,
-	useBatchMoveFolders,
-	useBatchMoveNotes,
-	useCancelSubscription,
-	useConfirmPlanChange,
-	useCreateNote,
-	useDeleteFolder,
-	useDeleteNote,
-	useDuplicateNote,
-	useFolderNotesById,
-	useFolders,
-	useNote,
-	usePlanChangePreview,
-	useRenameAttachment,
-	useRenameFolder,
-	useRenameNote,
-	useReverseCancel,
-	useSearch,
-	useUploadAttachment,
-} from "./queries";
 
 let qc: QueryClient;
 

@@ -1,3 +1,8 @@
+// CheckoutSettings from the SDK, widened to include "express" in the variant
+// union. The express variant is a valid Paddle.js variant not yet reflected in
+// the SDK's Variant type ('multi-page' | 'one-page').
+import type { CheckoutCustomer, CheckoutSettings as SDKCheckoutSettings } from "@paddle/paddle-js";
+
 export type {
 	CheckoutCustomer,
 	CheckoutEventsData,
@@ -12,10 +17,6 @@ export type {
 
 export { CheckoutEventNames } from "@paddle/paddle-js";
 
-// CheckoutSettings from the SDK, widened to include "express" in the variant
-// union. The express variant is a valid Paddle.js variant not yet reflected in
-// the SDK's Variant type ('multi-page' | 'one-page').
-import type { CheckoutCustomer, CheckoutSettings as SDKCheckoutSettings } from "@paddle/paddle-js";
 export type CheckoutSettings = Omit<SDKCheckoutSettings, "variant"> & {
 	variant?: SDKCheckoutSettings["variant"] | "express";
 };

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DangerZoneSectionLocal } from "./danger-zone-section-local";
 
 const { logout, deleteMutate, navigate } = vi.hoisted(() => ({
 	logout: vi.fn(),
@@ -14,8 +15,6 @@ vi.mock("react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("../../api/queries", () => ({
 	useDeleteSelf: () => ({ mutateAsync: deleteMutate, isPending: false }),
 }));
-
-import { DangerZoneSectionLocal } from "./danger-zone-section-local";
 
 beforeEach(() => {
 	logout.mockReset().mockResolvedValue(undefined);

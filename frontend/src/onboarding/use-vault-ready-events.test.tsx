@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
+import { useVaultReadyEvents } from "./use-vault-ready-events";
 
 const {
 	channelHandlers,
@@ -42,8 +43,6 @@ const {
 });
 
 vi.mock("phoenix", () => ({ Socket: socketCtor }));
-
-import { useVaultReadyEvents } from "./use-vault-ready-events";
 
 // getToken is the lynchpin: the hook's fire-and-forget connect() awaits it.
 // A getToken that rejects (or isn't a function) used to crash the vitest run

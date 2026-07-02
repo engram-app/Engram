@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it, vi } from "vitest";
+import { useOnboardingStatus } from "../api/queries";
 import OnboardLayout from "./onboard-layout";
 
 const logout = vi.fn();
@@ -16,8 +17,6 @@ vi.mock("../theme/theme-toggle", () => ({
 vi.mock("../api/queries", () => ({
 	useOnboardingStatus: vi.fn(),
 }));
-
-import { useOnboardingStatus } from "../api/queries";
 
 type Steps = ("agreement" | "billing" | "tools" | "vault")[];
 

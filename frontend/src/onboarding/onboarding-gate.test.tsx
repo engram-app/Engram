@@ -2,13 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it, vi } from "vitest";
+import { useAppBootstrap } from "../api/queries";
 import OnboardingGate from "./onboarding-gate";
 
 vi.mock("../api/queries", () => ({
 	useAppBootstrap: vi.fn(),
 }));
-
-import { useAppBootstrap } from "../api/queries";
 
 // The gate reads onboarding state out of the consolidated bootstrap payload, so
 // wrap each onboarding status under `data.onboarding`.
