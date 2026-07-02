@@ -1056,6 +1056,13 @@ jobs:
           # Add bun to PATH for E2E tests (already installed by plugin build)
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
+      # Harness unit tests (stack-free): e2e/unit has its own pytest rootdir
+      # so e2e/conftest.py (Obsidian/auth session fixtures) never loads.
+      # Guards helper logic like the Clerk session-create retry budget (#869).
+      - name: "Harness unit tests"
+        working-directory: e2e/unit
+        run: python3 -m pytest . -v --no-header -p no:cacheprovider
+
       # ------------------------------------------------------------------
       # Obsidian E2E tests
       # ------------------------------------------------------------------

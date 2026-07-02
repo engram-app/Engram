@@ -23,19 +23,22 @@ logger = logging.getLogger(__name__)
 # Observed window today (issue #193) is up to ~6s in degraded periods;
 # in normal operation it's sub-second.
 #
-# Strategy (revised after #193 reopened):
+# Strategy (revised again for #869):
 #   - create_user() blocks until POST /sessions stops 404'ing (readiness
 #     probe). Concentrates the wait at one site instead of every caller
 #     racing the propagation.
-#   - _create_session_with_retry stays as a defensive backstop for the
-#     unlikely case where someone reuses an old user_id mid-flight, but
-#     its budget is tight — readiness was already proven upstream.
+#   - _create_session_with_retry is the backstop — and it must be wall-clock
+#     budgeted, not attempt-capped: propagation is NON-monotonic. One probe
+#     success does not pin the user to every replica, so a later POST
+#     /sessions can 404 again for seconds (#869 hit this 4x in one day with
+#     the old ~3s / 5-attempt cap while the same commit passed on rerun).
 _SESSION_READY_MAX_WAIT_SECONDS = 60.0
 _SESSION_READY_INITIAL_BACKOFF = 0.5
 _SESSION_READY_MAX_BACKOFF = 8.0
 
-_SESSION_CREATE_MAX_ATTEMPTS = 5
+_SESSION_CREATE_MAX_WAIT_SECONDS = 30.0
 _SESSION_CREATE_INITIAL_BACKOFF = 0.2
+_SESSION_CREATE_MAX_BACKOFF = 4.0
 
 
 class ClerkPropagationTimeout(RuntimeError):
@@ -249,42 +252,43 @@ class ClerkClient:
         return token
 
     def _create_session_with_retry(self, user_id: str) -> str:
-        """POST /sessions with exponential-backoff retry on 404 resource_not_found.
+        """POST /sessions with capped-backoff retry on 404 resource_not_found.
 
-        Returns the session_id. Raises on non-404 errors immediately, or after
-        exhausting retries on persistent 404.
+        Wall-clock budgeted (_SESSION_CREATE_MAX_WAIT_SECONDS): Clerk's
+        propagation is non-monotonic, so the readiness probe in create_user
+        does not guarantee this call's replica has the user yet (#869).
+        Returns the session_id. Raises on non-404 errors immediately, or
+        once the budget is exhausted on persistent 404.
         """
+        deadline = time.monotonic() + _SESSION_CREATE_MAX_WAIT_SECONDS
         backoff = _SESSION_CREATE_INITIAL_BACKOFF
-        last_resp: requests.Response | None = None
-        for attempt in range(1, _SESSION_CREATE_MAX_ATTEMPTS + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             resp = self.session.post(
                 f"{self.base_url}/sessions",
                 json={"user_id": user_id},
                 timeout=10,
             )
-            last_resp = resp
             if resp.ok:
                 return resp.json()["id"]
             if resp.status_code == 404 and self._is_resource_not_found(resp):
-                if attempt < _SESSION_CREATE_MAX_ATTEMPTS:
+                if time.monotonic() + backoff <= deadline:
                     logger.warning(
-                        "Clerk create_session 404 for user %s (attempt %d/%d, sleeping %.2fs)",
-                        user_id, attempt, _SESSION_CREATE_MAX_ATTEMPTS, backoff,
+                        "Clerk create_session 404 for user %s (attempt %d, sleeping %.2fs, budget %.0fs)",
+                        user_id, attempt, backoff, _SESSION_CREATE_MAX_WAIT_SECONDS,
                     )
                     time.sleep(backoff)
-                    backoff *= 2
+                    backoff = min(backoff * 2, _SESSION_CREATE_MAX_BACKOFF)
                     continue
                 logger.error(
-                    "Clerk create_session 404 for user %s exhausted %d retries: %s",
-                    user_id, _SESSION_CREATE_MAX_ATTEMPTS, resp.text,
+                    "Clerk create_session 404 for user %s exhausted %.0fs budget (%d attempts): %s",
+                    user_id, _SESSION_CREATE_MAX_WAIT_SECONDS, attempt, resp.text,
                 )
             else:
                 logger.error("Clerk create_session failed: %s %s", resp.status_code, resp.text)
             resp.raise_for_status()
-        # Defensive — raise_for_status above should always raise on the final attempt.
-        assert last_resp is not None
-        last_resp.raise_for_status()
-        raise RuntimeError("unreachable")  # pragma: no cover
+            raise RuntimeError("unreachable")  # pragma: no cover
 
     @staticmethod
     def _is_resource_not_found(resp: requests.Response) -> bool:
