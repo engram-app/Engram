@@ -663,7 +663,11 @@ defmodule Engram.Notes do
                {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
             # Fold in updates logged since the last checkpoint. Runs inside the
             # caller's with_tenant txn — no nested tenant context needed.
-            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+            count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+
+            IO.puts(
+              "MERGE-DIAG replayed=#{count} snapshot=#{inspect(CrdtBridge.text_of(snapshot_doc))} tail_doc=#{inspect(CrdtBridge.text_of(tail_doc))} incoming=#{inspect(incoming_content)}"
+            )
 
             CrdtBridge.merge_plaintext_relative_to_snapshot(
               snapshot_doc,
