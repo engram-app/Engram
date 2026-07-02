@@ -214,6 +214,16 @@ dropped identifiers from your migration and greps `lib/` for them. If any
 reference survives, the gate fails. Fix it by going back and shipping the
 code removal in an earlier release first.
 
+## Data DML in migrations — FORCE RLS trap
+
+Raw `UPDATE`/`DELETE`/`INSERT` against a tenant table in a migration silently
+touches **zero rows on prod**: the migrator (`engram_admin`) owns the tables
+but has no BYPASSRLS, migrations set no `app.current_tenant`, and FORCE RLS
+binds owners too — dev/CI superusers mask it. Wrap the DML in
+`ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` / re-`FORCE` and add a
+fail-loud rowcount assertion. `migration_rls_lint_test.exs` enforces this;
+full pattern + rationale in `docs/context/migrations-force-rls-data-dml.md`.
+
 ## Forbidden in expand-phase migrations
 
 Squawk (run via `priv/repo/lint_migrations.sh`) already hard-fails on:
