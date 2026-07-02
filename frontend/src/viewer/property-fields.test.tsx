@@ -66,7 +66,7 @@ describe("PropertyField", () => {
 		render(<PropertyField type="datetime" value="2026-06-30T14:05:00Z" onCommit={onCommit} />);
 		// datetime-local input doesn't report textbox role; query by type
 		const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-		expect(input).toBeDefined();
+		expect(input).not.toBeNull();
 		fireEvent.focus(input);
 		fireEvent.blur(input);
 		expect(onCommit).toHaveBeenCalledWith("2026-06-30T14:05:00Z");

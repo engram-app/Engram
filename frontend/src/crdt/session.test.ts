@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	__isPathOpen,
 	closeDoc,
 	docPathFromDocId,
 	enroll,
@@ -179,6 +180,28 @@ describe("crdt session", () => {
 			expect(h2).not.toBeNull();
 			expect(h2?.awareness.doc).toBe(h2?.doc);
 			closeDoc("notes/b.md");
+		});
+
+		it("rapid close→reopen mid-load keeps the reopened doc's open marker", async () => {
+			// openDoc A is mid-load; closeDoc bumps the epoch + drops A's marker;
+			// openDoc B re-adds its OWN marker. When A resumes and bails on the
+			// epoch mismatch, it must NOT delete B's marker (that would strip B's
+			// flattenIfBloated open-editor protection).
+			startCrdtSession({ vaultId: "v1", push: () => {} });
+			const a = openDoc("notes/race.md"); // A: awaits the initial load
+			// Let A pass its FIRST guard (waitForSessionStart) and mark the path
+			// open, so it is suspended INSIDE getSharedText when we close. That is
+			// the interleaving that reaches openDoc's post-await abort path.
+			await Promise.resolve();
+			closeDoc("notes/race.md"); // bumps epoch, removes A's marker
+			const b = openDoc("notes/race.md"); // B: re-adds its own marker
+			const [hA, hB] = await Promise.all([a, b]);
+			expect(hA).toBeNull(); // A bailed on the epoch mismatch
+			expect(hB).not.toBeNull(); // B produced a working handle
+			// The marker B added must survive A's late abort path.
+			expect(__isPathOpen("notes/race.md")).toBe(true);
+			closeDoc("notes/race.md");
+			expect(__isPathOpen("notes/race.md")).toBe(false);
 		});
 
 		it("stopCrdtSession during in-flight openDoc yields null", async () => {

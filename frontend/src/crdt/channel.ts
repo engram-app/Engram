@@ -67,6 +67,9 @@ export class CrdtChannel {
 			return;
 		}
 		const doc = await this.mgr.getDoc(path);
+		if (!this.mgr.hasDoc(path)) {
+			return; // closed mid-load: never apply updates to a destroyed doc
+		}
 		try {
 			const decoder = decoding.createDecoder(bytes);
 			const messageType = decoding.readVarUint(decoder);

@@ -155,10 +155,10 @@ export async function openDoc(
 	s.openPaths.add(path);
 	const ytext = await s.manager.getSharedText(path);
 	if (session !== s || sessionGeneration !== gen || (docEpochs.get(path) ?? 0) !== epoch) {
-		// closeDoc/stop ran during the await: undo the partial open. closeDoc
-		// already destroyed the doc/awareness; just make sure we don't hold the
-		// open marker for a handle nobody received.
-		s.openPaths.delete(path);
+		// closeDoc/stop ran during the await. Do NOT delete the open marker: an
+		// epoch bump means closeDoc already removed it (or the session is dead),
+		// and a same-path reopen (openDoc B) may have re-added its OWN marker in
+		// between — deleting here would strip B's flattenIfBloated protection.
 		return null;
 	}
 	let awareness = s.awareness.get(path);
@@ -284,6 +284,11 @@ export function notifyCrdtChannelJoined(): void {
 /** Called by the transport layer when the CRDT Phoenix channel join fails. */
 export function notifyCrdtChannelError(): void {
 	setCrdtSyncStatus("error");
+}
+
+/** Test seam: is `path` currently tracked as open in the session? */
+export function __isPathOpen(path: string): boolean {
+	return session?.openPaths.has(path) ?? false;
 }
 
 export function docPathFromDocId(docId: string): string {

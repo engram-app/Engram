@@ -12,9 +12,9 @@ function deleteDb(name: string, attempt = 1): Promise<void> {
 			// onblocked fires when another connection (e.g. manager.destroy hasn't
 			// closed the IDB handle yet) is still open.  stopCrdtSession closes
 			// connections within milliseconds in the common case, so a short retry
-			// window closes the race.  We retry here so the caller does not need
-			// a second chance — the logout → login transition guard in the hook
-			// would skip a retry anyway.
+			// window closes the race.  This bounded blocked-retry is the ONLY
+			// retry: the caller (useWipeCrdtOnUserChange) fires once per identity
+			// change and does not retry, so the race must be resolved here.
 			if (attempt < BLOCKED_RETRY_ATTEMPTS) {
 				setTimeout(() => {
 					deleteDb(name, attempt + 1).then(resolve);

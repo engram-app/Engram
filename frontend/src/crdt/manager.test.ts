@@ -54,6 +54,23 @@ describe("CrdtManager", () => {
 		expect(sv.length).toBeGreaterThan(0);
 	});
 
+	it("entry() awaiter resumes when the doc is destroyed mid-load (no hang)", async () => {
+		// y-indexeddb never fires `synced` once destroy() runs, so a plain
+		// `whenSynced`-based ready promise would hang forever. entry() must race
+		// ready against a destroy signal so awaiters ALWAYS resume.
+		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		const p = m.getSharedText("hang.md"); // awaits entry().ready
+		// Close mid-load: destroys the doc + persistence before `synced` fires.
+		m.closeDoc("hang.md");
+		// The awaiter must resolve within a bounded time, not hang.
+		const guarded = Promise.race([
+			p.then(() => "resolved" as const),
+			new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 500)),
+		]);
+		await expect(guarded).resolves.toBe("resolved");
+		expect(m.hasDoc("hang.md")).toBe(false); // no ghost entry remains
+	});
+
 	it("flattenIfBloated on a non-live path is a no-op and does not create a doc", async () => {
 		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
 		await m.getDoc("notes/x.md");

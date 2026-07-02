@@ -140,7 +140,15 @@ export class CrdtManager {
 			}
 			this.opts.onUpdate(id, update, origin);
 		});
-		const ready: Promise<void> = persistence.whenSynced.then(() => undefined);
+		// y-indexeddb (9.0.12) never fires `synced` once destroy() runs, so a
+		// bare whenSynced would hang every awaiter if the doc is closed mid-load.
+		// Race it against the doc's "destroy" event (closeDoc/destroy call
+		// doc.destroy() before persistence.destroy()) so awaiters ALWAYS resume.
+		const destroyed = new Promise<void>((resolve) => doc.on("destroy", () => resolve()));
+		const ready: Promise<void> = Promise.race([
+			persistence.whenSynced.then(() => undefined),
+			destroyed,
+		]);
 		const entry: Entry = { doc, persistence, text, ready };
 		this.docs.set(id, entry);
 		await ready;
