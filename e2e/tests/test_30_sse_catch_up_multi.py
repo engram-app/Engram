@@ -7,6 +7,7 @@ the channel is down and verifies all are delivered on reconnect.
 """
 
 import asyncio
+import time
 
 import pytest
 
@@ -33,9 +34,14 @@ async def test_channel_catch_up_multi(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     assert not await cdp_b.check_stream_connected(), "B's channel should be disconnected"
 
     try:
-        # A creates 3 notes while B's channel is down
+        # A creates 3 notes while B's channel is down. The nonce keeps the
+        # content unique per attempt: on a flake RERUN the notes already exist
+        # server-side from attempt 1, and a byte-identical re-push
+        # short-circuits (no new seq, no broadcast) — so B's catch-up would
+        # legitimately have nothing new to deliver and the rerun always fails.
+        nonce = time.time()
         for i, path in enumerate(paths, 1):
-            write_note(vault_a, path, f"# Channel Catch Up {i}\nMissed while disconnected")
+            write_note(vault_a, path, f"# Channel Catch Up {i} ({nonce})\nMissed while disconnected")
 
         # Wait for all to reach server
         for path in paths:
