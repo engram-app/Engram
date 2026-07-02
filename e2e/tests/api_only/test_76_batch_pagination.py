@@ -94,13 +94,20 @@ class TestBatchUpsert:
         assert result["version"] == 1
         assert result["server_path"] == f"{PREFIX}/contract-check.md"
         assert isinstance(result["content_hash"], str) and result["content_hash"]
-        # Idempotent re-push of identical content bumps the version (update
-        # semantics match the single-note endpoint).
+        # Idempotent re-push of identical content short-circuits: no version
+        # bump, same hash (matches the single-note endpoint). A changed body
+        # is what bumps the version.
         body2 = _batch_push(
             api_sync,
             [{"path": f"{PREFIX}/contract-check.md", "content": "# C", "mtime": time.time()}],
         )
-        assert body2["results"][0]["version"] == 2
+        assert body2["results"][0]["version"] == 1
+        assert body2["results"][0]["content_hash"] == result["content_hash"]
+        body3 = _batch_push(
+            api_sync,
+            [{"path": f"{PREFIX}/contract-check.md", "content": "# C changed", "mtime": time.time()}],
+        )
+        assert body3["results"][0]["version"] == 2
         api_sync.delete_note(f"{PREFIX}/contract-check.md")
 
 
