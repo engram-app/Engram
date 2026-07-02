@@ -143,8 +143,7 @@
 						"noEmptyBlockStatements": "off",
 						"noShadow": "off",
 						"noSkippedTests": "off",
-						"noUnnecessaryConditions": "off",
-						"useAwait": "off"
+						"noUnnecessaryConditions": "off"
 					}
 				}
 			}
@@ -179,7 +178,7 @@
 						"noGlobalDirnameFilename": "off"
 					},
 					"style": { "noProcessEnv": "off" },
-					"suspicious": { "noConsole": "off", "noExplicitAny": "off" },
+					"suspicious": { "noConsole": "off", "noExplicitAny": "off", "useAwait": "off" },
 					"performance": { "noDelete": "off" },
 					"nursery": {
 						"noPlaywrightWaitForTimeout": "off",

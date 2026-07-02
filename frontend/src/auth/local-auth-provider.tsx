@@ -83,7 +83,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 			return accessToken;
 		}
 
-		return doRefresh();
+		return await doRefresh();
 	}, [accessToken, doRefresh]);
 
 	useEffect(() => {

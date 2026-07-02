@@ -36,6 +36,6 @@ export default {
 		// Defensive fallthrough: anything else that reaches the Worker is served
 		// from static assets. With the scoped `run_worker_first` this is only hit
 		// if the route list ever widens.
-		return env.ASSETS.fetch(request);
+		return await env.ASSETS.fetch(request);
 	},
 };
