@@ -474,7 +474,12 @@ defmodule EngramWeb.NotesController do
           end)
 
         body = %{results: merged}
-        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+          status: 200,
+          body: body
+        })
+
         json(conn, body)
 
       {:error, {:notes_cap_reached, limit, current}} ->
@@ -536,7 +541,13 @@ defmodule EngramWeb.NotesController do
         case Notes.batch_delete_notes(user, vault, ids) do
           {:ok, %{deleted: n}} ->
             body = %{deleted: n}
-            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+            Engram.Idempotency.remember(
+              conn.assigns.current_user,
+              conn.assigns.idempotency_key,
+              %{status: 200, body: body}
+            )
+
             broadcast_batch(user, vault, %{op: "delete", ids: ids})
             json(conn, body)
 
@@ -616,7 +627,12 @@ defmodule EngramWeb.NotesController do
     case result do
       {:ok, %{moved: n}} ->
         body = %{moved: n}
-        Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+          status: 200,
+          body: body
+        })
+
         broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
         json(conn, body)
 

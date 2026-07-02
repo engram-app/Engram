@@ -1,7 +1,7 @@
 defmodule Engram.Webhooks.IdempotencyTest do
-  # async: false — the underlying Engram.Idempotency is a process-wide ETS
-  # table, not sandboxed per test. Unique ids keep tests independent.
-  use ExUnit.Case, async: false
+  # PG-backed (#862): processed_webhook_events rows make dedup cross-node —
+  # a provider retry routed to the other node previously re-ran side effects.
+  use Engram.DataCase, async: true
 
   alias Engram.Webhooks.Idempotency
 

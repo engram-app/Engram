@@ -223,7 +223,13 @@ defmodule EngramWeb.AttachmentsController do
         case Attachments.batch_move(user, vault, paths, target) do
           {:ok, %{moved: n}} ->
             body = %{moved: n}
-            Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+            Engram.Idempotency.remember(
+              conn.assigns.current_user,
+              conn.assigns.idempotency_key,
+              %{status: 200, body: body}
+            )
+
             json(conn, body)
 
           {:error, {:conflict, p}} ->
@@ -266,7 +272,12 @@ defmodule EngramWeb.AttachmentsController do
     # batch_delete/3 is total — its @spec returns {:ok, %{deleted: _}} only.
     {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
     body = %{deleted: n}
-    Engram.Idempotency.remember(conn.assigns.idempotency_key, %{status: 200, body: body})
+
+    Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+      status: 200,
+      body: body
+    })
+
     json(conn, body)
   end
 
