@@ -64,8 +64,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
     text = CrdtBridge.text_of(doc)
 
-    IO.puts("CHECKPOINT-DIAG note=#{note_id} text=#{inspect(text)}")
-
     with {:ok, raw_state} <- encode(doc),
          {_flat_doc, state} <- maybe_flatten(doc, raw_state, note_id),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),

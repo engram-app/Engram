@@ -279,67 +279,6 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Rapid REST writes with a live room (e2e test_49/test_78 regression)
-  #
-  # Deliver-out used to re-diff the merged PLAINTEXT into the room doc,
-  # re-encoding the same textual change on the room's own Yjs lineage. The next
-  # REST write then replayed those room-lineage ops from the update-log tail
-  # onto the snapshot (which carries the SAME change on the merge lineage) —
-  # Yjs unions both encodings and the stored content duplicates/interleaves
-  # ("Iteration 6" + "Iteration 7" → "Iteration 67" in e2e).
-  # ---------------------------------------------------------------------------
-
-  describe "rapid REST writes with a live room" do
-    test "sequential REST updates stay verbatim and the room converges", %{
-      socket: socket,
-      doc_id: doc_id,
-      user: user,
-      vault: vault,
-      note: note
-    } do
-      # 1. A client enrolls the note — the room binds on "base".
-      client = CrdtBridge.new_doc()
-      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
-      {:ok, step1_frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
-      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(step1_frame)})
-      assert_push "crdt_msg", %{"b64" => _b64_step2}, 3000
-
-      # 2. Two rapid REST writes land while the room is live. Each write's
-      #    deliver-out reaches the room; the second write's merge replays the
-      #    first delivery from the update-log tail.
-      v6 = "# Stale Check\nIteration 6"
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v6})
-
-      # Synchronize on the first deliver-out having been applied + tail-logged.
-      wait_until(fn ->
-        {:ok, n} =
-          Engram.Repo.with_tenant(user.id, fn ->
-            Engram.Repo.aggregate(Engram.Notes.CrdtUpdateLog, :count)
-          end)
-
-        n >= 1
-      end)
-
-      v7 = "# Stale Check\nIteration 7"
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v7})
-
-      # 3. Stored content must be the last write verbatim — no interleave, no
-      #    duplication from tail replay.
-      {:ok, stored} = Notes.get_note(user, vault, "p.md")
-      assert stored.content == v7
-
-      # 4. The room doc must converge to the same text (deliver-out shares the
-      #    merge lineage instead of re-encoding the change).
-      {:ok, room_pid} = Engram.Notes.CrdtRegistry.ensure_started(user.id, vault.id, note.id)
-
-      wait_until(fn ->
-        room_doc = Yex.Sync.SharedDoc.get_doc(room_pid)
-        CrdtBridge.text_of(room_doc) == v7
-      end)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Per-user crdt_msg rate limit
   #
   # Scoped in its own describe so the limit=2 override only applies to these

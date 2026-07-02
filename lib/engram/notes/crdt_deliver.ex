@@ -68,13 +68,7 @@ defmodule Engram.Notes.CrdtDeliver do
       room ->
         try do
           SharedDoc.update_doc(room, fn doc ->
-            IO.puts(
-              "DELIVER-DIAG note=#{note_id} room_before=#{inspect(CrdtBridge.text_of(doc))} content=#{inspect(content)}"
-            )
-
             CrdtBridge.ingest_plaintext(doc, content)
-
-            IO.puts("DELIVER-DIAG note=#{note_id} room_after=#{inspect(CrdtBridge.text_of(doc))}")
           end)
         catch
           :exit, _reason -> :ok
