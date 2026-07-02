@@ -68,7 +68,11 @@ defmodule Engram.Logger.DecryptFailureTest do
           DecryptFailure.log("decrypt_failed", :no_dek, user_id: "u-123")
         end)
 
-      event = Enum.find(events, &(&1.level == :error))
+      # Match on this test's unique user_id, not just the level: LogCapture
+      # sees events from concurrently running async tests too (observed flake:
+      # a Vaults decrypt-failure line, category :crypto but no :error_kind,
+      # winning the Enum.find race and crashing the asserts below).
+      event = Enum.find(events, &(&1.level == :error and &1.meta[:user_id] == "u-123"))
 
       assert event, "expected an :error-level decrypt-failure event"
       assert event.meta.category == :crypto

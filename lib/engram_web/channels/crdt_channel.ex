@@ -35,7 +35,7 @@ defmodule EngramWeb.CrdtChannel do
   # 240 frames / 10 s ≈ 24 msg/s sustained — well above human typing speed with
   # a 2 s client debounce, and low enough to stop scripted floods.
   # In test builds the limit is reduced via :crdt_msg_rate_limit_override (see
-  # test/support/channel_case.ex pattern) so tests don't need to push 241 frames.
+  # per-describe setup in crdt_channel_test.exs) so tests don't push 241 frames.
   @msg_limit 240
   @msg_scale_ms 10_000
 

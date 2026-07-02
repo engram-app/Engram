@@ -11,7 +11,18 @@ defmodule Engram.Notes do
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Enqueue, Helpers, Note, PathSanitizer}
+
+  alias Engram.Notes.{
+    Chunk,
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtPersistence,
+    Enqueue,
+    Helpers,
+    Note,
+    PathSanitizer
+  }
+
   alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Telemetry
@@ -630,16 +641,16 @@ defmodule Engram.Notes do
           # Brand-new insert: no note row, no tail rows can exist yet. Skip the
           # replay entirely and call merge_plaintext/2 directly (restores the
           # simple two-way path that predates tail-aware merging).
-          Engram.Notes.CrdtBridge.merge_plaintext(nil, incoming_content)
+          CrdtBridge.merge_plaintext(nil, incoming_content)
 
         is_nil(prior_state) ->
           # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
           # rows MAY exist (bind/3 seeds the full text into the tail-log before
           # any checkpoint). Replay the tail, then two-way-diff the incoming
           # text against the tail-inclusive doc to avoid full-body duplication.
-          with {:ok, doc} <- Engram.Notes.CrdtBridge.doc_from_state(nil) do
-            _count = Engram.Notes.CrdtPersistence.replay_tail(doc, user, note_id)
-            Engram.Notes.CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+          with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
+            _count = CrdtPersistence.replay_tail(doc, user, note_id)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
           end
 
         true ->
@@ -648,13 +659,13 @@ defmodule Engram.Notes do
           #   capture the minimal Yjs operations that encode the incoming change.
           # - tail_doc: snapshot + replayed tail; the captured incoming operations are
           #   applied here so Yjs merges them convergently with the tail operations.
-          with {:ok, snapshot_doc} <- Engram.Notes.CrdtBridge.doc_from_state(prior_state),
-               {:ok, tail_doc} <- Engram.Notes.CrdtBridge.doc_from_state(prior_state) do
+          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state),
+               {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
             # Fold in updates logged since the last checkpoint. Runs inside the
             # caller's with_tenant txn — no nested tenant context needed.
-            _count = Engram.Notes.CrdtPersistence.replay_tail(tail_doc, user, note_id)
+            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
 
-            Engram.Notes.CrdtBridge.merge_plaintext_relative_to_snapshot(
+            CrdtBridge.merge_plaintext_relative_to_snapshot(
               snapshot_doc,
               tail_doc,
               incoming_content
@@ -1566,7 +1577,7 @@ defmodule Engram.Notes do
     # seeded state already satisfies the invariant. No normalize_doc is needed
     # on this path (unlike bind/3, which heals legacy at-rest state).
     with {:ok, %{state: state, text: merged_text}} <-
-           Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
+           CrdtBridge.merge_plaintext(nil, content),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
       {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce, merged_text: merged_text}}
     end
@@ -1598,7 +1609,7 @@ defmodule Engram.Notes do
 
     embed_jobs =
       ok_entries
-      |> Enum.filter(fn %{hash: hash, result: {:ok, info}} -> info.prev_hash != hash end)
+      |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
       # clamp: false — Oban.insert_all ignores unique/replace, so the settle
       # ceiling is moot here; skip the per-note burst-start SELECT.
       |> Enum.map(fn %{result: {:ok, info}} ->
@@ -1658,7 +1669,7 @@ defmodule Engram.Notes do
     # open never sees the batch merge and its next checkpoint REVERTS it.
     Enum.each(ok_entries, fn %{result: {:ok, info}} = entry ->
       _ =
-        Engram.Notes.CrdtDeliver.deliver_out(
+        CrdtDeliver.deliver_out(
           user.id,
           vault.id,
           entry.path,
@@ -1679,7 +1690,10 @@ defmodule Engram.Notes do
             status: :ok,
             id: info.id,
             version: info.version,
-            content_hash: entry.hash,
+            # The STORED hash (of the CRDT projection), matching the digest
+            # broadcast — the raw submitted content's hash diverges for
+            # frontmatter-bearing notes and would poison client syncedHashes.
+            content_hash: info.content_hash,
             # Canonical (sanitized) path — differs from `path` when the
             # sanitizer rewrote the input; clients rename local files to it.
             server_path: entry.path
@@ -3100,7 +3114,7 @@ defmodule Engram.Notes do
     # post-commit, best-effort. CRDT-origin writes never reach here (the
     # checkpoint writes the DB directly), so this fires solely for
     # REST/MCP/web/cascade writes — no double-delivery.
-    _ = Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    _ = CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
 
     :ok
   end
