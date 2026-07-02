@@ -9,8 +9,13 @@ defmodule Engram.RlsPolicyFormTest do
   """
   use Engram.DataCase, async: true
 
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)
+  # Derived from the canonical guarded set so this test cannot drift when a
+  # tenant table is added (onboarding_actions + crdt_update_log previously
+  # escaped the assertion because this list was hardcoded — 2026-07-02 audit).
+  @tenant_tables Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
 
+  # A table whose policy is not named tenant_isolation_<table> makes the
+  # query below return no rows and the match fail loudly — align the name.
   test "tenant_isolation policies wrap current_setting in (SELECT ...)" do
     for table <- @tenant_tables do
       %{rows: [[using_expr, check_expr]]} =
