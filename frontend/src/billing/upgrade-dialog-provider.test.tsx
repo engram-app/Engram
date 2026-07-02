@@ -36,7 +36,11 @@ describe("UpgradeDialogProvider", () => {
 			</UpgradeDialogProvider>,
 		);
 		fireEvent.click(screen.getByText("show"));
-		await waitFor(() => expect(screen.getByText(/note limit/iu)).toBeInTheDocument());
+		// Generous timeout: the dialog is lazy() now, and the FIRST test to touch
+		// it pays vitest's cold on-demand transform of the chunk (>1s).
+		expect(
+			await screen.findByText(/note limit/iu, undefined, { timeout: 5000 }),
+		).toBeInTheDocument();
 	});
 
 	it("dialog closes when onOpenChange(false) fires", async () => {
@@ -46,8 +50,10 @@ describe("UpgradeDialogProvider", () => {
 			</UpgradeDialogProvider>,
 		);
 		fireEvent.click(screen.getByText("show"));
-		// Radix Dialog provides only an X (sr-only "Close") to dismiss.
-		const dismiss = await screen.findByRole("button", { name: /close/iu });
+		// Radix Dialog provides only an X (sr-only "Close") to dismiss. Same 5s
+		// timeout as above: whichever test runs FIRST pays the cold transform of
+		// the lazy dialog chunk, so neither may assume a warm module cache.
+		const dismiss = await screen.findByRole("button", { name: /close/iu }, { timeout: 5000 });
 		fireEvent.click(dismiss);
 		await waitFor(() => expect(screen.queryByText(/note limit/iu)).not.toBeInTheDocument());
 	});

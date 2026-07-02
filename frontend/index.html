@@ -25,7 +25,24 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Static splash: paints as soon as the (render-blocking) stylesheet
+           lands, long before the JS bundle parses and React mounts. React's
+           createRoot().render() replaces it with the app. Markup + classes
+           mirror src/layout/loading-screen.tsx so the splash → LoadingScreen
+           handoff is pixel-identical (keep the two in sync). -->
+      <main
+        role="status"
+        aria-label="Loading"
+        class="flex h-screen flex-col items-center justify-center gap-3 bg-background text-foreground"
+      >
+        <span
+          aria-hidden="true"
+          class="size-6 animate-spin rounded-full border-2 border-border border-t-primary"
+        ></span>
+        <p class="text-muted-foreground text-sm">Loading…</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

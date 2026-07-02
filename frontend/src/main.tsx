@@ -1,9 +1,7 @@
-import * as Sentry from "@sentry/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { lazy, StrictMode, Suspense, use, useMemo } from "react";
+import { Component, lazy, type ReactNode, StrictMode, Suspense, use, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
-import { Toaster } from "@/components/ui/sonner";
 import { setApiBase, setWsBase } from "./api/base";
 import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
@@ -14,23 +12,80 @@ import { createAppRouter, installAppRouter } from "./router";
 import { ThemeProvider } from "./theme/theme-provider";
 import "./main.css";
 
+// Stale-deploy self-heal. Every lazy() below (app shell, Clerk provider,
+// Toaster, upgrade dialog, …) is a hashed chunk that a deploy can rotate out
+// from under an open tab; without this, the next lazy render 404s and the
+// throw lands on React Router's default error page (no route defines
+// errorElement). Vite fires `vite:preloadError` for failed dynamic-import
+// loads — reload once to pick up the fresh index.html + hashes.
+// preventDefault() suppresses the rethrow for the reload we handle; the
+// 30s guard means a genuinely broken asset host degrades back to the error
+// page instead of a reload loop.
+window.addEventListener("vite:preloadError", (event) => {
+	const KEY = "engram:chunk-reload-at";
+	const last = Number(sessionStorage.getItem(KEY) ?? 0);
+	if (Date.now() - last < 30_000) {
+		return;
+	}
+	sessionStorage.setItem(KEY, String(Date.now()));
+	event.preventDefault();
+	window.location.reload();
+});
+
 // Sentry — opt-in via VITE_SENTRY_DSN at build time. No-op (zero
 // network calls) when the env var is unset, so dev / self-host
 // builds are unaffected. Tracing + replay stay off in Tier 1;
 // OpenTelemetry → Tempo lands in Tier 2 with explicit sampling.
+//
+// Dynamically imported (like posthog below) so the SDK stays out of the eager
+// bundle that gates the sign-in page. The pre-init gap is bridged by the
+// early-error queue below: window error/unhandledrejection events that fire
+// before the chunk lands are buffered and flushed into captureException once
+// init runs, so bootstrap-window crashes still report. Resolves to null when
+// the chunk itself fails to load (ad-blockers match "sentry" in asset URLs;
+// stale-tab 404s) — callers must tolerate that, and it must NOT surface as an
+// unhandled rejection.
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
+
+type SentrySdk = typeof import("@sentry/react");
+
+const earlyErrors: unknown[] = [];
+const onEarlyError = (e: ErrorEvent) => earlyErrors.push(e.error ?? e.message);
+const onEarlyRejection = (e: PromiseRejectionEvent) => earlyErrors.push(e.reason);
 if (sentryDsn) {
-	Sentry.init({
-		dsn: sentryDsn,
-		environment: import.meta.env.MODE,
-		release: import.meta.env.VITE_GIT_SHA,
-		integrations: [],
-		// sendDefaultPii=false (SDK default) keeps cookies + the
-		// Authorization header out of breadcrumbs even if the SDK's
-		// own scrubbing misses something. Restated for documentation.
-		sendDefaultPii: false,
-	});
+	window.addEventListener("error", onEarlyError);
+	window.addEventListener("unhandledrejection", onEarlyRejection);
 }
+
+const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
+	? import("@sentry/react")
+			.then((Sentry) => {
+				Sentry.init({
+					dsn: sentryDsn,
+					environment: import.meta.env.MODE,
+					release: import.meta.env.VITE_GIT_SHA,
+					integrations: [],
+					// sendDefaultPii=false (SDK default) keeps cookies + the
+					// Authorization header out of breadcrumbs even if the SDK's
+					// own scrubbing misses something. Restated for documentation.
+					sendDefaultPii: false,
+				});
+				// The SDK's own global handlers are live from here; hand it the
+				// backlog and retire the temporary listeners.
+				window.removeEventListener("error", onEarlyError);
+				window.removeEventListener("unhandledrejection", onEarlyRejection);
+				for (const err of earlyErrors.splice(0)) {
+					Sentry.captureException(err);
+				}
+				return Sentry as SentrySdk;
+			})
+			.catch((err) => {
+				window.removeEventListener("error", onEarlyError);
+				window.removeEventListener("unhandledrejection", onEarlyRejection);
+				console.warn("[sentry] SDK failed to load — crash reporting disabled:", err);
+				return null;
+			})
+	: null;
 
 // Cloudflare Web Analytics — cookieless RUM beacon. Opt-in via
 // VITE_CF_BEACON_TOKEN at build time; no-op when unset so dev /
@@ -81,6 +136,31 @@ if (posthogKey) {
 const ClerkAuthProvider = lazy(() => import("./auth/clerk-auth-provider"));
 const LocalAuthProvider = lazy(() => import("./auth/local-auth-provider"));
 
+// sonner (~32 KB) is toast plumbing, not first-paint UI — lazy so it loads in
+// parallel after mount instead of inside the eager bundle that gates the
+// sign-in page. Worst case a toast fired before the chunk lands is dropped;
+// toasts are interaction-driven, so that window is effectively unreachable.
+const Toaster = lazy(() => import("@/components/ui/sonner").then((m) => ({ default: m.Toaster })));
+
+// Toasts are cosmetic: if the sonner chunk is truly unloadable (network flake
+// that survives the vite:preloadError reload), losing toasts must not take
+// down an otherwise working app via RootErrorBoundary.
+class OptionalBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+	state = { failed: false };
+
+	static getDerivedStateFromError() {
+		return { failed: true };
+	}
+
+	componentDidCatch(error: unknown) {
+		console.warn("[toaster] disabled — chunk failed to load:", error);
+	}
+
+	render() {
+		return this.state.failed ? null : this.props.children;
+	}
+}
+
 // Bootstrap chain: `use(configPromise)` suspends until config resolves
 // (window injection → /config.json → defaults). Once resolved, build the
 // runtime router (route shape depends on auth provider + billingEnabled)
@@ -89,7 +169,7 @@ const LocalAuthProvider = lazy(() => import("./auth/local-auth-provider"));
 function AppShell({ config }: { config: EngramConfig }) {
 	// Dev-only crash trigger for eyeballing ErrorFallback. Throws HERE, above
 	// RouterProvider, on purpose: a throwing *route* would be caught by React
-	// Router's own error boundary, not the outer Sentry.ErrorBoundary we're
+	// Router's own error boundary, not the outer RootErrorBoundary we're
 	// styling. Visit `?boom` to see the real crash page. Stripped from prod
 	// builds by the import.meta.env.DEV gate.
 	if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("boom")) {
@@ -112,7 +192,13 @@ function AppShell({ config }: { config: EngramConfig }) {
 					<AuthProvider>
 						<QueryClientProvider client={queryClient}>
 							<RouterProvider router={router} />
-							<Toaster richColors closeButton />
+							{/* Own boundary — a suspending Toaster must not trip the outer
+							    fallback and blank the app to LoadingScreen. */}
+							<OptionalBoundary>
+								<Suspense fallback={null}>
+									<Toaster richColors closeButton />
+								</Suspense>
+							</OptionalBoundary>
 						</QueryClientProvider>
 					</AuthProvider>
 				</Suspense>
@@ -132,12 +218,55 @@ function BootstrapGate() {
 	return <AppShell config={config} />;
 }
 
+// Replaces Sentry.ErrorBoundary so the SDK can load lazily. Capture waits on
+// `sentryReady`, then surfaces the eventId + an honest `reported` flag to
+// ErrorFallback (only claimed once captureException actually dispatched).
+interface RootErrorBoundaryState {
+	hasError: boolean;
+	error: unknown;
+	eventId?: string;
+	reported: boolean;
+}
+
+class RootErrorBoundary extends Component<{ children: ReactNode }, RootErrorBoundaryState> {
+	state: RootErrorBoundaryState = { hasError: false, error: null, reported: false };
+
+	static getDerivedStateFromError(error: unknown): Partial<RootErrorBoundaryState> {
+		return { hasError: true, error };
+	}
+
+	componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+		// captureReactException is what Sentry.ErrorBoundary itself uses — it
+		// attaches the React componentStack, which plain captureException drops.
+		sentryReady?.then((Sentry) => {
+			if (!Sentry) {
+				return;
+			}
+			const eventId = Sentry.captureReactException(error, errorInfo);
+			this.setState({ eventId, reported: true });
+		});
+	}
+
+	render() {
+		if (this.state.hasError) {
+			return (
+				<ErrorFallback
+					error={this.state.error}
+					eventId={this.state.eventId}
+					reported={this.state.reported}
+				/>
+			);
+		}
+		return this.props.children;
+	}
+}
+
 createRoot(document.getElementById("root")!).render(
-	<Sentry.ErrorBoundary fallback={ErrorFallback}>
+	<RootErrorBoundary>
 		<StrictMode>
 			<Suspense fallback={<LoadingScreen />}>
 				<BootstrapGate />
 			</Suspense>
 		</StrictMode>
-	</Sentry.ErrorBoundary>,
+	</RootErrorBoundary>,
 );

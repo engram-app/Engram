@@ -1,10 +1,9 @@
-import * as Sentry from "@sentry/react";
 import { Button } from "@/components/ui/button";
 import { heading } from "@/lib/ui-classes";
 import AuthBackdrop from "./layout/auth-backdrop";
 import AuthPanel from "./layout/auth-panel";
 
-// Top-level crash page rendered by `<Sentry.ErrorBoundary>` in main.tsx.
+// Top-level crash page rendered by `RootErrorBoundary` in main.tsx.
 //
 // CRITICAL: this renders OUTSIDE every provider (it replaces the whole app
 // subtree), so it must not touch RouterProvider, ThemeProvider, or config
@@ -13,25 +12,19 @@ import AuthPanel from "./layout/auth-panel";
 // header inlined here WITHOUT the ThemeToggle (which needs theme context).
 // Brand color tokens are global CSS, so they resolve fine without a provider.
 //
-// Sentry passes `{ error, componentStack, eventId, resetError }` to the
-// fallback; we surface `eventId` as a support reference and `error` (dev only).
-//
-// `reported` gates the "has been reported" claim + the reference id. Sentry
-// hands us an eventId even when no client is initialized (dev / self-host with
-// no VITE_SENTRY_DSN), but that id has no transport behind it — claiming the
-// crash was reported would be a lie. `getClient()` is truthy only when
-// Sentry.init actually ran, so we default to it and let tests inject the flag.
+// `reported` gates the "has been reported" claim + the reference id — claiming
+// a crash was reported when no Sentry client has transport behind it would be
+// a lie. The boundary sets it (with the eventId) only after captureException
+// actually dispatched; the SDK is lazy-loaded, so no sync default is possible
+// here and it defaults to false. Must NOT import @sentry/react — this file is
+// in the eager entry bundle.
 interface ErrorFallbackProps {
 	error: unknown;
 	eventId?: string;
 	reported?: boolean;
 }
 
-export default function ErrorFallback({
-	error,
-	eventId,
-	reported = Boolean(Sentry.getClient()),
-}: ErrorFallbackProps) {
+export default function ErrorFallback({ error, eventId, reported = false }: ErrorFallbackProps) {
 	const message = error instanceof Error ? error.message : String(error);
 
 	return (

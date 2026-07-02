@@ -4375,6 +4375,10 @@ jobs:
           VITE_CLERK_WAITLIST_MODE: 'false'
           VITE_API_BASE: https://api.engram.page
           VITE_WS_BASE: wss://api.engram.page
+          # VITE_INLINE_BOOTSTRAP_CONFIG=1 (inline config + Clerk preconnect +
+          # modulepreload) is set by the build:saas script itself so local saas
+          # builds produce the same artifact as CI. The plugin hard-fails the
+          # build if the VITE_* config above is missing.
           # PROD publishable key (pk_live_…). Distinct from the repo SECRET
           # `VITE_CLERK_PUBLISHABLE_KEY`, which is the pk_test the e2e CI uses
           # — baking that here would point the live app at the dev Clerk

@@ -1,9 +1,14 @@
 import type { ReactNode } from "react";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState } from "react";
 
 import { setUpgradeHandler } from "@/api/client";
 
-import { UpgradeRequiredDialog } from "./upgrade-required-dialog";
+// Lazy: the provider mounts at the router root (so it wraps the sign-in page
+// too), but the dialog itself only renders after a 402 — no reason for its
+// radix-dialog + billing-copy weight to sit in the eager entry bundle.
+const UpgradeRequiredDialog = lazy(() =>
+	import("./upgrade-required-dialog").then((m) => ({ default: m.UpgradeRequiredDialog })),
+);
 
 interface Ctx {
 	showUpgrade: (reason: string) => void;
@@ -20,6 +25,15 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 	// leak between provider remounts (StrictMode, HMR, tests).
 	useEffect(() => {
 		setUpgradeHandler(showUpgrade);
+		// Warm the lazy dialog chunk off the critical path (module cache dedupes
+		// with the lazy() import) — a 402 on a slow connection should open the
+		// dialog immediately, not after a cold chunk round trip of dead air.
+		// Warm-up failure is non-fatal (the lazy() render path + the
+		// vite:preloadError reload handle a real one); catch only prevents an
+		// unhandled rejection.
+		import("./upgrade-required-dialog").catch((err) => {
+			console.warn("[upgrade-dialog] chunk warm-up failed (non-fatal):", err);
+		});
 		return () => setUpgradeHandler(null);
 	}, [showUpgrade]);
 
@@ -27,15 +41,17 @@ export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 		<UpgradeCtx.Provider value={{ showUpgrade }}>
 			{children}
 			{reason ? (
-				<UpgradeRequiredDialog
-					reason={reason}
-					open={true}
-					onOpenChange={(open) => {
-						if (!open) {
-							setReason(null);
-						}
-					}}
-				/>
+				<Suspense fallback={null}>
+					<UpgradeRequiredDialog
+						reason={reason}
+						open={true}
+						onOpenChange={(open) => {
+							if (!open) {
+								setReason(null);
+							}
+						}}
+					/>
+				</Suspense>
 			) : null}
 		</UpgradeCtx.Provider>
 	);
