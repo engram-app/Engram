@@ -4375,6 +4375,11 @@ jobs:
           VITE_CLERK_WAITLIST_MODE: 'false'
           VITE_API_BASE: https://api.engram.page
           VITE_WS_BASE: wss://api.engram.page
+          # Activates the inlineBootstrap vite plugin: inline
+          # window.__ENGRAM_CONFIG__ (no /config.json round trip), preconnect
+          # to clerk.engram.page, and modulepreload of the Clerk chunks. The
+          # plugin hard-fails the build if the VITE_* config above is missing.
+          VITE_INLINE_BOOTSTRAP_CONFIG: '1'
           # PROD publishable key (pk_live_…). Distinct from the repo SECRET
           # `VITE_CLERK_PUBLISHABLE_KEY`, which is the pk_test the e2e CI uses
           # — baking that here would point the live app at the dev Clerk
