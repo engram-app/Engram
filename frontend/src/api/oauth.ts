@@ -26,9 +26,9 @@ export interface OAuthConsentResponse {
 	redirect_uri: string;
 }
 
-export async function fetchOAuthClient(clientId: string): Promise<OAuthClientMetadata> {
+export function fetchOAuthClient(clientId: string): Promise<OAuthClientMetadata> {
 	const url = joinApiUrl(getApiBase(), `/api/oauth/clients/${encodeURIComponent(clientId)}`);
-	return fetch(url).then(async (res) => {
+	return fetch(url).then((res) => {
 		if (!res.ok) {
 			throw new Error(`oauth client lookup failed: ${res.status}`);
 		}
@@ -36,6 +36,6 @@ export async function fetchOAuthClient(clientId: string): Promise<OAuthClientMet
 	});
 }
 
-export async function postOAuthConsent(params: OAuthConsentParams): Promise<OAuthConsentResponse> {
+export function postOAuthConsent(params: OAuthConsentParams): Promise<OAuthConsentResponse> {
 	return api.post<OAuthConsentResponse>("/oauth/authorize/consent", params);
 }
