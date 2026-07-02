@@ -104,14 +104,83 @@ defmodule Engram.Notes.CrdtBridge do
   @doc """
   Load `state` into a fresh doc, converge its content to `incoming` via a
   minimal edit, and return the re-encoded v1 state plus the resulting text.
+
+  This is a thin wrapper around `merge_plaintext_into_doc/2` for callers that
+  hold a raw state binary (or nil for a fresh doc). Use `merge_plaintext_into_doc/2`
+  directly when you already hold a doc (e.g. after replaying the tail-log).
   """
   @spec merge_plaintext(binary() | nil, String.t()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
   def merge_plaintext(state, incoming) when is_binary(incoming) do
-    with {:ok, doc} <- doc_from_state(state),
-         :ok <- ingest_plaintext(doc, incoming),
+    with {:ok, doc} <- doc_from_state(state) do
+      merge_plaintext_into_doc(doc, incoming)
+    end
+  end
+
+  @doc """
+  Converge an existing doc's content to `incoming` via a minimal edit and
+  return the re-encoded v1 state plus the resulting text.
+
+  Mirrors the behavior of `merge_plaintext/2` (ingest) but starts
+  from a doc that is already constructed (e.g. after applying a snapshot and
+  replaying the tail-log). Callers are responsible for having called
+  `normalize_doc/1` on legacy docs before invoking this function when
+  appropriate (matching the `bind/3` path in `CrdtPersistence`).
+
+  This is a two-way diff: it diffs `incoming` against `doc`'s current text.
+  For a convergent three-way merge where `doc` was built from a snapshot plus
+  a replayed update-log tail, use `merge_plaintext_relative_to_snapshot/3`
+  instead — that preserves both the tail edits and the incoming edits as
+  concurrent CRDT operations on the shared ancestor.
+  """
+  @spec merge_plaintext_into_doc(Yex.Doc.t(), String.t()) ::
+          {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
+  def merge_plaintext_into_doc(%Yex.Doc{} = doc, incoming) when is_binary(incoming) do
+    with :ok <- ingest_plaintext(doc, incoming),
          {:ok, encoded} <- Yex.encode_state_as_update(doc) do
       {:ok, %{state: encoded, text: project_doc(doc)}}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Three-way convergent merge: compute the incoming change relative to
+  `snapshot_doc` (the shared ancestor), then apply it to `tail_doc` (snapshot
+  + replayed update-log tail) as a concurrent Yjs operation.
+
+  This preserves both the tail edits AND the incoming edits when they modify
+  non-overlapping regions, exactly as Yjs merges concurrent inserts from
+  different clients. The result is re-encoded as a v1 state.
+
+  `snapshot_doc` is mutated (the incoming diff is applied to it to capture the
+  update binary). Pass a fresh doc built from the snapshot binary — do not
+  reuse a doc after calling this function.
+
+  `tail_doc` is mutated (the incoming update is applied). Pass a doc built
+  from the snapshot binary with the tail already replayed.
+  """
+  @spec merge_plaintext_relative_to_snapshot(Yex.Doc.t(), Yex.Doc.t(), String.t()) ::
+          {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
+  def merge_plaintext_relative_to_snapshot(
+        %Yex.Doc{} = snapshot_doc,
+        %Yex.Doc{} = tail_doc,
+        incoming
+      )
+      when is_binary(incoming) do
+    # Capture the snapshot's current state vector BEFORE applying the diff.
+    # encode_state_as_update/2 then returns only the delta introduced by the
+    # diff — i.e. the minimal Yjs operations that carry the incoming change.
+    # Note: each call to new_doc/0 picks a random 32-bit client_id; an n/2^32
+    # birthday collision between a tail-only client id and this doc's id is
+    # theoretically possible but Yjs-inherent and accepted as negligible.
+    sv_before = Yex.encode_state_vector!(snapshot_doc)
+
+    with :ok <- ingest_plaintext(snapshot_doc, incoming),
+         {:ok, incoming_update} <- Yex.encode_state_as_update(snapshot_doc, sv_before),
+         :ok <- Yex.apply_update(tail_doc, incoming_update),
+         {:ok, encoded} <- Yex.encode_state_as_update(tail_doc) do
+      {:ok, %{state: encoded, text: project_doc(tail_doc)}}
     else
       {:error, reason} -> {:error, reason}
     end

@@ -135,7 +135,13 @@ defmodule Engram.Notes.CrdtPersistence do
   # Replays the encrypted tail-log onto `doc` and returns the number of rows
   # found (whether or not each decrypted) so bind/3 can tell a fresh room (0
   # rows) from one that already carries CRDT history.
-  defp replay_tail(doc, user, note_id) do
+  #
+  # Public so `maybe_merge_crdt/4` in `Engram.Notes` can reuse this function
+  # when building the REST merge base: snapshot + tail ≡ bind/3's recipe.
+  # Must be called inside the caller's `Repo.with_tenant` transaction — it
+  # queries `CrdtUpdateLog` which is tenant-scoped by RLS.
+  @doc false
+  def replay_tail(doc, user, note_id) do
     rows =
       CrdtUpdateLog
       |> where([l], l.note_id == ^note_id)
