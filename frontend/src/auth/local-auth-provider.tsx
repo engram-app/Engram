@@ -4,6 +4,7 @@ import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
+import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
 	try {
@@ -91,6 +92,7 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 	}, [getToken]);
 
 	useClearQueryCacheOnUserChange(queryClient, user?.email);
+	useWipeCrdtOnUserChange(user?.email);
 
 	const login = useCallback(async (email: string, password: string) => {
 		const res = await fetch(joinApiUrl(getApiBase(), "/api/auth/login"), {

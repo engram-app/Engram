@@ -11,6 +11,7 @@ import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { rememberSignupUser } from "./signup-rejection";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
+import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
 
 // Map Clerk onto Engram's CSS design tokens. The Clerk React components render
 // in-DOM (not an iframe), so these var() references resolve against the document.
@@ -54,6 +55,7 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	}, [clerkUserId]);
 
 	useClearQueryCacheOnUserChange(queryClient, clerkUserId);
+	useWipeCrdtOnUserChange(clerkUserId);
 
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;

@@ -15,6 +15,12 @@ interface Entry {
  */
 export const REMOTE_ORIGIN = "remote";
 
+/** Local IndexedDB namespace for CRDT docs. The wire doc_id stays
+ *  `${vaultId}/${path}` — only the local DB name carries this prefix, so a
+ *  logout wipe can enumerate-and-delete without touching other same-origin
+ *  DBs (Clerk, etc.). */
+export const CRDT_IDB_PREFIX = "engram-crdt/";
+
 export interface CrdtManagerOptions {
 	/** Namespaces IndexedDB store names and doc ids per vault. */
 	dbPrefix: string;
@@ -123,7 +129,7 @@ export class CrdtManager {
 			return cached;
 		}
 		const doc = new Y.Doc();
-		const persistence = new IndexeddbPersistence(id, doc);
+		const persistence = new IndexeddbPersistence(CRDT_IDB_PREFIX + id, doc);
 		const text = doc.getText("content");
 		persistence.on("error", (err: unknown) => this.opts.onPersistError?.(path, err));
 		// Single listener: local updates go to the channel; remote-origin updates
