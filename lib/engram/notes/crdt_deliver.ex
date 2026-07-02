@@ -70,85 +70,143 @@ defmodule Engram.Notes.CrdtDeliver do
 
   # Step 1 — converge a live room onto the just-committed state, if one exists.
   # Non-creating lookup so an external write never spins a room for a note
-  # nobody is observing. `:global.whereis_name` can hand back a room that is
-  # mid auto-exit, so guard the GenServer.call against an :exit — the announce
-  # (step 2) still lets clients re-pull when the push could not land.
+  # nobody is observing.
   #
-  # Applies the stored merged state (shared lineage — see moduledoc). Falls
-  # back to the legacy plaintext re-diff only when the state cannot be loaded
-  # (no note row / decrypt failure) so delivery still happens; that path
-  # re-encodes the change on the room's lineage and is NOT double-safe, but a
-  # rare degraded delivery beats none.
+  # Applies the stored merged state (shared lineage — see moduledoc). The
+  # plaintext re-diff runs ONLY for rows that have no CRDT state at all
+  # (legacy/lazy rows) — there is no competing lineage to double. A note whose
+  # state exists but fails to load (decrypt error, KMS outage, missing row)
+  # SKIPS the push instead: re-encoding its content on the room's lineage is
+  # the doubling corruption this module exists to prevent, and the announce
+  # (step 2) still fires so enrolled clients re-pull. Every skip is logged at
+  # :error (Sentry-visible) — a sustained fallback rate must be loud.
   defp push_to_live_room(user_id, note_id, content) do
     case CrdtRegistry.lookup(note_id) do
       nil ->
         :ok
 
       room ->
-        state = load_merged_state(user_id, note_id)
+        case load_merged_state(user_id, note_id) do
+          {:ok, state} when is_binary(state) ->
+            room_apply(room, note_id, fn doc -> apply_state(doc, state, note_id) end)
 
-        try do
-          SharedDoc.update_doc(room, fn doc ->
-            apply_or_ingest(doc, state, content, note_id)
-          end)
-        catch
-          :exit, _reason -> :ok
+          {:ok, nil} ->
+            room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
+
+          {:error, _reason} ->
+            # Already logged in load_merged_state. Deliberately no ingest.
+            :ok
         end
     end
   end
 
-  defp apply_or_ingest(doc, state, content, note_id) when is_binary(state) do
+  # `:global.whereis_name` can hand back a room that is mid auto-exit, so the
+  # GenServer.call is guarded against benign exits (the announce still lets
+  # clients re-pull when the push could not land). Every OTHER exit reason —
+  # call timeout, a crash of the room while running our fun — is a real bug
+  # signal and is logged at :error rather than swallowed: with
+  # `restart: :temporary` a crashed room drops all observers, and a repeating
+  # crash loop would otherwise produce zero log lines from this module.
+  defp room_apply(room, note_id, fun) do
+    SharedDoc.update_doc(room, fun)
+  catch
+    :exit, {:noproc, _} ->
+      :ok
+
+    :exit, {:normal, _} ->
+      :ok
+
+    :exit, {:shutdown, _} ->
+      :ok
+
+    :exit, reason ->
+      Logger.error(
+        "crdt deliver room push exited",
+        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+      )
+
+      :ok
+  end
+
+  defp apply_state(doc, state, note_id) do
     case Yex.apply_update(doc, state) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning(
-          "crdt deliver apply_update failed, falling back to plaintext ingest",
-          Metadata.with_category(:warning, :sync, note_id: note_id, reason: inspect(reason))
+        # The just-committed state failed to apply — the doc or the state is
+        # already suspect, so plaintext-diffing into that same doc would be
+        # the worst possible response (foreign-lineage re-encode on top of a
+        # broken doc). Skip; observers converge via the announce → step-1
+        # re-pull against a fresh room.
+        Logger.error(
+          "crdt deliver apply_update failed — skipping push",
+          Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
         )
 
-        CrdtBridge.ingest_plaintext(doc, content)
+        :ok
     end
-  end
-
-  defp apply_or_ingest(doc, nil, content, _note_id) do
-    CrdtBridge.ingest_plaintext(doc, content)
   end
 
   # Loads + decrypts the note's committed CRDT snapshot. Runs post-commit in
   # the writer process, so the row read here is the state the write just
-  # persisted. Returns nil on any failure — the caller degrades to the
-  # plaintext-ingest fallback. Never raises.
+  # persisted. Returns:
+  #   {:ok, binary} — the merged state to apply (shared lineage)
+  #   {:ok, nil}    — the row has NO CRDT state (legacy/lazy row); plaintext
+  #                   ingest is the only delivery available and is safe
+  #   {:error, r}   — the state exists but could not be read (decrypt/KMS/
+  #                   missing row/raise) — logged here at :error; the caller
+  #                   must NOT fall back to a plaintext re-encode
+  # Never raises/exits/throws (delivery must not fail the write).
   defp load_merged_state(user_id, note_id) do
     user = Accounts.get_user!(user_id)
 
     result =
       Repo.with_tenant(user_id, fn ->
-        with %Note{} = note <- Repo.get(Note, note_id),
-             {:ok, state} when is_binary(state) <- Crypto.decrypt_crdt_state(note, user) do
-          state
-        else
-          _ -> nil
+        case Repo.get(Note, note_id) do
+          nil ->
+            {:error, :missing_row}
+
+          %Note{crdt_state_ciphertext: nil} ->
+            {:ok, nil}
+
+          %Note{} = note ->
+            case Crypto.decrypt_crdt_state(note, user) do
+              {:ok, state} when is_binary(state) -> {:ok, state}
+              {:ok, nil} -> {:ok, nil}
+              {:error, reason} -> {:error, reason}
+            end
         end
       end)
 
     # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
     case result do
-      {:ok, state} when is_binary(state) -> state
-      _ -> nil
+      {:ok, {:ok, state_or_nil}} ->
+        {:ok, state_or_nil}
+
+      {:ok, {:error, reason}} ->
+        log_state_load_failure(note_id, reason)
+        {:error, reason}
+
+      {:error, reason} ->
+        log_state_load_failure(note_id, {:tenant_txn, reason})
+        {:error, reason}
     end
   rescue
     err ->
-      Logger.warning(
-        "crdt deliver state load failed",
-        Metadata.with_category(:warning, :sync,
-          note_id: note_id,
-          reason: Exception.format(:error, err, __STACKTRACE__)
-        )
-      )
+      log_state_load_failure(note_id, Exception.format(:error, err, __STACKTRACE__))
+      {:error, :raised}
+  catch
+    kind, reason ->
+      log_state_load_failure(note_id, {kind, reason})
+      {:error, :caught}
+  end
 
-      nil
+  defp log_state_load_failure(note_id, reason) do
+    Logger.error(
+      "crdt deliver state load failed — skipping room push (announce still fires)",
+      Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+    )
   end
 
   # Step 2 — discovery announce. Mirrors the channel's own `crdt_doc_ready`
