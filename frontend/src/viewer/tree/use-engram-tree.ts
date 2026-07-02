@@ -173,12 +173,12 @@ export function useEngramTree(deps: Deps) {
 		// highlight (isDragTarget) is the right affordance, not a reorder line.
 		canReorder: false,
 		onRename: (item: ItemInstance<Data>, value: string) => deps.onRenameCommit(item.getId(), value),
-		onDrop: (items: ItemInstance<Data>[], target: DragTarget<Data>) => {
+		onDrop: (dragged: ItemInstance<Data>[], target: DragTarget<Data>) => {
 			// HT normalizes `target.item` to the destination container (the parent
 			// folder for between-siblings, or the folder dropped onto). We ignore the
 			// insertion index and reparent into it. See drop-redirect.ts.
 			const destId = (target as { item?: ItemInstance<Data> }).item?.getId();
-			const sources = items.map((i) => ({
+			const sources = dragged.map((i) => ({
 				id: i.getId(),
 				parentId: i.getParent()?.getId(),
 			}));

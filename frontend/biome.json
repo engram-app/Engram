@@ -141,7 +141,6 @@
 						"noAlert": "off",
 						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
 						"noEmptyBlockStatements": "off",
-						"noShadow": "off",
 						"noSkippedTests": "off",
 						"noUnnecessaryConditions": "off"
 					}
@@ -178,7 +177,12 @@
 						"noGlobalDirnameFilename": "off"
 					},
 					"style": { "noProcessEnv": "off" },
-					"suspicious": { "noConsole": "off", "noExplicitAny": "off", "useAwait": "off" },
+					"suspicious": {
+						"noConsole": "off",
+						"noExplicitAny": "off",
+						"useAwait": "off",
+						"noShadow": "off"
+					},
 					"performance": { "noDelete": "off" },
 					"nursery": {
 						"noPlaywrightWaitForTimeout": "off",
