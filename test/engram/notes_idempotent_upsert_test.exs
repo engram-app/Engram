@@ -73,6 +73,31 @@ defmodule Engram.NotesIdempotentUpsertTest do
     refute_receive %Phoenix.Socket.Broadcast{event: "notes.batch"}, 100
   end
 
+  test "batch re-push of a frontmatter note (raw != stored projection) does not broadcast a phantom digest",
+       %{user: user, vault: vault} do
+    # The CRDT projection re-serializes YAML frontmatter, so the stored content
+    # can differ from the raw push bytes. A re-push of the SAME raw bytes then
+    # misses the identical-content short-circuit (projection vs raw hash) and
+    # runs the full rewrite — but the rewrite converges to the SAME projection
+    # (prev_hash == content_hash), so no digest entry may be broadcast. Gating
+    # the digest on the raw entry hash instead fans a phantom change to every
+    # device on each idempotent re-push of such a note.
+    raw = "---\ntitle:    Spaced   Out\n---\nbody\n"
+    entries = [%{"path" => "fm.md", "content" => raw}]
+    {:ok, _} = Notes.batch_upsert_notes(user, vault, entries)
+
+    {:ok, stored} = Notes.get_note(user, vault, "fm.md")
+    # Precondition: projection and raw genuinely diverge — otherwise this test
+    # is vacuous (the identical-content test above already covers that case).
+    assert stored.content != raw
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    {:ok, _} = Notes.batch_upsert_notes(user, vault, entries)
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "notes.batch"}, 100
+  end
+
   test "re-push after a delete resurrects instead of short-circuiting", %{
     user: user,
     vault: vault

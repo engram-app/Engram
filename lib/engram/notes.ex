@@ -1772,9 +1772,15 @@ defmodule Engram.Notes do
     # Same hash gate as the embed jobs: entries whose update short-circuited
     # (idempotent re-push, no version/seq persisted) must not appear in the
     # digest, or every batch re-sync fans a phantom change to all devices.
+    # Compare projection-vs-projection (info.content_hash, the stored CRDT
+    # projection) — NOT the raw entry hash. For frontmatter notes the
+    # projection re-serializes YAML, so raw != projection on every push; a
+    # raw-hash gate broadcasts a phantom digest for each idempotent re-push
+    # of such notes (the exact syncedHashes re-pull loop Finding 2 fixed in
+    # the digest body below).
     changed_entries =
-      Enum.filter(ok_entries, fn %{hash: hash, result: {:ok, info}} ->
-        info.prev_hash != hash
+      Enum.filter(ok_entries, fn %{result: {:ok, info}} ->
+        info.prev_hash != info.content_hash
       end)
 
     _ =
