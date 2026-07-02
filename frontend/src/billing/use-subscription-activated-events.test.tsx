@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
+import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
 const {
 	channelHandlers,
@@ -42,8 +43,6 @@ const {
 });
 
 vi.mock("phoenix", () => ({ Socket: socketCtor }));
-
-import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
 const authAdapter: AuthAdapter = {
 	isLoaded: true,

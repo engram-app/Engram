@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DeletedVaultsSection } from "./deleted-vaults-section";
 
 const restoreMutate = vi.fn();
 const purgeMutate = vi.fn();
@@ -31,8 +32,6 @@ vi.mock("@/api/queries", () => ({
 	useBillingConfig: () => ({ data: { vaults_cap: cap } }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { DeletedVaultsSection } from "./deleted-vaults-section";
 
 function renderWithRouter(ui: ReactElement, { route = "/settings/vaults" } = {}) {
 	return render(<MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>);

@@ -1,6 +1,7 @@
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EmailSection } from "./email-section";
 import { makeUser } from "./section-test-helpers";
 
 const newEmail = {
@@ -41,8 +42,6 @@ vi.mock("@clerk/react/errors", () => ({
 	isReverificationCancelledError: vi.fn(() => false),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { EmailSection } from "./email-section";
 
 describe("EmailSection", () => {
 	beforeEach(() => {

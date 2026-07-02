@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { makeUser } from "./account/section-test-helpers";
+import AccountPage from "./account-page";
 
 vi.mock("@clerk/react", () => ({
 	useUser: () => ({ user: makeUser(), isLoaded: true }),
@@ -17,8 +18,6 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/theme/theme-provider", () => ({
 	useTheme: () => ({ theme: "system", resolved: "dark", setTheme: vi.fn() }),
 }));
-
-import AccountPage from "./account-page";
 
 describe("AccountPage", () => {
 	it("renders the section stack with no embedded Clerk UserProfile", () => {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectChannel, disconnectChannel } from "./channel";
 
 // Minimal phoenix mock: capture the onOpen callback and the channel handlers.
 // Uses vi.hoisted + a constructor function (not arrow) so `new Socket(...)` works.
@@ -26,8 +27,6 @@ vi.mock("phoenix", () => ({
 	Socket: socketCtor,
 	Channel: vi.fn(),
 }));
-
-import { connectChannel, disconnectChannel } from "./channel";
 
 afterEach(() => {
 	disconnectChannel();

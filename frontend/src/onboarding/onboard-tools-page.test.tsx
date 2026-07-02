@@ -4,6 +4,8 @@ import type React from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingStatus, OnboardingStatus } from "../api/queries";
+// Import after mocks
+import OnboardToolsPage from "./onboard-tools-page";
 
 const mutateAsync = vi.fn().mockResolvedValue({});
 
@@ -48,9 +50,6 @@ vi.mock("../config-context", async () => {
 		useConfig: () => ({ billingEnabled }) as ReturnType<typeof actual.useConfig>,
 	};
 });
-
-// Import after mocks
-import OnboardToolsPage from "./onboard-tools-page";
 
 function wrap(ui: React.ReactNode) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

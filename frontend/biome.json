@@ -96,7 +96,6 @@
 						"useBaseline": "off",
 						"useDomQuerySelector": "off",
 						"useExpect": "off",
-						"useImportsFirst": "off",
 						"useReactFunctionComponentDefinition": "off",
 						"useRegexpTest": "off",
 						"useTestHooksOnTop": "off",

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProfileSection } from "./profile-section";
 import { makeUser } from "./section-test-helpers";
 
 const user = makeUser();
@@ -12,8 +13,6 @@ vi.mock("@clerk/react/errors", () => ({
 	isReverificationCancelledError: () => false,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { ProfileSection } from "./profile-section";
 
 describe("ProfileSection", () => {
 	beforeEach(() => vi.clearAllMocks());

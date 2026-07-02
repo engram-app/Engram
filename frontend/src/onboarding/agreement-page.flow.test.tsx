@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useOnboardingStatus } from "../api/queries";
+import AgreementPage from "./agreement-page";
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock("../api/client", () => ({
@@ -16,9 +18,6 @@ vi.mock("../legal/load", () => ({
 	loadVersion: () => "# Terms\n\nMock terms content.",
 	sha256Hex: async () => "a".repeat(64),
 }));
-
-import { useOnboardingStatus } from "../api/queries";
-import AgreementPage from "./agreement-page";
 
 function LocationProbe() {
 	const loc = useLocation();

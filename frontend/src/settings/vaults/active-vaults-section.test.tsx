@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ActiveVaultsSection } from "./active-vaults-section";
 
 const deleteMutate = vi.fn();
 const updateMutate = vi.fn();
@@ -47,8 +48,6 @@ vi.mock("@/api/queries", () => ({
 	useBillingStatus: () => ({ data: billingState.current }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { ActiveVaultsSection } from "./active-vaults-section";
 
 describe("ActiveVaultsSection", () => {
 	beforeEach(() => {

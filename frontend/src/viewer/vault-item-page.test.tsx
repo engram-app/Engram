@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AttachmentSummary } from "../api/queries";
+import VaultItemPage from "./vault-item-page";
 
 // Stub both heavy viewers — this suite only verifies the note-vs-attachment
 // routing decision, not their rendering.
@@ -13,8 +14,6 @@ let mockLoading = false;
 vi.mock("../api/queries", () => ({
 	useAttachments: () => ({ data: mockAttachments, isLoading: mockLoading }),
 }));
-
-import VaultItemPage from "./vault-item-page";
 
 const att = (id: string): AttachmentSummary => ({
 	id,

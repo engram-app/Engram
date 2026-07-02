@@ -2,6 +2,7 @@ import { isReverificationCancelledError } from "@clerk/react/errors";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DangerZoneSection } from "./danger-zone-section";
 import { makeUser } from "./section-test-helpers";
 
 const signOut = vi.fn().mockResolvedValue({});
@@ -16,8 +17,6 @@ vi.mock("@clerk/react/errors", () => ({
 	isReverificationCancelledError: vi.fn(() => false),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { DangerZoneSection } from "./danger-zone-section";
 
 describe("DangerZoneSection", () => {
 	beforeEach(() => {

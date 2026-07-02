@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import FolderActions from "./folder-actions";
+import { FolderTreeProvider } from "./folder-tree-context";
 
 const { navigate, post, toastError, openUpload } = vi.hoisted(() => ({
 	navigate: vi.fn(),
@@ -51,9 +53,6 @@ vi.mock("../api/active-vault", () => ({
 	getActiveVaultId: () => "1",
 	setActiveVaultId: vi.fn(),
 }));
-
-import FolderActions from "./folder-actions";
-import { FolderTreeProvider } from "./folder-tree-context";
 
 function renderWithProviders() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

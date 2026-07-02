@@ -2,15 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubscriptionDetail } from "../api/queries";
+import CancelPanel from "./cancel-panel";
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("../api/client", () => ({
 	api: { get: vi.fn(), post, patch: vi.fn(), del: vi.fn() },
 	setTokenGetter: vi.fn(),
 }));
-
-import type { SubscriptionDetail } from "../api/queries";
-import CancelPanel from "./cancel-panel";
 
 let qc: QueryClient;
 

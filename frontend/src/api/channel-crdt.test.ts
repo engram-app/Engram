@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { connectChannel, disconnectChannel } from "./channel";
 
 // Mock the phoenix Socket/Channel so we can assert the crdt: topic join +
 // inbound event routing without a real WS.
@@ -41,8 +42,6 @@ const sessionMock = vi.hoisted(() => ({
 	resyncOpenDocs: vi.fn(),
 }));
 vi.mock("../crdt/session", () => sessionMock);
-
-import { connectChannel, disconnectChannel } from "./channel";
 
 describe("crdt channel wiring", () => {
 	beforeEach(() => {

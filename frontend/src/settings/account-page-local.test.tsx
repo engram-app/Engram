@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import AccountPageLocal from "./account-page-local";
 
 vi.mock("./account/profile-section-local", () => ({
 	ProfileSectionLocal: () => <div data-testid="profile" />,
@@ -16,8 +17,6 @@ vi.mock("./account/password-section-local", () => ({
 vi.mock("./account/danger-zone-section-local", () => ({
 	DangerZoneSectionLocal: () => <div data-testid="danger" />,
 }));
-
-import AccountPageLocal from "./account-page-local";
 
 describe("AccountPageLocal", () => {
 	it("renders every section in order", () => {

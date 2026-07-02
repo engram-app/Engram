@@ -1,5 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useIsFreeTier } from "./use-is-free-tier";
 
 let billingEnabled = true;
 let tier: string | undefined = "free";
@@ -16,8 +17,6 @@ vi.mock("../api/queries", async () => {
 	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
 	return { ...actual, useBillingStatus: () => ({ data: tier ? { tier } : undefined }) };
 });
-
-import { useIsFreeTier } from "./use-is-free-tier";
 
 beforeEach(() => {
 	billingEnabled = true;

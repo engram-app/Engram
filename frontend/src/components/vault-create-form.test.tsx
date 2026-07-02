@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { VaultCreateForm } from "./vault-create-form";
 
 // vi.mock factories run at the top of the file — declare their fakes
 // via vi.hoisted so the references resolve when the mock executes.
@@ -14,8 +15,6 @@ vi.mock("@/api/queries", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { error: toastError, success: toastSuccess } }));
-
-import { VaultCreateForm } from "./vault-create-form";
 
 describe("VaultCreateForm onError", () => {
 	beforeEach(() => vi.clearAllMocks());

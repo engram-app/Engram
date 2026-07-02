@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionsSection } from "./sessions-section";
 
 const current = {
 	id: "sess_current",
@@ -17,8 +18,6 @@ vi.mock("@clerk/react", () => ({
 	useSession: () => ({ session: { id: "sess_current" } }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { SessionsSection } from "./sessions-section";
 
 describe("SessionsSection", () => {
 	beforeEach(() => vi.clearAllMocks());

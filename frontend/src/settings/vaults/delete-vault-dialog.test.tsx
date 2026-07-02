@@ -1,13 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DeleteVaultDialog } from "./delete-vault-dialog";
 
 const deleteMutate = vi.fn();
 vi.mock("@/api/queries", () => ({
 	useDeleteVault: () => ({ mutate: deleteMutate, isPending: false }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
-import { DeleteVaultDialog } from "./delete-vault-dialog";
 
 const vault = {
 	id: "7",

@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider } from "../theme/theme-provider";
+import BillingPage from "./billing-page";
 
 const initializePaddleMock = vi.fn();
 vi.mock("@paddle/paddle-js", () => ({
@@ -46,8 +47,6 @@ const { channelHandlers, socketCtor } = vi.hoisted(() => {
 	return { channelHandlers, socketCtor };
 });
 vi.mock("phoenix", () => ({ Socket: socketCtor }));
-
-import BillingPage from "./billing-page";
 
 const authAdapter: AuthAdapter = {
 	isLoaded: true,
