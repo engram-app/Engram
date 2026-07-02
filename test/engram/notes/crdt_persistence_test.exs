@@ -460,4 +460,25 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert updated.content =~ "trailing edit never checkpointed"
     assert updated.seq > original_seq
   end
+
+  # ── bind/3 does NOT leak trap_exit into a bare test process ───────────────
+
+  test "bind/3 called directly from a test process does not set trap_exit", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+    doc = CrdtBridge.new_doc()
+
+    # The guard relies on :"$initial_call" being absent in a bare test process.
+    # Confirm the predicate holds: if this is nil, the guard will NOT set the flag.
+    assert Process.get(:"$initial_call") == nil
+
+    # Confirm the test process is not trapping exits before the call.
+    assert Process.info(self(), :trap_exit) == {:trap_exit, false}
+
+    # Call bind/3 directly (bare ExUnit test process — no :"$initial_call" in dict).
+    _returned = CrdtPersistence.bind(st, note.id, doc)
+
+    # The guard must have prevented the flag from being set.
+    assert Process.info(self(), :trap_exit) == {:trap_exit, false}
+  end
 end
