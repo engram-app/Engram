@@ -341,7 +341,7 @@ defmodule Engram.Notes do
         end)
 
       case result do
-        {:ok, {:ok, {prev_hash, note}}} ->
+        {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
               Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
@@ -477,7 +477,7 @@ defmodule Engram.Notes do
               case Repo.one(lookup_query) do
                 %Note{id: ^note_id} = inserted ->
                   :ok = UsageMeters.inc_notes_count(user.id, 1)
-                  {:ok, {nil, inserted}}
+                  {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
 
                 %Note{} = existing ->
                   # Concurrent create won; report a version conflict (→ 409) the
@@ -567,8 +567,14 @@ defmodule Engram.Notes do
         |> Ecto.Changeset.put_change(:seq, seq)
         |> Repo.update()
         |> case do
-          {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-          {:error, changeset} -> {:error, changeset}
+          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+          # so callers can include the stored hash in broadcast digests without
+          # re-deriving it.
+          {:ok, updated} ->
+            {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+          {:error, changeset} ->
+            {:error, changeset}
         end
       end
     end
@@ -1392,8 +1398,16 @@ defmodule Engram.Notes do
     case Map.get(existing_by_hmac, entry.path_hmac) do
       nil ->
         case build_batch_insert_row(entry, user, vault, now) do
-          {:ok, id, row} ->
-            info = %{id: id, version: 1, prev_hash: nil, updated_at: now}
+          {:ok, id, row, merged_text, content_hash} ->
+            info = %{
+              id: id,
+              version: 1,
+              prev_hash: nil,
+              updated_at: now,
+              content: merged_text,
+              content_hash: content_hash
+            }
+
             {%{entry | result: {:ok, info}}, [row | rows]}
 
           {:error, errors} ->
@@ -1412,13 +1426,15 @@ defmodule Engram.Notes do
     base_attrs = batch_base_attrs(entry, user)
 
     case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
-      {:ok, {prev_hash, updated}} ->
+      {:ok, {prev_hash, updated, merged_text, content_hash}} ->
         {:ok,
          %{
            id: updated.id,
            version: updated.version,
            prev_hash: prev_hash,
-           updated_at: updated.updated_at
+           updated_at: updated.updated_at,
+           content: merged_text,
+           content_hash: content_hash
          }}
 
       {:error, changeset} ->
@@ -1435,24 +1451,46 @@ defmodule Engram.Notes do
 
     base_attrs = batch_base_attrs(entry, user, vault)
 
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id),
-         {:ok, crdt} <- build_crdt_state(entry, user, note_id) do
-      phase_b =
-        inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, entry.tags)
+    with {:ok, crdt} <- build_crdt_state(entry, user, note_id),
+         # Finding 1 fix: move key derivation into the `with` head so a DEK
+         # error propagates as {:error, _} rather than raising MatchError.
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      # Mirror the single-note insert path (upsert_note/3 ~line 441): derive
+      # content, title, tags, and content_hash from the CRDT-projected text so
+      # the DB row and the seeded doc are byte-for-byte consistent from birth.
+      merged_tags = Helpers.extract_tags(crdt.merged_text)
+      content_hash = Crypto.hmac_content_hash(key, crdt.merged_text)
 
-      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: Helpers.extract_title(crdt.merged_text, entry.path),
+          tags: merged_tags,
+          content_hash: content_hash
+      }
 
-      if changeset.valid? do
-        row =
-          changeset
-          |> Ecto.Changeset.apply_changes()
-          |> Map.take(@batch_insert_columns)
-          |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
-          |> Map.merge(crdt)
+      crdt_row_fields = Map.take(crdt, [:crdt_state_ciphertext, :crdt_state_nonce])
 
-        {:ok, note_id, row}
-      else
-        {:error, changeset}
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+        phase_b =
+          inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
+
+        changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+        if changeset.valid? do
+          row =
+            changeset
+            |> Ecto.Changeset.apply_changes()
+            |> Map.take(@batch_insert_columns)
+            |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
+            |> Map.merge(crdt_row_fields)
+
+          # Finding 2 fix: return the PROJECTION hash so the digest can use the
+          # stored value (not entry.hash which is HMAC of raw submitted content).
+          {:ok, note_id, row, crdt.merged_text, content_hash}
+        else
+          {:error, changeset}
+        end
       end
     end
   end
@@ -1464,9 +1502,10 @@ defmodule Engram.Notes do
     # frontmatter fence out of the body into the Y.Map at insert time, so the
     # seeded state already satisfies the invariant. No normalize_doc is needed
     # on this path (unlike bind/3, which heals legacy at-rest state).
-    with {:ok, %{state: state}} <- Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
+    with {:ok, %{state: state, text: merged_text}} <-
+           Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
-      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce}}
+      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce, merged_text: merged_text}}
     end
   end
 
@@ -1519,7 +1558,12 @@ defmodule Engram.Notes do
               "mtime" => entry.mtime,
               "version" => info.version,
               "updated_at" => info.updated_at,
-              "content_hash" => entry.hash
+              # Finding 2 fix: use the hash of the CRDT projection (stored row),
+              # not entry.hash (HMAC of raw submitted content). For frontmatter
+              # notes the projection re-serializes YAML so these diverge; using
+              # entry.hash caused the plugin's syncedHashes to see a phantom
+              # server change and re-pull on every batch push of tagged notes.
+              "content_hash" => info.content_hash
             }
           end)
 
@@ -1545,6 +1589,19 @@ defmodule Engram.Notes do
     Enum.each(created, fn _ ->
       :ok =
         PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
+    end)
+
+    # Deliver-out to live CRDT rooms — without this, a room that has the note
+    # open never sees the batch merge and its next checkpoint REVERTS it.
+    Enum.each(ok_entries, fn %{result: {:ok, info}} = entry ->
+      _ =
+        Engram.Notes.CrdtDeliver.deliver_out(
+          user.id,
+          vault.id,
+          entry.path,
+          info.id,
+          info.content
+        )
     end)
 
     :ok
