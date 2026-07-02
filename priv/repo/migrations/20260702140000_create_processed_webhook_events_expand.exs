@@ -1,6 +1,10 @@
 defmodule Engram.Repo.Migrations.CreateProcessedWebhookEventsExpand do
   use Ecto.Migration
 
+  # squawk-ignore-file
+  #
+  # squawk false positives here: index on a freshly-created (empty) table cannot block anything.
+
   # phase/expand — new table; no backfill.
   #
   # Cross-node webhook replay dedup (#862): the ETS-backed guard was

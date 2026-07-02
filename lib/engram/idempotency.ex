@@ -36,33 +36,39 @@ defmodule Engram.Idempotency do
     ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
     expires_at = DateTime.add(DateTime.utc_now(), ttl_ms, :millisecond)
 
-    with {:ok, dek} <- Crypto.get_dek(user) do
-      {ciphertext, nonce} = Envelope.encrypt(Jason.encode!(body), dek, aad(user.id, key))
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        {ciphertext, nonce} = Envelope.encrypt(Jason.encode!(body), dek, aad(user.id, key))
 
-      {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.insert_all(
-            Key,
-            [
-              %{
-                id: Ecto.UUID.generate(),
-                user_id: user.id,
-                key: key,
-                status: status,
-                response_ciphertext: ciphertext,
-                response_nonce: nonce,
-                expires_at: expires_at,
-                inserted_at: DateTime.utc_now()
-              }
-            ],
-            # First response wins — a concurrent duplicate remember no-ops.
-            on_conflict: :nothing,
-            conflict_target: [:user_id, :key]
-          )
-        end)
+        {:ok, _} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.insert_all(
+              Key,
+              [
+                %{
+                  id: Ecto.UUID.generate(),
+                  user_id: user.id,
+                  key: key,
+                  status: status,
+                  response_ciphertext: ciphertext,
+                  response_nonce: nonce,
+                  expires_at: expires_at,
+                  inserted_at: DateTime.utc_now()
+                }
+              ],
+              # First response wins — a concurrent duplicate remember no-ops.
+              on_conflict: :nothing,
+              conflict_target: [:user_id, :key]
+            )
+          end)
+
+        :ok
+
+      {:error, _} ->
+        # No DEK → nothing to cache. A future replay degrades to
+        # re-execution, which is safe (idempotent upserts short-circuit).
+        :ok
     end
-
-    :ok
   end
 
   @spec lookup(map(), Ecto.UUID.t()) :: {:ok, %{status: integer(), body: term()}} | :miss

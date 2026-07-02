@@ -1,6 +1,11 @@
 defmodule Engram.Repo.Migrations.CreateIdempotencyKeysExpand do
   use Ecto.Migration
 
+  # squawk-ignore-file
+  #
+  # squawk false positives here: indexes on a freshly-created (empty) table cannot block
+  # anything, and `status` holds an HTTP status code (bounded < 600).
+
   # phase/expand — new table; no backfill.
   #
   # Replaces the node-local ETS idempotency cache for batch endpoints (#862):
