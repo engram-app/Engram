@@ -118,7 +118,7 @@ function nextCursor(page: ChangesPage, prev: string): string {
 	if (page.next_cursor) {
 		return page.next_cursor;
 	}
-	const last = page.changes[page.changes.length - 1];
+	const last = page.changes.at(-1);
 	return last ? encodeCursor(last.seq, last.id) : prev;
 }
 

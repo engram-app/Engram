@@ -26,8 +26,10 @@ then turns two sets back off:
   nursery pulls in; and React/TS-hostile rules (`noTernary`, `noJsxLiterals`,
   `useExplicitType`/`useExplicitReturnType`, `noMagicNumbers`, `noNonNullAssertion`,
   `useNamingConvention` — the API is **snake_case**, so this would fight every DTO).
-- **(b) Ratchet-deferred** — real rules the current code violates, to be re-enabled
-  one-per-PR. Tracked in **engram-app/Engram issue #812**.
+- **(b) Ratchet-deferred** — real rules the current code violated, re-enabled one-per-PR
+  under **engram-app/Engram issue #812** (now **COMPLETE** — see Progress below). The only
+  rule left permanently off from this bucket is `noUnnecessaryConditions` (Biome false
+  positives), which has effectively graduated to bucket (a).
 
 There is no per-rule comment distinguishing (a) from (b) in the file — see gotcha §1.
 Intent lives in #812 and commit messages.
@@ -166,9 +168,13 @@ Mechanical tier **complete**: `noLeakedRender` (#826), `useNamedCaptureGroup` (#
 the earlier a11y tier.
 
 Behavioral tier: `noEqualsToNull` (#833), `noReturnAssign` (#834), `noVoid` (#835),
-`useAwait` (#836), `noShadow` (#837), `noEmptyBlockStatements` (#838), and
-`useExhaustiveDependencies` (#840) merged. `noUnnecessaryConditions` dropped as
-permanently-off (see per-rule note above).
+`useAwait` (#836), `noShadow` (#837), `noEmptyBlockStatements` (#838),
+`useExhaustiveDependencies` (#840), and `useAtIndex` (#841) merged. `useAtIndex` also
+bumped `tsconfig` `lib` `ES2020` → `ES2022` so `.at()` types resolve (the 5 sites were
+all `[x.length - 1]` with an existing `?`/`!` guard, so `.at(-1)`'s `T | undefined`
+return was safe). `noUnnecessaryConditions` dropped as permanently-off (see per-rule note
+above).
 
-Remaining in #812: config-gated `useAtIndex` (its `.at(-1)` autofix needs a tsconfig
-`lib` → es2022 bump in the same PR). With that, the behavioral tier is otherwise done.
+**#812 CLOSED — ratchet complete.** Every deferred rule is either enabled or intentionally
+off with documented rationale (`noUnnecessaryConditions` in `overrides[0]`). No rules
+remain to ratchet.
