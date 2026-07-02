@@ -1,10 +1,18 @@
 defmodule EngramWeb.CrdtChannelTest do
   use EngramWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.{Crypto, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry}
 
   setup do
+    EngramWeb.RateLimiter.reset_buckets!()
+
+    on_exit(fn ->
+      EngramWeb.RateLimiter.reset_buckets!()
+    end)
+
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
@@ -161,6 +169,49 @@ defmodule EngramWeb.CrdtChannelTest do
       refute_push "crdt_msg", _payload, 300
     end
 
+    # -------------------------------------------------------------------------
+    # Frame size cap
+    # -------------------------------------------------------------------------
+
+    test "oversize crdt_msg frame is rejected with frame_too_large error",
+         %{socket: socket, doc_id: doc_id, note: note} do
+      # Encode 5_000_001 bytes — one byte over the 5 MB cap.
+      oversized_b64 = Base.encode64(:binary.copy(<<0>>, 5_000_001))
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => oversized_b64})
+
+      assert_reply ref, :error, %{reason: "frame_too_large"}, 3000
+
+      # The room must NOT have been started (the frame was rejected before ensure_room).
+      assert CrdtRegistry.lookup(note.id) == nil
+    end
+
+    # -------------------------------------------------------------------------
+    # Log hygiene: path must appear in metadata, not the message body
+    # -------------------------------------------------------------------------
+
+    test "dropped-frame warning carries path in metadata, not the message body",
+         %{socket: socket, doc_id: doc_id} do
+      # Extract the note path portion (everything after the vault_id prefix).
+      [_vault_id, note_path] = String.split(doc_id, "/", parts: 2)
+
+      log =
+        capture_log(fn ->
+          push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => "!!!not_valid_base64!!!"})
+          # Synchronize on channel processing — no push is sent back for bad frames,
+          # so we wait out the window to confirm the warning fired before capture ends.
+          refute_push "crdt_msg", _, 300
+        end)
+
+      # The warning must have fired (non-vacuous check).
+      assert log =~ "dropped crdt_msg",
+             "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
+
+      # The raw note path must NOT appear in the log message body.
+      refute String.contains?(log, note_path),
+             "Expected path #{inspect(note_path)} to be in metadata only, but it appeared in: #{inspect(log)}"
+    end
+
     test "second crdt_msg for the same doc reuses the cached room", %{
       socket: socket,
       doc_id: doc_id
@@ -224,6 +275,39 @@ defmodule EngramWeb.CrdtChannelTest do
       # does not exit the room — it's linked the other way). The room being
       # alive confirms the full update→persist→notify path ran.
       assert Process.alive?(room_pid)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Per-user crdt_msg rate limit
+  #
+  # Scoped in its own describe so the limit=2 override only applies to these
+  # tests. Other tests in the file run at the production default (240/10_000ms)
+  # and won't trip the limiter on valid-frame pushes.
+  # ---------------------------------------------------------------------------
+
+  describe "crdt_msg rate limiting" do
+    setup do
+      Application.put_env(:engram, :crdt_msg_rate_limit_override, 2)
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :crdt_msg_rate_limit_override)
+        EngramWeb.RateLimiter.reset_buckets!()
+      end)
+    end
+
+    test "crdt_msg beyond the rate limit is rejected with rate_limited error",
+         %{socket: socket, doc_id: doc_id} do
+      # Limit override = 2 (see describe setup above). Push a tiny valid b64
+      # frame three times; the third must be denied.
+      tiny_b64 = Base.encode64(<<0>>)
+
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
     end
   end
 
