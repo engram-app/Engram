@@ -84,9 +84,13 @@ defmodule Engram.Notes.CrdtPersistence do
         %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
         update,
         _name,
-        _doc
+        doc
       ) do
     user = state[:user] || Accounts.get_user!(user_id)
+
+    IO.puts(
+      "UPDATE-DIAG note=#{note_id} bytes=#{byte_size(update)} doc_after=#{inspect(Engram.Notes.CrdtBridge.text_of(doc))}"
+    )
 
     case Crypto.encrypt_crdt_state(update, user, note_id) do
       {:ok, {ct, nonce}} ->
