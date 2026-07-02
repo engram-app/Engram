@@ -424,3 +424,88 @@ defmodule Engram.NotesBatchTest do
     end
   end
 end
+
+defmodule Engram.NotesBatchSetBasedTest do
+  @moduledoc """
+  Set-based batch semantics (#863): one shared seq per delete batch (the
+  per-id next_seq! held the vault row lock as a serialization point for the
+  whole tenant), and NO broadcasts for batches that fail — the per-id
+  composition leaked note_changed events for rolled-back work (documented
+  caveat in the old moduledoc; this is the promised fix).
+  """
+  use Engram.DataCase, async: true
+
+  alias Engram.Notes
+
+  setup do
+    user = insert(:user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault} = Engram.Vaults.create_vault(user, %{name: "Test"})
+    %{user: user, vault: vault}
+  end
+
+  test "batch delete stamps ONE shared seq across all tombstones", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+    {:ok, n3} = Notes.upsert_note(user, vault, %{"path" => "c.md", "content" => "# C"})
+
+    assert {:ok, %{deleted: 3}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id, n3.id])
+
+    seqs = for id <- [n1.id, n2.id, n3.id], do: Engram.Fixtures.raw_note_row!(user, id).seq
+    assert [_] = Enum.uniq(seqs)
+    assert hd(seqs) > n3.seq
+  end
+
+  test "failed batch delete emits NO delete broadcasts", %{user: user, vault: vault} do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    assert {:error, {:not_found, _}} =
+             Notes.batch_delete_notes(user, vault, [n1.id, Ecto.UUID.generate()])
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
+
+    # And nothing was deleted.
+    assert {:ok, _} = Notes.get_note_by_id(user, vault, n1.id)
+  end
+
+  test "successful batch delete still broadcasts one delete per note", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    assert {:ok, %{deleted: 2}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id])
+
+    assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: p1}
+    assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: p2}
+    assert Enum.sort([p1["path"], p2["path"]]) == ["a.md", "b.md"]
+    assert p1["event_type"] == "delete"
+  end
+
+  test "batch delete decrements the notes meter by the batch size", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+    before = Engram.UsageMeters.notes_count(user.id)
+
+    assert {:ok, %{deleted: 2}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id])
+    assert Engram.UsageMeters.notes_count(user.id) == before - 2
+  end
+
+  # NOTE deliberately absent: a "batch move emits no broadcasts on failure"
+  # test would assert a guarantee batch_move_notes does NOT provide — moves
+  # still broadcast mid-transaction per item (see its moduledoc caveat), so
+  # a multi-item batch that fails late leaks events for rolled-back renames.
+  # The after-commit buffer for move/folder ops is the tracked follow-up.
+end

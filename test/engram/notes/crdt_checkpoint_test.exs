@@ -164,6 +164,28 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "checkpoint should not enqueue embed when content is unchanged"
   end
 
+  test "checkpoint with unchanged content compacts crdt_state without bumping version/seq", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    # No text mutation — doc projects the same content the row already has.
+
+    # Clear all pre-existing embed jobs so Oban uniqueness cannot mask a wrong enqueue.
+    Repo.delete_all(Oban.Job)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_note.version == raw_note.version
+    assert after_note.seq == raw_note.seq
+
+    # No embed job must exist — Oban uniqueness cannot mask a wrong enqueue because
+    # we cleared the table above.
+    refute_enqueued(worker: EmbedNote)
+  end
+
   # ── Race fix: prune respects watermark — post-snapshot rows survive ────────
 
   test "prune_tail keeps rows inserted AFTER the watermark was captured", ctx do
@@ -231,6 +253,97 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "post-watermark row (inserted_at > watermark) must survive for the next checkpoint/replay"
   end
 
+  # ── Watermark capture race: post-snapshot rows survive when watermark captured early ───
+
+  test "a tail row inserted after the watermark survives prune even when checkpoint runs later",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # Simulate the race: watermark is captured (pre-encode), THEN a new update
+    # row lands (concurrent update_v1 during encode), THEN checkpoint completes.
+    {:ok, watermark} =
+      Repo.with_tenant(user.id, fn -> CrdtCheckpoint.tail_watermark(note.id) end)
+
+    {:ok, {ct, n}} = Crypto.encrypt_crdt_state("late_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: n,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc, watermark: watermark)
+
+    {:ok, remaining} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert remaining == 1, "post-watermark row must survive prune"
+  end
+
+  # ── Watermark capture failure: nil watermark prunes nothing ────────────────
+
+  test "checkpoint with a nil watermark prunes nothing", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Seed the tail-log with one row.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
+
+    {:ok, {ct, n}} = Crypto.encrypt_crdt_state("fake_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: n,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    # Confirm tail row exists before checkpoint.
+    {:ok, tail_count_before} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert tail_count_before == 1
+
+    # Checkpoint with an explicit nil watermark (simulating capture failure).
+    # With nil watermark, prune_tail becomes a no-op, so the row survives.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc, watermark: nil)
+
+    # Tail row must still be present after checkpoint because nil watermark
+    # caused prune_tail to skip deletion.
+    {:ok, tail_count_after} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert tail_count_after == 1
+  end
+
   # ── Debounce timer: multiple fast activity signals reset the timer ─────────
 
   test "CrdtCheckpointTimer debounces — activity signals reset the settle timer", ctx do
@@ -268,6 +381,16 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert_receive {:DOWN, ^ref, :process, ^timer, _}, 1_000
 
     Application.delete_env(:engram, CrdtCheckpointTimer)
+  end
+
+  # ── No-raise: deleted user row must not crash terminate path ─────────────
+
+  test "checkpoint returns :ok instead of raising when the user row is gone", ctx do
+    %{vault: vault, note: note} = ctx
+    doc = CrdtBridge.new_doc()
+
+    assert :ok ==
+             CrdtCheckpoint.checkpoint(Ecto.UUID.generate(), vault.id, note.id, doc)
   end
 
   test "CrdtCheckpointTimer exits when room exits", ctx do

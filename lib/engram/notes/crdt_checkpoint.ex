@@ -19,6 +19,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   import Ecto.Query
 
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.EmbedNote
 
@@ -26,14 +27,41 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
-  state, re-materializes plaintext columns, prunes the tail-log, bumps seq,
-  and enqueues a debounced embed when content changed.
+  state, prunes the tail-log, and — when the projected text actually changed —
+  re-materializes plaintext columns, bumps version/seq, and enqueues a
+  debounced embed. When the text is unchanged (hash match) it degrades to a
+  snapshot-compaction write with NO version/seq churn, so calling it on every
+  room exit is cheap.
 
-  Never called per-keystroke — driven by `CrdtCheckpointTimer`.
+  Options: `:watermark` — a pre-captured prune boundary (max inserted_at of
+  the tail rows the doc already reflects). When omitted, it is captured here
+  BEFORE the doc is encoded, so rows landing mid-encode survive the prune.
+
+  Never called per-keystroke — driven by `CrdtCheckpointTimer` (debounced)
+  and by `CrdtPersistence.unbind/3` on room exit. Never raises: any internal
+  failure is logged and returns `:ok` (safe in the room's terminate path).
   """
-  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t()) :: :ok
-  def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc) do
+  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t(), keyword()) :: :ok
+  def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc, opts \\ []) do
     user = Accounts.get_user!(user_id)
+
+    # Capture the prune watermark BEFORE reading/encoding the doc. Any tail row
+    # inserted while we encode is NOT necessarily in the snapshot, so it must
+    # survive the prune (it replays on next bind — apply_update is idempotent).
+    watermark =
+      case Keyword.fetch(opts, :watermark) do
+        {:ok, wm} ->
+          wm
+
+        :error ->
+          # A capture failure degrades to nil: prune becomes a no-op, which is the
+          # safe direction (rows are kept and replayed on next bind).
+          case Repo.with_tenant(user_id, fn -> tail_watermark(note_id) end) do
+            {:ok, wm} -> wm
+            _ -> nil
+          end
+      end
+
     text = CrdtBridge.text_of(doc)
 
     with {:ok, raw_state} <- encode(doc),
@@ -43,16 +71,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
       content_hash = Crypto.hmac_content_hash(key, text)
       tags = Helpers.extract_tags(text)
 
+      # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction) — the fun returns the bare hash.
       {:ok, prev_hash} =
         Repo.with_tenant(user_id, fn ->
-          # Capture a watermark BEFORE encoding, so any update-log rows
-          # that arrive after this point are not deleted by prune_tail/2.
-          # The doc already reflects all rows up to (and including) the
-          # watermark, so the snapshot is correct for exactly those rows.
-          # Prune only rows at/below the watermark; later-arriving updates
-          # survive for the next checkpoint/replay.
-          watermark = tail_watermark(note_id)
-
           # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
           # Repo.get! leaves them nil. Materialize through the decrypt path so
           # they are populated BEFORE we re-derive title + re-HMAC path/folder.
@@ -62,32 +83,49 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {:ok, note} = Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note_id), user)
           prev = note.content_hash
 
-          # Re-derive title from the note's decrypted (sanitized-at-write) path.
-          title = Helpers.extract_title(text, note.path)
+          if prev == content_hash do
+            # Text unchanged: compact the snapshot + prune, but do NOT touch
+            # version/seq/content — legacy /changes pullers must not see phantom edits.
+            {1, _} =
+              Repo.update_all(
+                from(n in Note, where: n.id == ^note_id and n.kind == "note"),
+                set: [
+                  crdt_state_ciphertext: ct,
+                  crdt_state_nonce: nonce,
+                  dek_version: Crypto.row_version_aad_bound()
+                ]
+              )
 
-          merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
-          {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
+            prune_tail(note_id, watermark)
+            prev
+          else
+            # Re-derive title from the note's decrypted (sanitized-at-write) path.
+            title = Helpers.extract_title(text, note.path)
 
-          phase_b =
-            Notes.inject_phase_b_fields_pub(
-              encrypted,
-              user,
-              note_id,
-              note.path,
-              note.folder,
-              tags
-            )
-            |> Map.put(:crdt_state_ciphertext, ct)
-            |> Map.put(:crdt_state_nonce, nonce)
-            |> Map.put(:content_hash, content_hash)
+            merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
+            {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
 
-          note
-          |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
-          |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-          |> Repo.update!()
+            phase_b =
+              Notes.inject_phase_b_fields_pub(
+                encrypted,
+                user,
+                note_id,
+                note.path,
+                note.folder,
+                tags
+              )
+              |> Map.put(:crdt_state_ciphertext, ct)
+              |> Map.put(:crdt_state_nonce, nonce)
+              |> Map.put(:content_hash, content_hash)
 
-          prune_tail(note_id, watermark)
-          {:ok, prev}
+            note
+            |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
+            |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+            |> Repo.update!()
+
+            prune_tail(note_id, watermark)
+            prev
+          end
         end)
 
       _ =
@@ -100,11 +138,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
       err ->
         Logger.error(
           "crdt checkpoint failed note_id=#{note_id} reason=#{inspect(err)}",
-          Engram.Logger.Metadata.with_category(:error, :sync, note_id: note_id)
+          Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
         :ok
     end
+  rescue
+    err ->
+      Logger.error(
+        "crdt checkpoint raised note_id=#{note_id} error=#{Exception.format(:error, err, __STACKTRACE__)}",
+        Metadata.with_category(:error, :sync, note_id: note_id)
+      )
+
+      :ok
   end
 
   defp encode(doc) do
@@ -121,7 +167,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     if CrdtBridge.should_flatten?(state, doc) do
       Logger.info(
         "crdt flatten note_id=#{note_id} state_bytes=#{byte_size(state)} clients=#{CrdtBridge.client_count(doc)}",
-        Engram.Logger.Metadata.with_category(:info, :sync, note_id: note_id)
+        Metadata.with_category(:info, :sync, note_id: note_id)
       )
 
       case CrdtBridge.flatten(doc) do
@@ -139,7 +185,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # The existing index on (note_id, inserted_at) makes this a fast index scan.
   # Called at the START of the checkpoint so the watermark marks the exact
   # boundary the snapshot covers.
-  defp tail_watermark(note_id) do
+  @doc false
+  def tail_watermark(note_id) do
     CrdtUpdateLog
     |> where([l], l.note_id == ^note_id)
     |> select([l], max(l.inserted_at))

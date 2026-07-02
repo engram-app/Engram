@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Note}
 
   setup do
     user = insert(:user)
@@ -136,5 +136,127 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     # The hashes differ because content changed
     refute note1.content_hash == note2.content_hash
+  end
+
+  test "REST write merges against snapshot + tail, not the stale snapshot alone", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base"})
+
+    # Simulate live typing since the last checkpoint: a real Yjs update row in
+    # the tail-log that appends " + LIVE" (build it from the note's snapshot doc,
+    # capture the update with Yex.Doc.monitor_update_v1 — see this test file's
+    # existing frame-building helpers).
+    append_tail_update!(user, vault, note, " + LIVE")
+
+    # REST writer read "shared base" (pre-live-typing) and appends its own edit.
+    {:ok, updated} =
+      Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base + REST"})
+
+    assert updated.content =~ "LIVE", "tail-log live edits must survive a REST merge"
+    assert updated.content =~ "REST"
+  end
+
+  test "nil-snapshot with tail rows merges without duplicating the body", ctx do
+    %{user: user, vault: vault} = ctx
+
+    # Create a note so we have a valid note_id, vault_id, etc.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "nil-snap.md", "content" => "placeholder"})
+
+    # NULL out the crdt_state columns to simulate a pre-CRDT note (bind/3's seed
+    # path: no snapshot + a tail update seeded from an empty doc).
+    Repo.with_tenant(user.id, fn ->
+      {:ok,
+       Repo.update_all(
+         from(n in Engram.Notes.Note, where: n.id == ^note.id),
+         set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+       )}
+    end)
+
+    # Simulate bind/3's seed_from_content path: it starts from a FRESH empty doc
+    # and ingests the full text — producing a tail row that encodes the full body
+    # as an insert-everything operation relative to the empty doc.
+    seed_doc = CrdtBridge.new_doc()
+    {:ok, _ref} = Yex.Doc.monitor_update_v1(seed_doc)
+    text = Yex.Doc.get_text(seed_doc, CrdtBridge.text_name())
+    :ok = CrdtBridge.diff_into_text(text, "shared base + LIVE")
+
+    seed_update =
+      receive do
+        {:update_v1, update, _origin, ^seed_doc} -> update
+      after
+        1_000 -> raise "timeout waiting for seed update_v1"
+      end
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(seed_update, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    # REST writer arrives with the same base text (before the LIVE edit).
+    {:ok, updated} =
+      Notes.upsert_note(user, vault, %{"path" => "nil-snap.md", "content" => "shared base + REST"})
+
+    # "shared base" must appear exactly once — not doubled ("shared base + RESTshared base + LIVE")
+    assert length(String.split(updated.content, "shared base")) == 2,
+           "body was duplicated: #{inspect(updated.content)}"
+
+    refute String.contains?(updated.content, "RESTshared"),
+           "duplication detected: #{inspect(updated.content)}"
+  end
+
+  # Inserts one synthetic Yjs update row into the tail-log for the given note.
+  # The update extends the snapshot doc's text by appending `suffix`.
+  # Steps:
+  #   1. Decrypt the note's current snapshot → doc.
+  #   2. Monitor the doc for update_v1 events.
+  #   3. Diff the extended text into the doc (captures one update binary).
+  #   4. Encrypt the update binary and insert a CrdtUpdateLog row.
+  defp append_tail_update!(user, vault, note, suffix) do
+    raw = load_raw(user, note.id)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+
+    {:ok, _ref} = Yex.Doc.monitor_update_v1(doc)
+
+    current_text = CrdtBridge.body_of(doc)
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    :ok = CrdtBridge.diff_into_text(text, current_text <> suffix)
+
+    update =
+      receive do
+        {:update_v1, update, _origin, ^doc} -> update
+      after
+        1_000 -> raise "timeout waiting for update_v1 from doc mutation"
+      end
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    :ok
   end
 end

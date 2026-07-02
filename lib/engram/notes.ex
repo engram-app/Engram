@@ -11,7 +11,18 @@ defmodule Engram.Notes do
   alias Engram.Crypto.Envelope
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Enqueue, Helpers, Note, PathSanitizer}
+
+  alias Engram.Notes.{
+    Chunk,
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtPersistence,
+    Enqueue,
+    Helpers,
+    Note,
+    PathSanitizer
+  }
+
   alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Telemetry
@@ -373,7 +384,7 @@ defmodule Engram.Notes do
         end)
 
       case result do
-        {:ok, {:ok, {prev_hash, note}}} ->
+        {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
               Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
@@ -518,7 +529,7 @@ defmodule Engram.Notes do
               case Repo.one(lookup_query) do
                 %Note{id: ^note_id} = inserted ->
                   :ok = UsageMeters.inc_notes_count(user.id, 1)
-                  {:ok, {nil, inserted}}
+                  {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
 
                 %Note{} = existing ->
                   # Concurrent create won; report a version conflict (→ 409) the
@@ -593,7 +604,10 @@ defmodule Engram.Notes do
       # deleted_at), so delete → re-push still resurrects via the insert path.
       # Repair paths that re-derive persisted fields from unchanged content
       # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
-      {:ok, {existing.content_hash, existing}}
+      # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
+      # incoming content (hash-equal to the stored merged content by the guard
+      # above), so callers thread the same digest fields either way.
+      {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
     else
       do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
     end
@@ -631,16 +645,32 @@ defmodule Engram.Notes do
         |> Ecto.Changeset.put_change(:seq, seq)
         |> Repo.update()
         |> case do
-          {:ok, updated} -> {:ok, {existing.content_hash, updated}}
-          {:error, changeset} -> {:error, changeset}
+          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+          # so callers can include the stored hash in broadcast digests without
+          # re-deriving it.
+          {:ok, updated} ->
+            {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+          {:error, changeset} ->
+            {:error, changeset}
         end
       end
     end
   end
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
-  # Loads the row's encrypted crdt_state (nil → fresh doc), diffs the incoming
-  # plaintext onto the Y.Text (never full-replace), re-encodes + re-encrypts.
+  #
+  # Implements a three-way convergent merge: builds the snapshot doc (ancestor)
+  # and the tail doc (snapshot + replayed update-log tail) separately, then
+  # applies the incoming change as a Yjs operation computed relative to the
+  # snapshot. This preserves concurrent tail edits (live typing in the settle
+  # window) alongside the incoming REST/MCP plaintext — neither side loses
+  # keystrokes when they modify non-overlapping regions.
+  #
+  # Without tail replay (the old two-way diff), the converge-diff would delete
+  # tail keystrokes from the doc and deliver_out would push those deletions to
+  # open editors — the stale-snapshot window bug.
+  #
   # Returns the merged text so callers compute content_hash + tags from the
   # MERGED result — the public-API contract is "server merges, never clobbers."
   defp maybe_merge_crdt(existing, incoming_content, user, note_id) do
@@ -656,8 +686,61 @@ defmodule Engram.Notes do
           nil
       end
 
-    with {:ok, %{state: new_state, text: merged_text}} <-
-           Engram.Notes.CrdtBridge.merge_plaintext(prior_state, incoming_content),
+    # When the note has no snapshot (prior_state == nil), the three-way path
+    # would build an empty snapshot_doc ancestor while replay_tail fills
+    # tail_doc with the bind-time seed of the full text. The incoming REST diff
+    # is then computed against the empty ancestor ("insert everything") and
+    # applied onto the already-full tail — producing a full-body duplication
+    # ("shared base + LIVEshared base + REST"). Concurrency preservation is lost
+    # only in this legacy/pre-CRDT window, but that is strictly better than
+    # duplicating the body.
+    #
+    # Two sub-cases share prior_state == nil:
+    # - Brand-new insert (existing == nil): no tail rows can exist yet; skip
+    #   replay entirely and call merge_plaintext/2 directly.
+    # - Pre-CRDT update (existing is a %Note{} with nil crdt_state columns):
+    #   tail rows MAY exist (bind/3 could have seeded the full text into the
+    #   tail-log before any checkpoint ran). Replay the tail, then two-way-diff
+    #   the incoming text against the tail-inclusive doc to avoid duplication.
+    merge_result =
+      cond do
+        is_nil(prior_state) and is_nil(existing) ->
+          # Brand-new insert: no note row, no tail rows can exist yet. Skip the
+          # replay entirely and call merge_plaintext/2 directly (restores the
+          # simple two-way path that predates tail-aware merging).
+          CrdtBridge.merge_plaintext(nil, incoming_content)
+
+        is_nil(prior_state) ->
+          # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
+          # rows MAY exist (bind/3 seeds the full text into the tail-log before
+          # any checkpoint). Replay the tail, then two-way-diff the incoming
+          # text against the tail-inclusive doc to avoid full-body duplication.
+          with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
+            _count = CrdtPersistence.replay_tail(doc, user, note_id)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+          end
+
+        true ->
+          # Two independent docs from the same snapshot:
+          # - snapshot_doc: the shared ancestor; the incoming diff is applied here to
+          #   capture the minimal Yjs operations that encode the incoming change.
+          # - tail_doc: snapshot + replayed tail; the captured incoming operations are
+          #   applied here so Yjs merges them convergently with the tail operations.
+          with {:ok, snapshot_doc} <- CrdtBridge.doc_from_state(prior_state),
+               {:ok, tail_doc} <- CrdtBridge.doc_from_state(prior_state) do
+            # Fold in updates logged since the last checkpoint. Runs inside the
+            # caller's with_tenant txn — no nested tenant context needed.
+            _count = CrdtPersistence.replay_tail(tail_doc, user, note_id)
+
+            CrdtBridge.merge_plaintext_relative_to_snapshot(
+              snapshot_doc,
+              tail_doc,
+              incoming_content
+            )
+          end
+      end
+
+    with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {:ok,
@@ -727,16 +810,32 @@ defmodule Engram.Notes do
   """
   @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note_by_id(user, vault, id) when is_binary(id) do
+    fetch_note_by_id(user, vault, id, :all)
+  end
+
+  # Shared shell for by-id fetches; `fields: :meta` skips the content column
+  # and its decrypt for callers that only need path/folder/tags (#863) —
+  # same projection pattern the changes feeds use.
+  defp fetch_note_by_id(user, vault, id, fields) when is_binary(id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      base =
+        from(n in Note,
+          where:
+            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
+              is_nil(n.deleted_at)
+        )
+
+      query =
+        case fields do
+          :meta -> from(n in base, select: struct(n, @note_meta_fields))
+          :all -> base
+        end
+
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
-          case Repo.get(Note, id) do
-            %Note{user_id: uid, vault_id: vid, deleted_at: nil} = note
-            when uid == user.id and vid == vault.id ->
-              {:ok, decrypt_or_raise!(note, user)}
-
-            _ ->
-              {:error, :not_found}
+          case Repo.one(query) do
+            %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
+            nil -> {:error, :not_found}
           end
         end)
 
@@ -1045,17 +1144,7 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        # T3.2 — pass path_hmac (base64), never plaintext path. The note row
-        # already carries `path_hmac` raw bytes; base64-encode for JSON safety.
-        Enqueue.enqueue(
-          DeleteNoteIndex.new(%{
-            note_id: note.id,
-            user_id: note.user_id,
-            vault_id: note.vault_id,
-            path_hmac: Base.encode64(note.path_hmac)
-          }),
-          "delete_note_index"
-        )
+        Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
       end
 
     broadcast_change(user.id, vault.id, "delete", path)
@@ -1083,49 +1172,127 @@ defmodule Engram.Notes do
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
   user + vault. All-or-nothing: if any id fails to resolve to a live note
-  owned by the caller, the entire batch rolls back and no notes are
-  deleted.
+  owned by the caller, nothing is deleted.
 
-  Returns `{:ok, %{deleted: n}}` on success (n = `length(ids)`), or
-  `{:error, {:not_found, id}}` identifying the first offending id when
-  one or more ids don't resolve.
+  Set-based (#863): ONE meta-projected `id IN (...)` fetch (no content read
+  or decrypt), ONE shared seq for the whole batch (the previous per-id
+  `next_seq!` composition took the vault row lock N times and held it to
+  commit — a serialization point for every concurrent write to the vault),
+  ONE `update_all`, and a bulk `Oban.insert_all` for the index cleanup jobs.
+  The missing-id check runs BEFORE any write, so all-or-nothing needs no
+  rollback of partial work.
 
-  Empty list short-circuits to `{:ok, %{deleted: 0}}` without opening a
-  transaction. Composed on top of `delete_note_by_id/3` — each per-id
-  delete runs inside the outer `Repo.transaction`, so a later `:not_found`
-  reverts prior successful deletes (Qdrant/Oban side-effects enqueued
-  during the rolled-back transaction are still inserted via Oban's
-  `Repo.insert`, but only become visible after commit; on rollback they
-  vanish with the transaction).
+  Broadcasts fire AFTER the transaction commits — the old per-id
+  composition leaked `note_changed` events for work that later rolled back.
+  NOTE: this fixes batch DELETE only; `batch_move_notes/4` and the folder
+  batch ops still broadcast mid-transaction (their moduledocs carry the
+  caveat) — the systemic after-commit buffer remains a follow-up.
 
-  Note: `delete_note/3` fires a `note_changed` event via `Phoenix.PubSub`
-  during each per-id iteration. PubSub broadcasts are NOT transactional —
-  subscribers may receive events for items that ultimately get rolled back
-  when a later id in the batch fails. This is consistent with the
-  single-target delete behavior and acceptable because the typical batch
-  caller (the same client that initiated the batch) sees the synchronous
-  `{:error, _}` return value and can reconcile. The systemic fix
-  (after-commit hooks so broadcasts only fire post-commit) is tracked as a
-  follow-up issue and will land before more batch ops are added.
+  Duplicate ids collapse to a single delete (idempotent-delete semantics);
+  folder-marker ids are NOT deletable here (use the folder APIs) and read
+  as not_found. Returns `{:ok, %{deleted: n}}` (n = distinct live notes
+  deleted) or `{:error, {:not_found, id}}` for the first unresolvable id.
   """
-  @spec batch_delete_notes(map(), map(), [integer()]) ::
+  @spec batch_delete_notes(map(), map(), [String.t()]) ::
           {:ok, %{deleted: non_neg_integer()}}
-          | {:error, {:not_found, integer()} | term()}
+          | {:error, {:not_found, String.t()} | term()}
   def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(ids, %{deleted: 0}, fn id, acc ->
-        case delete_note_by_id(user, vault, id) do
-          :ok -> {:cont, Map.update!(acc, :deleted, &(&1 + 1))}
-          {:error, :not_found} -> {:halt, {:rollback, {:not_found, id}}}
-        end
-      end)
-      |> case do
-        {:rollback, reason} -> Repo.rollback(reason)
-        acc -> acc
+    now = DateTime.utc_now()
+    # Duplicate ids collapse to one delete (idempotent-delete semantics);
+    # `deleted` counts DISTINCT notes, documented in the @doc above.
+    ids = Enum.uniq(ids)
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      {:ok, result} =
+        Repo.with_tenant(user.id, fn ->
+          # kind filter: folder-marker rows share the notes table but have
+          # nil path_hmac and their own delete API — a marker id here must
+          # read as not_found, not tombstone the marker + crash on encode64.
+          notes =
+            Repo.all(
+              from(n in Note,
+                where:
+                  n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+                    is_nil(n.deleted_at) and n.kind == "note",
+                select: struct(n, @note_meta_fields)
+              )
+            )
+
+          found = MapSet.new(notes, & &1.id)
+
+          case Enum.find(ids, &(not MapSet.member?(found, &1))) do
+            nil ->
+              seq = Engram.Vaults.next_seq!(vault.id)
+
+              {updated, _} =
+                from(n in Note,
+                  where: n.id in ^Enum.map(notes, & &1.id) and is_nil(n.deleted_at)
+                )
+                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+
+              :ok = UsageMeters.dec_notes_count(user.id, updated)
+
+              # Jobs insert inside the txn, so a failure rolls them back with
+              # the tombstones. insert_all trades Enqueue.enqueue's per-job
+              # telemetry for one statement; {_count, _} match keeps failures
+              # loud (insert_all raises on error).
+              jobs = Enum.map(notes, &delete_note_index_job/1)
+              _ = if jobs != [], do: Oban.insert_all(jobs)
+
+              {:ok, %{deleted: updated, notes: notes}}
+
+            missing ->
+              {:error, {:not_found, missing}}
+          end
+        end)
+
+      case result do
+        {:ok, %{deleted: deleted, notes: notes}} ->
+          # Post-commit: same per-note delete events clients already handle.
+          # Meta rows decrypt cheaply (path envelope only — no content).
+          notes
+          |> Crypto.decrypt_notes_batch(user)
+          |> Enum.zip(notes)
+          |> Enum.each(fn
+            {{:ok, note}, _raw} ->
+              broadcast_change(user.id, vault.id, "delete", note.path)
+
+            {{:error, reason}, raw} ->
+              # The tombstone committed; only the broadcast is lost. Fail
+              # LOUD in logs (read paths raise on decrypt failures) so a
+              # corrupt path envelope doesn't vanish silently — other
+              # devices reconcile on their next pull via the seq feed.
+              Logger.error(
+                "batch_delete broadcast skipped: undecryptable path envelope",
+                Metadata.with_category(:error, :crypto,
+                  user_id: user.id,
+                  vault_id: vault.id,
+                  note_id: raw.id,
+                  reason: inspect(reason)
+                )
+              )
+          end)
+
+          {:ok, %{deleted: deleted}}
+
+        {:error, _} = err ->
+          err
       end
-    end)
+    end
+  end
+
+  # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
+  # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
+  # arg change cannot drift between sites (silently orphaning Qdrant points).
+  defp delete_note_index_job(note) do
+    DeleteNoteIndex.new(%{
+      note_id: note.id,
+      user_id: note.user_id,
+      vault_id: note.vault_id,
+      path_hmac: Base.encode64(note.path_hmac)
+    })
   end
 
   @doc """
@@ -1456,8 +1623,16 @@ defmodule Engram.Notes do
     case Map.get(existing_by_hmac, entry.path_hmac) do
       nil ->
         case build_batch_insert_row(entry, user, vault, now) do
-          {:ok, id, row} ->
-            info = %{id: id, version: 1, prev_hash: nil, updated_at: now}
+          {:ok, id, row, merged_text, content_hash} ->
+            info = %{
+              id: id,
+              version: 1,
+              prev_hash: nil,
+              updated_at: now,
+              content: merged_text,
+              content_hash: content_hash
+            }
+
             {%{entry | result: {:ok, info}}, [row | rows]}
 
           {:error, errors} ->
@@ -1476,13 +1651,15 @@ defmodule Engram.Notes do
     base_attrs = batch_base_attrs(entry, user)
 
     case do_update_note(existing, base_attrs, user, entry.path, entry.folder, entry.tags) do
-      {:ok, {prev_hash, updated}} ->
+      {:ok, {prev_hash, updated, merged_text, content_hash}} ->
         {:ok,
          %{
            id: updated.id,
            version: updated.version,
            prev_hash: prev_hash,
-           updated_at: updated.updated_at
+           updated_at: updated.updated_at,
+           content: merged_text,
+           content_hash: content_hash
          }}
 
       {:error, changeset} ->
@@ -1499,24 +1676,46 @@ defmodule Engram.Notes do
 
     base_attrs = batch_base_attrs(entry, user, vault)
 
-    with {:ok, encrypted} <- Crypto.encrypt_note_fields(base_attrs, user, note_id),
-         {:ok, crdt} <- build_crdt_state(entry, user, note_id) do
-      phase_b =
-        inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, entry.tags)
+    with {:ok, crdt} <- build_crdt_state(entry, user, note_id),
+         # Finding 1 fix: move key derivation into the `with` head so a DEK
+         # error propagates as {:error, _} rather than raising MatchError.
+         {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      # Mirror the single-note insert path (upsert_note/3 ~line 441): derive
+      # content, title, tags, and content_hash from the CRDT-projected text so
+      # the DB row and the seeded doc are byte-for-byte consistent from birth.
+      merged_tags = Helpers.extract_tags(crdt.merged_text)
+      content_hash = Crypto.hmac_content_hash(key, crdt.merged_text)
 
-      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: Helpers.extract_title(crdt.merged_text, entry.path),
+          tags: merged_tags,
+          content_hash: content_hash
+      }
 
-      if changeset.valid? do
-        row =
-          changeset
-          |> Ecto.Changeset.apply_changes()
-          |> Map.take(@batch_insert_columns)
-          |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
-          |> Map.merge(crdt)
+      crdt_row_fields = Map.take(crdt, [:crdt_state_ciphertext, :crdt_state_nonce])
 
-        {:ok, note_id, row}
-      else
-        {:error, changeset}
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
+        phase_b =
+          inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
+
+        changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+        if changeset.valid? do
+          row =
+            changeset
+            |> Ecto.Changeset.apply_changes()
+            |> Map.take(@batch_insert_columns)
+            |> Map.merge(%{id: note_id, version: 1, created_at: now, updated_at: now})
+            |> Map.merge(crdt_row_fields)
+
+          # Finding 2 fix: return the PROJECTION hash so the digest can use the
+          # stored value (not entry.hash which is HMAC of raw submitted content).
+          {:ok, note_id, row, crdt.merged_text, content_hash}
+        else
+          {:error, changeset}
+        end
       end
     end
   end
@@ -1528,9 +1727,10 @@ defmodule Engram.Notes do
     # frontmatter fence out of the body into the Y.Map at insert time, so the
     # seeded state already satisfies the invariant. No normalize_doc is needed
     # on this path (unlike bind/3, which heals legacy at-rest state).
-    with {:ok, %{state: state}} <- Engram.Notes.CrdtBridge.merge_plaintext(nil, content),
+    with {:ok, %{state: state, text: merged_text}} <-
+           CrdtBridge.merge_plaintext(nil, content),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
-      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce}}
+      {:ok, %{crdt_state_ciphertext: ct, crdt_state_nonce: nonce, merged_text: merged_text}}
     end
   end
 
@@ -1560,7 +1760,7 @@ defmodule Engram.Notes do
 
     embed_jobs =
       ok_entries
-      |> Enum.filter(fn %{hash: hash, result: {:ok, info}} -> info.prev_hash != hash end)
+      |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
       # clamp: false — Oban.insert_all ignores unique/replace, so the settle
       # ceiling is moot here; skip the per-note burst-start SELECT.
       |> Enum.map(fn %{result: {:ok, info}} ->
@@ -1591,7 +1791,12 @@ defmodule Engram.Notes do
               "mtime" => entry.mtime,
               "version" => info.version,
               "updated_at" => info.updated_at,
-              "content_hash" => entry.hash
+              # Finding 2 fix: use the hash of the CRDT projection (stored row),
+              # not entry.hash (HMAC of raw submitted content). For frontmatter
+              # notes the projection re-serializes YAML so these diverge; using
+              # entry.hash caused the plugin's syncedHashes to see a phantom
+              # server change and re-pull on every batch push of tagged notes.
+              "content_hash" => info.content_hash
             }
           end)
 
@@ -1619,6 +1824,19 @@ defmodule Engram.Notes do
         PostHog.capture(distinct_id, "note_created", %{vault_id: vault.id})
     end)
 
+    # Deliver-out to live CRDT rooms — without this, a room that has the note
+    # open never sees the batch merge and its next checkpoint REVERTS it.
+    Enum.each(ok_entries, fn %{result: {:ok, info}} = entry ->
+      _ =
+        CrdtDeliver.deliver_out(
+          user.id,
+          vault.id,
+          entry.path,
+          info.id,
+          info.content
+        )
+    end)
+
     :ok
   end
 
@@ -1631,7 +1849,10 @@ defmodule Engram.Notes do
             status: :ok,
             id: info.id,
             version: info.version,
-            content_hash: entry.hash,
+            # The STORED hash (of the CRDT projection), matching the digest
+            # broadcast — the raw submitted content's hash diverges for
+            # frontmatter-bearing notes and would poison client syncedHashes.
+            content_hash: info.content_hash,
             # Canonical (sanitized) path — differs from `path` when the
             # sanitizer rewrote the input; clients rename local files to it.
             server_path: entry.path
@@ -1656,7 +1877,10 @@ defmodule Engram.Notes do
   # (user, vault, path_hmac) constraint, surfacing {:error, :conflict}
   # instead of crashing on a Postgrex unique_violation.
   defp move_note_into_folder(user, vault, id, target_folder) do
-    case get_note_by_id(user, vault, id) do
+    # Meta fetch (#863): only note.path is needed to build the destination —
+    # the previous get_note_by_id decrypted the full content per id, and
+    # rename_note's inner path decrypts the row AGAIN for the re-encrypt.
+    case fetch_note_by_id(user, vault, id, :meta) do
       {:ok, note} ->
         new_path =
           case target_folder do
@@ -2339,17 +2563,15 @@ defmodule Engram.Notes do
   # envelope; real notes go through the parallel batch decryptor instead
   # of one-at-a-time. `:meta` skips the content column entirely for flows
   # that never rewrite content (delete cascades).
-  defp fetch_decrypted_live_rows(user, vault, fields) do
-    base =
-      from(n in Note,
-        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at)
-      )
-
+  # Always meta-projected (#863): both callers (folder rename + folder-delete
+  # cascade) only need path/folder/kind; content decrypt is targeted per-id
+  # where actually required (fetch_v1_contents).
+  defp fetch_decrypted_live_rows(user, vault) do
     query =
-      case fields do
-        :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> base
-      end
+      from(n in Note,
+        where: n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
+        select: struct(n, @note_meta_fields)
+      )
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
@@ -2361,8 +2583,38 @@ defmodule Engram.Notes do
     Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
   end
 
+  # Targeted content fetch for legacy (pre-AAD) rows in a folder rename —
+  # the only rows whose rename path re-encrypts content. Returns
+  # %{note_id => plaintext content}; empty when the folder is all-v2.
+  defp fetch_v1_contents(user, notes) do
+    v1_ids =
+      for n <- notes,
+          n.kind == "note",
+          n.dek_version != Crypto.row_version_aad_bound(),
+          do: n.id
+
+    if v1_ids == [] do
+      %{}
+    else
+      {:ok, rows} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(n in Note, where: n.id in ^v1_ids))
+        end)
+
+      rows
+      |> decrypt_or_raise!(user)
+      |> Map.new(fn n -> {n.id, n.content || ""} end)
+    end
+  end
+
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder) do
-    decrypted = fetch_decrypted_live_rows(user, vault, :all)
+    # :meta scan (#863 review): the v2 branch below never reads content —
+    # a folder rename preserves the basename so the title can't change and
+    # content/tags AADs key on note_id. Decrypting every content blob in
+    # the vault kept rename O(vault-content-size); only legacy v1 rows
+    # (full AAD rebind, needs content + recomputed title) fetch content,
+    # targeted by id below.
+    decrypted = fetch_decrypted_live_rows(user, vault)
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -2374,6 +2626,7 @@ defmodule Engram.Notes do
     else
       now = DateTime.utc_now()
       old_len = String.length(old_folder)
+      content_by_id = fetch_v1_contents(user, notes)
 
       # Build bulk updates — compute new paths/folders/titles in Elixir,
       # then apply as a single update per note (avoids N+1 per-row queries).
@@ -2402,7 +2655,15 @@ defmodule Engram.Notes do
                   new_note_folder <>
                     String.slice(note.path, String.length(note.folder)..-1//1)
 
-                {np, Helpers.extract_title(note.content || "", np)}
+                # Title recompute is only meaningful for the v1 full rebind;
+                # v2 rows never rewrite the title (basename unchanged).
+                title =
+                  case Map.fetch(content_by_id, note.id) do
+                    {:ok, content} -> Helpers.extract_title(content, np)
+                    :error -> nil
+                  end
+
+                {np, title}
             end
 
           {note, note.path, new_path, new_note_folder, new_title}
@@ -2444,16 +2705,27 @@ defmodule Engram.Notes do
                 )
 
               _ ->
-                full_kw =
-                  full_aad_bound_kw(
-                    user,
-                    note.id,
-                    note.content || "",
-                    new_title,
-                    new_path,
-                    new_note_folder,
-                    note.tags || []
-                  )
+                # AAD-bound rows (#863): content/tags AADs key on note_id only
+                # and a folder rename preserves the basename (title cannot
+                # change), so only the path + folder envelopes need rotating.
+                # The old full re-encrypt rewrote the content blob (largest
+                # column) on every note in the folder — pure TOAST/WAL churn.
+                # Legacy v1 rows keep the full rebind: the rename is their
+                # upgrade to AAD-bound encryption.
+                kw =
+                  if note.dek_version == Crypto.row_version_aad_bound() do
+                    phase_b_path_folder_for(user, note.id, new_path, new_note_folder)
+                  else
+                    full_aad_bound_kw(
+                      user,
+                      note.id,
+                      Map.get(content_by_id, note.id, ""),
+                      new_title,
+                      new_path,
+                      new_note_folder,
+                      note.tags || []
+                    )
+                  end
 
                 from(n in Note, where: n.id == ^note.id)
                 |> Repo.update_all(
@@ -2461,7 +2733,7 @@ defmodule Engram.Notes do
                     [
                       updated_at: now,
                       seq: seq
-                    ] ++ full_kw
+                    ] ++ kw
                 )
             end
           end)
@@ -2569,7 +2841,7 @@ defmodule Engram.Notes do
   # naturally dedupe through the union filter.
   defp do_delete_folders(user, vault, folders) do
     prefixes = Enum.map(folders, &(&1 <> "/"))
-    decrypted = fetch_decrypted_live_rows(user, vault, :meta)
+    decrypted = fetch_decrypted_live_rows(user, vault)
 
     matches =
       Enum.filter(decrypted, fn r ->
@@ -2605,16 +2877,7 @@ defmodule Engram.Notes do
       # Side effects outside the transaction context — Qdrant cleanup + broadcasts.
       # Markers carry no embedding and no path, so skip them.
       Enum.each(real_notes, fn note ->
-        _ =
-          Enqueue.enqueue(
-            DeleteNoteIndex.new(%{
-              note_id: note.id,
-              user_id: user.id,
-              vault_id: vault.id,
-              path_hmac: Base.encode64(note.path_hmac)
-            }),
-            "delete_note_index"
-          )
+        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
         :ok = broadcast_change(user.id, vault.id, "delete", note.path)
       end)
@@ -2984,7 +3247,7 @@ defmodule Engram.Notes do
     # post-commit, best-effort. CRDT-origin writes never reach here (the
     # checkpoint writes the DB directly), so this fires solely for
     # REST/MCP/web/cascade writes — no double-delivery.
-    _ = Engram.Notes.CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    _ = CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
 
     :ok
   end
