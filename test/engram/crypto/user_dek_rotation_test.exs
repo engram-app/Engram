@@ -267,6 +267,38 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  describe "rotate_user/1 - OKF columns" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "OkfVault")
+      {:ok, vault: vault}
+    end
+
+    test "rotation rewraps OKF columns and recomputes type_hmac", %{user: user, vault: vault} do
+      content = "---\ntype: Playbook\ndescription: d\nresource: r\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/okf.md", "content" => content})
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
+      assert decrypted.type == "Playbook"
+      assert decrypted.description == "d"
+      assert decrypted.resource == "r"
+
+      {:ok, new_filter_key} = Crypto.dek_filter_key(reloaded_user)
+      assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
+    end
+  end
+
   describe "rotate_user/1 — attachments sweep" do
     test "happy path: attachment blob re-encrypted under new DEK (legacy v1 fixture)", %{
       user: user

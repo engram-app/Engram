@@ -904,15 +904,19 @@ defmodule Engram.Crypto.UserDekRotation do
          new_dek_version
        ) do
     base_columns = [
-      {:content, :content_ciphertext, :content_nonce, nil},
-      {:title, :title_ciphertext, :title_nonce, nil},
-      {:path, :path_ciphertext, :path_nonce, :path_hmac},
-      {:folder, :folder_ciphertext, :folder_nonce, :folder_hmac}
+      {:content, :content_ciphertext, :content_nonce, nil, nil},
+      {:title, :title_ciphertext, :title_nonce, nil, nil},
+      {:path, :path_ciphertext, :path_nonce, :path_hmac, & &1},
+      {:folder, :folder_ciphertext, :folder_nonce, :folder_hmac, & &1},
+      {:type, :type_ciphertext, :type_nonce, :type_hmac,
+       &Engram.Notes.OkfFields.normalize_type/1},
+      {:description, :description_ciphertext, :description_nonce, nil, nil},
+      {:resource, :resource_ciphertext, :resource_nonce, nil, nil}
     ]
 
     base_updates =
       base_columns
-      |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key} ->
+      |> Enum.flat_map(fn {column, ct_field, nonce_field, hmac_key, hmac_transform} ->
         ct = Map.get(note, ct_field)
         nonce = Map.get(note, nonce_field)
 
@@ -931,7 +935,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
               hmac_updates =
                 if hmac_key && is_binary(plaintext) do
-                  [{hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}]
+                  [{hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}]
                 else
                   []
                 end
