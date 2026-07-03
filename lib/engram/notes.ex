@@ -792,8 +792,61 @@ defmodule Engram.Notes do
     sanitized = PathSanitizer.sanitize(path)
 
     case get_note(user, vault, sanitized) do
-      {:ok, note} -> {:ok, note}
-      {:error, :not_found} -> upsert_note(user, vault, %{"path" => sanitized, "content" => ""})
+      {:ok, note} ->
+        {:ok, note}
+
+      {:error, :not_found} ->
+        # A soft-deleted row at this path means the STEP1 is STALE (the note was
+        # deleted or renamed away) — refuse rather than bootstrap. The unique
+        # index is partial (deleted_at IS NULL), so the empty insert would slip
+        # through and silently resurrect the note server-side: the e2e
+        # "RenameOld.md still on server" / delete-ghost failures.
+        if deleted_note_exists?(user, vault, sanitized) do
+          {:error, :not_found}
+        else
+          case upsert_note(user, vault, %{"path" => sanitized, "content" => ""}) do
+            {:ok, note} ->
+              {:ok, note}
+
+            {:error, :version_conflict, _existing} ->
+              # Lost the insert race to a concurrent creator — usually the same
+              # device's REST push for the note this STEP1 announces. The row
+              # exists now, so resolve to it instead of dropping the frame: a
+              # dropped STEP1 is never retried (plugin enrollment is
+              # once-per-session) and pins the receiver's file empty forever.
+              # Re-fetch via get_note so a row deleted in the interim still
+              # resolves to :not_found rather than resurrecting.
+              get_note(user, vault, sanitized)
+
+            other ->
+              other
+          end
+        end
+    end
+  end
+
+  # True when a soft-deleted row exists at `path` (live rows excluded by the
+  # caller's get_note miss). Multiple deleted rows can share a path_hmac —
+  # existence is all the bootstrap guard needs.
+  defp deleted_note_exists?(user, vault, path) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        hmac = Crypto.hmac_field(filter_key, path)
+
+        query =
+          from(n in Note,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
+                not is_nil(n.deleted_at)
+          )
+
+        case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
+          {:ok, exists?} -> exists?
+          _ -> false
+        end
+
+      _ ->
+        false
     end
   end
 
