@@ -65,52 +65,6 @@ defmodule EngramWeb.SearchController do
     end
   end
 
-  defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
-    case Search.search(user, vault, query, opts) do
-      {:ok, results} ->
-        # `cross_vault` mode passes nil as the vault filter so id lookup
-        # spans all of the user's vaults (matches how the search hits
-        # were sourced).
-        id_lookup_vault = if cross_vault, do: nil, else: vault
-
-        notes =
-          results
-          |> Enum.map(fn r ->
-            %{
-              id: nil,
-              path: r.source_path,
-              title: r.title || derive_title(r.source_path),
-              folder: derive_folder(r.source_path),
-              heading_path: r.heading_path,
-              snippet: r.text,
-              score: r.score,
-              match_count: r.match_count
-            }
-          end)
-          |> Enum.take(note_limit)
-          |> attach_ids(user, id_lookup_vault)
-
-        json(conn, %{results: notes})
-
-      {:error, :feature_not_available} ->
-        conn
-        |> put_status(403)
-        |> json(%{error: "Cross-vault search requires Pro plan"})
-
-      {:error, reason} ->
-        require Logger
-
-        Logger.error(
-          "Search failed",
-          Engram.Logger.Metadata.with_category(:error, :search, reason: inspect(reason))
-        )
-
-        conn
-        |> put_status(500)
-        |> json(%{error: "search_failed"})
-    end
-  end
-
   def search(conn, _params) do
     conn
     |> put_status(422)
@@ -193,5 +147,51 @@ defmodule EngramWeb.SearchController do
     |> List.last()
     |> Kernel.||("")
     |> String.replace_suffix(".md", "")
+  end
+
+  defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
+    case Search.search(user, vault, query, opts) do
+      {:ok, results} ->
+        # `cross_vault` mode passes nil as the vault filter so id lookup
+        # spans all of the user's vaults (matches how the search hits
+        # were sourced).
+        id_lookup_vault = if cross_vault, do: nil, else: vault
+
+        notes =
+          results
+          |> Enum.map(fn r ->
+            %{
+              id: nil,
+              path: r.source_path,
+              title: r.title || derive_title(r.source_path),
+              folder: derive_folder(r.source_path),
+              heading_path: r.heading_path,
+              snippet: r.text,
+              score: r.score,
+              match_count: r.match_count
+            }
+          end)
+          |> Enum.take(note_limit)
+          |> attach_ids(user, id_lookup_vault)
+
+        json(conn, %{results: notes})
+
+      {:error, :feature_not_available} ->
+        conn
+        |> put_status(403)
+        |> json(%{error: "Cross-vault search requires Pro plan"})
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.error(
+          "Search failed",
+          Engram.Logger.Metadata.with_category(:error, :search, reason: inspect(reason))
+        )
+
+        conn
+        |> put_status(500)
+        |> json(%{error: "search_failed"})
+    end
   end
 end
