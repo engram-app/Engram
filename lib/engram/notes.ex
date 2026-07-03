@@ -501,6 +501,7 @@ defmodule Engram.Notes do
              {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
           phase_b =
             inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
+            |> inject_okf_fields(user, note_id, crdt.merged_text)
             |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
             |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -635,6 +636,7 @@ defmodule Engram.Notes do
             folder,
             crdt.tags
           )
+          |> inject_okf_fields(user, existing.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -1457,7 +1459,16 @@ defmodule Engram.Notes do
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
-    :tags_hmac
+    :tags_hmac,
+    :fm_timestamp,
+    :fm_created,
+    :type_ciphertext,
+    :type_nonce,
+    :type_hmac,
+    :description_ciphertext,
+    :description_nonce,
+    :resource_ciphertext,
+    :resource_nonce
   ]
 
   @doc """
@@ -1752,6 +1763,7 @@ defmodule Engram.Notes do
       with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
         phase_b =
           inject_phase_b_fields(encrypted, user, note_id, entry.path, entry.folder, merged_tags)
+          |> inject_okf_fields(user, note_id, crdt.merged_text)
 
         changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
@@ -3332,6 +3344,39 @@ defmodule Engram.Notes do
   # folder / tags ciphertext.
   defp inject_phase_b_fields(attrs, user, note_id, path, folder, tags) do
     Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
+  end
+
+  # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
+  # absent, so removing frontmatter clears previously stored values.
+  defp inject_okf_fields(attrs, user, note_id, content) do
+    okf = Engram.Notes.OkfFields.extract(content)
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    type_hmac =
+      case okf.type do
+        nil -> nil
+        t -> Crypto.hmac_field(filter_key, Engram.Notes.OkfFields.normalize_type(t))
+      end
+
+    attrs
+    |> Map.merge(okf_envelope(dek, note_id, :type, okf.type))
+    |> Map.merge(okf_envelope(dek, note_id, :description, okf.description))
+    |> Map.merge(okf_envelope(dek, note_id, :resource, okf.resource))
+    |> Map.merge(%{
+      type_hmac: type_hmac,
+      fm_timestamp: okf.fm_timestamp,
+      fm_created: okf.fm_created
+    })
+  end
+
+  defp okf_envelope(_dek, _note_id, field, nil) do
+    %{:"#{field}_ciphertext" => nil, :"#{field}_nonce" => nil}
+  end
+
+  defp okf_envelope(dek, note_id, field, value) do
+    {ct, nonce} = Envelope.encrypt(value, dek, Crypto.aad_for_row(:notes, field, note_id))
+    %{:"#{field}_ciphertext" => ct, :"#{field}_nonce" => nonce}
   end
 
   @doc false
