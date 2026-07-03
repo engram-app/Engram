@@ -16,6 +16,15 @@ defmodule Engram.Notes.Note do
     field :title, :string, virtual: true
     field :content, :string, virtual: true
 
+    # OKF v0.1 fields (spec 2026-07-02). type/description/resource are
+    # encrypted (virtuals below); the two dates are the ONLY plaintext
+    # frontmatter columns (range queries need real values).
+    field :type, :string, virtual: true
+    field :description, :string, virtual: true
+    field :resource, :string, virtual: true
+    field :fm_timestamp, :utc_datetime
+    field :fm_created, :utc_datetime
+
     field :version, :integer, default: 1
     # Sync change-log backbone (PR A): per-row latest change sequence, allocated
     # from `vaults.change_seq` via `Engram.Vaults.next_seq!/1` on every write.
@@ -59,6 +68,14 @@ defmodule Engram.Notes.Note do
     field :crdt_state_ciphertext, :binary
     field :crdt_state_nonce, :binary
 
+    field :type_ciphertext, :binary
+    field :type_nonce, :binary
+    field :type_hmac, :binary
+    field :description_ciphertext, :binary
+    field :description_nonce, :binary
+    field :resource_ciphertext, :binary
+    field :resource_nonce, :binary
+
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
     has_many :chunks, Engram.Notes.Chunk
@@ -81,7 +98,14 @@ defmodule Engram.Notes.Note do
     :folder_hmac,
     :tags_hmac,
     :crdt_state_ciphertext,
-    :crdt_state_nonce
+    :crdt_state_nonce,
+    :type_ciphertext,
+    :type_nonce,
+    :type_hmac,
+    :description_ciphertext,
+    :description_nonce,
+    :resource_ciphertext,
+    :resource_nonce
   ]
 
   def changeset(note, attrs) do
@@ -103,7 +127,9 @@ defmodule Engram.Notes.Note do
         :user_id,
         :vault_id,
         :deleted_at,
-        :kind
+        :kind,
+        :fm_timestamp,
+        :fm_created
       ] ++ @encryption_fields,
       empty_values: []
     )
