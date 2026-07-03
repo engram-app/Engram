@@ -8,6 +8,13 @@ defmodule EngramWeb.SearchController do
 
   @max_search_limit 50
 
+  @date_params [
+    {"created_after", :created_after},
+    {"created_before", :created_before},
+    {"updated_after", :updated_after},
+    {"updated_before", :updated_before}
+  ]
+
   operation(:search,
     operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
@@ -31,19 +38,34 @@ defmodule EngramWeb.SearchController do
     note_limit = params["limit"] |> clamp_limit()
     tags = params["tags"]
     folder = params["folder"]
+    type = params["type"]
     cross_vault = Map.get(params, "cross_vault", false)
 
-    opts =
-      [
-        limit: note_limit,
-        cross_vault: cross_vault,
-        mode: parse_mode(params["mode"]),
-        group_by_note: true
-      ]
-      |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
-      |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
-      |> maybe_put_diversity(params["diversity"])
+    case parse_date_params(params) do
+      {:ok, date_opts} ->
+        opts =
+          [
+            limit: note_limit,
+            cross_vault: cross_vault,
+            mode: parse_mode(params["mode"]),
+            group_by_note: true
+          ]
+          |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
+          |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
+          |> then(&if(type, do: Keyword.put(&1, :type, type), else: &1))
+          |> Keyword.merge(date_opts)
+          |> maybe_put_diversity(params["diversity"])
 
+        do_search(conn, user, vault, query, note_limit, cross_vault, opts)
+
+      {:error, param} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "invalid ISO 8601 datetime in #{param}"})
+    end
+  end
+
+  defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
     case Search.search(user, vault, query, opts) do
       {:ok, results} ->
         # `cross_vault` mode passes nil as the vault filter so id lookup
@@ -106,6 +128,24 @@ defmodule EngramWeb.SearchController do
   end
 
   defp clamp_limit(_), do: 5
+
+  # Parses the four OKF date-range params into Search opts. Absent params are
+  # skipped; the first param with an unparseable ISO 8601 value halts with
+  # its name so the controller can return a 422 naming the offending param.
+  defp parse_date_params(params) do
+    Enum.reduce_while(@date_params, {:ok, []}, fn {param, key}, {:ok, acc} ->
+      case params[param] do
+        nil ->
+          {:cont, {:ok, acc}}
+
+        value ->
+          case DateTime.from_iso8601(value) do
+            {:ok, dt, _} -> {:cont, {:ok, [{key, dt} | acc]}}
+            {:error, _} -> {:halt, {:error, param}}
+          end
+      end
+    end)
+  end
 
   defp parse_mode("keyword"), do: :keyword
   defp parse_mode("vector"), do: :vector
