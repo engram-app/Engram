@@ -104,7 +104,7 @@ defmodule Engram.Vector.Qdrant do
   On a fresh create, also creates the keyword/integer payload indexes every
   tenant-scoped filter depends on (#626, extended for OKF frontmatter fields).
   An existing collection already carries them (indexes persist), so the
-  steady-state path skips the work — the only way to lose them is a
+  steady-state path skips the work: the only way to lose them is a
   drop+recreate, which re-enters the create branch.
 
   NOTE: `ensure_collection` runs on every note index (see

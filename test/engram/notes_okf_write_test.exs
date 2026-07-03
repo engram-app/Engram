@@ -1,6 +1,5 @@
 defmodule Engram.NotesOkfWriteTest do
   use Engram.DataCase, async: true
-  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
 

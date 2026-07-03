@@ -21,6 +21,10 @@ defmodule Engram.Parsers.Markdown do
   - `:heading_path` — e.g. "Title > H1 > H2"
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
+
+  Exception: when frontmatter is present, a synthetic chunk carrying the raw
+  frontmatter block is appended last, with `heading_path` fixed to
+  `"frontmatter"` and `char_start`/`char_end` both fixed to `0`.
   """
   def parse("", _path), do: []
 

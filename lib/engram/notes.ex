@@ -3397,6 +3397,18 @@ defmodule Engram.Notes do
     inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
   end
 
+  @doc false
+  # Public delegate so `CrdtCheckpoint` can re-run OKF v0.1 frontmatter
+  # extraction on every changed-text checkpoint, the same way it re-runs
+  # Phase B. Without this, a live-editor frontmatter edit persists content
+  # while type_ciphertext/type_hmac/fm_timestamp/fm_created keep stale
+  # values. The `defp` counterpart cannot be called across module
+  # boundaries; this thin wrapper exposes it without promoting it to an
+  # official public API.
+  def inject_okf_fields_pub(attrs, user, note_id, content) do
+    inject_okf_fields(attrs, user, note_id, content)
+  end
+
   # Returns a keyword list of Phase B field updates suitable for splicing into
   # `Repo.update_all(set: [...])` or `Repo.insert_all` rows. Single source of
   # truth for HMAC + envelope computation across upsert and rename paths.
