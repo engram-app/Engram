@@ -140,6 +140,14 @@ if config_env() != :test do
     config :engram, :embed_poison_cooldown_seconds, String.to_integer(secs)
   end
 
+  # Preemptive cooldown (seconds) ReconcileEmbeddings stamps on every note it
+  # enqueues (#897). Makes the backoff crash-independent: an OOM/node kill that
+  # bypasses the graceful poison stamp still can't cause immediate re-enqueue.
+  # MUST exceed the 15-min reconcile cron interval. Default 30m (1_800).
+  if secs = System.get_env("EMBED_RECONCILE_BACKOFF_SECONDS") do
+    config :engram, :embed_reconcile_backoff_seconds, String.to_integer(secs)
+  end
+
   # Client-side Voyage rate limit. Unset = no throttle (self-host default).
   # Set to your Voyage paid-tier RPM (e.g. 2000) to fail fast with a synthetic
   # 429 before burning real API calls. EmbedNote snoozes on the synthetic 429
