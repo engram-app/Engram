@@ -33,9 +33,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Reconnect + catch-up round-trip budget under e2e-clerk load. 15s flaked
-# (#643); aligned with test_47 + test_78's 30s budget (#565). Clerk-only
-# (skipif below), so one generous constant suffices.
-RT_TIMEOUT = 30
+# once (#643) but 30s masks real catch-up latency regressions. Tightened
+# back to 15s; if it flakes, profile the xdist contention — do not re-widen.
+RT_TIMEOUT = 15
 
 
 def _log_latency(label: str, t0: float) -> float:
