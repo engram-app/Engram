@@ -17,8 +17,14 @@ defmodule Engram.Vector.Qdrant do
   # rejects (400) a filter on an un-indexed field, so each must have a keyword
   # index before any upsert/search/delete. `note_id` is not a live filter key
   # today (deletes resolve via `path_hmac`) but is indexed to match the prod
-  # collection + future-proof. See #626.
-  @payload_index_fields ~w(user_id vault_id note_id path_hmac)
+  # collection + future-proof. See #626. `type_hmac` is the OKF frontmatter
+  # `type` blind index (spec 2026-07-02).
+  @payload_index_fields ~w(user_id vault_id note_id path_hmac type_hmac)
+
+  # OKF frontmatter dates are stored plaintext (see build_prepared/6) so
+  # Qdrant can range-filter on them; they need an integer payload index
+  # rather than keyword.
+  @integer_payload_index_fields ~w(fm_timestamp fm_created)
 
   defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
@@ -95,11 +101,20 @@ defmodule Engram.Vector.Qdrant do
   Ensure a collection exists with the given vector dimensions.
   Creates it if missing; no-ops if already present (Qdrant returns 200 either way).
 
-  On a fresh create, also creates the keyword payload indexes every
-  tenant-scoped filter depends on (#626). An existing collection already
-  carries them (indexes persist), so the steady-state path skips the work —
-  the only way to lose them is a drop+recreate, which re-enters the create
-  branch.
+  On a fresh create, also creates the keyword/integer payload indexes every
+  tenant-scoped filter depends on (#626, extended for OKF frontmatter fields).
+  An existing collection already carries them (indexes persist), so the
+  steady-state path skips the work — the only way to lose them is a
+  drop+recreate, which re-enters the create branch.
+
+  NOTE: `ensure_collection` runs on every note index (see
+  `Indexing.prepare_index/2`), so the `:exists` branch is a hot path. It
+  intentionally does NOT re-run `ensure_payload_indexes/1`, even though that
+  PUT is idempotent, to avoid adding several extra Qdrant round trips to
+  every single note embed. An already-deployed collection that predates a
+  newly-added index field (like this task's `type_hmac`/`fm_timestamp`/
+  `fm_created`) needs that index created once out-of-band, same procedure
+  as #626.
   """
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
@@ -146,21 +161,25 @@ defmodule Engram.Vector.Qdrant do
     with :ok <- verify_collection_shape(col), do: {:ok, :exists}
   end
 
-  # Create a keyword payload index per filtered field, right after a fresh
+  # Create a payload index per filtered field, right after a fresh
   # collection create. `?wait=true` blocks until each index is ready so the
   # first upsert can't race an unbuilt index. Stops at the first failure so a
-  # real error surfaces.
+  # real error surfaces. Keyword fields are equality/any-match filters;
+  # integer fields (the OKF dates) are range filters.
   defp ensure_payload_indexes(col) do
-    Enum.reduce_while(@payload_index_fields, :ok, fn field, :ok ->
-      case create_payload_index(col, field) do
+    keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
+    integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
+
+    Enum.reduce_while(keyword ++ integer, :ok, fn {field, schema}, :ok ->
+      case create_payload_index(col, field, schema) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
     end)
   end
 
-  defp create_payload_index(col, field) do
-    opts = [json: %{field_name: field, field_schema: "keyword"}] ++ req_opts()
+  defp create_payload_index(col, field, schema) do
+    opts = [json: %{field_name: field, field_schema: schema}] ++ req_opts()
 
     instrument(:create_payload_index, fn ->
       case Req.put("#{base_url()}/collections/#{col}/index?wait=true", opts) do
@@ -508,7 +527,7 @@ defmodule Engram.Vector.Qdrant do
     base = %{
       query: vector,
       using: "dense",
-      filter: tenant_filter(search_opts),
+      filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
@@ -544,12 +563,16 @@ defmodule Engram.Vector.Qdrant do
       else: body
   end
 
-  # Extracted from search/3 so all three query shapes share tenant filtering.
-  defp tenant_filter(search_opts) do
+  @doc false
+  # Public for filter-shape tests only (test/engram/vector/qdrant_filter_test.exs).
+  # Extracted from search/3 so all three query shapes share tenant + OKF
+  # frontmatter filtering.
+  def build_tenant_filter(search_opts) do
     user_id = Keyword.fetch!(search_opts, :user_id)
     vault_id = Keyword.get(search_opts, :vault_id)
     tags_hmac = Keyword.get(search_opts, :tags_hmac)
     folder_hmac = Keyword.get(search_opts, :folder_hmac)
+    type_hmac = Keyword.get(search_opts, :type_hmac)
 
     must = [%{key: "user_id", match: %{value: user_id}}]
     must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
@@ -558,8 +581,26 @@ defmodule Engram.Vector.Qdrant do
     must =
       if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
 
-    %{must: must}
+    must =
+      if type_hmac, do: [%{key: "type_hmac", match: %{value: type_hmac}} | must], else: must
+
+    must
+    |> add_range_clause("fm_timestamp", search_opts, :fm_timestamp_gte, :fm_timestamp_lte)
+    |> add_range_clause("fm_created", search_opts, :fm_created_gte, :fm_created_lte)
+    |> then(&%{must: &1})
   end
+
+  defp add_range_clause(must, key, opts, gte_key, lte_key) do
+    range =
+      %{}
+      |> maybe_put_bound(:gte, Keyword.get(opts, gte_key))
+      |> maybe_put_bound(:lte, Keyword.get(opts, lte_key))
+
+    if range == %{}, do: must, else: must ++ [%{key: key, range: range}]
+  end
+
+  defp maybe_put_bound(range, _bound, nil), do: range
+  defp maybe_put_bound(range, bound, value), do: Map.put(range, bound, value)
 
   @doc """
   Keyword-only search against the sparse `keyword` vector. `sparse` is
@@ -578,7 +619,7 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{indices: sparse.indices, values: sparse.values},
       using: "keyword",
-      filter: tenant_filter(search_opts),
+      filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
@@ -600,7 +641,7 @@ defmodule Engram.Vector.Qdrant do
 
   @doc false
   def hybrid_search_body(dense, sparse, search_opts) do
-    filter = tenant_filter(search_opts)
+    filter = build_tenant_filter(search_opts)
     limit = Keyword.get(search_opts, :limit, 5)
 
     dense_leg =
