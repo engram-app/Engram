@@ -9,16 +9,17 @@ import {
 	removeKey,
 	setType,
 	setValue,
+	sortRowsOkfFirst,
 } from "../crdt/frontmatter-doc";
 import { PropertyField } from "./property-fields";
 import { PropertyTypeMenu } from "./property-type-menu";
 import { effectiveType, type PropertyType } from "./property-types";
 
 export function PropertiesWidget({ doc }: { doc: Y.Doc }) {
-	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
+	const [rows, setRows] = useState<PropertyRow[]>(() => sortRowsOkfFirst(readRows(doc)));
 
 	useEffect(() => {
-		const refresh = () => setRows(readRows(doc));
+		const refresh = () => setRows(sortRowsOkfFirst(readRows(doc)));
 		const { values, order, types } = frontmatterMaps(doc);
 		values.observeDeep(refresh);
 		order.observe(refresh);
