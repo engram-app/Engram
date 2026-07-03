@@ -272,6 +272,71 @@ defmodule Engram.SearchTest do
       assert {:ok, []} = Search.search(user, vault, "query", tags: ["health", "labs"])
     end
 
+    test "type filter is HMAC-translated and dates become unix bounds (OKF)",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      expected_type_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "playbook"))
+
+      updated_after = ~U[2026-01-01 00:00:00Z]
+      created_before = ~U[2026-06-01 00:00:00Z]
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        conditions = decoded["filter"]["must"]
+
+        type_cond = Enum.find(conditions, &(&1["key"] == "type_hmac"))
+        assert type_cond["match"]["value"] == expected_type_hmac
+
+        timestamp_cond = Enum.find(conditions, &(&1["key"] == "fm_timestamp"))
+        assert timestamp_cond["range"]["gte"] == DateTime.to_unix(updated_after)
+        refute Map.has_key?(timestamp_cond["range"], "lte")
+
+        created_cond = Enum.find(conditions, &(&1["key"] == "fm_created"))
+        assert created_cond["range"]["lte"] == DateTime.to_unix(created_before)
+        refute Map.has_key?(created_cond["range"], "gte")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      assert {:ok, []} =
+               Search.search(user, vault, "query",
+                 type: "Playbook",
+                 updated_after: updated_after,
+                 created_before: created_before
+               )
+    end
+
+    test "date bounds alone need no DEK", %{bypass: bypass} do
+      # Brand-new user, no DEK provisioned. Date bounds are plaintext, so the
+      # search proceeds (unlike folder/tags/type, which require the DEK to
+      # derive an HMAC).
+      user_no_dek = insert(:user)
+      vault = insert(:vault, user: user_no_dek)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        conditions = decoded["filter"]["must"]
+        assert Enum.find(conditions, &(&1["key"] == "fm_timestamp"))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      assert {:ok, []} =
+               Search.search(user_no_dek, vault, "query", updated_after: ~U[2026-01-01 00:00:00Z])
+    end
+
     test "user without DEK returns empty result for filtered search instead of crashing",
          %{bypass: bypass} do
       # Brand-new user — no notes upserted, no DEK provisioned. Mirrors the
@@ -280,11 +345,12 @@ defmodule Engram.SearchTest do
       vault = insert(:vault, user: user_no_dek)
 
       Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn _ ->
-        flunk("Qdrant must not be queried when caller has no DEK and supplied folder/tags")
+        flunk("Qdrant must not be queried when caller has no DEK and supplied folder/tags/type")
       end)
 
       assert {:ok, []} = Search.search(user_no_dek, vault, "query", folder: "Health")
       assert {:ok, []} = Search.search(user_no_dek, vault, "query", tags: ["x"])
+      assert {:ok, []} = Search.search(user_no_dek, vault, "query", type: "Playbook")
     end
 
     test "returns error when embedder fails", %{user: user, vault: vault} do
