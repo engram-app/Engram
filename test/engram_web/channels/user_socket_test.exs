@@ -1,5 +1,8 @@
 defmodule EngramWeb.UserSocketTest do
-  use EngramWeb.ChannelCase, async: true
+  # async: false — the setup mutates the global Logger level to :info; every
+  # other test that does this is async: false to avoid corrupting concurrent
+  # async modules (e.g. sync_channel_test) that rely on the default :warning.
+  use EngramWeb.ChannelCase, async: false
   import ExUnit.CaptureLog
   require Logger
 
