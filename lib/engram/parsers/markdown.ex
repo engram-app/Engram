@@ -29,12 +29,40 @@ defmodule Engram.Parsers.Markdown do
     title = Helpers.extract_title(content, path)
     body = strip_frontmatter(content)
 
-    if String.trim(body) == "" do
-      []
-    else
-      body
-      |> split_into_sections(title)
-      |> build_chunks(folder, title)
+    body_chunks =
+      if String.trim(body) == "" do
+        []
+      else
+        body
+        |> split_into_sections(title)
+        |> build_chunks(folder, title)
+      end
+
+    body_chunks ++ frontmatter_chunk(content, folder, title, length(body_chunks))
+  end
+
+  # Frontmatter values used to be stripped before indexing, making every key
+  # invisible to keyword search (spec 2026-07-02). One synthetic chunk carries
+  # the raw block into the BM25 leg. char offsets are 0/0: the block sits
+  # before the post-frontmatter body that offsets are relative to.
+  defp frontmatter_chunk(content, folder, title, position) do
+    case Engram.Notes.Frontmatter.split(content) do
+      {block, _body} when is_binary(block) and block != "" ->
+        context_prefix = build_context_prefix(folder, "#{title} > frontmatter")
+
+        [
+          %{
+            text: block,
+            context_text: context_prefix <> "\n\n" <> block,
+            heading_path: "frontmatter",
+            char_start: 0,
+            char_end: 0,
+            position: position
+          }
+        ]
+
+      _ ->
+        []
     end
   end
 
