@@ -63,7 +63,14 @@ config :engram, Oban,
   # latency cost.
   stage_interval: :timer.seconds(5),
   queues: [
-    embed: 5,
+    # Bounded low on purpose. Each *concurrent* Voyage embed HTTP request
+    # (Req → Finch → TLS) holds ~100 MB of off-heap memory (invisible to
+    # `:erlang.memory`, released after the request). At `embed: 5`, five
+    # simultaneous embeds + a ReconcileEmbeddings backlog blew the 1024 MB
+    # Fargate task ceiling → OOM crash-loop (2026-07-03). Guarded by
+    # ObanQueueConfigTest; do not raise without bounding the Finch pool +
+    # raising task memory. See the incident plan doc.
+    embed: 2,
     reindex: 1,
     maintenance: 2,
     crypto_backfill: 1,

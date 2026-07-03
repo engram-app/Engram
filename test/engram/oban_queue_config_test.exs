@@ -29,6 +29,27 @@ defmodule Engram.ObanQueueConfigTest do
              end)
   end
 
+  # Regression guard for the 2026-07-03 prod OOM crash-loop. Each *concurrent*
+  # Voyage embedding HTTP request (Req → Finch → TLS) holds ~100 MB of off-heap
+  # memory (invisible to `:erlang.memory`, released after the request). At
+  # `embed: 5`, five simultaneous embeds + a ReconcileEmbeddings backlog blew
+  # the 1024 MB Fargate task ceiling → OOM-killed the node every ~2 min. Keeping
+  # the embed producer small bounds peak concurrent HTTP fan-out to the embedder.
+  # See docs/superpowers/plans/2026-07-02-crdt-oom-compaction-fixes.md.
+  test "embed queue concurrency is capped low to bound embedder HTTP off-heap memory" do
+    embed_limit = configured_queue_limit(:embed)
+
+    assert is_integer(embed_limit) and embed_limit <= 2,
+           "embed queue concurrency must stay <= 2 (got #{inspect(embed_limit)}).\n" <>
+             "Each concurrent Voyage embed HTTP request holds ~100 MB off-heap (TLS);\n" <>
+             "embed: 5 OOM-killed the 1024 MB prod task on 2026-07-03. Do not raise this\n" <>
+             "without also bounding the shared Finch pool + raising the task memory."
+  end
+
+  defp configured_queue_limit(queue) do
+    Application.fetch_env!(:engram, Oban)[:queues] |> Keyword.get(queue)
+  end
+
   # The configured queue list. `testing: :manual` (config/test.exs) deep-merges
   # into the base `config/config.exs` Oban config, so `:queues` is the real
   # base list here. Guard against an env that stubs it to `false`/`nil` — that
