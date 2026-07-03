@@ -4,9 +4,10 @@ defmodule EngramWeb.UserSocketTest do
   # async modules (e.g. sync_channel_test) that rely on the default :warning.
   use EngramWeb.ChannelCase, async: false
   import ExUnit.CaptureLog
-  require Logger
 
   alias EngramWeb.UserSocket
+
+  require Logger
 
   setup do
     previous_level = Logger.level()

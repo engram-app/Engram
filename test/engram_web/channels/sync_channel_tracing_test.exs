@@ -7,9 +7,10 @@ defmodule EngramWeb.SyncChannelTracingTest do
   # (mirrors user_socket_test.exs from Task A3).
   use EngramWeb.ChannelCase, async: false
   import ExUnit.CaptureLog
-  require Logger
 
   alias EngramWeb.UserSocket
+
+  require Logger
 
   setup do
     previous_level = Logger.level()

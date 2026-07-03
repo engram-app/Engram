@@ -1,10 +1,10 @@
 defmodule EngramWeb.UserSocket do
   use Phoenix.Socket
 
-  require Logger
-
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
+
+  require Logger
 
   channel "sync:*", EngramWeb.SyncChannel
   channel "crdt:*", EngramWeb.CrdtChannel
