@@ -38,6 +38,23 @@ API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 PLUGIN_SRC = Path(os.environ.get("ENGRAM_PLUGIN_SRC", Path(__file__).parent.parent / "plugin"))
 OBSIDIAN_BIN = Path.home() / "Applications" / "Obsidian.AppImage"
 
+
+def pytest_configure(config):
+    """Fail fast when a Clerk-shaped run is missing its secret.
+
+    The Clerk-gated test files skip themselves when E2E_CLERK_SECRET_KEY is
+    empty, so a misconfigured secret would otherwise turn ~9 files into green
+    skips instead of a loud failure.
+    """
+    if os.environ.get("AUTH_PROVIDER") == "clerk" and not os.environ.get(
+        "E2E_CLERK_SECRET_KEY"
+    ):
+        pytest.exit(
+            "AUTH_PROVIDER=clerk but E2E_CLERK_SECRET_KEY is empty — "
+            "Clerk-gated tests would silently skip. Fix the secret wiring.",
+            returncode=1,
+        )
+
 def _worker_index() -> int:
     """xdist worker number (0 for master / serial runs)."""
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")

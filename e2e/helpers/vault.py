@@ -91,6 +91,34 @@ def wait_for_content(
     )
 
 
+def wait_for_exact_content(
+    vault_path: Path,
+    rel_path: str,
+    expected: str,
+    timeout: float = 15,
+    poll: float = 0.3,
+) -> str:
+    """Poll until file content equals expected exactly, return it.
+
+    Substring checks pass even when sync truncates, duplicates, or reorders
+    body lines; exact equality is the only assertion that proves the full
+    payload survived the round trip.
+    """
+    full = vault_path / rel_path
+    last: str | None = None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if full.exists():
+            last = full.read_text(encoding="utf-8")
+            if last == expected:
+                return last
+        time.sleep(poll)
+    raise TimeoutError(
+        f"File {rel_path} never exactly matched expected content within {timeout}s\n"
+        f"--- expected ---\n{expected!r}\n--- last seen ---\n{last!r}"
+    )
+
+
 def list_notes(vault_path: Path, folder: str = "") -> list[str]:
     """List .md files in folder (relative paths)."""
     search = vault_path / folder if folder else vault_path
