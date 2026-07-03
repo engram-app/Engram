@@ -63,7 +63,10 @@ CREATE TABLE public.vaults (
     dek_version integer DEFAULT 1 NOT NULL
 );
 
--- structure.sql:229  (encrypted at rest; path/folder/tags also HMAC'd for indexing)
+-- structure.sql:229  (encrypted at rest; path/folder/tags also HMAC'd for indexing;
+-- only the frontmatter dates fm_timestamp/fm_created are stored plaintext, for range
+-- queries -- OKF wave 2026-07-02; type is encrypted + type_hmac blind index,
+-- description/resource encrypted display-only)
 CREATE TABLE public.notes (
     id uuid DEFAULT uuidv7() NOT NULL,
     user_id uuid NOT NULL,
