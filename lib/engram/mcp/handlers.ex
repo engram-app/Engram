@@ -445,9 +445,13 @@ defmodule Engram.MCP.Handlers do
   @doc """
   Build the keyword opts list for `Engram.Search.search/4` from MCP tool args.
 
-  Assembles `:limit`, `:mode`, `:tags`, and (when given a number) `:diversity`
-  from the raw args map. Absent or non-numeric `diversity` is omitted so the
-  `SearchProfile` default applies.
+  Assembles `:limit`, `:mode`, `:tags`, `:folder`, `:type`, the four date-bound
+  opts (`:created_after`, `:created_before`, `:updated_after`,
+  `:updated_before`), and (when given a number) `:diversity` from the raw args
+  map. Absent or non-numeric `diversity` is omitted so the `SearchProfile`
+  default applies. Date args are parsed as ISO 8601; a missing, non-string, or
+  unparseable value is silently omitted rather than raising, since a bad MCP
+  tool arg must not crash the call.
   """
   def build_search_opts(args) do
     limit = min(args["limit"] || 5, 20)
@@ -455,11 +459,34 @@ defmodule Engram.MCP.Handlers do
 
     opts = [limit: limit, mode: search_mode(args)]
     opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
+    opts = if args["folder"], do: Keyword.put(opts, :folder, args["folder"]), else: opts
+    opts = if args["type"], do: Keyword.put(opts, :type, args["type"]), else: opts
+
+    opts =
+      Enum.reduce(
+        [
+          created_after: "created_after",
+          created_before: "created_before",
+          updated_after: "updated_after",
+          updated_before: "updated_before"
+        ],
+        opts,
+        fn {key, arg}, acc -> put_date_opt(acc, key, args[arg]) end
+      )
 
     if is_number(args["diversity"]),
       do: Keyword.put(opts, :diversity, args["diversity"]),
       else: opts
   end
+
+  defp put_date_opt(opts, key, value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> Keyword.put(opts, key, dt)
+      _ -> opts
+    end
+  end
+
+  defp put_date_opt(opts, _key, _value), do: opts
 
   @doc "Map the MCP `mode` arg to a Search mode (unknown → :hybrid)."
   def search_mode(args) do

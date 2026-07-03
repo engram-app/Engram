@@ -61,5 +61,33 @@ defmodule Engram.MCP.HandlersSearchModeTest do
       assert diversity["maximum"] == 1
       refute "diversity" in (tool.inputSchema["required"] || [])
     end
+
+    test "build_search_opts plumbs folder, type and date bounds" do
+      opts =
+        Handlers.build_search_opts(%{
+          "query" => "x",
+          "folder" => "projects",
+          "type" => "Playbook",
+          "updated_after" => "2026-01-01T00:00:00Z",
+          "created_before" => "bogus"
+        })
+
+      assert opts[:folder] == "projects"
+      assert opts[:type] == "Playbook"
+      assert opts[:updated_after] == ~U[2026-01-01 00:00:00Z]
+      refute Keyword.has_key?(opts, :created_before)
+    end
+
+    test "search_notes tool advertises folder, type and date-range properties" do
+      tool = Enum.find(Engram.MCP.Tools.list(), &(&1.name == "search_notes"))
+      props = tool.inputSchema["properties"]
+
+      assert props["folder"]["type"] == "string"
+      assert props["type"]["type"] == "string"
+
+      for key <- ~w(created_after created_before updated_after updated_before) do
+        assert props[key]["type"] == "string"
+      end
+    end
   end
 end
