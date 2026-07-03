@@ -1,5 +1,5 @@
 defmodule EngramWeb.SyncChannelTracingTest do
-  # async: false — the setup mutates the global Logger level to :info; every
+  # async: false. The setup mutates the global Logger level to :info; every
   # other test that does this is async: false to avoid corrupting concurrent
   # async modules (e.g. sync_channel_test) that rely on the default :warning.
   # ExUnit.CaptureLog's own `:level` option only restricts capture; it does
