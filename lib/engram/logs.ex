@@ -33,6 +33,8 @@ defmodule Engram.Logs do
           stack: entry["stack"] || entry[:stack],
           plugin_version: entry["plugin_version"] || entry[:plugin_version] || "",
           platform: entry["platform"] || entry[:platform] || "",
+          conn_id: entry["conn_id"] || entry[:conn_id],
+          device_id: entry["device_id"] || entry[:device_id],
           created_at: now
         }
       end)

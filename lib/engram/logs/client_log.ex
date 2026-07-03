@@ -11,6 +11,8 @@ defmodule Engram.Logs.ClientLog do
     field :stack, :string
     field :plugin_version, :string, default: ""
     field :platform, :string, default: ""
+    field :conn_id, :string
+    field :device_id, :string
 
     belongs_to :user, Engram.Accounts.User
 
@@ -27,6 +29,8 @@ defmodule Engram.Logs.ClientLog do
       :stack,
       :plugin_version,
       :platform,
+      :conn_id,
+      :device_id,
       :user_id
     ])
     |> validate_required([:ts, :user_id])
