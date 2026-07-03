@@ -4,19 +4,27 @@ import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
-import { type SearchResult, useSearch } from "../api/queries";
+import { type SearchFilters, type SearchResult, useSearch } from "../api/queries";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
+
+const filterInputClasses =
+	"rounded-md border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
 function SearchPanel() {
 	const { setView } = useRailView();
 	const [input, setInput] = useState("");
+	const [filters, setFilters] = useState<SearchFilters>({});
 	// True debounce, not useDeferredValue: deferral only delays rendering —
 	// every settled keystroke still became a new query key, i.e. one vector
 	// search (Voyage embed + Qdrant) per character typed.
 	const deferred = useDebouncedValue(input.trim(), 300);
-	const { data: results, isLoading, error } = useSearch(deferred);
+	const { data: results, isLoading, error } = useSearch(deferred, filters);
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
+
+	function setDateFilter(key: keyof SearchFilters, rawValue: string) {
+		setFilters((f) => ({ ...f, [key]: rawValue ? `${rawValue}T00:00:00Z` : undefined }));
+	}
 	const inputRef = useRef<HTMLInputElement>(null);
 	const lastRecordedRef = useRef<string>("");
 	const hasResults = (results?.length ?? 0) > 0;
@@ -67,6 +75,41 @@ function SearchPanel() {
 						className="w-full rounded-md border border-border bg-background py-1.5 pr-2 pl-7 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
 					/>
 				</label>
+				<fieldset className="mt-2 flex flex-wrap items-center gap-1.5">
+					<legend className="sr-only">Filter search results</legend>
+					<input
+						type="text"
+						placeholder="Type (e.g. Playbook)"
+						aria-label="filter by type"
+						value={filters.type ?? ""}
+						onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value || undefined }))}
+						className={filterInputClasses}
+					/>
+					<input
+						type="date"
+						aria-label="created after"
+						onChange={(e) => setDateFilter("createdAfter", e.target.value)}
+						className={filterInputClasses}
+					/>
+					<input
+						type="date"
+						aria-label="created before"
+						onChange={(e) => setDateFilter("createdBefore", e.target.value)}
+						className={filterInputClasses}
+					/>
+					<input
+						type="date"
+						aria-label="updated after"
+						onChange={(e) => setDateFilter("updatedAfter", e.target.value)}
+						className={filterInputClasses}
+					/>
+					<input
+						type="date"
+						aria-label="updated before"
+						onChange={(e) => setDateFilter("updatedBefore", e.target.value)}
+						className={filterInputClasses}
+					/>
+				</fieldset>
 			</div>
 			<ScrollArea className="flex-1">
 				{!deferred && recent.length > 0 && (

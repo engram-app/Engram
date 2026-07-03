@@ -1520,6 +1520,52 @@ describe("useSearch", () => {
 		expect(result.current.data).toEqual(firstResults);
 		expect(result.current.isPlaceholderData).toBe(true);
 	});
+
+	it("posts type and date filters when provided", async () => {
+		post.mockResolvedValue({ results: [] });
+
+		renderHook(
+			() =>
+				useSearch("x", {
+					type: "Playbook",
+					createdAfter: "2026-01-01T00:00:00Z",
+					createdBefore: "2026-06-01T00:00:00Z",
+					updatedAfter: "2026-02-01T00:00:00Z",
+					updatedBefore: "2026-07-01T00:00:00Z",
+				}),
+			{ wrapper },
+		);
+
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/search",
+				{
+					query: "x",
+					limit: 20,
+					type: "Playbook",
+					created_after: "2026-01-01T00:00:00Z",
+					created_before: "2026-06-01T00:00:00Z",
+					updated_after: "2026-02-01T00:00:00Z",
+					updated_before: "2026-07-01T00:00:00Z",
+				},
+				{ signal: expect.any(AbortSignal) },
+			),
+		);
+	});
+
+	it("omits unset filters from the POST body", async () => {
+		post.mockResolvedValue({ results: [] });
+
+		renderHook(() => useSearch("x", { type: "Playbook" }), { wrapper });
+
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/search",
+				{ query: "x", limit: 20, type: "Playbook" },
+				{ signal: expect.any(AbortSignal) },
+			),
+		);
+	});
 });
 
 describe("useAttachments", () => {
