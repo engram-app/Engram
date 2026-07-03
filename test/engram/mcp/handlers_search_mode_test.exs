@@ -2,9 +2,10 @@ defmodule Engram.MCP.HandlersSearchModeTest do
   use ExUnit.Case, async: true
 
   alias Engram.MCP.Handlers
+  alias Engram.MCP.Tools
 
   test "search_notes tool advertises the mode enum" do
-    tool = Enum.find(Engram.MCP.Tools.list(), &(&1.name == "search_notes"))
+    tool = Enum.find(Tools.list(), &(&1.name == "search_notes"))
     assert tool.inputSchema["properties"]["mode"]["enum"] == ["hybrid", "keyword", "vector"]
     assert tool.inputSchema["properties"]["mode"]["default"] == "hybrid"
   end
@@ -54,7 +55,7 @@ defmodule Engram.MCP.HandlersSearchModeTest do
     end
 
     test "search_notes tool advertises diversity property" do
-      tool = Enum.find(Engram.MCP.Tools.list(), &(&1.name == "search_notes"))
+      tool = Enum.find(Tools.list(), &(&1.name == "search_notes"))
       diversity = tool.inputSchema["properties"]["diversity"]
       assert diversity["type"] == "number"
       assert diversity["minimum"] == 0
@@ -79,7 +80,7 @@ defmodule Engram.MCP.HandlersSearchModeTest do
     end
 
     test "search_notes tool advertises folder, type and date-range properties" do
-      tool = Enum.find(Engram.MCP.Tools.list(), &(&1.name == "search_notes"))
+      tool = Enum.find(Tools.list(), &(&1.name == "search_notes"))
       props = tool.inputSchema["properties"]
 
       assert props["folder"]["type"] == "string"

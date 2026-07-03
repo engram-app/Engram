@@ -3371,13 +3371,22 @@ defmodule Engram.Notes do
   end
 
   defp okf_envelope(_dek, _note_id, field, nil) do
-    %{:"#{field}_ciphertext" => nil, :"#{field}_nonce" => nil}
+    {ciphertext_key, nonce_key} = okf_envelope_keys(field)
+    %{ciphertext_key => nil, nonce_key => nil}
   end
 
   defp okf_envelope(dek, note_id, field, value) do
     {ct, nonce} = Envelope.encrypt(value, dek, Crypto.aad_for_row(:notes, field, note_id))
-    %{:"#{field}_ciphertext" => ct, :"#{field}_nonce" => nonce}
+    {ciphertext_key, nonce_key} = okf_envelope_keys(field)
+    %{ciphertext_key => ct, nonce_key => nonce}
   end
+
+  # Explicit mapping instead of interpolated atoms (`:"#{field}_ciphertext"`)
+  # so we never call binary_to_atom/2 at runtime; field is always one of the
+  # three OKF fields below, so the atoms are already known at compile time.
+  defp okf_envelope_keys(:type), do: {:type_ciphertext, :type_nonce}
+  defp okf_envelope_keys(:description), do: {:description_ciphertext, :description_nonce}
+  defp okf_envelope_keys(:resource), do: {:resource_ciphertext, :resource_nonce}
 
   @doc false
   # Public delegate so `CrdtCheckpoint` can reuse the single source of truth
