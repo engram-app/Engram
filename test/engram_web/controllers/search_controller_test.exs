@@ -273,6 +273,11 @@ defmodule EngramWeb.SearchControllerTest do
       assert %{"error" => _} = json_response(conn, 422)
     end
 
+    test "non-string date param is a 422", %{conn: conn} do
+      conn = post(conn, ~p"/api/search", %{"query" => "x", "updated_after" => 123})
+      assert %{"error" => _} = json_response(conn, 422)
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn

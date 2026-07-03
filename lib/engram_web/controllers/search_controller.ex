@@ -138,11 +138,14 @@ defmodule EngramWeb.SearchController do
         nil ->
           {:cont, {:ok, acc}}
 
-        value ->
+        value when is_binary(value) ->
           case DateTime.from_iso8601(value) do
             {:ok, dt, _} -> {:cont, {:ok, [{key, dt} | acc]}}
             {:error, _} -> {:halt, {:error, param}}
           end
+
+        _non_binary ->
+          {:halt, {:error, param}}
       end
     end)
   end
