@@ -29,6 +29,27 @@ defmodule Engram.ObanQueueConfigTest do
              end)
   end
 
+  # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
+  # was NOT caused by embed concurrency itself — it was the Lingua language
+  # detector loading ~945 MB of full-accuracy models off-heap during indexing
+  # (fixed via `low_accuracy_mode: true`; see LangDetect +
+  # docs/context/lingua-language-detection-memory.md). With that bounded, embed: 5
+  # is safe (peak ≈ 560 MB under the 1024 MB task). This ceiling just stops the
+  # value being cranked into a new memory problem without a fresh measurement.
+  test "embed queue concurrency stays within a memory-safe ceiling" do
+    embed_limit = configured_queue_limit(:embed)
+
+    assert is_integer(embed_limit) and embed_limit >= 1 and embed_limit <= 8,
+           "embed queue concurrency should be 1..8 (got #{inspect(embed_limit)}).\n" <>
+             "Above ~8, re-measure the per-node indexing footprint (Lingua models +\n" <>
+             "embed working set) against the ECS task memory before raising further —\n" <>
+             "see docs/context/lingua-language-detection-memory.md."
+  end
+
+  defp configured_queue_limit(queue) do
+    Application.fetch_env!(:engram, Oban)[:queues] |> Keyword.get(queue)
+  end
+
   # The configured queue list. `testing: :manual` (config/test.exs) deep-merges
   # into the base `config/config.exs` Oban config, so `:queues` is the real
   # base list here. Guard against an env that stubs it to `false`/`nil` — that

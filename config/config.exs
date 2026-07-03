@@ -63,6 +63,12 @@ config :engram, Oban,
   # latency cost.
   stage_interval: :timer.seconds(5),
   queues: [
+    # The 2026-07-03 OOM crash-loop was NOT caused by embed concurrency — it was
+    # the Lingua language-detector loading ~945 MB of full-accuracy n-gram models
+    # off-heap during indexing (fixed via `low_accuracy_mode: true` → ~135 MB; see
+    # lib/engram/keyword_index/lang_detect.ex + docs/context/lingua-language-detection-memory.md).
+    # With that bounded, embed concurrency is back to 5 (peak ≈ 560 MB, safe under
+    # the 1024 MB task). ObanQueueConfigTest keeps a sane ceiling as a tripwire.
     embed: 5,
     reindex: 1,
     maintenance: 2,
