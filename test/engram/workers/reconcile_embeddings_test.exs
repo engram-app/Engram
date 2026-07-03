@@ -2,6 +2,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.Notes.Note
   alias Engram.Workers.{EmbedNote, ReconcileEmbeddings}
 
   describe "perform/1" do
@@ -158,6 +159,57 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    # #897 — crash-independent backoff. EmbedNote's poison cooldown only fires
+    # on a GRACEFUL terminal {:error, _}; an OOM/node kill bypasses it entirely,
+    # leaving embed_retry_after NULL, so reconcile re-enqueues the same poison
+    # note every 15 min → self-sustaining crash loop (the 2026-07-03 incident).
+    # Reconcile therefore preemptively stamps a short future cooldown on every
+    # note it enqueues; a crash can no longer cause immediate re-enqueue, and a
+    # successful EmbedNote clears the stamp back to NULL.
+    test "stamps a future embed_retry_after on every note it enqueues" do
+      user = insert(:user)
+      note = insert(:note, user: user, embed_hash: nil, embed_retry_after: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      refute is_nil(reloaded.embed_retry_after),
+             "reconcile must stamp embed_retry_after so an OOM'd embed can't re-enqueue next tick"
+
+      assert DateTime.compare(reloaded.embed_retry_after, DateTime.utc_now()) == :gt,
+             "the preemptive cooldown must be in the future"
+    end
+
+    test "does not stamp notes it did not enqueue" do
+      user = insert(:user)
+      # up-to-date note — not enqueued, so it must not be collaterally cooled.
+      fresh = insert(:note, user: user, content_hash: "abc123", embed_hash: "abc123")
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => fresh.id})
+
+      assert is_nil(Repo.get!(Note, fresh.id, skip_tenant_check: true).embed_retry_after)
+    end
+
+    test "the stamped cooldown makes a poison note skip the next reconcile tick" do
+      # End-to-end crash simulation: enqueue, DON'T run the embed job (mimics an
+      # OOM kill — no success clear, no graceful poison stamp), then tick again.
+      # The preemptive stamp alone must keep it out of the second batch.
+      user = insert(:user)
+      note = insert(:note, user: user, embed_hash: nil, embed_retry_after: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      refute is_nil(stamped)
+
+      # Second tick, no embed ran. Note is inside its fresh cooldown → not
+      # selected. (Its stamp is unchanged — we didn't re-stamp a skipped note.)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == stamped
     end
   end
 
