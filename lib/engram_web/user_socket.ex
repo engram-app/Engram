@@ -58,6 +58,7 @@ defmodule EngramWeb.UserSocket do
       Metadata.with_category(:info, :websocket,
         conn_id: conn_id,
         device_id: device_id,
+        vault_id: vault_id,
         user_id: HMAC.hash_user_id(to_string(user.id))
       )
     )

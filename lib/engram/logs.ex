@@ -92,26 +92,34 @@ defmodule Engram.Logs do
     hashed_user = HMAC.hash_user_id(to_string(user.id))
 
     Enum.each(entries, fn entry ->
-      level = normalize_level(entry["level"] || entry[:level])
-      client_cat = entry["category"] || entry[:category] || ""
-      msg = "[client:#{client_cat}] #{entry["message"] || entry[:message] || ""}"
+      try do
+        level = normalize_level(entry["level"] || entry[:level])
+        client_cat = entry["category"] || entry[:category] || ""
+        msg = "[client:#{client_cat}] #{entry["message"] || entry[:message] || ""}"
 
-      meta =
-        Metadata.with_category(level, :client,
-          conn_id: entry["conn_id"] || entry[:conn_id],
-          device_id: entry["device_id"] || entry[:device_id],
-          user_id: hashed_user
-        )
+        meta =
+          Metadata.with_category(level, :client,
+            conn_id: entry["conn_id"] || entry[:conn_id],
+            device_id: entry["device_id"] || entry[:device_id],
+            user_id: hashed_user
+          )
 
-      # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
-      meta =
-        if entry["diagnostic"] == true or entry[:diagnostic] == true do
-          Keyword.put(meta, :loki_ship, true)
-        else
-          meta
-        end
+        # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
+        meta =
+          if entry["diagnostic"] == true or entry[:diagnostic] == true do
+            Keyword.put(meta, :loki_ship, true)
+          else
+            meta
+          end
 
-      Logger.log(level, msg, meta)
+        Logger.log(level, msg, meta)
+      rescue
+        e ->
+          Logger.warning(
+            "client log re-emit failed: #{Exception.message(e)}",
+            Engram.Logger.Metadata.with_category(:warning, :client, [])
+          )
+      end
     end)
   end
 
