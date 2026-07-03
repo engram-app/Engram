@@ -2,13 +2,17 @@
 
 _Created 2026-07-02. Branch: `fix/crdt-oom-compaction`. Root cause PROVEN by live measurement 2026-07-03._
 
-> **NOTE:** An earlier version of this doc blamed unbounded CRDT/Yjs history. **That was wrong** — disproven by measurement (max `crdt_state` is 18 KB, max tail-log is 2 rows). The real cause is below. History kept for the lesson: measure before theorizing.
+> **NOTE — two wrong theories, corrected by measurement (the lesson: measure before theorizing):**
+> 1. First blamed unbounded CRDT/Yjs history → disproven (max `crdt_state` 18 KB).
+> 2. Then blamed "~100 MB off-heap per concurrent Voyage HTTP request" → **also disproven**: 8 concurrent `Voyage.embed_texts` = flat 154 MB. The balloon was `prepare_index`'s *language-detection* step, not the HTTP call.
 
 ## TL;DR (proven)
 
 `release-v0.5.613` (CRDT-default) put prod into an **OOM crash-loop** (ECS: `"OutOfMemoryError: container killed due to memory usage"`, exit 137, every ~2-3 min), **connection-independent** (zero clients — socket/channel joins flat at 0).
 
-Root cause: **concurrent Voyage embedding HTTP requests balloon off-heap memory ~100 MB per *simultaneous* request**, and the `embed` Oban queue runs at **concurrency 5** with `ReconcileEmbeddings` re-enqueuing the whole backlog every 15 min. 5 concurrent embeds × ~100 MB off-heap blows the **1024 MB task ceiling** → OOM-kills the engram container → embed jobs orphan as `executing` → next boot repeats. Self-sustaining.
+Root cause: the **Lingua language-detector NIF** (`LangDetect`, called per chunk during indexing) loads **~945 MB of full-accuracy Latin-script n-gram models off-heap** (a one-time, process-global load — invisible to `:erlang.memory`). On the **1024 MB** Fargate task that OOM-kills the engram container whenever indexing runs. A **~341-note vault sync** created an `EmbedNote` backlog; `ReconcileEmbeddings` re-enqueues it every 15 min → each boot re-triggers model loading → OOM → jobs orphan as `executing` → self-sustaining. (Embed concurrency only sets *how fast* the models load; it does not bound the ~945 MB, so an embed-concurrency cap alone does NOT fix it.)
+
+Fix: `low_accuracy_mode: true` in `LangDetect` → trigram-only models → **~135 MB** (measured, ~7×). With that, embed concurrency stays at 5 (full throughput; peak ≈ 560 MB). See `docs/context/lingua-language-detection-memory.md`.
 
 Trigger: a **~341-note vault sync** (`019ef66f-*` UUIDv7 batch) created a large `EmbedNote` backlog.
 

@@ -29,21 +29,21 @@ defmodule Engram.ObanQueueConfigTest do
              end)
   end
 
-  # Regression guard for the 2026-07-03 prod OOM crash-loop. Each *concurrent*
-  # Voyage embedding HTTP request (Req → Finch → TLS) holds ~100 MB of off-heap
-  # memory (invisible to `:erlang.memory`, released after the request). At
-  # `embed: 5`, five simultaneous embeds + a ReconcileEmbeddings backlog blew
-  # the 1024 MB Fargate task ceiling → OOM-killed the node every ~2 min. Keeping
-  # the embed producer small bounds peak concurrent HTTP fan-out to the embedder.
-  # See docs/superpowers/plans/2026-07-02-crdt-oom-compaction-fixes.md.
-  test "embed queue concurrency is capped low to bound embedder HTTP off-heap memory" do
+  # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
+  # was NOT caused by embed concurrency itself — it was the Lingua language
+  # detector loading ~945 MB of full-accuracy models off-heap during indexing
+  # (fixed via `low_accuracy_mode: true`; see LangDetect +
+  # docs/context/lingua-language-detection-memory.md). With that bounded, embed: 5
+  # is safe (peak ≈ 560 MB under the 1024 MB task). This ceiling just stops the
+  # value being cranked into a new memory problem without a fresh measurement.
+  test "embed queue concurrency stays within a memory-safe ceiling" do
     embed_limit = configured_queue_limit(:embed)
 
-    assert is_integer(embed_limit) and embed_limit <= 2,
-           "embed queue concurrency must stay <= 2 (got #{inspect(embed_limit)}).\n" <>
-             "Each concurrent Voyage embed HTTP request holds ~100 MB off-heap (TLS);\n" <>
-             "embed: 5 OOM-killed the 1024 MB prod task on 2026-07-03. Do not raise this\n" <>
-             "without also bounding the shared Finch pool + raising the task memory."
+    assert is_integer(embed_limit) and embed_limit >= 1 and embed_limit <= 8,
+           "embed queue concurrency should be 1..8 (got #{inspect(embed_limit)}).\n" <>
+             "Above ~8, re-measure the per-node indexing footprint (Lingua models +\n" <>
+             "embed working set) against the ECS task memory before raising further —\n" <>
+             "see docs/context/lingua-language-detection-memory.md."
   end
 
   defp configured_queue_limit(queue) do
