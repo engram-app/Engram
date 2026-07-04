@@ -23,6 +23,16 @@ PATH = "E2E/HashOnlyLive.md"
 
 @pytest.mark.asyncio
 async def test_hash_only_live_update(vault_b, cdp_b, api_sync):
+    # Rerun-safety: pytest-rerunfailures (reruns=1) retries on failure against a
+    # SHARED server DB with no reset between attempts. A note left over from a
+    # failed attempt 1 makes attempt 2's identical create hit the server's
+    # deliberate hash-equal broadcast-skip (an idempotent re-push is a no-op —
+    # no version bump, no note_changed), so B never gets the live event and
+    # wait_for_file times out. That makes the rerun DETERMINISTICALLY fail
+    # rather than retry. Soft-delete first so every attempt's create is a fresh,
+    # broadcasting insert. (Same rerun-safety pattern as test_79/test_80.)
+    api_sync.delete_note(PATH)
+
     # Explicit precondition: B's channel must be up before we broadcast.
     await cdp_b.wait_for_stream_connected(timeout=20)
 
