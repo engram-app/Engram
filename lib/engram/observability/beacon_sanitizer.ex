@@ -33,6 +33,8 @@ defmodule Engram.Observability.BeaconSanitizer do
     end
   end
 
+  def sanitize(_, _), do: {:error, :invalid_entry}
+
   defp hex(value, len, err) when is_binary(value) do
     down = String.downcase(value)
 
@@ -57,6 +59,16 @@ defmodule Engram.Observability.BeaconSanitizer do
 
   defp timing(_, _, _), do: {:error, :bad_timing}
 
-  defp attributes(attrs) when is_map(attrs), do: Map.take(attrs, @allowed_attributes)
+  defp attributes(attrs) when is_map(attrs) do
+    attrs
+    |> Map.take(@allowed_attributes)
+    |> Enum.filter(fn {_k, v} -> safe_attr_value?(v) end)
+    |> Map.new()
+  end
+
   defp attributes(_), do: %{}
+
+  defp safe_attr_value?(v) when is_number(v), do: true
+  defp safe_attr_value?(v) when is_binary(v), do: byte_size(v) <= 64
+  defp safe_attr_value?(_), do: false
 end

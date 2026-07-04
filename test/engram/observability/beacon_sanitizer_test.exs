@@ -64,4 +64,40 @@ defmodule Engram.Observability.BeaconSanitizerTest do
   test "rejects an unknown span name" do
     assert {:error, :bad_name} = S.sanitize(put_in(base()["name"], "arbitrary.span"), @now_us)
   end
+
+  test "rejects non-map entry (crash safety)" do
+    assert {:error, :invalid_entry} = S.sanitize("not a map", @now_us)
+    assert {:error, :invalid_entry} = S.sanitize(123, @now_us)
+    assert {:error, :invalid_entry} = S.sanitize([1, 2, 3], @now_us)
+  end
+
+  test "drops oversized string values in attributes (value smuggling)" do
+    oversized = String.duplicate("x", 200)
+
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.surface" => oversized,
+        "engram.event_type" => "upsert"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+    assert out.attributes == %{"engram.event_type" => "upsert"}
+  end
+
+  test "keeps short string and numeric values in attributes" do
+    entry =
+      put_in(base()["attributes"], %{
+        "engram.surface" => "obsidian",
+        "engram.duration_ms" => 12.5,
+        "engram.event_type" => "upsert"
+      })
+
+    assert {:ok, out} = S.sanitize(entry, @now_us)
+
+    assert out.attributes == %{
+             "engram.surface" => "obsidian",
+             "engram.duration_ms" => 12.5,
+             "engram.event_type" => "upsert"
+           }
+  end
 end
