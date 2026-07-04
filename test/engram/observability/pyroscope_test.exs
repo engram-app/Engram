@@ -154,6 +154,28 @@ defmodule Engram.Observability.PyroscopeTest do
     end
   end
 
+  describe "parse_interval_ms/2" do
+    test "nil falls back to the default" do
+      assert Pyroscope.parse_interval_ms(nil, 10) == 10
+    end
+
+    test "a positive integer string parses" do
+      assert Pyroscope.parse_interval_ms("50", 10) == 50
+    end
+
+    test "surrounding whitespace is tolerated" do
+      assert Pyroscope.parse_interval_ms("  25 ", 10) == 25
+    end
+
+    test "zero, negative, and non-integer input fall back to the default" do
+      assert Pyroscope.parse_interval_ms("0", 10) == 10
+      assert Pyroscope.parse_interval_ms("-5", 10) == 10
+      assert Pyroscope.parse_interval_ms("abc", 10) == 10
+      assert Pyroscope.parse_interval_ms("", 10) == 10
+      assert Pyroscope.parse_interval_ms("12x", 10) == 10
+    end
+  end
+
   describe "push lifecycle (integration)" do
     test "after push_interval, POSTs to /ingest with the right params and resets counters" do
       bypass = Bypass.open()

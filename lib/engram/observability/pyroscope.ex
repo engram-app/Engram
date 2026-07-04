@@ -144,6 +144,21 @@ defmodule Engram.Observability.Pyroscope do
     end
   end
 
+  @doc """
+  Parse a millisecond interval from an env var string. Returns the
+  default for nil, blank, non-integer, or non-positive input so a
+  fat-fingered env value can never disable or invert the timer.
+  """
+  @spec parse_interval_ms(String.t() | nil, pos_integer()) :: pos_integer()
+  def parse_interval_ms(nil, default) when is_integer(default) and default > 0, do: default
+
+  def parse_interval_ms(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  end
+
   # ── GenServer callbacks ───────────────────────────────────────────
 
   @impl true
