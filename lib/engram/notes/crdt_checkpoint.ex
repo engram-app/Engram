@@ -62,6 +62,26 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end
       end
 
+    # Deliver_out gap guard: a REST/MCP write may have committed a newer
+    # crdt_state that this live room never ingested (CrdtDeliver.deliver_out is
+    # best-effort and runs post-commit, so a checkpoint firing in that window
+    # would otherwise encode the stale in-memory doc and REVERT the committed
+    # write — see Engram#902). Fold the DB's current crdt_state into the doc
+    # before encoding. apply_update is convergent + idempotent (a no-op when the
+    # room already has it), the same native-CRDT merge CrdtDeliver.push_to_live_room
+    # uses — so a stale room can never clobber a committed write.
+    _ =
+      case Repo.with_tenant(user_id, fn -> Repo.get(Note, note_id) end) do
+        {:ok, %Note{} = db_note} ->
+          case Crypto.decrypt_crdt_state(db_note, user) do
+            {:ok, db_state} when is_binary(db_state) -> Yex.apply_update(doc, db_state)
+            _ -> :ok
+          end
+
+        _ ->
+          :ok
+      end
+
     text = CrdtBridge.text_of(doc)
 
     with {:ok, raw_state} <- encode(doc),

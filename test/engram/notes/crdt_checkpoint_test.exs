@@ -94,6 +94,60 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── Staleness guard: checkpoint must not revert a newer REST write ─────────
+
+  test "checkpoint does NOT revert a REST write that landed while the room was stale", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # A live room's in-memory doc, built from the note's current CRDT state
+    # ("before"). The room makes no local edit — it is simply about to go stale.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, room_doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # A REST/MCP write lands AFTER the room doc was built and BEFORE deliver_out
+    # ingests it into the live room: notes.content + crdt_state now say
+    # "before REST-EDIT". This is the deliver_out post-commit gap.
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before REST-EDIT"})
+
+    # The debounced checkpoint (or an unbind on last-observer disconnect) fires
+    # on the STALE room doc, whose projection is still "before".
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, room_doc)
+
+    # The committed REST write must survive: the checkpoint must not overwrite
+    # newer DB content with the room's stale projection. The room made no edit,
+    # so the convergent merge result is exactly the REST content.
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content == "before REST-EDIT"
+  end
+
+  test "checkpoint converges a stale room's own edit with a concurrent REST write", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, room_doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # The live room makes its OWN edit: base "before" -> prepend a line.
+    :ok =
+      CrdtBridge.diff_into_text(
+        Yex.Doc.get_text(room_doc, CrdtBridge.text_name()),
+        "TOP\nbefore"
+      )
+
+    # Concurrently a REST write appends a line (base "before" -> "before\nBOT"),
+    # committing a new crdt_state the stale room never ingested.
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before\nBOT"})
+
+    # Checkpointing the stale room must converge BOTH edits, not drop either.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, room_doc)
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content =~ "TOP"
+    assert fresh.content =~ "BOT"
+  end
+
   # ── Virtual field integrity: title/path not corrupted ─────────────────────
 
   test "checkpoint does not corrupt title or path_hmac on a note with a non-trivial path", ctx do
