@@ -19,11 +19,29 @@ defmodule Engram.Logger.Category do
           | :oban
           | :boot
           | :data
+          | :websocket
+          | :client
 
-  @categories [:http, :sync, :search, :auth, :billing, :crypto, :lifecycle, :oban, :boot, :data]
+  @categories [
+    :http,
+    :sync,
+    :search,
+    :auth,
+    :billing,
+    :crypto,
+    :lifecycle,
+    :oban,
+    :boot,
+    :data,
+    :websocket,
+    :client
+  ]
 
   # info lines from these categories are state changes worth keeping in Loki.
-  @info_to_loki [:billing, :crypto, :lifecycle, :oban, :boot]
+  # :websocket (connection lifecycle) is low-volume + high-value. :client is
+  # NOT here: re-emitted plugin info would flood Loki; verbose client entries
+  # opt in per-entry via a loki_ship override (see Logs.insert_logs).
+  @info_to_loki [:billing, :crypto, :lifecycle, :oban, :boot, :websocket]
 
   @spec all() :: [t(), ...]
   def all, do: @categories
