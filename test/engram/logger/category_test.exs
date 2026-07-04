@@ -13,7 +13,9 @@ defmodule Engram.Logger.CategoryTest do
              :lifecycle,
              :oban,
              :boot,
-             :data
+             :data,
+             :websocket,
+             :client
            ]
   end
 
@@ -49,5 +51,23 @@ defmodule Engram.Logger.CategoryTest do
 
   test "debug never ships to Loki" do
     refute Category.loki_ship?(:debug, :billing)
+  end
+
+  test ":websocket and :client are valid categories" do
+    assert Category.valid?(:websocket)
+    assert Category.valid?(:client)
+  end
+
+  test ":websocket info ships to Loki (connection lifecycle is high-value)" do
+    assert Category.loki_ship?(:info, :websocket)
+  end
+
+  test ":client info does NOT ship to Loki by default (kept in Postgres)" do
+    refute Category.loki_ship?(:info, :client)
+  end
+
+  test "both ship at warning" do
+    assert Category.loki_ship?(:warning, :websocket)
+    assert Category.loki_ship?(:warning, :client)
   end
 end

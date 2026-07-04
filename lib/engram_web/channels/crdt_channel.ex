@@ -13,6 +13,7 @@ defmodule EngramWeb.CrdtChannel do
 
   use Phoenix.Channel
 
+  alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtRegistry
@@ -62,8 +63,21 @@ defmodule EngramWeb.CrdtChannel do
             case Vaults.get_vault(user, vault_id) do
               {:ok, vault} ->
                 case Vaults.check_api_key_access(socket.assigns[:current_api_key], vault) do
-                  :ok -> {:ok, assign(socket, vault: vault, rooms: %{}, room_doc: %{})}
-                  _ -> {:error, %{reason: "api_key_vault_forbidden"}}
+                  :ok ->
+                    Logger.info(
+                      "crdt join",
+                      Metadata.with_category(:info, :websocket,
+                        conn_id: socket.assigns[:conn_id],
+                        device_id: socket.assigns[:device_id],
+                        topic: socket.topic,
+                        user_id: HMAC.hash_user_id(to_string(user.id))
+                      )
+                    )
+
+                    {:ok, assign(socket, vault: vault, rooms: %{}, room_doc: %{})}
+
+                  _ ->
+                    {:error, %{reason: "api_key_vault_forbidden"}}
                 end
 
               _ ->
@@ -102,6 +116,21 @@ defmodule EngramWeb.CrdtChannel do
         log_dropped(doc_id, err)
         {:noreply, socket}
     end
+  end
+
+  @impl true
+  def terminate(reason, socket) do
+    Logger.info(
+      "crdt leave",
+      Metadata.with_category(:info, :websocket,
+        conn_id: socket.assigns[:conn_id],
+        device_id: socket.assigns[:device_id],
+        topic: socket.topic,
+        reason: inspect(reason)
+      )
+    )
+
+    :ok
   end
 
   @impl true

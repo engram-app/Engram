@@ -1,6 +1,9 @@
 defmodule EngramWeb.UserSocket do
   use Phoenix.Socket
 
+  alias Engram.Crypto.HMAC
+  alias Engram.Logger.Metadata
+
   require Logger
 
   channel "sync:*", EngramWeb.SyncChannel
@@ -8,10 +11,10 @@ defmodule EngramWeb.UserSocket do
   channel "user:*", EngramWeb.UserChannel
 
   @impl true
-  def connect(%{"token" => token}, socket, _connect_info) do
+  def connect(%{"token" => token} = params, socket, _connect_info) do
     case Engram.Auth.TokenResolver.resolve(token) do
       {:ok, user} ->
-        {:ok, assign(socket, %{current_user: user, current_api_key: nil})}
+        {:ok, accept(socket, user, nil, params)}
 
       {:ok, user, :internal_jwt} ->
         # Device-flow / OAuth / MCP access tokens. Mirror the Auth plug's
@@ -19,10 +22,10 @@ defmodule EngramWeb.UserSocket do
         # branches on its presence (e.g. SyncChannel api-key vault
         # restriction) doesn't misclassify this as a PAT auth and try to
         # treat the atom `:internal_jwt` as a struct.
-        {:ok, assign(socket, %{current_user: user, current_api_key: nil})}
+        {:ok, accept(socket, user, nil, params)}
 
       {:ok, user, api_key} ->
-        {:ok, assign(socket, %{current_user: user, current_api_key: api_key})}
+        {:ok, accept(socket, user, api_key, params)}
 
       {:error, reason} ->
         # Previously silent — during a Clerk break every SPA reconnect storms
@@ -31,7 +34,7 @@ defmodule EngramWeb.UserSocket do
 
         Logger.warning(
           "auth rejected",
-          Engram.Logger.Metadata.with_category(:warning, :auth, reason: label)
+          Metadata.with_category(:warning, :auth, reason: label)
         )
 
         :error
@@ -39,6 +42,35 @@ defmodule EngramWeb.UserSocket do
   end
 
   def connect(_params, _socket, _connect_info), do: :error
+
+  # Stamps connection-correlation ids into assigns and logs the connect. The
+  # ids are client-supplied (URL query params); conn_id is unique per physical
+  # socket, device_id is stable per install. Both are echoed on every channel
+  # lifecycle log so a plugin log line and a backend log line for the same
+  # socket share a key.
+  defp accept(socket, user, api_key, params) do
+    conn_id = params["conn_id"]
+    device_id = params["device_id"]
+    vault_id = params["vault_id"]
+
+    Logger.info(
+      "ws connect",
+      Metadata.with_category(:info, :websocket,
+        conn_id: conn_id,
+        device_id: device_id,
+        vault_id: vault_id,
+        user_id: HMAC.hash_user_id(to_string(user.id))
+      )
+    )
+
+    assign(socket, %{
+      current_user: user,
+      current_api_key: api_key,
+      conn_id: conn_id,
+      device_id: device_id,
+      vault_id_param: vault_id
+    })
+  end
 
   @impl true
   def id(socket), do: "user_socket:#{socket.assigns.current_user.id}"
