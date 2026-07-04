@@ -27,6 +27,10 @@ defmodule Engram.Sync.Broadcast do
   holds for every caller that does not opt in via `deferred/1`.
   """
 
+  alias Engram.Logger.Metadata
+
+  require Logger
+
   @buffer_key :__engram_sync_broadcast_buffer__
 
   @doc """
@@ -37,7 +41,7 @@ defmodule Engram.Sync.Broadcast do
   def emit(topic, event, payload) do
     case Process.get(@buffer_key) do
       nil ->
-        _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
+        broadcast_now(topic, event, payload)
         :ok
 
       buffered when is_list(buffered) ->
@@ -85,11 +89,29 @@ defmodule Engram.Sync.Broadcast do
         |> Process.get([])
         |> Enum.reverse()
         |> Enum.each(fn {topic, event, payload} ->
-          EngramWeb.Endpoint.broadcast(topic, event, payload)
+          broadcast_now(topic, event, payload)
         end)
 
       _ ->
         :ok
     end
+  end
+
+  # Single point where a sync event actually hits PubSub. Emits a breadcrumb
+  # FIRST so the log lines up with the receiver's traced `sync join`/`sync leave`
+  # — the broadcast is fastlaned PubSub → socket (the sync channel has no
+  # `handle_out`), so this log is the only server-side proof a broadcast fired.
+  # Privacy: log ONLY UUIDs (topic + note_id). Never the note path or content.
+  defp broadcast_now(topic, event, payload) do
+    note_id = Map.get(payload, "id") || Map.get(payload, "note_id")
+    op = Map.get(payload, "event_type")
+
+    Logger.info(
+      "sync broadcast emit topic=#{topic} event=#{event} note_id=#{note_id} op=#{op}",
+      Metadata.with_category(:info, :sync, note_id: note_id)
+    )
+
+    _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
+    :ok
   end
 end
