@@ -201,7 +201,8 @@ config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 # runtime.exs (gated on SENTRY_DSN).
 config :sentry,
   context_lines: 5,
-  before_send: {Engram.Sentry.Scrubber, :scrub}
+  before_send: {Engram.Sentry.Scrubber, :scrub},
+  client: Engram.Observability.SentryFinchClient
 
 # Full-jitter window (ms) advertised to clients in the sync-channel join reply.
 # On reconnect after a drop (e.g. a graceful node drain), clients wait
