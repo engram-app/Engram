@@ -40,9 +40,11 @@ defmodule Engram.Observability.Otel do
   """
   @spec attach_handlers() :: :ok
   def attach_handlers do
-    OpentelemetryBandit.setup()
-    OpentelemetryPhoenix.setup(adapter: :bandit)
-    OpentelemetryEcto.setup([:engram, :repo])
+    # setup/0,1 return :ok | {:error, :already_exists}; bind to satisfy the
+    # :unmatched_returns dialyzer flag. Re-attaching is harmless (idempotent).
+    _ = OpentelemetryBandit.setup()
+    _ = OpentelemetryPhoenix.setup(adapter: :bandit)
+    _ = OpentelemetryEcto.setup([:engram, :repo])
     :ok
   end
 
