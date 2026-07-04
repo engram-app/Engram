@@ -222,6 +222,11 @@ config :engram, :client_logs_retention_days, 30
 config :ex_aws, :http_client, ExAws.Request.Req
 config :ex_aws, :req_opts, receive_timeout: 30_000
 
+# joken_jwks drives its Tesla client with Erlang's built-in httpc adapter, so
+# the JWKS verification path needs no hackney. dev.exs and test.exs set this
+# too; pinning it in base config keeps prod off Tesla's default adapter.
+config :tesla, JokenJwks.HttpFetcher, adapter: Tesla.Adapter.Httpc
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
