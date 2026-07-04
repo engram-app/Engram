@@ -851,5 +851,15 @@ if pyroscope_url = System.get_env("GRAFANA_PYROSCOPE_URL") do
         raise("GRAFANA_AGENT_TOKEN required when GRAFANA_PYROSCOPE_URL is set"),
     app_name: System.get_env("PYROSCOPE_APP_NAME", "engram-saas-prod"),
     env: to_string(config_env()),
-    instance: System.get_env("HOSTNAME", System.get_env("ECS_TASK_ID", "unknown"))
+    instance: System.get_env("HOSTNAME", System.get_env("ECS_TASK_ID", "unknown")),
+    sample_interval_ms:
+      Engram.Observability.Pyroscope.parse_interval_ms(
+        System.get_env("PYROSCOPE_SAMPLE_INTERVAL_MS"),
+        10
+      ),
+    push_interval_ms:
+      Engram.Observability.Pyroscope.parse_interval_ms(
+        System.get_env("PYROSCOPE_PUSH_INTERVAL_MS"),
+        10_000
+      )
 end
