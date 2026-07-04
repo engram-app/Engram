@@ -24,4 +24,10 @@ defmodule Engram.Observability.OtelTest do
       assert Otel.sample_ratio("", 1.0) == 1.0
     end
   end
+
+  describe "attach_handlers/0" do
+    test "installs Phoenix, Ecto, and Bandit instrumentation and returns :ok" do
+      assert Otel.attach_handlers() == :ok
+    end
+  end
 end

@@ -32,4 +32,17 @@ defmodule Engram.Observability.Otel do
       _ -> default
     end
   end
+
+  @doc """
+  Attach the Phoenix + Ecto + Bandit telemetry handlers that turn our
+  existing `:telemetry` events into OpenTelemetry spans. Call once at
+  boot, gated on `enabled?/0` (see `Engram.Application.start/2`).
+  """
+  @spec attach_handlers() :: :ok
+  def attach_handlers do
+    OpentelemetryBandit.setup()
+    OpentelemetryPhoenix.setup(adapter: :bandit)
+    OpentelemetryEcto.setup([:engram, :repo])
+    :ok
+  end
 end

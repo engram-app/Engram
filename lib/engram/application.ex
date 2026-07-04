@@ -19,6 +19,8 @@ defmodule Engram.Application do
     EngramWeb.RequestLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
 
+    if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
+
     children =
       [
         EngramWeb.Telemetry,
