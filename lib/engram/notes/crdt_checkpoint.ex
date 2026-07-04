@@ -139,7 +139,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
             fenced_query =
               if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
 
-            case Repo.update_all(fenced_query, set: Map.to_list(changeset.changes)) do
+            # update_all does NOT auto-manage timestamps (Repo.update! does), and
+            # `updated_at` is never cast into changeset.changes. Set it explicitly —
+            # matching every sibling notes update_all — or the /api/notes/changes
+            # timestamp feed (filters + orders on updated_at) silently drops the edit.
+            set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+
+            case Repo.update_all(fenced_query, set: set) do
               {1, _} ->
                 prune_tail(note_id, watermark)
                 prev
@@ -214,10 +220,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
   @doc """
   Read the current `notes.version` for a note (tenant-scoped), or nil on any
   failure. Captured by `CrdtCheckpointTimer` BEFORE it snapshots the live doc so
-  the value fences the subsequent checkpoint write (`:captured_version`). Reading
-  it before the doc snapshot guarantees `captured_version` never exceeds the
-  version the snapshot reflects, so a concurrent commit can only cause a harmless
-  over-abort, never a revert.
+  the value fences the subsequent checkpoint write (`:captured_version`).
+
+  Capturing version before the snapshot closes the dominant snapshot-then-commit
+  gap: a commit landing after the read bumps the version, so the CAS aborts. It
+  does NOT make a revert impossible — `version` bumps at REST commit while the
+  live room doc only converges later at `CrdtDeliver.deliver_out`, so a commit
+  inside that narrow commit→deliver window can still be captured-then-overwritten.
+  That residual self-heals: deliver_out applies the merged state, which fires
+  `update_v1` → a follow-up tick re-checkpoints the merged content.
+
+  Returns nil on read failure, which degrades to an UNfenced write (prior
+  behaviour). This is deliberate: nil is indistinguishable from the unbind
+  path's absent `captured_version` (which must stay unfenced to persist on room
+  exit), and a transient version-read blip is rare + self-heals on the next tick.
   """
   @spec current_version(String.t(), String.t()) :: integer() | nil
   def current_version(user_id, note_id) do
