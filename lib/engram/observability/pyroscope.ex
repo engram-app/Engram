@@ -144,6 +144,21 @@ defmodule Engram.Observability.Pyroscope do
     end
   end
 
+  @doc """
+  Parse a millisecond interval from an env var string. Returns the
+  default for nil, blank, non-integer, or non-positive input so a
+  fat-fingered env value can never disable or invert the timer.
+  """
+  @spec parse_interval_ms(String.t() | nil, pos_integer()) :: pos_integer()
+  def parse_interval_ms(nil, default) when is_integer(default) and default > 0, do: default
+
+  def parse_interval_ms(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  end
+
   # ── GenServer callbacks ───────────────────────────────────────────
 
   @impl true
@@ -173,7 +188,11 @@ defmodule Engram.Observability.Pyroscope do
       sample_interval_ms: sample_interval,
       push_interval_ms: push_interval,
       spy_name: Keyword.get(cfg, :spy_name, @default_spy_name),
-      sample_rate: div(1_000, sample_interval),
+      # Clamp to at least 1: an operator-supplied interval above 1000ms
+      # would otherwise floor to 0 and report a bogus sampleRate=0 to
+      # Pyroscope. Intended range is 10-50ms, so this only guards a
+      # fat-fingered env value.
+      sample_rate: max(1, div(1_000, sample_interval)),
       window_started_at_ms: now_ms(),
       sample_timer_ref: nil,
       push_timer_ref: nil,
@@ -190,7 +209,15 @@ defmodule Engram.Observability.Pyroscope do
 
   @impl true
   def handle_info(:sample, state) do
-    counters = take_sample(state.counters)
+    process_count = length(Process.list())
+    {duration_us, counters} = :timer.tc(fn -> take_sample(state.counters) end)
+
+    :telemetry.execute(
+      [:engram, :pyroscope, :sample],
+      %{duration_ms: duration_us / 1_000, process_count: process_count},
+      %{}
+    )
+
     {:noreply, %{state | counters: counters, sample_timer_ref: schedule_sample(state)}}
   end
 

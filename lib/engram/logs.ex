@@ -5,8 +5,12 @@ defmodule Engram.Logs do
 
   import Ecto.Query
 
+  alias Engram.Crypto.HMAC
+  alias Engram.Logger.Metadata
   alias Engram.Logs.ClientLog
   alias Engram.Repo
+
+  require Logger
 
   @max_query_limit 1000
   @default_limit 200
@@ -33,11 +37,14 @@ defmodule Engram.Logs do
           stack: entry["stack"] || entry[:stack],
           plugin_version: entry["plugin_version"] || entry[:plugin_version] || "",
           platform: entry["platform"] || entry[:platform] || "",
+          conn_id: entry["conn_id"] || entry[:conn_id],
+          device_id: entry["device_id"] || entry[:device_id],
           created_at: now
         }
       end)
 
     {count, _} = Repo.insert_all(ClientLog, rows, skip_tenant_check: true)
+    reemit_to_logger(user, entries)
     {:ok, count}
   end
 
@@ -75,4 +82,48 @@ defmodule Engram.Logs do
   end
 
   defp parse_ts(_), do: nil
+
+  # Mirror each ingested plugin log line into the backend Logger under the
+  # :client category so it flows through FireLens to CloudWatch (everything)
+  # and Loki (warn+ always; info only when the client marks it diagnostic).
+  # This makes both sides of a WS connection greppable by conn_id in ONE Loki
+  # query, without the read-only DB bastion.
+  defp reemit_to_logger(user, entries) do
+    hashed_user = HMAC.hash_user_id(to_string(user.id))
+
+    Enum.each(entries, fn entry ->
+      try do
+        level = normalize_level(entry["level"] || entry[:level])
+        client_cat = entry["category"] || entry[:category] || ""
+        msg = "[client:#{client_cat}] #{entry["message"] || entry[:message] || ""}"
+
+        meta =
+          Metadata.with_category(level, :client,
+            conn_id: entry["conn_id"] || entry[:conn_id],
+            device_id: entry["device_id"] || entry[:device_id],
+            user_id: hashed_user
+          )
+
+        # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
+        meta =
+          if entry["diagnostic"] == true or entry[:diagnostic] == true do
+            Keyword.put(meta, :loki_ship, true)
+          else
+            meta
+          end
+
+        Logger.log(level, msg, meta)
+      rescue
+        e ->
+          Logger.warning(
+            "client log re-emit failed: #{Exception.message(e)}",
+            Engram.Logger.Metadata.with_category(:warning, :client, [])
+          )
+      end
+    end)
+  end
+
+  defp normalize_level("warn"), do: :warning
+  defp normalize_level("error"), do: :error
+  defp normalize_level(_), do: :info
 end

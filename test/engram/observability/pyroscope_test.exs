@@ -154,6 +154,28 @@ defmodule Engram.Observability.PyroscopeTest do
     end
   end
 
+  describe "parse_interval_ms/2" do
+    test "nil falls back to the default" do
+      assert Pyroscope.parse_interval_ms(nil, 10) == 10
+    end
+
+    test "a positive integer string parses" do
+      assert Pyroscope.parse_interval_ms("50", 10) == 50
+    end
+
+    test "surrounding whitespace is tolerated" do
+      assert Pyroscope.parse_interval_ms("  25 ", 10) == 25
+    end
+
+    test "zero, negative, and non-integer input fall back to the default" do
+      assert Pyroscope.parse_interval_ms("0", 10) == 10
+      assert Pyroscope.parse_interval_ms("-5", 10) == 10
+      assert Pyroscope.parse_interval_ms("abc", 10) == 10
+      assert Pyroscope.parse_interval_ms("", 10) == 10
+      assert Pyroscope.parse_interval_ms("12x", 10) == 10
+    end
+  end
+
   describe "push lifecycle (integration)" do
     test "after push_interval, POSTs to /ingest with the right params and resets counters" do
       bypass = Bypass.open()
@@ -205,6 +227,29 @@ defmodule Engram.Observability.PyroscopeTest do
         # Either ends with a space + digits, OR is a frame chain — both shapes valid.
         assert first_line =~ ~r/ \d+$/
       end
+    end
+  end
+
+  describe "sampler self-telemetry" do
+    test "each sample pass emits [:engram, :pyroscope, :sample] with duration_ms + process_count" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :pyroscope, :sample]])
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      Application.put_env(:engram, :pyroscope,
+        url: "http://localhost:1",
+        username: "u",
+        token: "t",
+        # Fast sampling, push far in the future so no /ingest during the test.
+        sample_interval_ms: 5,
+        push_interval_ms: 60_000
+      )
+
+      {:ok, pid} = Pyroscope.start_link([])
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000) end)
+
+      assert_receive {[:engram, :pyroscope, :sample], ^ref, measurements, _meta}, 1_000
+      assert is_float(measurements.duration_ms) and measurements.duration_ms >= 0.0
+      assert is_integer(measurements.process_count) and measurements.process_count > 0
     end
   end
 end

@@ -851,5 +851,36 @@ if pyroscope_url = System.get_env("GRAFANA_PYROSCOPE_URL") do
         raise("GRAFANA_AGENT_TOKEN required when GRAFANA_PYROSCOPE_URL is set"),
     app_name: System.get_env("PYROSCOPE_APP_NAME", "engram-saas-prod"),
     env: to_string(config_env()),
-    instance: System.get_env("HOSTNAME", System.get_env("ECS_TASK_ID", "unknown"))
+    instance: System.get_env("HOSTNAME", System.get_env("ECS_TASK_ID", "unknown")),
+    sample_interval_ms:
+      Engram.Observability.Pyroscope.parse_interval_ms(
+        System.get_env("PYROSCOPE_SAMPLE_INTERVAL_MS"),
+        10
+      ),
+    push_interval_ms:
+      Engram.Observability.Pyroscope.parse_interval_ms(
+        System.get_env("PYROSCOPE_PUSH_INTERVAL_MS"),
+        10_000
+      )
+end
+
+# OpenTelemetry tracing. Same opt-in shape as Sentry/Pyroscope: no-op
+# unless the OTLP endpoint is set (prod points it at the Alloy sidecar
+# on loopback; Alloy forwards to Tempo). ENGRAM_OTEL_SAMPLE_RATIO tunes
+# head sampling without a code deploy (1.0 = every trace).
+if otlp_endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
+  ratio = Engram.Observability.Otel.sample_ratio(System.get_env("ENGRAM_OTEL_SAMPLE_RATIO"), 1.0)
+
+  config :opentelemetry,
+    span_processor: :batch,
+    traces_exporter: :otlp,
+    sampler: {:parent_based, %{root: {:trace_id_ratio_based, ratio}}},
+    resource: [
+      service: [name: "engram-backend"],
+      deployment: [environment: to_string(config_env())]
+    ]
+
+  config :opentelemetry_exporter,
+    otlp_protocol: :http_protobuf,
+    otlp_endpoint: otlp_endpoint
 end

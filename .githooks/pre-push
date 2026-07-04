@@ -191,4 +191,20 @@ wait
 report "credo"   credo   || FAILED=1
 report "sobelow" sobelow || FAILED=1
 
+# ── Release smoke (dependency changes only) ──────────────────────────────
+# `mix release` assembly runs a duplicate-module check that `mix test` never
+# does. Two deps vendoring the same module names (for example hackney's h2 and
+# grpcbox's ts_chatterbox) only blow up here. Run it when mix.exs/mix.lock
+# changed vs origin/main, so normal pushes stay fast.
+if git diff --name-only origin/main...HEAD 2>/dev/null | grep -qE '^mix\.(exs|lock)$'; then
+  echo "▸ Release smoke: mix.exs/mix.lock changed, running MIX_ENV=prod mix release --overwrite"
+  if MIX_ENV=prod mix release --overwrite >"$QUALITY_LOGDIR/release.log" 2>&1; then
+    echo "  ✓ mix release"
+  else
+    echo "  ✖ mix release failed (duplicate modules? boot config?); bypass: git push --no-verify" >&2
+    cat "$QUALITY_LOGDIR/release.log" >&2
+    FAILED=1
+  fi
+fi
+
 [ "$FAILED" = "0" ] || exit 1
