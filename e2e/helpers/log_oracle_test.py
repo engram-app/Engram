@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers.log_oracle import wait_for_delivery
+from helpers.log_oracle import wait_for_binary_delivery, wait_for_delivery
 
 
 class _FakeApi:
@@ -102,3 +102,50 @@ def test_timeout_survives_log_query_failure(tmp_path):
         wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
 
     assert rel in str(exc.value)
+
+
+def _pull_attachment(path):
+    return {
+        "category": "pull",
+        "level": "info",
+        "message": f"Attachment created: {path} | bytes=3",
+    }
+
+
+def test_binary_returns_bytes_when_file_appears(tmp_path):
+    """Attachment variant: returns bytes on success, never queries logs."""
+    rel = "E2E/img.png"
+    full = tmp_path / rel
+    full.parent.mkdir(parents=True)
+    full.write_bytes(b"PNG")
+    api = _FakeApi(raise_on_get=True)
+
+    data = wait_for_binary_delivery(tmp_path, rel, api, timeout=1, poll=0.02)
+
+    assert data == b"PNG"
+    assert api.get_calls == 0
+
+
+def test_binary_zero_byte_is_not_ready(tmp_path):
+    """A 0-byte placeholder is not a delivered attachment → still times out."""
+    rel = "E2E/empty.png"
+    full = tmp_path / rel
+    full.parent.mkdir(parents=True)
+    full.write_bytes(b"")
+    api = _FakeApi(logs=[])
+
+    with pytest.raises(TimeoutError):
+        wait_for_binary_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+
+def test_binary_timeout_reports_attachment_materialized(tmp_path):
+    """A pull 'Attachment created:' line counts as materialized for attachments."""
+    rel = "E2E/late.png"
+    api = _FakeApi(logs=[_pull_attachment(rel)])
+
+    with pytest.raises(TimeoutError) as exc:
+        wait_for_binary_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+    msg = str(exc.value)
+    assert "materialized=yes" in msg
+    assert rel in msg

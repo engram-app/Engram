@@ -36,14 +36,18 @@ from pathlib import Path
 
 _RECEIVE_CATEGORIES = ("channel", "ws")
 _MATERIALIZE_CATEGORY = "pull"
-_MATERIALIZE_PREFIXES = ("Created:", "Applied:")
+# Receiver-side "wrote it to disk" signatures, per plugin src (2026-07-04):
+_NOTE_MATERIALIZE = ("Created:", "Applied:")
+_ATTACHMENT_MATERIALIZE = ("Attachment applied:", "Attachment created:")
 
 
 def _yn(flag: bool) -> str:
     return "yes" if flag else "no"
 
 
-def _classify(logs: list[dict], rel_path: str) -> tuple[bool, bool, list[str]]:
+def _classify(
+    logs: list[dict], rel_path: str, materialize_prefixes: tuple[str, ...]
+) -> tuple[bool, bool, list[str]]:
     """Scan client logs for the path. Return (received, materialized, hits)."""
     received = False
     materialized = False
@@ -56,15 +60,40 @@ def _classify(logs: list[dict], rel_path: str) -> tuple[bool, bool, list[str]]:
         hits.append(f"{category}: {message}")
         if category in _RECEIVE_CATEGORIES and "Event:" in message:
             received = True
-        if category == _MATERIALIZE_CATEGORY and message.startswith(_MATERIALIZE_PREFIXES):
+        if category == _MATERIALIZE_CATEGORY and message.startswith(materialize_prefixes):
             materialized = True
     return received, materialized, hits
+
+
+def _timeout_error(
+    rel_path: str, api_sync, timeout: float, materialize_prefixes: tuple[str, ...]
+) -> TimeoutError:
+    """Build a causal-chain TimeoutError from the client log stream.
+
+    Best-effort diagnostics on an ALREADY-failed wait: a log-query error must
+    not mask the real timeout, so we fold it into the message rather than let
+    it propagate and hide what actually failed.
+    """
+    received = materialized = False
+    hits: list[str] = []
+    try:
+        logs = api_sync.get_logs(limit=200).get("logs", [])
+        received, materialized, hits = _classify(logs, rel_path, materialize_prefixes)
+    except Exception as exc:  # noqa: BLE001 - diagnostic enrichment, see docstring
+        hits = [f"(log query failed: {exc})"]
+
+    detail = "\n  ".join(hits) if hits else "(no client log line mentioned the path)"
+    return TimeoutError(
+        f"{rel_path} not delivered within {timeout}s. "
+        f"Client-log evidence: received={_yn(received)} "
+        f"materialized={_yn(materialized)}.\n  {detail}"
+    )
 
 
 def wait_for_delivery(
     vault_path, rel_path: str, api_sync, timeout: float = 30, poll: float = 0.3
 ) -> str:
-    """Poll until ``rel_path`` materializes in ``vault_path``, return its content.
+    """Poll until ``rel_path`` materializes in ``vault_path``, return its text.
 
     On timeout, raise TimeoutError whose message names the causal-chain gap,
     mined from ``api_sync.get_logs()``.
@@ -75,22 +104,22 @@ def wait_for_delivery(
         if full.exists():
             return full.read_text(encoding="utf-8")
         time.sleep(poll)
+    raise _timeout_error(rel_path, api_sync, timeout, _NOTE_MATERIALIZE)
 
-    # Timed out. Enrich with the client-log causal chain. This is best-effort
-    # diagnostics on an ALREADY-failed wait: a log-query error must not mask
-    # the real TimeoutError, so we swallow it into the message rather than let
-    # it propagate and hide what actually failed.
-    received = materialized = False
-    hits: list[str] = []
-    try:
-        logs = api_sync.get_logs(limit=200).get("logs", [])
-        received, materialized, hits = _classify(logs, rel_path)
-    except Exception as exc:  # noqa: BLE001 - diagnostic enrichment, see comment above
-        hits = [f"(log query failed: {exc})"]
 
-    detail = "\n  ".join(hits) if hits else "(no client log line mentioned the path)"
-    raise TimeoutError(
-        f"{rel_path} not delivered within {timeout}s. "
-        f"Client-log evidence: received={_yn(received)} "
-        f"materialized={_yn(materialized)}.\n  {detail}"
-    )
+def wait_for_binary_delivery(
+    vault_path, rel_path: str, api_sync, timeout: float = 30, poll: float = 0.3
+) -> bytes:
+    """Attachment variant of ``wait_for_delivery``.
+
+    Waits for a non-empty binary file (a 0-byte placeholder is not delivered),
+    returns its bytes, and on timeout mines the log stream using the
+    attachment materialize signatures ("Attachment applied/created:").
+    """
+    full = Path(vault_path) / rel_path
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if full.exists() and full.stat().st_size > 0:
+            return full.read_bytes()
+        time.sleep(poll)
+    raise _timeout_error(rel_path, api_sync, timeout, _ATTACHMENT_MATERIALIZE)

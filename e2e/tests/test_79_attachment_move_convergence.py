@@ -18,7 +18,8 @@ import asyncio
 
 import pytest
 
-from helpers.vault import wait_for_binary, wait_for_file_gone
+from helpers.log_oracle import wait_for_binary_delivery
+from helpers.vault import wait_for_file_gone
 
 # B-side convergence (pull + blob fetch) can lag under parallel CI load — give
 # it more room than the suite's 15s default.
@@ -51,7 +52,7 @@ async def test_web_move_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api_s
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
     await cdp_b.trigger_full_sync()
-    wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
+    wait_for_binary_delivery(vault_b, old_path, api_sync, timeout=CONVERGE_TIMEOUT)
 
     # Web-originated move: repoint live row + insert old-path tombstone.
     assert api_sync.rename_attachment(old_path, new_path) == 200
@@ -61,7 +62,7 @@ async def test_web_move_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api_s
     # B converges on its next pull: the tombstone trashes old, the repointed row
     # writes new — no duplicate left at the old path.
     await cdp_b.trigger_full_sync()
-    assert wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT) == TINY_PNG
+    assert wait_for_binary_delivery(vault_b, new_path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
     wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
 
 
@@ -83,7 +84,7 @@ async def test_web_move_converges_after_offline_window(
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
     await cdp_b.trigger_full_sync()
-    wait_for_binary(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
+    wait_for_binary_delivery(vault_b, old_path, api_sync, timeout=CONVERGE_TIMEOUT)
 
     # Take B offline so it misses the ephemeral move broadcasts entirely.
     await cdp_b.wait_for_stream_connected(timeout=10)
@@ -100,5 +101,5 @@ async def test_web_move_converges_after_offline_window(
     # repointed row(new). B converges with no duplicate.
     await cdp_b.reconnect_stream()
     await cdp_b.trigger_full_sync()
-    assert wait_for_binary(vault_b, new_path, timeout=CONVERGE_TIMEOUT) == TINY_PNG
+    assert wait_for_binary_delivery(vault_b, new_path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
     wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)

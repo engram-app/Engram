@@ -15,7 +15,7 @@ covers the web-origin contract end to end.
 
 import pytest
 
-from helpers.vault import wait_for_binary
+from helpers.log_oracle import wait_for_binary_delivery
 
 # B-side convergence (pull + blob fetch) can lag under parallel CI load — give
 # it more room than the suite's 15s default. Matches test_79.
@@ -44,4 +44,4 @@ async def test_web_upload_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api
 
     # B converges on its next explicit pull — the deterministic convergence path.
     await cdp_b.trigger_full_sync()
-    assert wait_for_binary(vault_b, path, timeout=CONVERGE_TIMEOUT) == TINY_PNG
+    assert wait_for_binary_delivery(vault_b, path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
