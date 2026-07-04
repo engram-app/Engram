@@ -45,4 +45,27 @@ defmodule Engram.Observability.Otel do
     OpentelemetryEcto.setup([:engram, :repo])
     :ok
   end
+
+  @doc """
+  The active span's `{hex_trace_id, hex_span_id}`, or nil when no span
+  is current. Used to stamp trace ids onto log metadata.
+  """
+  @spec span_context() :: {String.t(), String.t()} | nil
+  def span_context do
+    case OpenTelemetry.Tracer.current_span_ctx() do
+      :undefined ->
+        nil
+
+      span_ctx ->
+        trace_id = :otel_span.hex_trace_id(span_ctx)
+        span_id = :otel_span.hex_span_id(span_ctx)
+
+        # An all-zero trace id means an invalid/empty context.
+        if trace_id == String.duplicate("0", 32) do
+          nil
+        else
+          {to_string(trace_id), to_string(span_id)}
+        end
+    end
+  end
 end
