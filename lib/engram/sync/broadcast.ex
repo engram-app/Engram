@@ -97,21 +97,44 @@ defmodule Engram.Sync.Broadcast do
     end
   end
 
-  # Single point where a sync event actually hits PubSub. Emits a breadcrumb
-  # FIRST so the log lines up with the receiver's traced `sync join`/`sync leave`
-  # — the broadcast is fastlaned PubSub → socket (the sync channel has no
-  # `handle_out`), so this log is the only server-side proof a broadcast fired.
-  # Privacy: log ONLY UUIDs (topic + note_id). Never the note path or content.
+  @doc """
+  Broadcasts `event` on `topic` to every subscriber EXCEPT `pid` (the pushing
+  socket), via `Endpoint.broadcast_from/4`.
+
+  This is the socket-origin delivery leg (a REST/CRDT push echoing to a note's
+  other live peers). It is never subject to the deferral buffer — `broadcast_from`
+  is only ever called with a live socket pid, outside the folder cascade — so it
+  logs and broadcasts directly, mirroring `broadcast_now/3`'s breadcrumb with
+  `mode=from`.
+  """
+  @spec emit_from(pid(), String.t(), String.t(), map()) :: :ok
+  def emit_from(pid, topic, event, payload) when is_pid(pid) do
+    log_emit(topic, event, payload, "from")
+    _ = EngramWeb.Endpoint.broadcast_from(pid, topic, event, payload)
+    :ok
+  end
+
+  # Single point where a fanout sync event actually hits PubSub. Emits a
+  # breadcrumb FIRST so the log lines up with the receiver's traced
+  # `sync join`/`sync leave` — the broadcast is fastlaned PubSub → socket (the
+  # sync channel has no `handle_out`), so this log is the only server-side proof
+  # a broadcast fired.
   defp broadcast_now(topic, event, payload) do
+    log_emit(topic, event, payload, "fanout")
+    _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
+    :ok
+  end
+
+  # Shared delivery breadcrumb for both legs (`fanout` = broadcast to all,
+  # `from` = broadcast_from excluding the pusher).
+  # Privacy: log ONLY UUIDs (topic + note_id). Never the note path or content.
+  defp log_emit(topic, event, payload, mode) do
     note_id = Map.get(payload, "id") || Map.get(payload, "note_id")
     op = Map.get(payload, "event_type")
 
     Logger.info(
-      "sync broadcast emit topic=#{topic} event=#{event} note_id=#{note_id} op=#{op}",
+      "sync broadcast emit topic=#{topic} event=#{event} note_id=#{note_id} op=#{op} mode=#{mode}",
       Metadata.with_category(:info, :sync, note_id: note_id)
     )
-
-    _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
-    :ok
   end
 end

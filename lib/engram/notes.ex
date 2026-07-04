@@ -25,6 +25,7 @@ defmodule Engram.Notes do
 
   alias Engram.Observability.PostHog
   alias Engram.Repo
+  alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
   alias Engram.Workers.{DeleteNoteIndex, EmbedNote}
@@ -2030,6 +2031,8 @@ defmodule Engram.Notes do
         |> decrypt_or_raise!(user)
         |> Enum.map(&change_map/1)
 
+      _ = log_changes_page(since, changes)
+
       next_cursor =
         if has_more do
           last = List.last(page)
@@ -2116,6 +2119,33 @@ defmodule Engram.Notes do
       end
 
     {:ok, %{changes: changes, has_more: has_more, next: next}}
+  end
+
+  # Catch-up-pull breadcrumb: a reconnecting client pulls `/api/notes/changes`
+  # to recover notes missed while disconnected (e2e `test_23`). The flake is a
+  # note returning EMPTY (or absent) from the pull, so we log what the page
+  # actually delivered — count + per-note `id:content_len` — to prove
+  # present/empty/absent server-side. Only NON-empty pages log, so an idle poll
+  # (the common case) stays silent and prod is not spammed on every poll.
+  # Privacy: UUID + content BYTE-LENGTH only. Never the path or content.
+  @changes_trace_sample 20
+  defp log_changes_page(_since, []), do: :ok
+
+  defp log_changes_page(since, changes) do
+    sample =
+      changes
+      |> Enum.take(@changes_trace_sample)
+      |> Enum.map_join(",", fn c -> "#{c.id}:#{byte_size(c.content || "")}" end)
+
+    more =
+      if length(changes) > @changes_trace_sample,
+        do: "+#{length(changes) - @changes_trace_sample}",
+        else: ""
+
+    Logger.info(
+      "changes page since=#{DateTime.to_iso8601(since)} count=#{length(changes)} notes=#{sample}#{more}",
+      Metadata.with_category(:info, :sync)
+    )
   end
 
   defp change_map(note) do
@@ -3293,12 +3323,13 @@ defmodule Engram.Notes do
       case Keyword.get(opts, :broadcast_from) do
         pid when is_pid(pid) ->
           # `broadcast_from` excludes the pushing socket; it is never used from
-          # the folder cascade (which has no socket to exclude), so it stays a
-          # direct Endpoint call and is not subject to deferral.
-          EngramWeb.Endpoint.broadcast_from(pid, topic, "note_changed", payload)
+          # the folder cascade (which has no socket to exclude), so it goes
+          # straight through (not subject to deferral). Routed through Broadcast
+          # so this socket-origin leg logs the same delivery breadcrumb.
+          Broadcast.emit_from(pid, topic, "note_changed", payload)
 
         nil ->
-          Engram.Sync.Broadcast.emit(topic, "note_changed", payload)
+          Broadcast.emit(topic, "note_changed", payload)
       end
 
     # Deliver-out to CRDT clients (gap ③): push the merged plaintext to a live
@@ -3314,7 +3345,7 @@ defmodule Engram.Notes do
   @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
   defp broadcast_change(user_id, vault_id, event_type, path) do
     _ =
-      Engram.Sync.Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", %{
+      Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", %{
         "event_type" => event_type,
         "path" => path,
         "vault_id" => vault_id

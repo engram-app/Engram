@@ -63,4 +63,22 @@ defmodule Engram.Sync.BroadcastTraceTest do
 
     refute log =~ "rolled-back"
   end
+
+  test "emit_from/4 logs the breadcrumb (mode=from) and excludes the given pid" do
+    EngramWeb.Endpoint.subscribe("sync:from-test")
+
+    log =
+      capture_log(fn ->
+        Broadcast.emit_from(self(), "sync:from-test", "note_changed", %{"id" => "from-note"})
+      end)
+
+    assert log =~ "sync broadcast emit"
+    assert log =~ "sync:from-test"
+    assert log =~ "note_changed"
+    assert log =~ "from-note"
+    # Distinguishes the socket-origin (CRDT/REST push) leg from the fanout leg.
+    assert log =~ "mode=from"
+    # broadcast_from excludes the given pid — self() here — so no delivery back.
+    refute_receive %Phoenix.Socket.Broadcast{topic: "sync:from-test"}, 50
+  end
 end
