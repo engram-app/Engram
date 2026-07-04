@@ -188,7 +188,11 @@ defmodule Engram.Observability.Pyroscope do
       sample_interval_ms: sample_interval,
       push_interval_ms: push_interval,
       spy_name: Keyword.get(cfg, :spy_name, @default_spy_name),
-      sample_rate: div(1_000, sample_interval),
+      # Clamp to at least 1: an operator-supplied interval above 1000ms
+      # would otherwise floor to 0 and report a bogus sampleRate=0 to
+      # Pyroscope. Intended range is 10-50ms, so this only guards a
+      # fat-fingered env value.
+      sample_rate: max(1, div(1_000, sample_interval)),
       window_started_at_ms: now_ms(),
       sample_timer_ref: nil,
       push_timer_ref: nil,
