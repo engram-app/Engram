@@ -118,13 +118,45 @@ defmodule Engram.Notes.CrdtCheckpoint do
               |> Map.put(:crdt_state_nonce, nonce)
               |> Map.put(:content_hash, content_hash)
 
-            note
-            |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
-            |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-            |> Repo.update!()
+            # #902 fence. When the caller captured the doc at a known row version,
+            # persist only if the row is STILL at that version. A REST/MCP write
+            # that committed after the snapshot bumped `version`, so the CAS matches
+            # zero rows and we ABORT — never overwriting the newer committed content
+            # with our stale encoding. `captured_version` nil (e.g. the unbind path)
+            # keeps the prior unfenced behaviour. The field set is derived through
+            # Note.changeset (identical casting to the previous Repo.update!) and
+            # applied via a version-fenced update_all, mirroring the compaction branch.
+            captured = Keyword.get(opts, :captured_version)
+            fence_version = captured || note.version
 
-            prune_tail(note_id, watermark)
-            prev
+            changeset =
+              note
+              |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
+              |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+
+            base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
+
+            fenced_query =
+              if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
+
+            case Repo.update_all(fenced_query, set: Map.to_list(changeset.changes)) do
+              {1, _} ->
+                prune_tail(note_id, watermark)
+                prev
+
+              {0, _} ->
+                # The row advanced since our snapshot — a newer write is already
+                # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
+                # revert. Return `content_hash` so the caller enqueues no embed for a
+                # write that did not happen; the next debounce tick re-captures the
+                # now-merged doc and checkpoints that.
+                Logger.info(
+                  "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
+                  Metadata.with_category(:info, :sync, note_id: note_id)
+                )
+
+                content_hash
+            end
           end
         end)
 
@@ -176,6 +208,24 @@ defmodule Engram.Notes.CrdtCheckpoint do
       end
     else
       {doc, state}
+    end
+  end
+
+  @doc """
+  Read the current `notes.version` for a note (tenant-scoped), or nil on any
+  failure. Captured by `CrdtCheckpointTimer` BEFORE it snapshots the live doc so
+  the value fences the subsequent checkpoint write (`:captured_version`). Reading
+  it before the doc snapshot guarantees `captured_version` never exceeds the
+  version the snapshot reflects, so a concurrent commit can only cause a harmless
+  over-abort, never a revert.
+  """
+  @spec current_version(String.t(), String.t()) :: integer() | nil
+  def current_version(user_id, note_id) do
+    case Repo.with_tenant(user_id, fn ->
+           Repo.one(from(n in Note, where: n.id == ^note_id, select: n.version))
+         end) do
+      {:ok, v} -> v
+      _ -> nil
     end
   end
 

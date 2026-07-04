@@ -174,8 +174,16 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # ---------------------------------------------------------------------------
 
   defp do_checkpoint(%{room_pid: room_pid} = state) do
+    # Capture the row version BEFORE snapshotting the doc so it never exceeds the
+    # version the snapshot reflects (#902 fence). A REST/MCP write committing
+    # after this read bumps the version, so the fenced checkpoint write aborts
+    # instead of reverting the committed content. nil on read failure → unfenced.
+    captured_version = CrdtCheckpoint.current_version(state.user_id, state.note_id)
     doc = Yex.Sync.SharedDoc.get_doc(room_pid)
-    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.note_id, doc)
+
+    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.note_id, doc,
+      captured_version: captured_version
+    )
   rescue
     err ->
       Logger.warning(

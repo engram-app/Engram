@@ -94,6 +94,35 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── #902 revert gap: checkpoint must not clobber a newer committed write ───
+
+  test "checkpoint does NOT revert a REST write that committed after the doc snapshot", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # The live room holds a doc that still projects the ORIGINAL "before" content,
+    # captured at the note's current version. This is the stale-room snapshot.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    captured_version = raw_note.version
+
+    # A concurrent REST write commits NEW content and bumps the row version —
+    # this is the deliver_out gap: it landed after the doc snapshot was taken.
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "committed after"})
+
+    # The debounced checkpoint now fires with the stale doc. Fenced on the
+    # captured version, it must ABORT rather than overwrite the newer row.
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        captured_version: captured_version
+      )
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+
+    assert fresh.content == "committed after",
+           "checkpoint reverted a committed REST write (the #902 gap)"
+  end
+
   # ── Virtual field integrity: title/path not corrupted ─────────────────────
 
   test "checkpoint does not corrupt title or path_hmac on a note with a non-trivial path", ctx do
