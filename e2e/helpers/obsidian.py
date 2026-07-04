@@ -131,6 +131,13 @@ class ObsidianInstance:
             "debounceMs": 500,
             "liveSyncEnabled": True,
             "maxFileSizeMB": 5,
+            # Ship client logs suite-wide (default is off). Every device's
+            # receive/materialize lines (categories channel/ws/pull) then land
+            # in client_logs, correlated to the #908 server breadcrumbs, so a
+            # delivery flake's FIRST failing run carries client-side evidence
+            # (non-deterministic flakes can't be reproduced on demand). Read by
+            # helpers/log_oracle.py::wait_for_delivery.
+            "remoteLoggingEnabled": True,
         }
         # Explicitly pin the file-level CRDT sync path (spec §12a) for the
         # dedicated CRDT job. NOTE: since plugin #148 enableCrdt DEFAULTS to
