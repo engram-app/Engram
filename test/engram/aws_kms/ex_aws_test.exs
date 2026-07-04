@@ -259,6 +259,46 @@ defmodule Engram.AwsKms.ExAwsTest do
       end
     end
 
+    test "classifies a transport failure as :network_error", %{bypass: bypass} do
+      # Regression guard for the hackney to Req swap: transport failures now
+      # arrive as exception structs (for example %Mint.TransportError{}) rather
+      # than hackney's bare :timeout / {:socket_error, _} atoms. Closing the
+      # server forces a connection error through the real Req adapter.
+      Bypass.down(bypass)
+
+      prev_retries = Application.get_env(:ex_aws, :retries)
+      Application.put_env(:ex_aws, :retries, max_attempts: 1)
+
+      on_exit(fn ->
+        if prev_retries,
+          do: Application.put_env(:ex_aws, :retries, prev_retries),
+          else: Application.delete_env(:ex_aws, :retries)
+      end)
+
+      :telemetry.attach_many(
+        "kms-network-failure",
+        [
+          [:engram, :crypto, :kms, :request],
+          [:engram, :crypto, :kms, :failure]
+        ],
+        fn name, _meas, meta, _ -> send(self(), {name, meta}) end,
+        nil
+      )
+
+      try do
+        assert {:error, :network_error} =
+                 KmsExAws.encrypt("pt", %{"user_id" => "1", "purpose" => "dek_wrap"})
+
+        assert_received {[:engram, :crypto, :kms, :request],
+                         %{op: :encrypt, status: :error, error_class: :network_error}}
+
+        assert_received {[:engram, :crypto, :kms, :failure],
+                         %{op: :encrypt, error_class: :network_error}}
+      after
+        :telemetry.detach("kms-network-failure")
+      end
+    end
+
     test "emits :request and :failure with error_class :exception when the inner call raises" do
       prev_key_id = Application.get_env(:engram, :aws_kms_key_id)
       Application.delete_env(:engram, :aws_kms_key_id)

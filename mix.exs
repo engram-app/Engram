@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.618",
+      version: "0.5.619",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -101,23 +101,10 @@ defmodule Engram.MixProject do
       # HTTP client (Qdrant, Voyage AI)
       {:req, "~> 0.5"},
 
-      # HTTP transport. The two real runtime consumers are ex_aws (S3 + KMS,
-      # via our Engram.Storage.ExAwsHackney http_client) and Sentry (prod error
-      # reporting, via its default Sentry.HackneyClient). joken_jwks lists
-      # hackney as an optional dep but we drive its Tesla client with the httpc
-      # adapter (config/dev.exs + config/test.exs; prod falls back to Tesla's
-      # httpc default), so the JWKS path does NOT use hackney.
-      #
-      # 1.x (< 4.0.1) carries GHSA-gp9c-pm5m-5cxr (high — ssl:connect/2
-      # post-handshake upgrade has no timeout) plus three moderate/low
-      # CRLF/SSRF advisories, so we pin the 4.x line.
-      #
-      # `override: true` because ex_aws and joken_jwks still declare a
-      # conservative `~> 1.x` requirement on hackney as an OPTIONAL dep. Both
-      # ex_aws and Sentry use only the classic `:hackney.request/5` (+ body/1)
-      # API, which 4.x preserves (ex_aws 2.7.0 already advertises `~> 4.0`).
-      # The forced 4.x ex_aws S3/KMS path is exercised by the e2e suite.
-      {:hackney, "~> 4.4", override: true},
+      # Finch: the HTTP/2-capable client (Mint-based) that Req rides on. Used
+      # directly by Engram.Observability.SentryFinchClient and by ex_aws via
+      # ExAws.Request.Req. This is the backend's single HTTP stack: no hackney.
+      {:finch, "~> 0.23"},
 
       # Rate limiting
       {:hammer, "~> 7.3"},

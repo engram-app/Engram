@@ -127,8 +127,13 @@ defmodule Engram.AwsKms.ExAws do
   end
 
   defp classify({:http_error, _status, _other}), do: :network_error
-  defp classify(:timeout), do: :network_error
-  defp classify({:socket_error, _}), do: :network_error
+
+  # Transport-level failures under the Req/Finch/Mint stack arrive as exception
+  # structs (for example %Req.TransportError{reason: :econnrefused}), unwrapped
+  # by ex_aws from the http client's {:error, %{reason: reason}}. The old hackney
+  # adapter produced bare :timeout / {:socket_error, _} atoms, which Req never
+  # emits, so match any exception struct as a network error.
+  defp classify(%{__exception__: true}), do: :network_error
   defp classify(_other), do: {:aws, "Unknown", "unrecognised_error_shape"}
 
   defp classify_type(type, msg) do
