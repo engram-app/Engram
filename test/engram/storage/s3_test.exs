@@ -169,6 +169,73 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
+  describe "start_multipart/1" do
+    test "returns the upload id parsed from the XML body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/#{@bucket}/#{@key}", fn conn ->
+        assert conn.query_string =~ "uploads"
+
+        xml =
+          ~s(<?xml version="1.0"?><InitiateMultipartUploadResult>) <>
+            ~s(<Bucket>#{@bucket}</Bucket><Key>#{@key}</Key><UploadId>UP123</UploadId>) <>
+            ~s(</InitiateMultipartUploadResult>)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/xml")
+        |> Plug.Conn.resp(200, xml)
+      end)
+
+      assert {:ok, "UP123"} = S3.start_multipart(@key)
+    end
+  end
+
+  describe "upload_part/4" do
+    test "returns the etag from the response headers", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "PUT", "/#{@bucket}/#{@key}", fn conn ->
+        assert conn.query_string =~ "partNumber=1"
+        assert conn.query_string =~ "uploadId=UP123"
+
+        conn
+        |> Plug.Conn.put_resp_header("etag", ~s("etag-1"))
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      assert {:ok, ~s("etag-1")} = S3.upload_part(@key, "UP123", 1, <<1, 2, 3>>)
+    end
+  end
+
+  describe "complete_multipart_upload/3" do
+    test "returns :ok on success", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/#{@bucket}/#{@key}", fn conn ->
+        assert conn.query_string =~ "uploadId=UP123"
+
+        xml =
+          ~s(<?xml version="1.0"?><CompleteMultipartUploadResult>) <>
+            ~s(<Location>loc</Location><Bucket>#{@bucket}</Bucket><Key>#{@key}</Key>) <>
+            ~s(<ETag>"final"</ETag></CompleteMultipartUploadResult>)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/xml")
+        |> Plug.Conn.resp(200, xml)
+      end)
+
+      assert :ok =
+               S3.complete_multipart_upload(@key, "UP123", [
+                 %{part_number: 1, etag: ~s("etag-1")}
+               ])
+    end
+  end
+
+  describe "abort_multipart_upload/2" do
+    test "returns :ok on success", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "DELETE", "/#{@bucket}/#{@key}", fn conn ->
+        assert conn.query_string =~ "uploadId=UP123"
+        Plug.Conn.resp(conn, 204, "")
+      end)
+
+      assert :ok = S3.abort_multipart_upload(@key, "UP123")
+    end
+  end
+
   defp render_msg({:string, s}), do: IO.iodata_to_binary(s)
   defp render_msg({:report, _}), do: ""
   defp render_msg(other), do: to_string(other)

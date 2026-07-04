@@ -215,11 +215,12 @@ config :engram, :reconnect_jitter_max_ms, 5_000
 # are deleted daily by Engram.Workers.ClientLogsPruner (Engram#792).
 config :engram, :client_logs_retention_days, 30
 
-# ex_aws HTTP client. We override the stock `ExAws.Request.Hackney` adapter
-# because it only matches hackney's 4-tuple reply; hackney 4.x returns a
-# 3-tuple for body-less responses (HEAD), which breaks S3.head_object/exists?.
-# Engram.Storage.ExAwsHackney is the stock adapter plus that missing clause.
-config :ex_aws, :http_client, Engram.Storage.ExAwsHackney
+# ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
+# Finch pool, so the backend carries no hackney dependency. :req_opts sets the
+# per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles
+# body-less (HEAD) responses natively, so no shim is needed for S3.exists?.
+config :ex_aws, :http_client, ExAws.Request.Req
+config :ex_aws, :req_opts, receive_timeout: 30_000
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
