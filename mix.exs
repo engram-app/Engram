@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.620",
+      version: "0.5.621",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -12,6 +12,7 @@ defmodule Engram.MixProject do
       deps: deps(),
       package: package(),
       listeners: [Phoenix.CodeReloader],
+      releases: releases(),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore.exs",
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
@@ -46,6 +47,17 @@ defmodule Engram.MixProject do
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  # Release app-boot-order overrides. `opentelemetry_exporter` must boot
+  # before `opentelemetry` (its dependency), and `opentelemetry` is marked
+  # `:temporary` so an SDK crash cannot take down the whole release.
+  defp releases do
+    [
+      engram: [
+        applications: [opentelemetry_exporter: :permanent, opentelemetry: :temporary]
+      ]
+    ]
+  end
 
   defp package do
     [
@@ -116,6 +128,17 @@ defmodule Engram.MixProject do
       {:prom_ex, "~> 1.11"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
+
+      # OpenTelemetry (traces). Boot order is enforced by the release
+      # app-order override in `releases/0` (exporter :permanent so it boots
+      # first, opentelemetry :temporary so an SDK crash cannot take the node
+      # down). Listed exporter-first here only to match, for readability.
+      {:opentelemetry_exporter, "~> 1.10"},
+      {:opentelemetry, "~> 1.7"},
+      {:opentelemetry_api, "~> 1.5"},
+      {:opentelemetry_phoenix, "~> 2.0"},
+      {:opentelemetry_bandit, "~> 0.3"},
+      {:opentelemetry_ecto, "~> 1.2"},
 
       # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
       # and self-host)

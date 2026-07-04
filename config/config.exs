@@ -164,12 +164,14 @@ config :logger, :default_formatter,
     :route,
     :row_id,
     :server_version,
+    :span_id,
     :status,
     :storage_key,
     :table,
     :tool,
     :topic,
     :total_count,
+    :trace_id,
     :user_id,
     :vault_id,
     :worker
@@ -206,6 +208,10 @@ config :sentry,
   context_lines: 5,
   before_send: {Engram.Sentry.Scrubber, :scrub},
   client: Engram.Observability.SentryFinchClient
+
+# OpenTelemetry tracing is off by default. runtime.exs flips the
+# exporter to :otlp only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+config :opentelemetry, traces_exporter: :none
 
 # Full-jitter window (ms) advertised to clients in the sync-channel join reply.
 # On reconnect after a drop (e.g. a graceful node drain), clients wait
