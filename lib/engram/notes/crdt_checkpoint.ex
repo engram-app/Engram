@@ -118,13 +118,51 @@ defmodule Engram.Notes.CrdtCheckpoint do
               |> Map.put(:crdt_state_nonce, nonce)
               |> Map.put(:content_hash, content_hash)
 
-            note
-            |> Note.changeset(Map.put(phase_b, :version, note.version + 1))
-            |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
-            |> Repo.update!()
+            # #902 fence. When the caller captured the doc at a known row version,
+            # persist only if the row is STILL at that version. A REST/MCP write
+            # that committed after the snapshot bumped `version`, so the CAS matches
+            # zero rows and we ABORT — never overwriting the newer committed content
+            # with our stale encoding. `captured_version` nil (e.g. the unbind path)
+            # keeps the prior unfenced behaviour. The field set is derived through
+            # Note.changeset (identical casting to the previous Repo.update!) and
+            # applied via a version-fenced update_all, mirroring the compaction branch.
+            captured = Keyword.get(opts, :captured_version)
+            fence_version = captured || note.version
 
-            prune_tail(note_id, watermark)
-            prev
+            changeset =
+              note
+              |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
+              |> Ecto.Changeset.put_change(:seq, Vaults.next_seq!(vault_id))
+
+            base_query = from(n in Note, where: n.id == ^note_id and n.kind == "note")
+
+            fenced_query =
+              if captured, do: where(base_query, [n], n.version == ^captured), else: base_query
+
+            # update_all does NOT auto-manage timestamps (Repo.update! does), and
+            # `updated_at` is never cast into changeset.changes. Set it explicitly —
+            # matching every sibling notes update_all — or the /api/notes/changes
+            # timestamp feed (filters + orders on updated_at) silently drops the edit.
+            set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+
+            case Repo.update_all(fenced_query, set: set) do
+              {1, _} ->
+                prune_tail(note_id, watermark)
+                prev
+
+              {0, _} ->
+                # The row advanced since our snapshot — a newer write is already
+                # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
+                # revert. Return `content_hash` so the caller enqueues no embed for a
+                # write that did not happen; the next debounce tick re-captures the
+                # now-merged doc and checkpoints that.
+                Logger.info(
+                  "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
+                  Metadata.with_category(:info, :sync, note_id: note_id)
+                )
+
+                content_hash
+            end
           end
         end)
 
@@ -176,6 +214,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
       end
     else
       {doc, state}
+    end
+  end
+
+  @doc """
+  Read the current `notes.version` for a note (tenant-scoped), or nil on any
+  failure. Captured by `CrdtCheckpointTimer` BEFORE it snapshots the live doc so
+  the value fences the subsequent checkpoint write (`:captured_version`).
+
+  Capturing version before the snapshot closes the dominant snapshot-then-commit
+  gap: a commit landing after the read bumps the version, so the CAS aborts. It
+  does NOT make a revert impossible — `version` bumps at REST commit while the
+  live room doc only converges later at `CrdtDeliver.deliver_out`, so a commit
+  inside that narrow commit→deliver window can still be captured-then-overwritten.
+  That residual self-heals: deliver_out applies the merged state, which fires
+  `update_v1` → a follow-up tick re-checkpoints the merged content.
+
+  Returns nil on read failure, which degrades to an UNfenced write (prior
+  behaviour). This is deliberate: nil is indistinguishable from the unbind
+  path's absent `captured_version` (which must stay unfenced to persist on room
+  exit), and a transient version-read blip is rare + self-heals on the next tick.
+  """
+  @spec current_version(String.t(), String.t()) :: integer() | nil
+  def current_version(user_id, note_id) do
+    case Repo.with_tenant(user_id, fn ->
+           Repo.one(
+             from(n in Note, where: n.id == ^note_id and n.kind == "note", select: n.version)
+           )
+         end) do
+      {:ok, v} -> v
+      _ -> nil
     end
   end
 
