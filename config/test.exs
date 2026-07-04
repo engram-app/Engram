@@ -144,7 +144,13 @@ config :engram, :limits_enforced, true
 config :engram, :seed_legal_on_boot, false
 
 # Real span contexts (so trace-correlation logic is testable) but no
-# export.
+# export by default. `span_processor: :simple` (rather than the default
+# `:batch`) registers the processor under the well-known `global` name
+# (see otel_tracer_server:init_processors/2), which is what lets
+# ClientSpanTest swap in an in-memory `:otel_exporter_pid` exporter via
+# `:otel_simple_processor.set_exporter/2` and synchronously observe the
+# exported span in the same test process (no batch flush delay/race).
 config :opentelemetry,
   traces_exporter: :none,
+  span_processor: :simple,
   sampler: :always_on
