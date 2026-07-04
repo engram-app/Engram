@@ -222,7 +222,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
   @spec current_version(String.t(), String.t()) :: integer() | nil
   def current_version(user_id, note_id) do
     case Repo.with_tenant(user_id, fn ->
-           Repo.one(from(n in Note, where: n.id == ^note_id, select: n.version))
+           Repo.one(
+             from(n in Note, where: n.id == ^note_id and n.kind == "note", select: n.version)
+           )
          end) do
       {:ok, v} -> v
       _ -> nil
