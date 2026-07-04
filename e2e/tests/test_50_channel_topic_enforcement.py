@@ -16,7 +16,8 @@ import time
 
 import pytest
 
-from helpers.vault import wait_for_file, write_note
+from helpers.log_oracle import wait_for_delivery
+from helpers.vault import write_note
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ async def test_reconnect_rejoins_correct_topic(vault_a, vault_b, cdp_a, cdp_b, a
 
     # B should receive via the reconnected channel
     t0 = time.monotonic()
-    b_content = wait_for_file(vault_b, path, timeout=RT_TIMEOUT)
+    b_content = wait_for_delivery(vault_b, path, api_sync, timeout=RT_TIMEOUT)
     elapsed = time.monotonic() - t0
     logger.info("LATENCY [topic_reconnect]: %.3fs", elapsed)
 
@@ -133,5 +134,5 @@ async def test_live_sync_still_works_after_all_tests(
     write_note(vault_a, path, content)
     api_sync.wait_for_note(path, timeout=10)
 
-    b_content = wait_for_file(vault_b, path, timeout=RT_TIMEOUT)
+    b_content = wait_for_delivery(vault_b, path, api_sync, timeout=RT_TIMEOUT)
     assert "Live sync still works" in b_content
