@@ -275,6 +275,11 @@ defmodule EngramWeb.Router do
     # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
     patch "/onboarding/profile", OnboardingController, :set_profile
     post "/onboarding/actions", OnboardingController, :record
+
+    # Client trace beacon ingest. Must work before onboarding completes (the
+    # SPA emits render/sync spans from the very first screen), so it lives in
+    # this scope rather than the vault-scoped/RequireOnboarding pipeline.
+    post "/telemetry/spans", TelemetryController, :create
   end
 
   # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
