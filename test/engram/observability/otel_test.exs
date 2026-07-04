@@ -30,4 +30,16 @@ defmodule Engram.Observability.OtelTest do
       assert Otel.attach_handlers() == :ok
     end
   end
+
+  describe "current_traceparent/0" do
+    test "returns a w3c traceparent inside a span, nil outside" do
+      require OpenTelemetry.Tracer, as: Tracer
+      assert Otel.current_traceparent() == nil
+
+      Tracer.with_span "t" do
+        tp = Otel.current_traceparent()
+        assert tp =~ ~r/\A00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]\z/
+      end
+    end
+  end
 end

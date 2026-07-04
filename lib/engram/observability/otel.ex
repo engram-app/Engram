@@ -70,4 +70,18 @@ defmodule Engram.Observability.Otel do
         end
     end
   end
+
+  @doc """
+  The W3C `traceparent` string for the active span, or nil when there is no
+  span. Used to smuggle trace context into the live-sync broadcast payload so
+  the browser can parent its render span onto the fan-out.
+  """
+  @spec current_traceparent() :: String.t() | nil
+  def current_traceparent do
+    case :otel_propagator_text_map.inject([]) do
+      [{"traceparent", tp} | _] -> tp
+      headers when is_list(headers) -> :proplists.get_value("traceparent", headers, nil)
+      _ -> nil
+    end
+  end
 end
