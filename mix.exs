@@ -129,9 +129,10 @@ defmodule Engram.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
 
-      # OpenTelemetry (traces). Exporter listed before opentelemetry so its
-      # deps boot first (release app-order override in `releases/0` mirrors
-      # this: exporter :permanent, opentelemetry :temporary).
+      # OpenTelemetry (traces). Boot order is enforced by the release
+      # app-order override in `releases/0` (exporter :permanent so it boots
+      # first, opentelemetry :temporary so an SDK crash cannot take the node
+      # down). Listed exporter-first here only to match, for readability.
       {:opentelemetry_exporter, "~> 1.10"},
       {:opentelemetry, "~> 1.7"},
       {:opentelemetry_api, "~> 1.5"},
