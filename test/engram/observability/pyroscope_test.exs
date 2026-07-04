@@ -229,4 +229,27 @@ defmodule Engram.Observability.PyroscopeTest do
       end
     end
   end
+
+  describe "sampler self-telemetry" do
+    test "each sample pass emits [:engram, :pyroscope, :sample] with duration_ms + process_count" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :pyroscope, :sample]])
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      Application.put_env(:engram, :pyroscope,
+        url: "http://localhost:1",
+        username: "u",
+        token: "t",
+        # Fast sampling, push far in the future so no /ingest during the test.
+        sample_interval_ms: 5,
+        push_interval_ms: 60_000
+      )
+
+      {:ok, pid} = Pyroscope.start_link([])
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000) end)
+
+      assert_receive {[:engram, :pyroscope, :sample], ^ref, measurements, _meta}, 1_000
+      assert is_float(measurements.duration_ms) and measurements.duration_ms >= 0.0
+      assert is_integer(measurements.process_count) and measurements.process_count > 0
+    end
+  end
 end

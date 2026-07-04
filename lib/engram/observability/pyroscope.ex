@@ -205,7 +205,15 @@ defmodule Engram.Observability.Pyroscope do
 
   @impl true
   def handle_info(:sample, state) do
-    counters = take_sample(state.counters)
+    process_count = length(Process.list())
+    {duration_us, counters} = :timer.tc(fn -> take_sample(state.counters) end)
+
+    :telemetry.execute(
+      [:engram, :pyroscope, :sample],
+      %{duration_ms: duration_us / 1_000, process_count: process_count},
+      %{}
+    )
+
     {:noreply, %{state | counters: counters, sample_timer_ref: schedule_sample(state)}}
   end
 
