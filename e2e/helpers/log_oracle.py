@@ -36,7 +36,11 @@ from pathlib import Path
 
 _RECEIVE_CATEGORIES = ("channel", "ws")
 _MATERIALIZE_CATEGORY = "pull"
-# Receiver-side "wrote it to disk" signatures, per plugin src (2026-07-04):
+# Receiver-side "wrote it to disk" signatures, per plugin src (2026-07-04).
+# These key on the classic REST pull path; a materialize via a CRDT binding
+# would not match, so the timeout diagnostic could under-report
+# materialized=no. Diagnostic-only: it never affects a test's pass/fail (the
+# assertion is the file on disk), only the failure message's precision.
 _NOTE_MATERIALIZE = ("Created:", "Applied:")
 _ATTACHMENT_MATERIALIZE = ("Attachment applied:", "Attachment created:")
 

@@ -1,11 +1,11 @@
 """Unit tests for the delivery log-oracle (helpers/log_oracle.py).
 
-Pure logic — no stack, no fixtures. The e2e root conftest boots the full
-Obsidian stack via a session-autouse fixture, so run these with confcutdir
-to skip it:
+Pure logic — no stack, no fixtures. Lives under e2e/unit/ (standalone
+pytest rootdir + a conftest that puts e2e/ on sys.path) so e2e/conftest.py
+(the Obsidian/auth session-autouse fixtures) never loads. Runs in CI via
+the "Harness unit tests" step; locally:
 
-    cd e2e && python3 -m pytest helpers/log_oracle_test.py \
-        --confcutdir helpers -o addopts='' --reruns 0 -p no:cacheprovider -q
+    cd e2e/unit && python3 -m pytest test_log_oracle.py -q
 """
 
 from __future__ import annotations
