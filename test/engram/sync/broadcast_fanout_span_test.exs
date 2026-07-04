@@ -10,12 +10,12 @@ defmodule Engram.Sync.BroadcastFanoutSpanTest do
   """
   use ExUnit.Case, async: false
 
+  alias Engram.Sync.Broadcast
+
   require Record
   # Pull in the SDK span record so we can read exported fields.
   @fields Record.extract(:span, from_lib: "opentelemetry/include/otel_span.hrl")
   Record.defrecordp(:span, @fields)
-
-  alias Engram.Sync.Broadcast
 
   setup do
     # Route exported spans to this process via the in-memory (pid) exporter,

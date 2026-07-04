@@ -1,12 +1,12 @@
 defmodule Engram.Observability.ClientSpanTest do
   use ExUnit.Case, async: false
 
+  alias Engram.Observability.ClientSpan
+
   require Record
   # Pull in the SDK span record so we can read exported fields.
   @fields Record.extract(:span, from_lib: "opentelemetry/include/otel_span.hrl")
   Record.defrecordp(:span, @fields)
-
-  alias Engram.Observability.ClientSpan
 
   setup do
     # Route exported spans to this process via the in-memory (pid) exporter.
