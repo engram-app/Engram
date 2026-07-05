@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import {
 	createFolder,
 	createVault,
@@ -15,6 +15,43 @@ import {
 	pickMoveTarget,
 	row,
 } from "./support/tree";
+
+type WSRoute = Parameters<Parameters<Page["routeWebSocket"]>[1]>[0];
+
+// Gates the app's own Phoenix socket (proxied through Vite dev at /socket)
+// so a test can simulate "this tab's realtime connection is down" without
+// touching HTTP. Deliberately narrower than `context.setOffline`: a full
+// network cutoff also kills Vite's OWN unrelated HMR websocket, and the dev
+// client's reconnect-recovery for THAT socket forces a full `location.reload()`
+// (see node_modules/vite/dist/client/client.mjs, "vite:ws:disconnect" handler),
+// which races the network as it comes back and can crash the tab with an
+// unrecoverable "Failed to fetch dynamically imported module" error. That is
+// a Vite-dev-only artifact, not a defect in the app's reconnect/cursor-sync
+// path, so this gate targets only the `/socket` pathname the Phoenix channel
+// uses, leaving Vite's HMR socket untouched.
+async function installSocketGate(
+	page: Page,
+): Promise<{ cut: () => Promise<void>; restore: () => void }> {
+	let blocked = false;
+	let current: WSRoute | null = null;
+	await page.routeWebSocket(/\/socket/u, (ws) => {
+		current = ws;
+		if (blocked) {
+			ws.close();
+			return;
+		}
+		ws.connectToServer();
+	});
+	return {
+		cut: async () => {
+			blocked = true;
+			await current?.close();
+		},
+		restore: () => {
+			blocked = false;
+		},
+	};
+}
 
 test.describe("web tree ops sync (web to web)", () => {
 	test("rename note propagates to a second tab", async ({ browser, baseURL }) => {
@@ -332,6 +369,126 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Predicted red: with no descendant notes, the backend may emit no
 		// broadcast, so tab B never invalidates and the folder lingers.
 		await expect(row(pageB, "Empty")).toHaveCount(0, { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
+	// Reconnect catch-up: tab B's socket is cut while the op happens in tab A,
+	// so B never sees the live broadcast. On reconnect the socket's onOpen
+	// fires runCursorSync, which pulls /sync/changes and feeds rows through
+	// the same invalidation pipeline as a live event. This is a distinct code
+	// path from the live-broadcast tests above and was, until this test,
+	// untested.
+	//
+	// KNOWN BUG (not a frontend defect): `/sync/changes` 500s on every call
+	// that reaches `Engram.Sync.record_cursor/4`, i.e. every call from a real
+	// client, because `client.ts` always sends `X-Device-Id` and the
+	// `vault_device_cursors` table (added in
+	// priv/repo/migrations/20260616130000_cursor_pull_expand.exs) was never
+	// granted to the `engram_app` role the write runs as (every sibling
+	// no-RLS table, e.g. idempotency_keys/processed_webhook_events, has an
+	// explicit `GRANT ... TO engram_app` in its migration; this one doesn't).
+	// `information_schema.role_table_grants` confirms `engram_app` has zero
+	// privileges on `vault_device_cursors`. The 500 happens after the
+	// changes page is already computed, so the client gets nothing and
+	// `runCursorSync`'s promise rejects (unhandled), silently killing catch-up
+	// for every focus/reconnect trigger, not just this offline scenario.
+	// Fix: a new migration granting SELECT/INSERT/UPDATE on
+	// vault_device_cursors to engram_app. Out of scope for this frontend e2e
+	// change; tracked here via test.fail() until fixed.
+	test("offline empty-folder delete catches up on reconnect", async ({ browser, baseURL }) => {
+		test.setTimeout(60_000);
+		test.fail(true, "vault_device_cursors missing GRANT to engram_app; see comment above");
+		const email = `e2e-tree-offdel-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treeoffdel-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "OfflineEmpty");
+		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		const gate = await installSocketGate(pageB);
+		await signInForNote(pageA, email, vault.id, anchorId);
+		await signInForNote(pageB, email, vault.id, anchorId);
+
+		await expect(row(pageA, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
+
+		// Tab B's realtime connection goes dark, so it misses the live
+		// broadcast entirely (and every reconnect attempt is cut too).
+		await gate.cut();
+
+		await openContextMenu(pageA, "OfflineEmpty");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+		await expect(row(pageA, "OfflineEmpty")).toHaveCount(0, { timeout: 10_000 });
+
+		// Let B's socket reconnect for real, and nudge the focus-based
+		// cursor-sync trigger too, since the socket's own reconnect jitter
+		// can be slow and unreliable in a headless run.
+		gate.restore();
+		await pageB.bringToFront();
+		await pageB.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+		// Convergence via catch-up, not live broadcast: the marker-only delete
+		// (no descendant notes) is the sharpest case for a feed that skips
+		// folder markers.
+		await expect(row(pageB, "OfflineEmpty")).toHaveCount(0, { timeout: 20_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
+	// See the KNOWN BUG note above the previous test: the same
+	// vault_device_cursors GRANT gap makes /sync/changes 500 here too.
+	test("offline folder rename catches up on reconnect", async ({ browser, baseURL }) => {
+		test.setTimeout(60_000);
+		test.fail(true, "vault_device_cursors missing GRANT to engram_app; see comment above");
+		const email = `e2e-tree-offrnf-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treeoffrnf-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "OfflineOldName");
+		const { id: childId } = await upsertNote(
+			baseURL!,
+			token,
+			vault.id,
+			"OfflineOldName/child.md",
+			"child body\n",
+		);
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		const gate = await installSocketGate(pageB);
+		await signInForNote(pageA, email, vault.id, childId);
+		await signInForNote(pageB, email, vault.id, childId);
+
+		await expect(row(pageA, "OfflineOldName")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "OfflineOldName")).toBeVisible({ timeout: 10_000 });
+
+		await gate.cut();
+
+		await openContextMenu(pageA, "OfflineOldName");
+		await pickAction(pageA, "Rename");
+		await commitRename(pageA, "OfflineNewName");
+		await expect(row(pageA, "OfflineNewName")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageA, "OfflineOldName")).toHaveCount(0);
+
+		gate.restore();
+		await pageB.bringToFront();
+		await pageB.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+		// Convergence via catch-up: renamed folder appears, old name gone, and
+		// the child is reachable under the new name (cascade re-path survived
+		// the reconnect pull, not just the folder marker's own row).
+		await expect(row(pageB, "OfflineNewName")).toBeVisible({ timeout: 20_000 });
+		await expect(row(pageB, "OfflineOldName")).toHaveCount(0, { timeout: 20_000 });
+		await expandFolder(pageB, "OfflineNewName");
+		await expect(row(pageB, "child")).toBeVisible({ timeout: 20_000 });
 
 		await ctxA.close();
 		await ctxB.close();
