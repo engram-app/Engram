@@ -30,6 +30,7 @@ export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props)
 		<div className="flex w-full flex-col gap-0.5">
 			<input
 				ref={inputRef}
+				data-testid="tree-rename-input"
 				type="text"
 				value={value}
 				onChange={(e) => setValue(e.target.value)}
