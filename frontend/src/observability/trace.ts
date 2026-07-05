@@ -124,7 +124,10 @@ export class BeaconBuffer {
 	// token/vault aren't ready yet), in which case `flush()` drops the
 	// batch without ever touching the network.
 	constructor(
-		private readonly resolveTransport: () => BeaconTransport | null | Promise<BeaconTransport | null>,
+		private readonly resolveTransport: () =>
+			| BeaconTransport
+			| null
+			| Promise<BeaconTransport | null>,
 	) {}
 
 	enqueue(entry: BeaconEntry): void {
