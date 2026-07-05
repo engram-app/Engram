@@ -43,13 +43,37 @@ PLUGIN_ID = "engram-vault-sync"
 AFTER_MARKER = "test66-after-disable"
 
 
+async def _set_remote_logging(cdp, enabled: bool) -> None:
+    """Toggle remoteLoggingEnabled on one instance via saveSettings."""
+    await cdp.evaluate(
+        f"(async () => {{"
+        f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
+        f"  p.settings.remoteLoggingEnabled = {str(enabled).lower()};"
+        f"  await p.saveSettings();"
+        f"}})()",
+        await_promise=True,
+    )
+
+
 @pytest.mark.asyncio
-async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
-    """Logs generated after remoteLoggingEnabled=false do not reach the server."""
+async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
+    """Logs generated after remoteLoggingEnabled=false do not reach the server.
+
+    Both sync-pair instances are toggled. test_16/66 aside, remote logging is
+    seeded ON suite-wide (helpers/obsidian.py, backend #909), so instance B
+    also logs the receive side of after.md under the SHARED user. list_logs()
+    cannot yet tell A's rows from B's (no per-instance device_id), so proving
+    "disable stops flush" requires silencing both. Once device_id lands
+    (plugin + backend follow-up), tighten this to filter A's rows and assert A
+    goes silent while B keeps logging, a strictly stronger per-client proof.
+    """
     # ------------------------------------------------------------------ #
-    # Setup: capture original setting and ensure remote logging starts ON.
+    # Setup: capture original setting on both instances.
     # ------------------------------------------------------------------ #
-    original_enabled = await cdp_a.evaluate(
+    original_enabled_a = await cdp_a.evaluate(
+        f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLoggingEnabled"
+    )
+    original_enabled_b = await cdp_b.evaluate(
         f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLoggingEnabled"
     )
 
@@ -94,18 +118,13 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
         )
 
         # ------------------------------------------------------------------ #
-        # Phase 2: disable remote logging.
+        # Phase 2: disable remote logging on BOTH sync-pair instances.
+        # saveSettings() calls rlog().setEnabled(false) synchronously, so no
+        # settle sleep is required. B must be silenced too (see docstring):
+        # it logs after.md's receive events under the same user.
         # ------------------------------------------------------------------ #
-        await cdp_a.evaluate(
-            f"(async () => {{"
-            f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
-            f"  p.settings.remoteLoggingEnabled = false;"
-            f"  await p.saveSettings();"
-            f"}})()",
-            await_promise=True,
-        )
-        # saveSettings() calls rlog().setEnabled(false) synchronously in
-        # onSettingsSave — no settle sleep required.
+        await _set_remote_logging(cdp_a, False)
+        await _set_remote_logging(cdp_b, False)
 
         # ------------------------------------------------------------------ #
         # Phase 3: generate entries AFTER disabling — they should NOT arrive.
@@ -134,18 +153,11 @@ async def test_disable_stops_flush(vault_a, cdp_a, api_sync):
 
     finally:
         # ------------------------------------------------------------------ #
-        # Restore: reset remoteLoggingEnabled to its original value, clean up
+        # Restore: reset remoteLoggingEnabled on both instances, clean up
         # seeded notes.
         # ------------------------------------------------------------------ #
-        restore_enabled = bool(original_enabled)
-        await cdp_a.evaluate(
-            f"(async () => {{"
-            f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
-            f"  p.settings.remoteLoggingEnabled = {str(restore_enabled).lower()};"
-            f"  await p.saveSettings();"
-            f"}})()",
-            await_promise=True,
-        )
+        await _set_remote_logging(cdp_a, bool(original_enabled_a))
+        await _set_remote_logging(cdp_b, bool(original_enabled_b))
         for fname in ("before.md", "after.md"):
             path = vault_a / "E2E" / "Logging66" / fname
             path.unlink(missing_ok=True)
