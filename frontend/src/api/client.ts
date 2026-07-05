@@ -1,3 +1,4 @@
+import { newTraceContext, tracingEnabled } from "../observability/trace";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
@@ -12,7 +13,7 @@ let tokenGetter: (() => Promise<string | null>) | null = null;
 let upgradeHandler: ((reason: string) => void) | null = null;
 
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
-	const token = tokenGetter ? await tokenGetter() : null;
+	const token = await getAuthToken();
 
 	const headers = new Headers(options.headers);
 	headers.set("Content-Type", "application/json");
@@ -24,6 +25,12 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 		headers.set("X-Vault-ID", String(vaultId));
 	}
 	headers.set("X-Device-Id", getDeviceId());
+	// Distributed trace leg A: gated on the real `tracingEnabled` config
+	// field (default false). Disabled = a single boolean check, no id
+	// generation, no header. The render-leg beacon lives in channel.ts.
+	if (tracingEnabled()) {
+		headers.set("traceparent", newTraceContext().traceparent);
+	}
 
 	// joinApiUrl handles both same-origin (selfhost) and cross-origin
 	// (saas, `https://api.engram.page`). For selfhost apiBase is "" so
@@ -54,6 +61,13 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 
 export function setTokenGetter(getter: () => Promise<string | null>) {
 	tokenGetter = getter;
+}
+
+// Shared with the observability beacon buffer (trace.ts), which resolves
+// its own Authorization header the same way authFetch does, rather than
+// duplicating the tokenGetter plumbing.
+export async function getAuthToken(): Promise<string | null> {
+	return tokenGetter ? await tokenGetter() : null;
 }
 
 export function setUpgradeHandler(fn: ((reason: string) => void) | null) {

@@ -13,6 +13,7 @@ const testConfig: EngramConfig = {
 	clerkWaitlistMode: false,
 	apiBase: "",
 	wsBase: "",
+	tracingEnabled: false,
 };
 
 // Counts actual ReactMarkdown renders — each one is a full remark/rehype

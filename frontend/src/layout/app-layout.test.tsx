@@ -16,6 +16,7 @@ const testConfig: EngramConfig = {
 	clerkWaitlistMode: false,
 	apiBase: "",
 	wsBase: "",
+	tracingEnabled: false,
 };
 
 vi.mock("../api/queries", async () => {
