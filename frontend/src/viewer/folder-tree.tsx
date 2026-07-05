@@ -8,7 +8,6 @@ import {
 	FOLDER_NOTES_STALE_MS,
 	type Folder,
 	fetchNotesForFolderId,
-	type Note,
 	ROOT_FOLDER_ID,
 	useAttachments,
 	useBatchDeleteAttachments,
@@ -20,6 +19,7 @@ import {
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
+	useNote,
 	useRenameAttachment,
 	useRenameFolder,
 	useRenameNote,
@@ -262,15 +262,27 @@ export default function FolderTree() {
 	// Auto-expand the chain leading to the active note so users can see
 	// where they are after navigation. Mirrors the old recursive
 	// `containsSelected` behaviour but driven by HT's expand API.
+	//
+	// Reads the note through `useNote` (reactive) rather than a one-off
+	// `qc.getQueryData` snapshot: the note's own fetch can resolve after
+	// `folders` does, and a snapshot read inside an effect keyed only on
+	// `folders` would miss that later arrival, since nothing re-runs the
+	// effect once `folders` itself stops changing. Gated to once per
+	// `selectedNoteId` (the ref below) so a LATER unrelated update to
+	// `activeNote` or `folders` (e.g. a background refetch from an unrelated
+	// cross-tab edit) does not silently re-expand a folder the user has since
+	// collapsed by hand.
+	const { data: activeNote } = useNote(selectedNoteId);
+	const autoExpandedForNoteRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (selectedNoteId === null || !folders) {
+		if (selectedNoteId === null || !folders || !activeNote?.folder) {
 			return;
 		}
-		const note = qc.getQueryData<Note>(["note", vaultId, selectedNoteId]);
-		if (!note?.folder) {
+		if (autoExpandedForNoteRef.current === selectedNoteId) {
 			return;
 		}
-		const segments = note.folder.split("/");
+		autoExpandedForNoteRef.current = selectedNoteId;
+		const segments = activeNote.folder.split("/");
 		for (let i = 1; i <= segments.length; i++) {
 			const path = segments.slice(0, i).join("/");
 			const folder = folders.find((f) => f.name === path);
@@ -281,7 +293,7 @@ export default function FolderTree() {
 				}
 			}
 		}
-	}, [selectedNoteId, folders, vaultId, qc, tree]);
+	}, [selectedNoteId, folders, activeNote, tree]);
 
 	// Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
 	function rowsFor(itemId: string, mode: "delete" | "move"): DeleteRow[] | MoveRow[] {
