@@ -12,8 +12,11 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
   # All tenant-scoped filters target payload fields that Qdrant Cloud
   # strict-mode requires an index for. ensure_collection must create them
-  # (idempotently) or every filtered op 400s on Cloud. See #626.
-  @indexed_fields ~w(user_id vault_id note_id path_hmac)
+  # (idempotently) or every filtered op 400s on Cloud. See #626. `type_hmac`
+  # is the OKF frontmatter blind index (keyword); `fm_timestamp`/`fm_created`
+  # are the OKF frontmatter dates (integer, range-filterable).
+  @indexed_fields ~w(user_id vault_id note_id path_hmac type_hmac)
+  @integer_indexed_fields ~w(fm_timestamp fm_created)
 
   # Stub the payload-index endpoint so tests asserting other behaviour don't
   # fail on the index PUTs ensure_collection now fires.
@@ -57,6 +60,10 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
     for field <- @indexed_fields do
       assert_receive {:index, ^field, "keyword"}
+    end
+
+    for field <- @integer_indexed_fields do
+      assert_receive {:index, ^field, "integer"}
     end
   end
 

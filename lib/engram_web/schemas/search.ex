@@ -11,6 +11,35 @@ defmodule EngramWeb.Schemas.SearchRequest do
       limit: %Schema{type: :integer, description: "1..50, default 5"},
       tags: %Schema{type: :array, items: %Schema{type: :string}},
       folder: %Schema{type: :string},
+      type: %Schema{
+        type: :string,
+        description:
+          "Filter to notes whose frontmatter `type` equals this value (case-insensitive)."
+      },
+      created_after: %Schema{
+        type: :string,
+        format: :"date-time",
+        description:
+          "Only notes whose frontmatter created date is at or after this ISO 8601 instant."
+      },
+      created_before: %Schema{
+        type: :string,
+        format: :"date-time",
+        description:
+          "Only notes whose frontmatter created date is at or before this ISO 8601 instant."
+      },
+      updated_after: %Schema{
+        type: :string,
+        format: :"date-time",
+        description:
+          "Only notes whose frontmatter timestamp is at or after this ISO 8601 instant."
+      },
+      updated_before: %Schema{
+        type: :string,
+        format: :"date-time",
+        description:
+          "Only notes whose frontmatter timestamp is at or before this ISO 8601 instant."
+      },
       mode: %Schema{type: :string, enum: ["keyword", "vector", "hybrid"]},
       cross_vault: %Schema{type: :boolean, description: "Pro plan only."},
       diversity: %Schema{
@@ -25,6 +54,7 @@ defmodule EngramWeb.Schemas.SearchRequest do
     example: %{
       "query" => "omega-3 dosage",
       "limit" => 5,
+      "type" => "Playbook",
       "mode" => "hybrid",
       "diversity" => 0.3
     }

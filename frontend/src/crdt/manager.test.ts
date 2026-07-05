@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { frontmatterMaps } from "./frontmatter-doc";
 import { CrdtManager } from "./manager";
 
 function freshDbName(): string {
@@ -79,4 +80,36 @@ describe("CrdtManager", () => {
 		expect(flattened).toBe(false);
 		expect(m.hasDoc("notes/x.md")).toBe(false); // must NOT have been resurrected
 	});
+
+	it("flattenIfBloated preserves frontmatter maps (#814)", async () => {
+		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		const path = "notes/fm.md";
+		const doc = await m.getDoc(path);
+		const maps = frontmatterMaps(doc);
+		doc.transact(() => {
+			maps.values.set("type", JSON.stringify("Playbook"));
+			maps.order.insert(0, ["type"]);
+			maps.types.set("type", "text");
+		});
+
+		// Cross both flatten thresholds (>500 KB AND >1000 distinct client-IDs)
+		// the same way the plugin's equivalent test does: apply an update
+		// authored by a fresh Y.Doc per iteration so each carries a unique
+		// client-ID, and pad content past the byte threshold.
+		for (let i = 0; i < 1100; i++) {
+			const author = new Y.Doc();
+			Y.applyUpdate(author, Y.encodeStateAsUpdate(doc));
+			author.getText("content").insert(author.getText("content").length, "x".repeat(500));
+			Y.applyUpdate(doc, Y.encodeStateAsUpdate(author, Y.encodeStateVector(doc)));
+		}
+
+		const flattened = await m.flattenIfBloated(path);
+		expect(flattened).toBe(true);
+
+		const fresh = await m.getDoc(path);
+		const after = frontmatterMaps(fresh);
+		expect(after.values.get("type")).toBe(JSON.stringify("Playbook"));
+		expect(after.order.toArray()).toEqual(["type"]);
+		expect(after.types.get("type")).toBe("text");
+	}, 30_000);
 });

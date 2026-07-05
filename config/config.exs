@@ -213,6 +213,13 @@ config :sentry,
 # exporter to :otlp only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 config :opentelemetry, traces_exporter: :none
 
+# Make the W3C trace-context propagator explicit. Inbound `traceparent`
+# headers (from the plugin and web SPA) parent the server span onto the
+# client span. Previously inherited from the SDK default, declared here so
+# leg-A continuation cannot silently break.
+config :opentelemetry,
+  text_map_propagators: [:trace_context, :baggage]
+
 # Full-jitter window (ms) advertised to clients in the sync-channel join reply.
 # On reconnect after a drop (e.g. a graceful node drain), clients wait
 # random(0, this) before reconnecting so a drained fleet doesn't stampede the

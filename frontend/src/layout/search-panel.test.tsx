@@ -5,25 +5,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RailViewProvider, useRailView } from "./rail-view-context";
 import SearchPanel from "./search-panel";
 
+const useSearchSpy = vi.fn((q: string, _filters?: unknown) => ({
+	data:
+		q === "hello"
+			? [
+					{
+						id: 7,
+						path: "note.md",
+						title: "Note",
+						folder: "",
+						heading_path: "",
+						snippet: "hello world",
+						match_count: 1,
+					},
+				]
+			: [],
+	isLoading: false,
+	error: null,
+}));
+
 vi.mock("../api/queries", () => ({
-	useSearch: (q: string) => ({
-		data:
-			q === "hello"
-				? [
-						{
-							id: 7,
-							path: "note.md",
-							title: "Note",
-							folder: "",
-							heading_path: "",
-							snippet: "hello world",
-							match_count: 1,
-						},
-					]
-				: [],
-		isLoading: false,
-		error: null,
-	}),
+	useSearch: (q: string, filters: unknown) => useSearchSpy(q, filters),
 }));
 
 function ViewProbe() {
@@ -48,6 +50,7 @@ function renderPanel() {
 describe("SearchPanel", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
+		useSearchSpy.mockClear();
 	});
 
 	it('renders header "Search" and an [x] return-to-files control', () => {
@@ -81,5 +84,21 @@ describe("SearchPanel", () => {
 		const input = screen.getByPlaceholderText(/search your notes/iu);
 		fireEvent.keyDown(input, { key: "Escape" });
 		expect(screen.getByTestId("view").textContent).toBe("files");
+	});
+
+	it("typing a type filter re-fires the search with that filter", () => {
+		renderPanel();
+		const typeInput = screen.getByLabelText(/filter by type/iu);
+		fireEvent.change(typeInput, { target: { value: "Playbook" } });
+
+		expect(useSearchSpy).toHaveBeenLastCalledWith("", { type: "Playbook" });
+	});
+
+	it("picking an updated-after date re-fires the search with an ISO midnight-UTC filter", () => {
+		renderPanel();
+		const updatedAfterInput = screen.getByLabelText(/updated after/iu);
+		fireEvent.change(updatedAfterInput, { target: { value: "2026-01-01" } });
+
+		expect(useSearchSpy).toHaveBeenLastCalledWith("", { updatedAfter: "2026-01-01T00:00:00Z" });
 	});
 });

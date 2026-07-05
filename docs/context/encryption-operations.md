@@ -7,6 +7,7 @@ _Last verified: 2026-06-18 (post-B.4)_
 > **Current operator surface (post-B.4):**
 > - Every vault is encrypted at rest by default at create time. There is no per-vault toggle, no cooldown, no in-flight encrypt job to monitor.
 > - Path/folder/tags/name + `notes.content`/`title` plaintext columns were dropped (B.3/B.4).
+> - Content is encrypted at rest; the ONLY plaintext frontmatter columns are the dates `notes.fm_timestamp`/`fm_created` (OKF wave 2026-07-02), kept plain for range queries. Frontmatter `type` is encrypted with a `type_hmac` blind index; `description`/`resource` are encrypted display-only. Rotation (T3.7) rewraps all three and re-derives `type_hmac`.
 > - To check vault state, query Postgres directly or use the engram MCP `list_vaults`.
 > - The live operator runbooks that still apply are the **Tier-3 sections** further down: master-key rotation (T3.5), master-key backup, and per-user DEK rotation (T3.7).
 

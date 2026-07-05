@@ -49,6 +49,37 @@ defmodule Engram.NotesBroadcastTest do
 
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
     end
+
+    test "carries a w3c traceparent when the upsert runs inside a span", %{
+      user: user,
+      vault: vault
+    } do
+      require OpenTelemetry.Tracer, as: Tracer
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      Tracer.with_span "req" do
+        {:ok, _} =
+          Notes.upsert_note(user, vault, %{
+            "path" => "c.md",
+            "content" => "# C",
+            "mtime" => 1.0
+          })
+      end
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
+      assert payload.traceparent =~ ~r/\A00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]\z/
+    end
+
+    test "traceparent is nil when no span is active", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "d.md", "content" => "# D", "mtime" => 1.0})
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
+      assert payload.traceparent == nil
+    end
   end
 
   describe "rename_folder/4 cascade broadcast" do

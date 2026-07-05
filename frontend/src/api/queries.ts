@@ -649,15 +649,35 @@ export function useCreateFolder() {
 	});
 }
 
-export function useSearch(query: string) {
+export interface SearchFilters {
+	type?: string;
+	createdAfter?: string;
+	createdBefore?: string;
+	updatedAfter?: string;
+	updatedBefore?: string;
+}
+
+export function useSearch(query: string, filters: SearchFilters = {}) {
 	const vaultId = useActiveVaultId();
 	return useQuery({
-		queryKey: ["search", vaultId, query],
+		queryKey: ["search", vaultId, query, filters],
 		// Each search costs a Voyage embedding + Qdrant round trip server-side:
 		// abort superseded requests, and keep the previous results rendered
 		// while the next key loads so the panel doesn't flicker empty.
 		queryFn: ({ signal }) =>
-			api.post<{ results: SearchResult[] }>("/search", { query, limit: 20 }, { signal }),
+			api.post<{ results: SearchResult[] }>(
+				"/search",
+				{
+					query,
+					limit: 20,
+					...(filters.type ? { type: filters.type } : {}),
+					...(filters.createdAfter ? { created_after: filters.createdAfter } : {}),
+					...(filters.createdBefore ? { created_before: filters.createdBefore } : {}),
+					...(filters.updatedAfter ? { updated_after: filters.updatedAfter } : {}),
+					...(filters.updatedBefore ? { updated_before: filters.updatedBefore } : {}),
+				},
+				{ signal },
+			),
 		select: (data) => data.results,
 		enabled: query.length > 0,
 		placeholderData: keepPreviousData,

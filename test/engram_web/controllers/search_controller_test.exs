@@ -248,6 +248,36 @@ defmodule EngramWeb.SearchControllerTest do
       assert json_response(conn, 200)
     end
 
+    test "forwards type and date filters", %{conn: conn, bypass: bypass} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      conn =
+        post(conn, ~p"/api/search", %{
+          "query" => "x",
+          "type" => "Playbook",
+          "updated_after" => "2026-01-01T00:00:00Z"
+        })
+
+      assert json_response(conn, 200)
+    end
+
+    test "invalid date param is a 422", %{conn: conn} do
+      conn = post(conn, ~p"/api/search", %{"query" => "x", "updated_after" => "not-a-date"})
+      assert %{"error" => _} = json_response(conn, 422)
+    end
+
+    test "non-string date param is a 422", %{conn: conn} do
+      conn = post(conn, ~p"/api/search", %{"query" => "x", "updated_after" => 123})
+      assert %{"error" => _} = json_response(conn, 422)
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn

@@ -56,6 +56,29 @@
             "x-struct": null,
             "x-validate": null
           },
+          "description": {
+            "description": "OKF frontmatter `description` field",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "fm_created": {
+            "description": "OKF frontmatter `created`/`date` field",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "fm_timestamp": {
+            "description": "OKF frontmatter `timestamp`/`modified`/`updated` field",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "folder": {
             "nullable": true,
             "type": "string",
@@ -82,6 +105,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "resource": {
+            "description": "OKF frontmatter `resource` field",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "tags": {
             "items": {
               "type": "string",
@@ -93,6 +123,13 @@
             "x-validate": null
           },
           "title": {
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "type": {
+            "description": "OKF frontmatter `type` field",
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -468,9 +505,24 @@
           "diversity": 0.3,
           "limit": 5,
           "mode": "hybrid",
-          "query": "omega-3 dosage"
+          "query": "omega-3 dosage",
+          "type": "Playbook"
         },
         "properties": {
+          "created_after": {
+            "description": "Only notes whose frontmatter created date is at or after this ISO 8601 instant.",
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "created_before": {
+            "description": "Only notes whose frontmatter created date is at or before this ISO 8601 instant.",
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "cross_vault": {
             "description": "Pro plan only.",
             "type": "boolean",
@@ -518,6 +570,26 @@
               "x-validate": null
             },
             "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "type": {
+            "description": "Filter to notes whose frontmatter `type` equals this value (case-insensitive).",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_after": {
+            "description": "Only notes whose frontmatter timestamp is at or after this ISO 8601 instant.",
+            "format": "date-time",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "updated_before": {
+            "description": "Only notes whose frontmatter timestamp is at or before this ISO 8601 instant.",
+            "format": "date-time",
+            "type": "string",
             "x-struct": null,
             "x-validate": null
           }

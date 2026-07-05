@@ -8,6 +8,13 @@ defmodule EngramWeb.SearchController do
 
   @max_search_limit 50
 
+  @date_params [
+    {"created_after", :created_after},
+    {"created_before", :created_before},
+    {"updated_after", :updated_after},
+    {"updated_before", :updated_before}
+  ]
+
   operation(:search,
     operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
@@ -31,61 +38,30 @@ defmodule EngramWeb.SearchController do
     note_limit = params["limit"] |> clamp_limit()
     tags = params["tags"]
     folder = params["folder"]
+    type = params["type"]
     cross_vault = Map.get(params, "cross_vault", false)
 
-    opts =
-      [
-        limit: note_limit,
-        cross_vault: cross_vault,
-        mode: parse_mode(params["mode"]),
-        group_by_note: true
-      ]
-      |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
-      |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
-      |> maybe_put_diversity(params["diversity"])
+    case parse_date_params(params) do
+      {:ok, date_opts} ->
+        opts =
+          [
+            limit: note_limit,
+            cross_vault: cross_vault,
+            mode: parse_mode(params["mode"]),
+            group_by_note: true
+          ]
+          |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
+          |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
+          |> then(&if(type, do: Keyword.put(&1, :type, type), else: &1))
+          |> Keyword.merge(date_opts)
+          |> maybe_put_diversity(params["diversity"])
 
-    case Search.search(user, vault, query, opts) do
-      {:ok, results} ->
-        # `cross_vault` mode passes nil as the vault filter so id lookup
-        # spans all of the user's vaults (matches how the search hits
-        # were sourced).
-        id_lookup_vault = if cross_vault, do: nil, else: vault
+        do_search(conn, user, vault, query, note_limit, cross_vault, opts)
 
-        notes =
-          results
-          |> Enum.map(fn r ->
-            %{
-              id: nil,
-              path: r.source_path,
-              title: r.title || derive_title(r.source_path),
-              folder: derive_folder(r.source_path),
-              heading_path: r.heading_path,
-              snippet: r.text,
-              score: r.score,
-              match_count: r.match_count
-            }
-          end)
-          |> Enum.take(note_limit)
-          |> attach_ids(user, id_lookup_vault)
-
-        json(conn, %{results: notes})
-
-      {:error, :feature_not_available} ->
+      {:error, param} ->
         conn
-        |> put_status(403)
-        |> json(%{error: "Cross-vault search requires Pro plan"})
-
-      {:error, reason} ->
-        require Logger
-
-        Logger.error(
-          "Search failed",
-          Engram.Logger.Metadata.with_category(:error, :search, reason: inspect(reason))
-        )
-
-        conn
-        |> put_status(500)
-        |> json(%{error: "search_failed"})
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "invalid ISO 8601 datetime in #{param}"})
     end
   end
 
@@ -106,6 +82,27 @@ defmodule EngramWeb.SearchController do
   end
 
   defp clamp_limit(_), do: 5
+
+  # Parses the four OKF date-range params into Search opts. Absent params are
+  # skipped; the first param with an unparseable ISO 8601 value halts with
+  # its name so the controller can return a 422 naming the offending param.
+  defp parse_date_params(params) do
+    Enum.reduce_while(@date_params, {:ok, []}, fn {param, key}, {:ok, acc} ->
+      case params[param] do
+        nil ->
+          {:cont, {:ok, acc}}
+
+        value when is_binary(value) ->
+          case DateTime.from_iso8601(value) do
+            {:ok, dt, _} -> {:cont, {:ok, [{key, dt} | acc]}}
+            {:error, _} -> {:halt, {:error, param}}
+          end
+
+        _non_binary ->
+          {:halt, {:error, param}}
+      end
+    end)
+  end
 
   defp parse_mode("keyword"), do: :keyword
   defp parse_mode("vector"), do: :vector
@@ -150,5 +147,51 @@ defmodule EngramWeb.SearchController do
     |> List.last()
     |> Kernel.||("")
     |> String.replace_suffix(".md", "")
+  end
+
+  defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
+    case Search.search(user, vault, query, opts) do
+      {:ok, results} ->
+        # `cross_vault` mode passes nil as the vault filter so id lookup
+        # spans all of the user's vaults (matches how the search hits
+        # were sourced).
+        id_lookup_vault = if cross_vault, do: nil, else: vault
+
+        notes =
+          results
+          |> Enum.map(fn r ->
+            %{
+              id: nil,
+              path: r.source_path,
+              title: r.title || derive_title(r.source_path),
+              folder: derive_folder(r.source_path),
+              heading_path: r.heading_path,
+              snippet: r.text,
+              score: r.score,
+              match_count: r.match_count
+            }
+          end)
+          |> Enum.take(note_limit)
+          |> attach_ids(user, id_lookup_vault)
+
+        json(conn, %{results: notes})
+
+      {:error, :feature_not_available} ->
+        conn
+        |> put_status(403)
+        |> json(%{error: "Cross-vault search requires Pro plan"})
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.error(
+          "Search failed",
+          Engram.Logger.Metadata.with_category(:error, :search, reason: inspect(reason))
+        )
+
+        conn
+        |> put_status(500)
+        |> json(%{error: "search_failed"})
+    end
   end
 end
