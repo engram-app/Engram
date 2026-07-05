@@ -42,8 +42,12 @@ defmodule Engram.Sync.Broadcast do
   When `payload` is a map, the calling span's `traceparent` (nil when there is
   no span, or OTEL is off) is stamped onto it here, at call time, so it
   reflects the request/job that produced the change rather than whatever
-  happens to be active later when a deferred buffer flushes. The browser uses
-  it to parent its render span onto the `sync.fanout` span below.
+  happens to be active later when a deferred buffer flushes. The browser
+  parents its render span onto this request/job span, so the render lands in
+  the same trace as the change that triggered it (a sibling of the
+  `sync.fanout` span below, not a child of it: stamping here, before the
+  fan-out span exists, keeps the render in the originating trace even when a
+  deferred buffer flushes the broadcast under a different or absent span).
   """
   @spec emit(String.t(), String.t(), map()) :: :ok
   def emit(topic, event, payload) do
