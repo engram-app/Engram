@@ -34,11 +34,18 @@ def delete_note(vault_path: Path, rel_path: str) -> None:
 def wait_for_file(
     vault_path: Path, rel_path: str, timeout: float = 15, poll: float = 0.3
 ) -> str:
-    """Poll until file exists, return content. Raise TimeoutError."""
+    """Poll until file exists and is non-empty, return content. Raise TimeoutError.
+
+    The non-empty guard mirrors wait_for_binary: sync materializes a note by
+    creating the file, then writing its body, so a bare exists() check can
+    catch the 0-byte window and return "" — the read-before-flush race behind
+    intermittent `assert "x" in ""` failures. No delivery test waits for a
+    genuinely-empty note (test_27 uses read_note), so requiring content is safe.
+    """
     full = vault_path / rel_path
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if full.exists():
+        if full.exists() and full.stat().st_size > 0:
             return full.read_text(encoding="utf-8")
         time.sleep(poll)
     raise TimeoutError(f"File {rel_path} did not appear within {timeout}s")

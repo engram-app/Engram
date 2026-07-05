@@ -105,7 +105,13 @@ def wait_for_delivery(
     full = Path(vault_path) / rel_path
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if full.exists():
+        # Non-empty guard matches wait_for_binary_delivery: sync creates the
+        # file then writes the body, so a bare exists() check can return "" in
+        # the 0-byte window (the read-before-flush race). Returning "" makes the
+        # caller's substring assert fail WITHOUT this oracle's causal-chain
+        # diagnostic ever firing — so wait past the empty window like the
+        # binary variant does.
+        if full.exists() and full.stat().st_size > 0:
             return full.read_text(encoding="utf-8")
         time.sleep(poll)
     raise _timeout_error(rel_path, api_sync, timeout, _NOTE_MATERIALIZE)
