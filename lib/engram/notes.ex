@@ -1045,9 +1045,9 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, nil)
         decrypted = decrypt_or_raise!(note, user)
-        :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted)
+        :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         {:ok, decrypted}
 
       {:ok, {:no_change, note}} ->
@@ -1203,7 +1203,7 @@ defmodule Engram.Notes do
         Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
       end
 
-    broadcast_change(user.id, vault.id, "delete", path)
+    broadcast_change(user.id, vault.id, "delete", path, note && note.id)
   end
 
   @doc """
@@ -1312,8 +1312,8 @@ defmodule Engram.Notes do
           |> Crypto.decrypt_notes_batch(user)
           |> Enum.zip(notes)
           |> Enum.each(fn
-            {{:ok, note}, _raw} ->
-              broadcast_change(user.id, vault.id, "delete", note.path)
+            {{:ok, note}, raw} ->
+              broadcast_change(user.id, vault.id, "delete", note.path, raw.id)
 
             {{:error, reason}, raw} ->
               # The tombstone committed; only the broadcast is lost. Fail
@@ -2898,7 +2898,7 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, nil)
 
         # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
         # 4-arity clause below carries no `id`, so a client's id-keyed
@@ -2911,7 +2911,8 @@ defmodule Engram.Notes do
             vault.id,
             "upsert",
             new_path,
-            %{note | path: new_path, folder: new_note_folder}
+            %{note | path: new_path, folder: new_note_folder},
+            []
           )
       end)
 
@@ -3005,7 +3006,7 @@ defmodule Engram.Notes do
       Enum.each(real_notes, fn note ->
         _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
-        :ok = broadcast_change(user.id, vault.id, "delete", note.path)
+        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id)
       end)
 
       # Root cause of the empty-folder-lingers-in-tab-B bug: an empty folder's
@@ -3017,7 +3018,7 @@ defmodule Engram.Notes do
       # emission style and position as the real-note loop above: after the
       # Repo.with_tenant transaction returns, so it never fires on rollback.
       Enum.each(markers, fn marker ->
-        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder)
+        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil)
       end)
 
       {:ok, %{deleted: length(matches)}}
@@ -3338,7 +3339,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts \\ []) do
+  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts) do
     # Protocol rev — dual-field transition: the payload carries BOTH
     # `content` and `content_hash` for one release. `content` is dropped the
     # release after the plugin min-version floor covers the hash-only
@@ -3391,14 +3392,33 @@ defmodule Engram.Notes do
     :ok
   end
 
-  @spec broadcast_change(Ecto.UUID.t(), Ecto.UUID.t(), String.t(), String.t()) :: :ok
-  defp broadcast_change(user_id, vault_id, event_type, path) do
-    _ =
-      Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", %{
-        "event_type" => event_type,
-        "path" => path,
-        "vault_id" => vault_id
-      })
+  # `id` may be nil: rename's old-path "delete" signal and the id-less
+  # folder-marker delete legitimately have no note id to carry (the note
+  # either still exists under a new path, or it's a folder, not a note).
+  # When a note is genuinely gone (delete_note/3, batch_delete_notes/3, the
+  # folder-delete cascade's real-note loop), callers MUST pass the id: the web
+  # client's useNote(id) cache is keyed by id, not path, since the URL-by-id
+  # refactor, and only invalidates it `if payload.id !== undefined`. Omitting
+  # id here left a currently-open deleted note's editor stuck showing stale
+  # content forever in any OTHER tab watching the same note, never re-fetched,
+  # never errored. See e2e "deleting the open note" test.
+  @spec broadcast_change(
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          String.t(),
+          Ecto.UUID.t() | nil
+        ) :: :ok
+  defp broadcast_change(user_id, vault_id, event_type, path, id) do
+    payload = %{
+      "event_type" => event_type,
+      "path" => path,
+      "vault_id" => vault_id
+    }
+
+    payload = if id, do: Map.put(payload, "id", id), else: payload
+
+    _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
 
     :ok
   end
