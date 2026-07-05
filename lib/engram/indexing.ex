@@ -266,7 +266,12 @@ defmodule Engram.Indexing do
           # (folder/tags/path scoping) without exposing plaintext.
           path_hmac: encode_hmac(note.path_hmac),
           folder_hmac: encode_hmac(note.folder_hmac),
-          tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1)
+          tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1),
+          type_hmac: encode_hmac(note.type_hmac),
+          # Plaintext by design (spec 2026-07-02): dates are the only
+          # unencrypted frontmatter fields, needed for range filters.
+          fm_timestamp: note.fm_timestamp && DateTime.to_unix(note.fm_timestamp),
+          fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
         }
 
         case Engram.Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id) do

@@ -151,9 +151,10 @@ defmodule Engram.Parsers.MarkdownTest do
   # ---------------------------------------------------------------------------
 
   describe "frontmatter handling" do
-    test "strips frontmatter from chunk text" do
+    test "strips frontmatter from body chunk text" do
       chunks = Markdown.parse(@frontmatter_note, "Test/Tagged.md")
-      all_text = Enum.map_join(chunks, " ", & &1.text)
+      body_chunks = Enum.reject(chunks, &(&1.heading_path == "frontmatter"))
+      all_text = Enum.map_join(body_chunks, " ", & &1.text)
       refute String.contains?(all_text, "tags:")
       refute String.contains?(all_text, "---")
     end
@@ -162,6 +163,28 @@ defmodule Engram.Parsers.MarkdownTest do
       chunks = Markdown.parse(@frontmatter_note, "Test/Tagged.md")
       [first | _] = chunks
       assert String.contains?(first.heading_path, "My Custom Title")
+    end
+
+    test "emits a trailing synthetic frontmatter chunk when frontmatter exists" do
+      content = "---\nstatus: done\nauthor: todd\n---\n# H\n\nbody text\n"
+      chunks = Markdown.parse(content, "a/n.md")
+
+      fm = List.last(chunks)
+      assert fm.heading_path == "frontmatter"
+      assert fm.text =~ "status: done"
+      assert fm.text =~ "author: todd"
+      assert fm.char_start == 0 and fm.char_end == 0
+      assert fm.position == length(chunks) - 1
+    end
+
+    test "no synthetic chunk without frontmatter" do
+      chunks = Markdown.parse("# H\n\nbody\n", "a/n.md")
+      refute Enum.any?(chunks, &(&1.heading_path == "frontmatter"))
+    end
+
+    test "frontmatter-only note yields just the frontmatter chunk" do
+      chunks = Markdown.parse("---\nstatus: done\n---\n", "a/n.md")
+      assert [%{heading_path: "frontmatter"}] = chunks
     end
   end
 

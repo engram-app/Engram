@@ -1,5 +1,6 @@
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
+import { frontmatterMaps } from "./frontmatter-doc";
 
 interface Entry {
 	doc: Y.Doc;
@@ -111,13 +112,39 @@ export class CrdtManager {
 			return false;
 		}
 		const plaintext = e.text.toJSON();
+		// #814: capture the frontmatter Y.Maps before destroying the bloated doc,
+		// or the flatten silently drops every widget-managed property (the fresh
+		// doc only ever gets the plaintext body re-inserted).
+		const before = frontmatterMaps(e.doc);
+		const fmValues = new Map<string, string>();
+		before.values.forEach((v, k) => {
+			fmValues.set(k, v);
+		});
+		const fmOrder = before.order.toArray();
+		const fmTypes = new Map<string, string>();
+		before.types.forEach((v, k) => {
+			fmTypes.set(k, v);
+		});
+
 		const id = this.docId(path);
 		e.doc.destroy();
 		await e.persistence.clearData();
 		await e.persistence.destroy();
 		this.docs.delete(id);
 		const fresh = await this.entry(path);
-		fresh.text.insert(0, plaintext); // local origin → propagated to the server
+		fresh.doc.transact(() => {
+			fresh.text.insert(0, plaintext); // local origin → propagated to the server
+			const after = frontmatterMaps(fresh.doc);
+			for (const [k, v] of fmValues) {
+				after.values.set(k, v);
+			}
+			if (fmOrder.length > 0) {
+				after.order.insert(0, fmOrder);
+			}
+			for (const [k, v] of fmTypes) {
+				after.types.set(k, v);
+			}
+		});
 		return true;
 	}
 

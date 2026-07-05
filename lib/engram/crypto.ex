@@ -369,8 +369,9 @@ defmodule Engram.Crypto do
     if needs_note_decrypt?(note) do
       with {:ok, dek} <- get_dek(user),
            {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_note_fields(note, dek) do
-        decrypt_phase_b_tags(note, dek)
+           {:ok, note} <- decrypt_phase_b_note_fields(note, dek),
+           {:ok, note} <- decrypt_phase_b_tags(note, dek) do
+        decrypt_okf_fields(note, dek)
       end
     else
       {:ok, note}
@@ -384,7 +385,10 @@ defmodule Engram.Crypto do
         title: scrub_field(note.title),
         path: scrub_field(note.path),
         folder: scrub_field(note.folder),
-        tags: scrub_tags(note.tags)
+        tags: scrub_tags(note.tags),
+        type: scrub_field(note.type),
+        description: scrub_field(note.description),
+        resource: scrub_field(note.resource)
     }
   end
 
@@ -404,7 +408,10 @@ defmodule Engram.Crypto do
     not is_nil(note.content_ciphertext) or
       not is_nil(note.title_ciphertext) or
       not is_nil(note.path_ciphertext) or
-      not is_nil(note.tags_ciphertext)
+      not is_nil(note.tags_ciphertext) or
+      not is_nil(note.type_ciphertext) or
+      not is_nil(note.description_ciphertext) or
+      not is_nil(note.resource_ciphertext)
   end
 
   # Content and title decrypt independently: metadata-only listings project
@@ -469,6 +476,31 @@ defmodule Engram.Crypto do
 
       :error ->
         {:error, :decrypt_failed}
+    end
+  end
+
+  # OKF fields (type/description/resource) decrypt independently; a note
+  # written before this feature has none of them and passes through.
+  defp decrypt_okf_fields(%Engram.Notes.Note{} = note, dek) do
+    with {:ok, note} <- decrypt_okf_field(note, dek, :type, :type_ciphertext, :type_nonce),
+         {:ok, note} <-
+           decrypt_okf_field(note, dek, :description, :description_ciphertext, :description_nonce) do
+      decrypt_okf_field(note, dek, :resource, :resource_ciphertext, :resource_nonce)
+    end
+  end
+
+  defp decrypt_okf_field(note, dek, virtual, ct_field, nonce_field) do
+    case Map.get(note, ct_field) do
+      nil ->
+        {:ok, note}
+
+      ct ->
+        aad = decrypt_aad(note, :notes, virtual)
+
+        case Envelope.decrypt(ct, Map.get(note, nonce_field), dek, aad) do
+          {:ok, plaintext} -> {:ok, Map.put(note, virtual, plaintext)}
+          :error -> {:error, :decrypt_failed}
+        end
     end
   end
 

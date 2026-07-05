@@ -665,7 +665,12 @@ defmodule EngramWeb.NotesController do
       # The hash is keyed server-side (HMAC); clients treat it as opaque.
       content_hash: note.content_hash,
       mtime: note.mtime,
-      updated_at: note.updated_at
+      updated_at: note.updated_at,
+      type: note.type,
+      description: note.description,
+      resource: note.resource,
+      fm_timestamp: note.fm_timestamp,
+      fm_created: note.fm_created
     }
   end
 

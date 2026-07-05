@@ -16,7 +16,34 @@ defmodule EngramWeb.Schemas.Note do
       content: %Schema{type: :string},
       content_hash: %Schema{type: :string, nullable: true},
       mtime: %Schema{type: :number, format: :float, description: "Client mtime (epoch seconds)"},
-      updated_at: %Schema{type: :string, format: :"date-time", nullable: true}
+      updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
+      type: %Schema{
+        type: :string,
+        nullable: true,
+        description: "OKF frontmatter `type` field"
+      },
+      description: %Schema{
+        type: :string,
+        nullable: true,
+        description: "OKF frontmatter `description` field"
+      },
+      resource: %Schema{
+        type: :string,
+        nullable: true,
+        description: "OKF frontmatter `resource` field"
+      },
+      fm_timestamp: %Schema{
+        type: :string,
+        format: :"date-time",
+        nullable: true,
+        description: "OKF frontmatter `timestamp`/`modified`/`updated` field"
+      },
+      fm_created: %Schema{
+        type: :string,
+        format: :"date-time",
+        nullable: true,
+        description: "OKF frontmatter `created`/`date` field"
+      }
     },
     required: [:path]
   })

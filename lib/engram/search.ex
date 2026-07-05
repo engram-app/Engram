@@ -46,6 +46,9 @@ defmodule Engram.Search do
   - `:limit`       — number of results (default 5)
   - `:tags`        — filter to notes with any of these tags
   - `:folder`      — filter to notes in this folder
+  - `:type`: filters to notes whose OKF frontmatter `type` matches (HMAC'd)
+  - `:created_after`/`:created_before`: filters to OKF `created` DateTime bounds
+  - `:updated_after`/`:updated_before`: filters to OKF `timestamp` DateTime bounds
   - `:cross_vault` — when true, search across all vaults (billing-gated)
   """
   def search(user, vault, query, opts \\ []) do
@@ -164,6 +167,8 @@ defmodule Engram.Search do
     limit = Keyword.get(opts, :limit, 5)
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)
+    type = Keyword.get(opts, :type)
+    date_bounds = date_bound_kw(opts)
 
     # On the grouped path `limit` is the NOTE count, not the chunk count.
     group? = Keyword.get(opts, :group_by_note, false)
@@ -189,12 +194,13 @@ defmodule Engram.Search do
     # (unchanged chunk-path behavior).
     rerank_keep = if group? or need_vectors?, do: pool, else: limit
 
-    case translate_phase_b_filters(user, folder, tags) do
+    case translate_phase_b_filters(user, folder, tags, type) do
       {:ok, phase_b_kw} ->
         search_opts =
           [user_id: to_string(user.id), limit: fetch_limit]
           |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
           |> Keyword.merge(phase_b_kw)
+          |> Keyword.merge(date_bounds)
           |> Keyword.put(:with_vector, need_vectors?)
           |> Keyword.put(:full_precision, profile.full_precision)
 
@@ -232,9 +238,10 @@ defmodule Engram.Search do
         end
 
       :no_dek_with_filter ->
-        # Caller asked to filter by folder/tags but has no DEK provisioned —
-        # impossible to derive HMAC, and the user has no encrypted points to
-        # match anyway. Mirrors list_folders (B.2.2) defensive empty.
+        # Caller asked to filter by folder/tags/type but has no DEK
+        # provisioned, so it's impossible to derive HMAC, and the user has no
+        # encrypted points to match anyway. Mirrors list_folders (B.2.2)
+        # defensive empty.
         {:ok, []}
     end
   end
@@ -302,19 +309,21 @@ defmodule Engram.Search do
 
   defp detect_query_language(query), do: Engram.KeywordIndex.LangDetect.detect(query) || :en
 
-  # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...]
-  # subset to merge into Qdrant search opts, or :no_dek_with_filter when the
-  # caller asked for a filter but has no DEK to derive the HMAC. An unfiltered
-  # search (no folder, no tags) is always {:ok, []} — DEK not required.
-  defp translate_phase_b_filters(_user, nil, nil), do: {:ok, []}
+  # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...,
+  # type_hmac: ...] subset to merge into Qdrant search opts, or
+  # :no_dek_with_filter when the caller asked for a filter but has no DEK to
+  # derive the HMAC. An unfiltered search (no folder, no tags, no type) is
+  # always {:ok, []}, no DEK required.
+  defp translate_phase_b_filters(_user, nil, nil, nil), do: {:ok, []}
 
-  defp translate_phase_b_filters(user, folder, tags) do
+  defp translate_phase_b_filters(user, folder, tags, type) do
     case Engram.Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         kw =
           []
           |> maybe_put_folder_hmac(filter_key, folder)
           |> maybe_put_tags_hmac(filter_key, tags)
+          |> maybe_put_type_hmac(filter_key, type)
 
         {:ok, kw}
 
@@ -333,6 +342,27 @@ defmodule Engram.Search do
   defp maybe_put_tags_hmac(kw, filter_key, tags) do
     encoded = Enum.map(tags, &Base.encode64(Engram.Crypto.hmac_field(filter_key, &1)))
     Keyword.put(kw, :tags_hmac, encoded)
+  end
+
+  defp maybe_put_type_hmac(kw, _filter_key, nil), do: kw
+
+  defp maybe_put_type_hmac(kw, filter_key, type) do
+    normalized = Engram.Notes.OkfFields.normalize_type(type)
+    Keyword.put(kw, :type_hmac, Base.encode64(Engram.Crypto.hmac_field(filter_key, normalized)))
+  end
+
+  # Plaintext date bounds need no DEK; translated straight to unix seconds
+  # and merged into search_opts regardless of DEK availability (unlike
+  # folder/tags/type, which require a DEK to derive an HMAC).
+  defp date_bound_kw(opts) do
+    [
+      fm_timestamp_gte: opts[:updated_after],
+      fm_timestamp_lte: opts[:updated_before],
+      fm_created_gte: opts[:created_after],
+      fm_created_lte: opts[:created_before]
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Enum.map(fn {k, %DateTime{} = dt} -> {k, DateTime.to_unix(dt)} end)
   end
 
   # Single-vault search: return the passed-in vault directly — no extra DB query.

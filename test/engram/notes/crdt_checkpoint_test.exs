@@ -450,6 +450,70 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 1
   end
 
+  # ── OKF frontmatter integrity: live edits must re-run extraction ───────────
+  # Finding 1 (critical, whole-branch review): the changed-text branch
+  # re-materialized content/title/tags/content_hash + phase-B fields, but
+  # never re-ran OKF extraction, so a live-editor frontmatter edit persisted
+  # content while type_ciphertext/type_hmac/fm_timestamp/fm_created kept
+  # stale values.
+
+  @okf_content """
+  ---
+  type: Playbook
+  description: Freshness alert triage.
+  resource: https://x.test/dash
+  timestamp: 2026-05-28T14:30:00Z
+  created: 2026-05-01
+  ---
+  body
+  """
+
+  test "checkpoint re-extracts OKF fields when a live edit changes frontmatter type", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "okf/change.md", "content" => @okf_content})
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    new_content = String.replace(@okf_content, "type: Playbook", "type: Reference")
+
+    # Frontmatter lives in a separate Y.Map from the body Y.Text, so a bare
+    # `diff_into_text` only rewrites the body. A frontmatter-changing edit
+    # must go through `ingest_plaintext` (what the live editor round-trips
+    # through) to land the new `type:` key.
+    :ok = CrdtBridge.ingest_plaintext(doc, new_content)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    assert fresh.type_hmac == Crypto.hmac_field(filter_key, "reference")
+  end
+
+  test "checkpoint nulls OKF fields when a live edit removes frontmatter", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "okf/remove.md", "content" => @okf_content})
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok = CrdtBridge.ingest_plaintext(doc, "just body\n")
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert is_nil(fresh.type_hmac)
+    assert is_nil(fresh.type_ciphertext)
+    assert is_nil(fresh.fm_timestamp)
+    assert is_nil(fresh.fm_created)
+  end
+
   # ── Debounce timer: multiple fast activity signals reset the timer ─────────
 
   test "CrdtCheckpointTimer debounces — activity signals reset the settle timer", ctx do

@@ -97,6 +97,33 @@ defmodule Engram.MCP.Tools do
             "items" => %{"type" => "string"},
             "description" => "Optional list of tags to filter by"
           },
+          "folder" => %{
+            "type" => "string",
+            "description" => "Optional folder path to scope the search to (exact match)"
+          },
+          "type" => %{
+            "type" => "string",
+            "description" =>
+              "Optional frontmatter type to filter by (e.g. 'Playbook', 'Reference'); case-insensitive"
+          },
+          "created_after" => %{
+            "type" => "string",
+            "description" =>
+              "Only notes created at/after this ISO 8601 datetime (frontmatter created/date)"
+          },
+          "created_before" => %{
+            "type" => "string",
+            "description" => "Only notes created at/before this ISO 8601 datetime"
+          },
+          "updated_after" => %{
+            "type" => "string",
+            "description" =>
+              "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified)"
+          },
+          "updated_before" => %{
+            "type" => "string",
+            "description" => "Only notes updated at/before this ISO 8601 datetime"
+          },
           "mode" => %{
             "type" => "string",
             "enum" => ["hybrid", "keyword", "vector"],

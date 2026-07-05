@@ -6,10 +6,12 @@ import {
 	frontmatterMaps,
 	moveKey,
 	ORDER_KEY,
+	type PropertyRow,
 	readRows,
 	removeKey,
 	setType,
 	setValue,
+	sortRowsOkfFirst,
 	TYPES_KEY,
 } from "./frontmatter-doc";
 
@@ -105,5 +107,25 @@ describe("frontmatter-doc mutations", () => {
 		setValue(doc, "x", "hi");
 		setType(doc, "x", "list");
 		expect(readRows(doc)).toEqual([{ key: "x", value: ["hi"], typeOverride: "list" }]);
+	});
+});
+
+describe("sortRowsOkfFirst", () => {
+	const row = (key: string): PropertyRow => ({ key, value: "x", typeOverride: null });
+
+	test("pins OKF keys in spec order before custom keys", () => {
+		const rows = ["zeta", "tags", "alpha", "type", "created"].map(row);
+		expect(sortRowsOkfFirst(rows).map((r) => r.key)).toEqual([
+			"type",
+			"created",
+			"tags",
+			"zeta",
+			"alpha",
+		]);
+	});
+
+	test("is stable for custom keys and identity when no OKF keys present", () => {
+		const rows = ["b", "a", "c"].map(row);
+		expect(sortRowsOkfFirst(rows).map((r) => r.key)).toEqual(["b", "a", "c"]);
 	});
 });
