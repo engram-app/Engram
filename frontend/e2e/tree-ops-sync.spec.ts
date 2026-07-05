@@ -207,6 +207,10 @@ test.describe("web tree ops sync (web to web)", () => {
 		// confirm it converges in tab B.
 		const edA = pageA.locator(".cm-content");
 		const edB = pageB.locator(".cm-content");
+		// The folder rename re-paths the child but must NOT touch its body. The
+		// pre-existing text must still be present in tab B BEFORE any new edit —
+		// this is the assertion that catches a deliver-out empty-content wipe.
+		await expect(edB).toContainText("child body", { timeout: 10_000 });
 		await edA.click();
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-FOLDER-RENAME");

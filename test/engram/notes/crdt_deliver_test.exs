@@ -208,6 +208,36 @@ defmodule Engram.Notes.CrdtDeliverTest do
       doc = SharedDoc.get_doc(room)
       assert CrdtBridge.text_of(doc) == "orig updated"
     end
+
+    test "EMPTY content on a stateless live room does NOT wipe the doc (folder-rename data-loss guard)",
+         %{user: user, vault: vault} do
+      # Regression for the folder-rename cascade: real_note_updates rows are a
+      # meta-scan that never loads the content column, so note.content is
+      # nil -> "" when broadcast_change reaches deliver_out. A live, unedited
+      # room has no persisted CRDT state yet ({:ok, nil}); ingesting "" would
+      # diff its body to empty. The cascade only re-paths, so the body must
+      # survive. deliver_out must skip the plaintext push (announce still fires).
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "child body"})
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+          )
+        end)
+
+      room = start_bare_room(note.id, "child body")
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "renamed/f.md", note.id, "")
+
+      # Body preserved — the pre-fix code wiped this to "".
+      doc = SharedDoc.get_doc(room)
+      assert CrdtBridge.text_of(doc) == "child body"
+
+      # The discovery announce still fires so clients re-pull the re-pathed doc.
+      assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
+    end
   end
 
   defp start_bare_room(note_id, seed_text) do
