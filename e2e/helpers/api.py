@@ -87,9 +87,15 @@ class ApiClient:
         return resp.json()
 
     def wait_for_note(
-        self, path: str, timeout: float = 10, poll: float = 0.5
+        self, path: str, timeout: float = 30, poll: float = 0.5
     ) -> dict:
-        """Poll until note exists on server. Returns the note dict."""
+        """Poll until note exists on server. Returns the note dict.
+
+        Default 30s (was 10s) matches the load-tuned delivery budgets
+        (RT_TIMEOUT, wait_for_stream): under e2e-clerk 2-worker load the
+        plugin's push can legitimately exceed 10s. Callsites that still pass an
+        explicit timeout=10 keep the tighter budget until swept separately.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             note = self.get_note(path)

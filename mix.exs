@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.626",
+      version: "0.5.627",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -34,7 +34,13 @@ defmodule Engram.MixProject do
   def application do
     [
       mod: {Engram.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      # opentelemetry_exporter + opentelemetry listed (in dep order) so OTP
+      # loads/starts them deterministically in EVERY env — not just the prod
+      # release via releases/0. Without this, `mix test`/dev boot the SDK as a
+      # normal start-dep and a transient code-load hiccup in the SDK's start/2
+      # (installing text_map_propagators) aborts the whole suite. Tracing stays
+      # off in test/dev via `traces_exporter: :none`, so no behavior change.
+      extra_applications: [:logger, :runtime_tools, :opentelemetry_exporter, :opentelemetry]
     ]
   end
 
