@@ -11,6 +11,7 @@ import {
 	startCrdtSession,
 	stopCrdtSession,
 } from "../crdt/session";
+import { beacon, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
 import { ROOT_FOLDER_ID } from "./queries";
 
@@ -149,6 +150,10 @@ export interface NoteChangedPayload {
 	mtime?: number;
 	updated_at?: string;
 	version?: number;
+	// Distributed trace leg B: the `sync.fanout` span's W3C traceparent,
+	// stamped into the payload by the backend. The browser parents its
+	// `browser.live_sync.render` beacon onto it. Absent when OTEL is off.
+	traceparent?: string;
 }
 
 /** Test hook: drop any pending batch without flushing. */
@@ -170,6 +175,12 @@ export function handleNoteChanged(
 	if (payload.vault_id !== activeVaultId) {
 		return;
 	}
+
+	// Leg-B trace timing. Gate BEFORE any tracing work: disabled = one
+	// boolean, no id parse, no enqueue. Capture the start now so the beacon
+	// spans the actual apply below.
+	const traced = tracingEnabled() && Boolean(payload.traceparent);
+	const startUs = traced ? Date.now() * 1000 : 0;
 
 	if (payload.id !== undefined) {
 		queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.id] });
@@ -194,6 +205,28 @@ export function handleNoteChanged(
 
 	for (const listener of listeners) {
 		listener(payload);
+	}
+
+	// Live-sync render leg: report a beacon parented onto the fan-out span so
+	// the Tempo trace closes obsidian.push -> backend -> browser render.
+	// enqueue is O(1) and never networks on the render path; the shared
+	// buffer batches/flushes on its own timer. Best-effort: a bad traceparent
+	// just skips.
+	if (traced) {
+		const parsed = parseTraceparent(payload.traceparent as string);
+		if (parsed) {
+			beacon.enqueue({
+				trace_id: parsed.traceId,
+				parent_span_id: parsed.parentSpanId,
+				name: "browser.live_sync.render",
+				start_us: startUs,
+				end_us: Date.now() * 1000,
+				attributes: {
+					"engram.surface": "web",
+					"engram.event_type": payload.event_type ?? "note_changed",
+				},
+			});
+		}
 	}
 }
 
