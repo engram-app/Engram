@@ -2841,6 +2841,14 @@ jobs:
       contents: read
     env:
       PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
+      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
+      # Concurrent n1-compat jobs from different runs share the host /tmp, so a
+      # fixed /tmp/prev-release let one job's `rm -rf` yank another's worktree
+      # mid-run (misleading "working directory ... No such file" in the deps
+      # step). run_id is unique per run; the leading `rm -rf` still clears a
+      # same-run stale dir. (runner.temp would auto-reap but isn't available in
+      # a job-level env: block — the runner context is step-only.)
+      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v7
@@ -2889,9 +2897,9 @@ jobs:
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           # Clean any stale worktree from a previous run on this runner.
-          rm -rf /tmp/prev-release
+          rm -rf "$PREV_DIR"
           git worktree prune
-          git worktree add /tmp/prev-release "${{ steps.prev.outputs.tag }}"
+          git worktree add "$PREV_DIR" "${{ steps.prev.outputs.tag }}"
 
       - name: Start ephemeral postgres
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
@@ -2919,23 +2927,23 @@ jobs:
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: cache-deps
         with:
-          path: /tmp/prev-release/deps
+          path: ${{ env.PREV_DIR }}/deps
           key: ${{ needs.prebuild-mix.outputs.deps-key }}
           restore-keys: mix-deps-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       - name: Install deps for prev release
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
-        working-directory: /tmp/prev-release
+        working-directory: ${{ env.PREV_DIR }}
         run: mix deps.get
 
       - name: Compile prev release
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
-        working-directory: /tmp/prev-release
+        working-directory: ${{ env.PREV_DIR }}
         run: mix compile
 
       - name: Set up DB at prev release schema
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
-        working-directory: /tmp/prev-release
+        working-directory: ${{ env.PREV_DIR }}
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         run: |
@@ -2952,7 +2960,7 @@ jobs:
         if: steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
-        working-directory: /tmp/prev-release
+        working-directory: ${{ env.PREV_DIR }}
         run: |
           # Copy this branch's NEW migrations into prev's migrations dir.
           cd "${{ github.workspace }}"
@@ -2968,13 +2976,13 @@ jobs:
           echo "New migrations on this PR (about to apply on top of prev's schema):"
           echo "$new_files_output" | sed 's/^/  /'
           while IFS= read -r f; do
-            cp "priv/repo/migrations/$f" /tmp/prev-release/priv/repo/migrations/
+            cp "priv/repo/migrations/$f" "$PREV_DIR"/priv/repo/migrations/
           done <<<"$new_files_output"
 
           # Now migrate prev with the new files in its tree. If this
           # fails, the expand-phase migration is incompatible with the
           # previously-deployed schema.
-          cd /tmp/prev-release
+          cd "$PREV_DIR"
           mix ecto.migrate
 
       - name: Smoke-query the migrated DB
@@ -2996,7 +3004,7 @@ jobs:
       - name: Clean up prev-release worktree
         if: always() && steps.gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
-          rm -rf /tmp/prev-release
+          rm -rf "$PREV_DIR"
           git worktree prune
 
   frontend-audit:
