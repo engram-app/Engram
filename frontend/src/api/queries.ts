@@ -1674,7 +1674,16 @@ export function useDeleteNote() {
 						: prev,
 				);
 			}
-			qc.removeQueries({ queryKey: noteKey });
+			// invalidateQueries, not removeQueries: removeQueries destroys the
+			// cached Query object outright, which orphans any CURRENTLY MOUNTED
+			// useNote(id) observer (e.g. NotePage on the note you just deleted),
+			// it keeps rendering the last-known content forever, because nothing
+			// forces that specific observer to reconnect to a freshly-built query.
+			// invalidateQueries marks the SAME Query object stale and refetches it
+			// in place (default refetchType "active"), so every existing observer
+			// gets the 404 and NotePage's `error` branch renders correctly instead
+			// of a frozen, already-deleted note. See e2e "deleting the open note".
+			qc.invalidateQueries({ queryKey: noteKey });
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1926,10 +1935,17 @@ export function useBatchDeleteNotes() {
 				);
 			}
 
-			// Drop any cached note body for the deleted ids so a stale
-			// useNote(id) subscriber 404s on remount instead of rendering.
+			// invalidateQueries, not removeQueries: removeQueries destroys the
+			// cached Query object outright, which orphans any CURRENTLY MOUNTED
+			// useNote(id) observer (e.g. NotePage on the note you just deleted),
+			// it keeps rendering the last-known content forever, because nothing
+			// forces that specific observer to reconnect to a freshly-built query.
+			// invalidateQueries marks the SAME Query object stale and refetches it
+			// in place (default refetchType "active"), so every existing observer
+			// (including a stale remount later) gets the 404 and NotePage's
+			// `error` branch renders correctly. See e2e "deleting the open note".
 			for (const id of ids) {
-				qc.removeQueries({ queryKey: ["note", vaultId, id] });
+				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
 
 			return { noteListSnapshots: snapshots };

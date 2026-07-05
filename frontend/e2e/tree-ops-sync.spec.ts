@@ -135,6 +135,98 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxB.close();
 	});
 
+	// The two tests above always anchor both tabs on a SURVIVING note, so
+	// neither tab ever ends up viewing the note that gets deleted. This is the
+	// gap: what happens when the note you are looking at gets deleted, both
+	// when you (the acting tab) delete it and when another tab (the observer)
+	// deletes it out from under you.
+	test("deleting the open note converges gracefully for both the acting and observer tab", async ({
+		browser,
+		baseURL,
+	}) => {
+		const email = `e2e-tree-delopen-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treedelopen-${Date.now()}`);
+		const { id: doomedId } = await upsertNote(
+			baseURL!,
+			token,
+			vault.id,
+			"doomed.md",
+			"doomed body\n",
+		);
+		// A surviving note. Not navigated to, just proof the vault isn't empty.
+		await upsertNote(baseURL!, token, vault.id, "survivor.md", "survivor body\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+
+		const pageErrorsA: Error[] = [];
+		const pageErrorsB: Error[] = [];
+		pageA.on("pageerror", (err) => pageErrorsA.push(err));
+		pageB.on("pageerror", (err) => pageErrorsB.push(err));
+
+		// Both tabs are anchored ON the note that is about to be deleted.
+		await signInForNote(pageA, email, vault.id, doomedId);
+		await signInForNote(pageB, email, vault.id, doomedId);
+
+		await expect(row(pageA, "doomed")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "doomed")).toBeVisible({ timeout: 10_000 });
+
+		// Tab A deletes the note it is currently viewing (the real UI path).
+		await openContextMenu(pageA, "doomed");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+
+		// Tree convergence in both tabs.
+		await expect(row(pageA, "doomed")).toHaveCount(0, { timeout: 10_000 });
+		await expect(row(pageB, "doomed")).toHaveCount(0, { timeout: 10_000 });
+
+		// OBSERVED behavior (found by running this test against main, not
+		// assumed): before the two root-cause fixes bundled with this test,
+		// BOTH tabs got stuck forever showing the already-deleted note's stale
+		// content, with no error, no redirect, no signal it was gone. Two
+		// distinct bugs converged on that one symptom:
+		//   1. The acting tab's `useBatchDeleteNotes`/`useDeleteNote` onMutate
+		//      called `qc.removeQueries(["note", vaultId, id])`, which destroys
+		//      the cached Query object outright. That orphans the CURRENTLY
+		//      MOUNTED useNote(id) observer (NotePage on the very note you just
+		//      deleted): nothing forces it to reconnect to a freshly-built
+		//      query, so it renders the last-known content forever. Fixed by
+		//      swapping to `invalidateQueries`, which refetches the SAME Query
+		//      object in place so every existing observer sees the result.
+		//   2. The backend's delete broadcast (`Notes.broadcast_change/4`, used
+		//      by delete_note/3, batch_delete_notes/3, and the folder-delete
+		//      cascade) never included the note's `id` in the `note_changed`
+		//      payload, only `path`. The web client's per-id invalidation
+		//      (`channel.ts` `handleNoteChanged`) is gated on `payload.id !==
+		//      undefined`, so the observer tab's id-keyed cache entry was NEVER
+		//      invalidated, only a defunct path-keyed one. Fixed by threading
+		//      the note id through to the broadcast for every "the note is
+		//      really gone" call site.
+		// With both fixed, useNote(id) refetches by id in both tabs, the
+		// backend 404s ("not found"), and NotePage's `error` branch renders
+		// "Failed to load note: not found" in place of the editor. The
+		// route/URL is left untouched (no redirect). That is the graceful
+		// state this test locks in: no dead editor showing stale content, no
+		// crash, no infinite spinner, just an explicit not-found message.
+		await expect(pageA).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageA.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
+
+		await expect(pageB).toHaveURL(new RegExp(`/note/${doomedId}`));
+		await expect(pageB.getByText(/Failed to load note/u)).toBeVisible({ timeout: 10_000 });
+
+		// No crash in either tab: the CRDT doc teardown (closeDoc fires from the
+		// effect cleanup once `note` flips to the error state and its derived
+		// `path` goes to null) must not throw an uncaught error.
+		expect(pageErrorsA).toEqual([]);
+		expect(pageErrorsB).toEqual([]);
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
 	test("move note propagates to a second tab", async ({ browser, baseURL }) => {
 		const email = `e2e-tree-mv-${Date.now()}@test.com`;
 		const token = await registerAndLogin(baseURL!, email);
