@@ -50,4 +50,35 @@ defmodule Engram.NotesBroadcastTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
     end
   end
+
+  describe "rename_folder/4 cascade broadcast" do
+    test "upsert broadcast for a renamed child carries the note id and new path", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete"}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert"} = payload
+      }
+
+      assert payload["id"] == child.id
+      assert payload["path"] == "New/Child.md"
+    end
+  end
 end
