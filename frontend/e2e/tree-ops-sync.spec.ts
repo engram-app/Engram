@@ -58,6 +58,17 @@ test.describe("web tree ops sync (web to web)", () => {
 		await expect(row(pageB, "renamed-note")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "rename-me")).toHaveCount(0);
 
+		// Content sync must survive the rename. Both tabs are anchored on the note
+		// (id stable across rename), so the editor stays bound. Edit in tab A and
+		// confirm it converges in tab B: a regression here means the rename broke
+		// the note's live content channel.
+		const edA = pageA.locator(".cm-content");
+		const edB = pageB.locator(".cm-content");
+		await edA.click();
+		await pageA.keyboard.press("Control+End");
+		await pageA.keyboard.type(" EDIT-AFTER-RENAME");
+		await expect(edB).toContainText("EDIT-AFTER-RENAME", { timeout: 10_000 });
+
 		await ctxA.close();
 		await ctxB.close();
 	});

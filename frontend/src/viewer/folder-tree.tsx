@@ -36,6 +36,24 @@ import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
 
+// RenameInput's caret selection only spans the basename (up to the
+// extension dot) so a normal type-over-selection edit leaves the extension
+// intact. That's a UX convenience, not a guarantee: a select-all, paste, or
+// programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
+// selection and can hand back a bare name with no extension at all. Without
+// this guard the note/attachment gets renamed to a genuinely extension-less
+// path server-side — for a note that silently breaks the CRDT doc's
+// `.endsWith(".md")` gate on next open, stranding the editor on "Connecting…"
+// forever. Re-append the original extension whenever the committed name has
+// none; an explicit new extension from the user is still respected.
+function withPreservedExtension(oldLeaf: string, newName: string): string {
+	if (newName.includes(".")) {
+		return newName;
+	}
+	const dot = oldLeaf.lastIndexOf(".");
+	return dot > 0 ? `${newName}${oldLeaf.slice(dot)}` : newName;
+}
+
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
 	| { kind: "file"; path: string }
@@ -106,7 +124,8 @@ export default function FolderTree() {
 				return;
 			}
 			const parts = item.path.split("/");
-			parts[parts.length - 1] = newName;
+			const oldLeaf = parts.pop() ?? "";
+			parts.push(withPreservedExtension(oldLeaf, newName));
 			const new_path = parts.join("/");
 			renameNote
 				.mutateAsync({ old_path: item.path, new_path })
@@ -124,7 +143,8 @@ export default function FolderTree() {
 				.catch(() => toast.error("Rename failed"));
 		} else if (p.kind === "attachment") {
 			const parts = p.path.split("/");
-			parts[parts.length - 1] = newName;
+			const oldLeaf = parts.pop() ?? "";
+			parts.push(withPreservedExtension(oldLeaf, newName));
 			const new_path = parts.join("/");
 			renameAttachment
 				.mutateAsync({ old_path: p.path, new_path })
