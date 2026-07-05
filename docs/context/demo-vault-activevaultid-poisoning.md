@@ -71,6 +71,17 @@ Follow-ups (not in this fix):
   never issues a real API write in the first place.
 - Roll back optimistic inserts on write failure (kills the transient root duplicates).
 
+## Observability (shipped with this fix)
+`VaultPlug` now logs a structured `reason` on every vault rejection (category
+`:http`, `metadata_reason`), so this whole class is a one-line Loki query instead
+of a trace dive:
+- `vault_id_malformed` — a non-UUID `X-Vault-ID` (exactly this bug: `demo-vault-2`).
+- `vault_not_found` — a well-formed id that does not resolve / is not owned.
+- `no_default_vault` — no header and the user has no default vault.
+Query: `{service_name="engram"} | json | metadata_reason="vault_id_malformed"`.
+The log carries `trace_id`, so pivot to the Tempo span (and the Sentry request-env,
+which still holds the raw `x-vault-id`) from there.
+
 ## Diagnosis Method (how to triage this class in prod)
 Grafana Tempo (traces) + Loki (logs), prod.
 

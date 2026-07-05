@@ -13,7 +13,10 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
   import Plug.Conn
 
+  alias Engram.Logger.Metadata
   alias Engram.Vaults
+
+  require Logger
 
   def init(opts), do: opts
 
@@ -29,10 +32,20 @@ defmodule EngramWeb.Plugs.VaultPlug do
           :forbidden -> halt_with(conn, 403, "API key does not have access to this vault")
         end
 
+      # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id like
+      # `demo-vault-2`) is distinct from a well-formed id that does not resolve.
+      # Both are 404 to the client, but the reason code makes the difference a
+      # one-line Loki query (metadata_reason) instead of a trace dive.
+      {:error, :malformed_vault_id} ->
+        log_rejection(user, "vault_id_malformed")
+        halt_with(conn, 404, "Vault not found")
+
       {:error, :not_found} ->
+        log_rejection(user, "vault_not_found")
         halt_with(conn, 404, "Vault not found")
 
       {:error, :no_default_vault} ->
+        log_rejection(user, "no_default_vault")
         halt_with(conn, 404, "No vault configured. Sync from Obsidian to create one.")
     end
   end
@@ -44,12 +57,23 @@ defmodule EngramWeb.Plugs.VaultPlug do
       [vault_id_str | _] ->
         case Ecto.UUID.cast(vault_id_str) do
           {:ok, vault_id} -> Vaults.get_vault(user, vault_id)
-          :error -> {:error, :not_found}
+          :error -> {:error, :malformed_vault_id}
         end
 
       [] ->
         Vaults.get_default_vault(user)
     end
+  end
+
+  # Static message + structured `reason`, matching the auth-plug convention; the
+  # raw vault id value is not logged (correlate via the request's trace_id / the
+  # Sentry request-env URL). Category :http keeps these out of the :auth-based
+  # auth-failure alert.
+  defp log_rejection(user, reason) do
+    Logger.warning(
+      "vault rejected",
+      Metadata.with_category(:warning, :http, reason: reason, user_id: user.id)
+    )
   end
 
   defp halt_with(conn, status, message) do

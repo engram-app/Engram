@@ -2,6 +2,7 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
   use EngramWeb.ConnCase, async: true
 
   alias Engram.Accounts
+  alias Engram.Test.LogCapture
   alias Engram.Vaults
   alias EngramWeb.Plugs.VaultPlug
 
@@ -93,6 +94,49 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       assert conn.halted
       assert conn.status == 404
+    end
+  end
+
+  # ── Structured rejection logging (diagnosability) ──────────────────────────
+
+  describe "logs a reason on vault rejection" do
+    test "malformed (non-uuid) vault id logs reason=vault_id_malformed", %{user: user} do
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          conn_with_user(user)
+          |> put_req_header("x-vault-id", "demo-vault-2")
+          |> VaultPlug.call([])
+        end)
+
+      assert Enum.any?(events, fn e ->
+               match?({:string, "vault rejected"}, e.msg) and
+                 e.meta[:reason] == "vault_id_malformed"
+             end),
+             "expected reason=vault_id_malformed, got: #{inspect(events)}"
+    end
+
+    test "unknown vault id logs reason=vault_not_found", %{user: user} do
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          conn_with_user(user)
+          |> put_req_header("x-vault-id", "00000000-0000-0000-0000-000000999999")
+          |> VaultPlug.call([])
+        end)
+
+      assert Enum.any?(events, fn e -> e.meta[:reason] == "vault_not_found" end),
+             "expected reason=vault_not_found, got: #{inspect(events)}"
+    end
+
+    test "no vault configured logs reason=no_default_vault" do
+      new_user = insert(:user)
+
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          conn_with_user(new_user) |> VaultPlug.call([])
+        end)
+
+      assert Enum.any?(events, fn e -> e.meta[:reason] == "no_default_vault" end),
+             "expected reason=no_default_vault, got: #{inspect(events)}"
     end
   end
 
