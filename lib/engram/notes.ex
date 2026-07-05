@@ -2873,7 +2873,7 @@ defmodule Engram.Notes do
       # Side effects outside the transaction — broadcast + reindex.
       # T3.2 — pass old_path_hmac (base64) to the worker, never plaintext.
       # Marker rows have no path / no embedding, skip the broadcast+enqueue.
-      Enum.each(real_note_updates, fn {note, old_note_path, new_path, _folder, _title} ->
+      Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
         _ =
           Enqueue.enqueue(
             Engram.Workers.RepathNoteIndex.new_debounced(note.id,
@@ -2883,7 +2883,20 @@ defmodule Engram.Notes do
           )
 
         :ok = broadcast_change(user.id, vault.id, "delete", old_note_path)
-        :ok = broadcast_change(user.id, vault.id, "upsert", new_path)
+
+        # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
+        # 4-arity clause below carries no `id`, so a client's id-keyed
+        # `useNote(id)` cache never invalidates and its editor stays bound to
+        # the pre-rename CRDT doc path. Pass the note (id included) through
+        # the 6-arity clause instead, same as single-note rename does.
+        :ok =
+          broadcast_change(
+            user.id,
+            vault.id,
+            "upsert",
+            new_path,
+            %{note | path: new_path, folder: new_note_folder}
+          )
       end)
 
       {:ok, length(notes)}

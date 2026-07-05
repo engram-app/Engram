@@ -183,4 +183,56 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxA.close();
 		await ctxB.close();
 	});
+
+	test("rename folder propagates to a second tab, child re-paths", async ({ browser, baseURL }) => {
+		const email = `e2e-tree-rnf-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treernf-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "OldName");
+		const { id: childId } = await upsertNote(
+			baseURL!,
+			token,
+			vault.id,
+			"OldName/child.md",
+			"child body\n",
+		);
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await signInForNote(pageA, email, vault.id, childId);
+		await signInForNote(pageB, email, vault.id, childId);
+
+		await expect(row(pageA, "OldName")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "OldName")).toBeVisible({ timeout: 10_000 });
+
+		await openContextMenu(pageA, "OldName");
+		await pickAction(pageA, "Rename");
+		await commitRename(pageA, "NewName");
+
+		// Origin: folder node renamed.
+		await expect(row(pageA, "NewName")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageA, "OldName")).toHaveCount(0);
+
+		// Convergence: tab B shows the renamed folder, old gone, and the child
+		// is reachable under the new folder.
+		await expect(row(pageB, "NewName")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "OldName")).toHaveCount(0);
+		await expandFolder(pageB, "NewName");
+		await expect(row(pageB, "child")).toBeVisible({ timeout: 10_000 });
+
+		// Content sync must survive the folder rename. Tabs are anchored on the
+		// child note (id stable), so its editor stays bound. Edit in tab A and
+		// confirm it converges in tab B.
+		const edA = pageA.locator(".cm-content");
+		const edB = pageB.locator(".cm-content");
+		await edA.click();
+		await pageA.keyboard.press("Control+End");
+		await pageA.keyboard.type(" EDIT-AFTER-FOLDER-RENAME");
+		await expect(edB).toContainText("EDIT-AFTER-FOLDER-RENAME", { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
 });
