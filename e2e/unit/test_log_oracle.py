@@ -52,6 +52,40 @@ def test_returns_content_when_file_appears(tmp_path):
     assert api.get_calls == 0
 
 
+def test_zero_byte_note_is_not_ready(tmp_path):
+    """A 0-byte note is the read-before-flush window, not a delivery → keep waiting.
+
+    Regression for the bug where wait_for_delivery returned "" the instant the
+    file existed, so a caller's `assert "x" in ""` failed WITHOUT this oracle's
+    causal-chain diagnostic ever firing (test_50 line 138).
+    """
+    rel = "E2E/Empty.md"
+    full = tmp_path / rel
+    full.parent.mkdir(parents=True)
+    full.write_text("", encoding="utf-8")
+    api = _FakeApi(logs=[])
+
+    with pytest.raises(TimeoutError):
+        wait_for_delivery(tmp_path, rel, api, timeout=0.1, poll=0.02)
+
+
+def test_waits_past_empty_window_then_returns_content(tmp_path):
+    """File appears empty first, gets its body a beat later → returns the body."""
+    import threading
+
+    rel = "E2E/Late.md"
+    full = tmp_path / rel
+    full.parent.mkdir(parents=True)
+    full.write_text("", encoding="utf-8")  # 0-byte window, as sync creates it
+    threading.Timer(0.1, full.write_text, args=("flushed body",)).start()
+    api = _FakeApi(raise_on_get=True)  # must succeed without touching logs
+
+    content = wait_for_delivery(tmp_path, rel, api, timeout=2, poll=0.02)
+
+    assert content == "flushed body"
+    assert api.get_calls == 0
+
+
 def test_timeout_reports_received_but_not_materialized(tmp_path):
     """Server delivered (channel Event) but client never wrote → pointed diagnosis."""
     rel = "E2E/Stuck.md"
