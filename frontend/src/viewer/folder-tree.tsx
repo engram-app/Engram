@@ -42,7 +42,7 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 // programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
 // selection and can hand back a bare name with no extension at all. Without
 // this guard the note/attachment gets renamed to a genuinely extension-less
-// path server-side — for a note that silently breaks the CRDT doc's
+// path server-side. For a note that silently breaks the CRDT doc's
 // `.endsWith(".md")` gate on next open, stranding the editor on "Connecting…"
 // forever. Re-append the original extension whenever the committed name has
 // none; an explicit new extension from the user is still respected.
