@@ -164,10 +164,6 @@ interface RenameFolderContext {
 	// child folderNotes entries to force refetch on next expand, which
 	// means rollback needs to restore them.
 	childLists: Array<{ key: readonly unknown[]; data: { notes: NoteSummary[] } | undefined }>;
-	// Notes cached by id whose `folder` was under the old prefix. We
-	// rewrite path/folder in place under the same key (id is stable);
-	// snapshots capture the pre-rename value for rollback.
-	noteSnapshots: Array<{ id: string; note: Note }>;
 }
 
 interface DeleteNoteContext {
@@ -1485,18 +1481,17 @@ export function useRenameNote() {
 				});
 			}
 
-			// The note id is stable across rename — only `path` and `folder`
-			// change. Update those fields in place under the SAME cache key
-			// (`['note', vaultId, id]`). No key shuffle: any subscriber to
-			// useNote(id) sees the new fields without remounting.
-			if (noteId !== null && prevNote) {
-				qc.setQueryData<Note>(["note", vaultId, noteId], {
-					...prevNote,
-					path: new_path,
-					folder: newFolder,
-				});
-			}
-
+			// Deliberately do NOT re-path the note-body cache (`['note', vaultId,
+			// id]`) here. An open editor (note-page.tsx) keys its CRDT doc on
+			// `note.path`; flipping the path optimistically makes it close the old
+			// doc and openDoc/enroll the NEW path before the rename has committed.
+			// The CRDT channel bootstraps a note for any path it sees (crdt_channel
+			// resolve_note_id -> get_or_bootstrap_note), so that premature enroll
+			// materialises an empty note at the new path, and the rename POST then
+			// 409s on the now-existing target: a stable duplicate that only surfaces
+			// under load (the bootstrap wins the race). Let onSettled's refetch move
+			// the note cache to the new path AFTER the server confirms the rename,
+			// exactly as the (passing) folder-move path already does.
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1515,9 +1510,7 @@ export function useRenameNote() {
 			if (ctx.folders !== undefined) {
 				qc.setQueryData(foldersKey, ctx.folders);
 			}
-			if (ctx.noteId !== null && ctx.prevNote !== undefined) {
-				qc.setQueryData(["note", vaultId, ctx.noteId], ctx.prevNote);
-			}
+			// No note-cache rollback: onMutate no longer re-paths `['note', id]`.
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
@@ -1561,7 +1554,6 @@ export function useRenameFolder() {
 			const ctx: RenameFolderContext = {
 				folders: qc.getQueryData<{ folders: Folder[] }>(foldersKey),
 				childLists: [],
-				noteSnapshots: [],
 			};
 
 			// Rewrite folder names.
@@ -1602,33 +1594,14 @@ export function useRenameFolder() {
 				qc.removeQueries({ queryKey: q.queryKey });
 			}
 
-			// Rewrite every cached `['note', vaultId, id]` whose folder sits
-			// under the old prefix. The id is stable across folder rename —
-			// path + folder shift, key stays put. This keeps any open
-			// useNote(id) subscriber coherent without a remount.
-			const oldPrefix = `${old_path}/`;
-			const allNotes = qc.getQueryCache().findAll({ queryKey: ["note", vaultId] });
-			for (const q of allNotes) {
-				const note = q.state.data as Note | undefined;
-				if (!note) {
-					continue;
-				}
-				if (note.folder !== old_path && !note.folder.startsWith(oldPrefix)) {
-					continue;
-				}
-				ctx.noteSnapshots.push({ id: note.id, note });
-				const suffixFolder = note.folder === old_path ? "" : note.folder.slice(oldPrefix.length);
-				const newFolder = suffixFolder ? `${new_path}/${suffixFolder}` : new_path;
-				// The note path always starts with `${old_path}/` (a note can't
-				// live AT a folder key), so strip + reattach.
-				const newPath = `${new_path}/${note.path.slice(oldPrefix.length)}`;
-				qc.setQueryData<Note>(["note", vaultId, note.id], {
-					...note,
-					path: newPath,
-					folder: newFolder,
-				});
-			}
-
+			// Deliberately do NOT re-path cached `['note', vaultId, id]` entries for
+			// descendants here. An open child note's editor keys its CRDT doc on
+			// `note.path`; flipping the path optimistically makes it openDoc/enroll
+			// the re-pathed doc before the folder rename has committed, and the CRDT
+			// channel bootstraps a note for any path it sees, materialising a
+			// duplicate at the new path that then 409s the rename. onSettled's
+			// `['note', vaultId]` refetch moves the note caches after the server
+			// confirms, matching the (passing) folder-move path.
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1643,9 +1616,7 @@ export function useRenameFolder() {
 					qc.setQueryData(entry.key, entry.data);
 				}
 			}
-			for (const snap of ctx.noteSnapshots) {
-				qc.setQueryData<Note>(["note", vaultId, snap.id], snap.note);
-			}
+			// No note-cache rollback: onMutate no longer re-paths `['note', id]`.
 			renameErrorToast(err, "folder");
 		},
 		onSettled: () => {
@@ -2073,26 +2044,13 @@ export function useBatchMoveNotes() {
 				}
 			}
 
-			// Patch the individual `['note', vaultId, id]` caches so an open viewer
-			// reflects the new folder. Path/folder shift; id stable. Applies to root
-			// targets too (dest === '').
-			{
-				const dest = targetFolderName;
-				for (const id of ids) {
-					const note = qc.getQueryData<Note>(["note", vaultId, id]);
-					if (!note) {
-						continue;
-					}
-					const filename = note.path.includes("/")
-						? note.path.slice(note.path.lastIndexOf("/") + 1)
-						: note.path;
-					qc.setQueryData<Note>(["note", vaultId, id], {
-						...note,
-						folder: dest,
-						path: dest ? `${dest}/${filename}` : filename,
-					});
-				}
-			}
+			// Deliberately do NOT re-path the moved notes' `['note', vaultId, id]`
+			// caches here. An open editor keys its CRDT doc on `note.path`; flipping
+			// it before the move commits makes the editor openDoc/enroll the new path,
+			// and the CRDT channel bootstraps a note for any path it sees, creating a
+			// duplicate at the destination that then 409s the move. onSuccess's
+			// `['note', vaultId]` refetch re-paths the note cache after the server
+			// confirms (the folder-list + count patches below keep the tree snappy).
 
 			// Bump folder counts: each source loses what it shed, the target gains
 			// the total moved. Two reasons, both load-bearing: (1) keeps the folder

@@ -75,23 +75,43 @@ function flushBatch(batch: PendingBatch): void {
 	const cached = queryClient.getQueryData<CachedFolders>(["folders", vaultId]);
 	let broadById = false;
 
+	// refetchType "all" (not the default "active"): the tree loader
+	// (viewer/tree/loader.ts) reads these caches with a raw getQueryData check
+	// and only fetches on a genuine cache miss, so a folder whose notes were
+	// loaded once (via fetchQuery/prefetchQuery) but has no live useQuery
+	// observer, meaning any subfolder besides the root (the only one with a
+	// mounted `useFolderNotesById`), would otherwise sit invalidated but
+	// unfetched forever, never converging a cross-tab move/delete into that
+	// folder.
 	for (const folder of folders) {
-		queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId, folder] });
+		queryClient.invalidateQueries({
+			queryKey: ["folderNotes", vaultId, folder],
+			refetchType: "all",
+		});
 		// Root has no folder marker; its id-keyed list keys under the sentinel.
 		if (folder === "") {
-			queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId, ROOT_FOLDER_ID] });
+			queryClient.invalidateQueries({
+				queryKey: ["folder-notes-by-id", vaultId, ROOT_FOLDER_ID],
+				refetchType: "all",
+			});
 			continue;
 		}
 		const entry = cached?.folders?.find((f) => f.name === folder);
 		if (entry) {
-			queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId, entry.id] });
+			queryClient.invalidateQueries({
+				queryKey: ["folder-notes-by-id", vaultId, entry.id],
+				refetchType: "all",
+			});
 		} else {
 			broadById = true;
 		}
 	}
 
 	if (broadById) {
-		queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId] });
+		queryClient.invalidateQueries({
+			queryKey: ["folder-notes-by-id", vaultId],
+			refetchType: "all",
+		});
 	}
 }
 

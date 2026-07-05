@@ -81,4 +81,53 @@ defmodule Engram.NotesBroadcastTest do
       assert payload.traceparent == nil
     end
   end
+
+  describe "rename_folder/4 cascade broadcast" do
+    test "upsert broadcast for a renamed child carries the note id and new path", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete"}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert"} = payload
+      }
+
+      assert payload["id"] == child.id
+      assert payload["path"] == "New/Child.md"
+    end
+  end
+
+  describe "delete_folder/3 empty-folder broadcast" do
+    test "deleting an empty folder still broadcasts a note_changed delete event", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Empty")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Empty"}
+      }
+    end
+  end
 end

@@ -8,7 +8,6 @@ import {
 	FOLDER_NOTES_STALE_MS,
 	type Folder,
 	fetchNotesForFolderId,
-	type Note,
 	ROOT_FOLDER_ID,
 	useAttachments,
 	useBatchDeleteAttachments,
@@ -20,6 +19,7 @@ import {
 	useDuplicateNote,
 	useFolderNotesById,
 	useFolders,
+	useNote,
 	useRenameAttachment,
 	useRenameFolder,
 	useRenameNote,
@@ -35,6 +35,39 @@ import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
+
+// RenameInput's caret selection only spans the basename (up to the
+// extension dot) so a normal type-over-selection edit leaves the extension
+// intact. That's a UX convenience, not a guarantee: a select-all, paste, or
+// programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
+// selection and can hand back a bare name with no extension at all, or a
+// dotted TITLE (e.g. "meeting v1.2", "Node.js guide") that isn't actually an
+// extension change. Without this guard the note/attachment gets renamed to a
+// path that doesn't end in the original extension server-side. For a note
+// that silently breaks the CRDT doc's `.endsWith(".md")` gate on next open,
+// stranding the editor on "Connecting…" forever.
+//
+// Rule: preserve the original extension unless newName ends with it already,
+// or explicitly ends with a recognized note extension (a deliberate swap,
+// e.g. .md -> .canvas). Otherwise the trailing dot(s) in newName are part of
+// the title, not an extension, so the original extension is re-appended.
+// ponytail: known ceiling, an attachment ext-swap like ("a.png","a.jpg")
+// becomes "a.jpg.png" since .jpg isn't in the recognized list. Inline rename
+// isn't the intended path for changing a file's type; add a MIME allowlist
+// only if that becomes a real complaint.
+const RECOGNIZED_NOTE_EXTENSIONS = [".md", ".canvas"];
+function withPreservedExtension(oldLeaf: string, newName: string): string {
+	const dot = oldLeaf.lastIndexOf(".");
+	const origExt = dot > 0 ? oldLeaf.slice(dot) : "";
+	const lowerNewName = newName.toLowerCase();
+	if (origExt && lowerNewName.endsWith(origExt.toLowerCase())) {
+		return newName;
+	}
+	if (RECOGNIZED_NOTE_EXTENSIONS.some((ext) => lowerNewName.endsWith(ext))) {
+		return newName;
+	}
+	return origExt ? `${newName}${origExt}` : newName;
+}
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
 type DeleteRow =
@@ -106,7 +139,8 @@ export default function FolderTree() {
 				return;
 			}
 			const parts = item.path.split("/");
-			parts[parts.length - 1] = newName;
+			const oldLeaf = parts.pop() ?? "";
+			parts.push(withPreservedExtension(oldLeaf, newName));
 			const new_path = parts.join("/");
 			renameNote
 				.mutateAsync({ old_path: item.path, new_path })
@@ -124,7 +158,8 @@ export default function FolderTree() {
 				.catch(() => toast.error("Rename failed"));
 		} else if (p.kind === "attachment") {
 			const parts = p.path.split("/");
-			parts[parts.length - 1] = newName;
+			const oldLeaf = parts.pop() ?? "";
+			parts.push(withPreservedExtension(oldLeaf, newName));
 			const new_path = parts.join("/");
 			renameAttachment
 				.mutateAsync({ old_path: p.path, new_path })
@@ -242,15 +277,27 @@ export default function FolderTree() {
 	// Auto-expand the chain leading to the active note so users can see
 	// where they are after navigation. Mirrors the old recursive
 	// `containsSelected` behaviour but driven by HT's expand API.
+	//
+	// Reads the note through `useNote` (reactive) rather than a one-off
+	// `qc.getQueryData` snapshot: the note's own fetch can resolve after
+	// `folders` does, and a snapshot read inside an effect keyed only on
+	// `folders` would miss that later arrival, since nothing re-runs the
+	// effect once `folders` itself stops changing. Gated to once per
+	// `selectedNoteId` (the ref below) so a LATER unrelated update to
+	// `activeNote` or `folders` (e.g. a background refetch from an unrelated
+	// cross-tab edit) does not silently re-expand a folder the user has since
+	// collapsed by hand.
+	const { data: activeNote } = useNote(selectedNoteId);
+	const autoExpandedForNoteRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (selectedNoteId === null || !folders) {
+		if (selectedNoteId === null || !folders || !activeNote?.folder) {
 			return;
 		}
-		const note = qc.getQueryData<Note>(["note", vaultId, selectedNoteId]);
-		if (!note?.folder) {
+		if (autoExpandedForNoteRef.current === selectedNoteId) {
 			return;
 		}
-		const segments = note.folder.split("/");
+		autoExpandedForNoteRef.current = selectedNoteId;
+		const segments = activeNote.folder.split("/");
 		for (let i = 1; i <= segments.length; i++) {
 			const path = segments.slice(0, i).join("/");
 			const folder = folders.find((f) => f.name === path);
@@ -261,7 +308,7 @@ export default function FolderTree() {
 				}
 			}
 		}
-	}, [selectedNoteId, folders, vaultId, qc, tree]);
+	}, [selectedNoteId, folders, activeNote, tree]);
 
 	// Resolve a single item id → the row shape DeleteConfirm / MoveDialog accept.
 	function rowsFor(itemId: string, mode: "delete" | "move"): DeleteRow[] | MoveRow[] {
@@ -561,7 +608,10 @@ export default function FolderTree() {
 					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					position={dialog.position}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
-					onClose={() => setDialog({ kind: "none" })}
+					// The action itself may open another dialog (delete/move) that
+					// shares this same state slot. Only clear it if it's still the
+					// context menu, so we do not stomp on a freshly opened dialog.
+					onClose={() => setDialog((prev) => (prev.kind === "context" ? { kind: "none" } : prev))}
 				/>
 			)}
 			{dialog.kind === "drawer" && (
@@ -569,9 +619,12 @@ export default function FolderTree() {
 					title={titleForItem(dialog.itemId)}
 					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
-					onClose={() => setDialog({ kind: "none" })}
+					// Same reasoning as the context menu above.
+					onClose={() => setDialog((prev) => (prev.kind === "drawer" ? { kind: "none" } : prev))}
 				/>
 			)}
 		</>
 	);
 }
+
+export { withPreservedExtension };

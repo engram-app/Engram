@@ -90,6 +90,18 @@ defmodule Engram.Notes.CrdtDeliver do
           {:ok, state} when is_binary(state) ->
             room_apply(room, note_id, fn doc -> apply_state(doc, state, note_id) end)
 
+          {:ok, nil} when content == "" ->
+            # Empty content on a room with NO persisted CRDT state is ambiguous:
+            # either a genuinely empty note (ingesting "" is a no-op anyway) or a
+            # caller that reached deliver-out with UNLOADED content. The
+            # folder-rename cascade is the latter: it scans meta columns only, so
+            # `note.content` is nil -> "". Ingesting "" would diff the live doc's
+            # body down to empty and clear its frontmatter: a silent wipe of an
+            # open, unedited note. Skip the plaintext push; the announce (step 2)
+            # still fires so enrolled clients re-pull. A real clear-to-empty
+            # arrives as a CRDT edit, never through this deliver-out fallback.
+            :ok
+
           {:ok, nil} ->
             room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
 
