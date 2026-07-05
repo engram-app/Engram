@@ -395,6 +395,47 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:loki_ship] == true
   end
 
+  test "surfaces a plug-set reject_reason as metadata on the existing request log line" do
+    # VaultPlug (and peers) assign :reject_reason instead of emitting a second
+    # log, so the rejection reason rides the single request-stop line rather than
+    # doubling Loki ingest on the 4xx path.
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 404,
+      assigns: %{reject_reason: "vault_id_malformed"}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:reason] == "vault_id_malformed"
+  end
+
+  test "omits reason metadata when no plug set one (normal request)" do
+    conn = %Plug.Conn{
+      method: "GET",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 200,
+      assigns: %{}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 0}, %{conn: conn})
+      end)
+
+    event = find_request_event(events)
+    assert event
+    assert event.meta[:reason] == nil
+  end
+
   defp find_request_event(events) do
     Enum.find(events, fn e ->
       msg = render_msg(e.msg)

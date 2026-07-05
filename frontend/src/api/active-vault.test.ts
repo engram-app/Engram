@@ -35,6 +35,16 @@ describe("active-vault persistence", () => {
 		expect(getActiveVaultId()).toBe("demo-vault-2");
 		expect(localStorage.getItem(KEY)).toBe("42");
 	});
+
+	it("heals storage already poisoned by a pre-fix tour session (drops + clears a demo id)", () => {
+		// A user who ran the tour before this fix shipped has a demo id persisted.
+		// On next load it must NOT be adopted, and must be cleared so it cannot
+		// re-poison later reads (otherwise they 404 forever with no self-recovery).
+		localStorage.setItem(KEY, "demo-vault-2");
+		resetActiveVaultToStored();
+		expect(getActiveVaultId()).toBeNull();
+		expect(localStorage.getItem(KEY)).toBeNull();
+	});
 });
 
 describe("resetActiveVaultToStored", () => {

@@ -2,7 +2,6 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
   use EngramWeb.ConnCase, async: true
 
   alias Engram.Accounts
-  alias Engram.Test.LogCapture
   alias Engram.Vaults
   alias EngramWeb.Plugs.VaultPlug
 
@@ -97,46 +96,38 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
     end
   end
 
-  # ── Structured rejection logging (diagnosability) ──────────────────────────
+  # ── Structured rejection reason (diagnosability) ───────────────────────────
+  #
+  # The plug assigns :reject_reason rather than emitting its own log; RequestLogger
+  # folds it into the single request-stop line (see request_logger_test.exs), so
+  # the reason is queryable in Loki without doubling ingest on the 4xx path.
 
-  describe "logs a reason on vault rejection" do
-    test "malformed (non-uuid) vault id logs reason=vault_id_malformed", %{user: user} do
-      {_conn, events} =
-        LogCapture.with_events(fn ->
-          conn_with_user(user)
-          |> put_req_header("x-vault-id", "demo-vault-2")
-          |> VaultPlug.call([])
-        end)
+  describe "assigns a reject reason" do
+    test "malformed (non-uuid) vault id → vault_id_malformed", %{user: user} do
+      conn =
+        conn_with_user(user)
+        |> put_req_header("x-vault-id", "demo-vault-2")
+        |> VaultPlug.call([])
 
-      assert Enum.any?(events, fn e ->
-               match?({:string, "vault rejected"}, e.msg) and
-                 e.meta[:reason] == "vault_id_malformed"
-             end),
-             "expected reason=vault_id_malformed, got: #{inspect(events)}"
+      assert conn.halted
+      assert conn.status == 404
+      assert conn.assigns[:reject_reason] == "vault_id_malformed"
     end
 
-    test "unknown vault id logs reason=vault_not_found", %{user: user} do
-      {_conn, events} =
-        LogCapture.with_events(fn ->
-          conn_with_user(user)
-          |> put_req_header("x-vault-id", "00000000-0000-0000-0000-000000999999")
-          |> VaultPlug.call([])
-        end)
+    test "well-formed but unknown vault id → vault_not_found", %{user: user} do
+      conn =
+        conn_with_user(user)
+        |> put_req_header("x-vault-id", "00000000-0000-0000-0000-000000999999")
+        |> VaultPlug.call([])
 
-      assert Enum.any?(events, fn e -> e.meta[:reason] == "vault_not_found" end),
-             "expected reason=vault_not_found, got: #{inspect(events)}"
+      assert conn.assigns[:reject_reason] == "vault_not_found"
     end
 
-    test "no vault configured logs reason=no_default_vault" do
+    test "no header and no default vault → no_default_vault" do
       new_user = insert(:user)
+      conn = conn_with_user(new_user) |> VaultPlug.call([])
 
-      {_conn, events} =
-        LogCapture.with_events(fn ->
-          conn_with_user(new_user) |> VaultPlug.call([])
-        end)
-
-      assert Enum.any?(events, fn e -> e.meta[:reason] == "no_default_vault" end),
-             "expected reason=no_default_vault, got: #{inspect(events)}"
+      assert conn.assigns[:reject_reason] == "no_default_vault"
     end
   end
 

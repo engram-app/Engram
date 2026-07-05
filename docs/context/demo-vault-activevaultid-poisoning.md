@@ -53,6 +53,9 @@ Prod web app (app.engram.page), user mid-walkthrough:
 - **Refresh didn't fix:** poisoned localStorage `engram.activeVaultId` persists.
 
 ## User Recovery
+Users already poisoned before this fix shipped **self-heal on the next load** —
+`readStored()` drops a `demo-vault-*` value and clears the key. Manual escape
+hatch if needed:
 ```js
 localStorage.removeItem("engram.activeVaultId")
 ```
@@ -62,9 +65,14 @@ Then reload (or sign out / clear site data) so it falls back to the real default
 DONE (core):
 - `active-vault.ts` `setActiveVaultId` skips `writeStored` for `demo-vault-*` ids
   (in-memory only) so a demo id can never persist and poison a reload.
+- `active-vault.ts` `readStored()` drops + clears a persisted `demo-vault-*` id, so
+  storage poisoned by a pre-fix tour session heals on the next load (otherwise those
+  users 404 forever with no self-recovery).
 - `active-vault.ts` `resetActiveVaultToStored()` re-reads localStorage into the
   in-memory selection; `demo-vault-provider.tsx` `deactivate()` calls it so leaving
   the tour restores the real vault (or null → VaultSwitcher self-heals to default).
+- `demo-vault-ids.ts` is the single source of truth for the `demo-vault-` prefix,
+  shared by the guard and `queries.ts` so they cannot drift.
 
 Follow-ups (not in this fix):
 - Guard mutation hooks on `demo.active` (parity with read hooks) so a demo edit
@@ -72,14 +80,15 @@ Follow-ups (not in this fix):
 - Roll back optimistic inserts on write failure (kills the transient root duplicates).
 
 ## Observability (shipped with this fix)
-`VaultPlug` now logs a structured `reason` on every vault rejection (category
-`:http`, `metadata_reason`), so this whole class is a one-line Loki query instead
-of a trace dive:
+`VaultPlug` assigns `:reject_reason`, which `RequestLogger` folds into the single
+request-stop log line as `metadata_reason` (no second log per rejection — that
+would double Loki ingest on the 4xx path). This whole class is now a one-line Loki
+query instead of a trace dive:
 - `vault_id_malformed` — a non-UUID `X-Vault-ID` (exactly this bug: `demo-vault-2`).
 - `vault_not_found` — a well-formed id that does not resolve / is not owned.
 - `no_default_vault` — no header and the user has no default vault.
 Query: `{service_name="engram"} | json | metadata_reason="vault_id_malformed"`.
-The log carries `trace_id`, so pivot to the Tempo span (and the Sentry request-env,
+The line carries `trace_id`, so pivot to the Tempo span (and the Sentry request-env,
 which still holds the raw `x-vault-id`) from there.
 
 ## Diagnosis Method (how to triage this class in prod)

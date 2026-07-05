@@ -75,10 +75,8 @@ defmodule EngramWeb.RequestLogger do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
     level = level_for_status(conn.status)
 
-    Logger.log(
-      level,
-      "#{conn.method} #{conn.status} in #{duration_ms}ms",
-      Engram.Logger.Metadata.with_category(level, :http,
+    meta =
+      [
         method: conn.method,
         status: conn.status,
         route: route(conn),
@@ -86,8 +84,24 @@ defmodule EngramWeb.RequestLogger do
         request_query: conn.query_string,
         user_id: current_user_id(conn),
         mtls_clientcert_subject: mtls_clientcert_subject(conn)
-      )
+      ]
+      |> maybe_put_reject_reason(conn)
+
+    Logger.log(
+      level,
+      "#{conn.method} #{conn.status} in #{duration_ms}ms",
+      Engram.Logger.Metadata.with_category(level, :http, meta)
     )
+  end
+
+  # A rejecting plug (e.g. VaultPlug) assigns :reject_reason so the reason rides
+  # this single request line instead of a second per-request log. Omitted entirely
+  # for normal requests so the field only appears on rejections.
+  defp maybe_put_reject_reason(meta, conn) do
+    case conn.assigns[:reject_reason] do
+      nil -> meta
+      reason -> Keyword.put(meta, :reason, reason)
+    end
   end
 
   # ALB liveness (/health) and readiness (/health/deep) probes hit every task

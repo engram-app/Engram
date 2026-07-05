@@ -13,10 +13,7 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
   import Plug.Conn
 
-  alias Engram.Logger.Metadata
   alias Engram.Vaults
-
-  require Logger
 
   def init(opts), do: opts
 
@@ -34,19 +31,17 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id like
       # `demo-vault-2`) is distinct from a well-formed id that does not resolve.
-      # Both are 404 to the client, but the reason code makes the difference a
-      # one-line Loki query (metadata_reason) instead of a trace dive.
+      # Both are 404 to the client, but the reason rides the existing request-stop
+      # log (RequestLogger reads :reject_reason) so the difference is a one-line
+      # Loki query without emitting a second log line per rejected request.
       {:error, :malformed_vault_id} ->
-        log_rejection(user, "vault_id_malformed")
-        halt_with(conn, 404, "Vault not found")
+        reject(conn, "vault_id_malformed", "Vault not found")
 
       {:error, :not_found} ->
-        log_rejection(user, "vault_not_found")
-        halt_with(conn, 404, "Vault not found")
+        reject(conn, "vault_not_found", "Vault not found")
 
       {:error, :no_default_vault} ->
-        log_rejection(user, "no_default_vault")
-        halt_with(conn, 404, "No vault configured. Sync from Obsidian to create one.")
+        reject(conn, "no_default_vault", "No vault configured. Sync from Obsidian to create one.")
     end
   end
 
@@ -65,15 +60,14 @@ defmodule EngramWeb.Plugs.VaultPlug do
     end
   end
 
-  # Static message + structured `reason`, matching the auth-plug convention; the
-  # raw vault id value is not logged (correlate via the request's trace_id / the
-  # Sentry request-env URL). Category :http keeps these out of the :auth-based
-  # auth-failure alert.
-  defp log_rejection(user, reason) do
-    Logger.warning(
-      "vault rejected",
-      Metadata.with_category(:warning, :http, reason: reason, user_id: user.id)
-    )
+  # Stash the reason on the conn for RequestLogger to fold into the single
+  # request-stop log line (no second log per rejection). Category/level come from
+  # RequestLogger's :http request log; the raw vault id is not logged (correlate
+  # via trace_id / the Sentry request-env URL).
+  defp reject(conn, reason, message) do
+    conn
+    |> assign(:reject_reason, reason)
+    |> halt_with(404, message)
   end
 
   defp halt_with(conn, status, message) do

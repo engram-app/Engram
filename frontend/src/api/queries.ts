@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
+import { DEMO_VAULT_ID_PREFIX } from "../onboarding/tour/demo-vault-ids";
 import { useDemoVaultOptional } from "../onboarding/tour/demo-vault-provider";
 import {
 	isSyntheticFolderId,
@@ -1157,10 +1158,16 @@ export function useVaults() {
 		// Two fake vaults so the VaultSwitcher renders its dropdown — the tour's
 		// first step is gated on a real switch between them. Notes are shared.
 		const vaults: Vault[] = [
-			{ ...base, id: "demo-vault-1", name: demo.vault.name, slug: demo.vault.id, is_default: true },
 			{
 				...base,
-				id: "demo-vault-2",
+				id: `${DEMO_VAULT_ID_PREFIX}1`,
+				name: demo.vault.name,
+				slug: demo.vault.id,
+				is_default: true,
+			},
+			{
+				...base,
+				id: `${DEMO_VAULT_ID_PREFIX}2`,
 				name: "Personal",
 				slug: `${demo.vault.id}-personal`,
 				is_default: false,
