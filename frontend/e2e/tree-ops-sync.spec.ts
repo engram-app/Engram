@@ -381,25 +381,19 @@ test.describe("web tree ops sync (web to web)", () => {
 	// path from the live-broadcast tests above and was, until this test,
 	// untested.
 	//
-	// KNOWN BUG (not a frontend defect): `/sync/changes` 500s on every call
-	// that reaches `Engram.Sync.record_cursor/4`, i.e. every call from a real
-	// client, because `client.ts` always sends `X-Device-Id` and the
-	// `vault_device_cursors` table (added in
+	// Previously a KNOWN BUG (not a frontend defect): `/sync/changes` 500'd on
+	// every call that reached `Engram.Sync.record_cursor/4`, i.e. every call
+	// from a real client, because `client.ts` always sends `X-Device-Id` and
+	// the `vault_device_cursors` table (added in
 	// priv/repo/migrations/20260616130000_cursor_pull_expand.exs) was never
 	// granted to the `engram_app` role the write runs as (every sibling
 	// no-RLS table, e.g. idempotency_keys/processed_webhook_events, has an
-	// explicit `GRANT ... TO engram_app` in its migration; this one doesn't).
-	// `information_schema.role_table_grants` confirms `engram_app` has zero
-	// privileges on `vault_device_cursors`. The 500 happens after the
-	// changes page is already computed, so the client gets nothing and
-	// `runCursorSync`'s promise rejects (unhandled), silently killing catch-up
-	// for every focus/reconnect trigger, not just this offline scenario.
-	// Fix: a new migration granting SELECT/INSERT/UPDATE on
-	// vault_device_cursors to engram_app. Out of scope for this frontend e2e
-	// change; tracked here via test.fail() until fixed.
+	// explicit `GRANT ... TO engram_app` in its migration; this one didn't).
+	// Fixed by priv/repo/migrations/20260705120000_grant_vault_device_cursors_
+	// expand.exs. This test now asserts real convergence through the fixed
+	// catch-up path.
 	test("offline empty-folder delete catches up on reconnect", async ({ browser, baseURL }) => {
 		test.setTimeout(60_000);
-		test.fail(true, "vault_device_cursors missing GRANT to engram_app; see comment above");
 		const email = `e2e-tree-offdel-${Date.now()}@test.com`;
 		const token = await registerAndLogin(baseURL!, email);
 		const vault = await createVault(baseURL!, token, `treeoffdel-${Date.now()}`);
@@ -442,11 +436,10 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxB.close();
 	});
 
-	// See the KNOWN BUG note above the previous test: the same
-	// vault_device_cursors GRANT gap makes /sync/changes 500 here too.
+	// See the fixed-bug note above the previous test: same catch-up path,
+	// same grant fix.
 	test("offline folder rename catches up on reconnect", async ({ browser, baseURL }) => {
 		test.setTimeout(60_000);
-		test.fail(true, "vault_device_cursors missing GRANT to engram_app; see comment above");
 		const email = `e2e-tree-offrnf-${Date.now()}@test.com`;
 		const token = await registerAndLogin(baseURL!, email);
 		const vault = await createVault(baseURL!, token, `treeoffrnf-${Date.now()}`);

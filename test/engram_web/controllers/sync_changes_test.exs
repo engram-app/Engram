@@ -60,6 +60,31 @@ defmodule EngramWeb.SyncChangesTest do
     assert row.last_seq == 2
   end
 
+  # Regression: vault_device_cursors (priv/repo/migrations/20260616130000_
+  # cursor_pull_expand.exs) was created without a GRANT to engram_app, unlike
+  # every sibling no-RLS table. Engram.Sync.record_cursor/4 writes to it via
+  # Repo.with_tenant (which drops to the engram_app role), so every real
+  # request carrying X-Device-Id (every real client) hit `permission denied`
+  # and 500'd. Fixed by priv/repo/migrations/20260705120000_grant_vault_device_
+  # cursors_expand.exs. Without that grant this test 500s with a Postgrex
+  # 42501 insufficient_privilege error instead of asserting 200.
+  test "GET /sync/changes with X-Device-Id records the watermark instead of 500ing", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "x"})
+
+    assert conn |> get(~p"/api/sync/changes") |> json_response(200)
+
+    {:ok, row} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        Engram.Repo.get_by(Engram.Sync.DeviceCursor, vault_id: vault.id, device_id: "dev-1")
+      end)
+
+    assert row.last_seq == 0
+  end
+
   test "malformed cursor -> 400", %{conn: conn} do
     # A valid query param that is NOT a valid opaque cursor token (decodes but
     # has no "<seq>:<id>" shape) — exercises decode_cursor's {:error, :invalid_cursor}.
