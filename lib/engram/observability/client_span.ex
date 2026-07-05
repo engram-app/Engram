@@ -22,7 +22,13 @@ defmodule Engram.Observability.ClientSpan do
   require OpenTelemetry.Tracer, as: Tracer
   require OpenTelemetry.Span, as: Span
 
-  @spec record(map()) :: :ok | {:error, term()}
+  @spec record(%{
+          :traceparent => String.t(),
+          :name => String.t(),
+          :start_us => integer(),
+          :end_us => integer(),
+          optional(any()) => any()
+        }) :: :ok | {:error, Exception.t()}
   def record(%{traceparent: traceparent, name: name, start_us: start_us, end_us: end_us} = entry) do
     # `:otel_propagator_text_map.extract/1` already attaches the extracted
     # context as a side effect and hands back the *previous* context as an
@@ -43,7 +49,9 @@ defmodule Engram.Observability.ClientSpan do
         |> Map.put("telemetry.source", "client")
 
       span = Tracer.start_span(name, %{start_time: start_native, attributes: attributes})
-      Span.end_span(span, end_native)
+      # end_span/2 returns the ended span ctx; we don't need it (the exporter
+      # ships on end). Bind it so dialyzer doesn't flag an unmatched return.
+      _ended = Span.end_span(span, end_native)
       :ok
     after
       OpenTelemetry.Ctx.detach(token)
