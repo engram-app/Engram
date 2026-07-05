@@ -104,6 +104,12 @@ export async function createFolder(
 	}
 }
 
+// Navigates straight to /note/:id, which the AuthGuard redirects to
+// /sign-in. Seeds localStorage["engram.activeVaultId"] on the sign-in page
+// BEFORE completing sign-in, not after, so the value survives the
+// post-sign-in redirect and NotePage's first query targets the right vault.
+// The vault-switcher's auto-select would not pick the newly created vault in
+// time otherwise. Then signs in and asserts arrival back at /note/:id.
 export async function signInForNote(
 	page: Page,
 	email: string,

@@ -3,7 +3,41 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
-import FolderTree from "./folder-tree";
+import FolderTree, { withPreservedExtension } from "./folder-tree";
+
+describe("withPreservedExtension", () => {
+	it("appends the original extension to a dotted title (the bug being fixed)", () => {
+		expect(withPreservedExtension("Child.md", "meeting v1.2")).toBe("meeting v1.2.md");
+	});
+
+	it("appends the original extension when the new name contains a non-extension dot", () => {
+		expect(withPreservedExtension("Child.md", "Node.js guide")).toBe("Node.js guide.md");
+	});
+
+	it("appends the original extension when the new name has no dot at all", () => {
+		expect(withPreservedExtension("Child.md", "renamed")).toBe("renamed.md");
+	});
+
+	it("keeps the new name when it already ends with the original extension", () => {
+		expect(withPreservedExtension("Child.md", "renamed.md")).toBe("renamed.md");
+	});
+
+	it("appends .canvas to a dotted title when renaming a canvas", () => {
+		expect(withPreservedExtension("diagram.canvas", "flow v2")).toBe("flow v2.canvas");
+	});
+
+	it("respects a deliberate swap to another recognized note extension", () => {
+		expect(withPreservedExtension("Child.md", "board.canvas")).toBe("board.canvas");
+	});
+
+	it("re-appends the original extension for an attachment renamed to a bare title", () => {
+		expect(withPreservedExtension("photo.png", "vacation")).toBe("vacation.png");
+	});
+
+	it("keeps an attachment rename that preserves its own extension", () => {
+		expect(withPreservedExtension("photo.png", "photo v2.png")).toBe("photo v2.png");
+	});
+});
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
 // primitives (loader, useEngramTree, TreeRow, dialogs). These integration

@@ -40,18 +40,33 @@ import { MoveDialog } from "./tree-actions/move-dialog";
 // extension dot) so a normal type-over-selection edit leaves the extension
 // intact. That's a UX convenience, not a guarantee: a select-all, paste, or
 // programmatic value replacement (e.g. Playwright's `.fill`) bypasses the
-// selection and can hand back a bare name with no extension at all. Without
-// this guard the note/attachment gets renamed to a genuinely extension-less
-// path server-side. For a note that silently breaks the CRDT doc's
-// `.endsWith(".md")` gate on next open, stranding the editor on "Connecting…"
-// forever. Re-append the original extension whenever the committed name has
-// none; an explicit new extension from the user is still respected.
+// selection and can hand back a bare name with no extension at all, or a
+// dotted TITLE (e.g. "meeting v1.2", "Node.js guide") that isn't actually an
+// extension change. Without this guard the note/attachment gets renamed to a
+// path that doesn't end in the original extension server-side. For a note
+// that silently breaks the CRDT doc's `.endsWith(".md")` gate on next open,
+// stranding the editor on "Connecting…" forever.
+//
+// Rule: preserve the original extension unless newName ends with it already,
+// or explicitly ends with a recognized note extension (a deliberate swap,
+// e.g. .md -> .canvas). Otherwise the trailing dot(s) in newName are part of
+// the title, not an extension, so the original extension is re-appended.
+// ponytail: known ceiling, an attachment ext-swap like ("a.png","a.jpg")
+// becomes "a.jpg.png" since .jpg isn't in the recognized list. Inline rename
+// isn't the intended path for changing a file's type; add a MIME allowlist
+// only if that becomes a real complaint.
+const RECOGNIZED_NOTE_EXTENSIONS = [".md", ".canvas"];
 function withPreservedExtension(oldLeaf: string, newName: string): string {
-	if (newName.includes(".")) {
+	const dot = oldLeaf.lastIndexOf(".");
+	const origExt = dot > 0 ? oldLeaf.slice(dot) : "";
+	const lowerNewName = newName.toLowerCase();
+	if (origExt && lowerNewName.endsWith(origExt.toLowerCase())) {
 		return newName;
 	}
-	const dot = oldLeaf.lastIndexOf(".");
-	return dot > 0 ? `${newName}${oldLeaf.slice(dot)}` : newName;
+	if (RECOGNIZED_NOTE_EXTENSIONS.some((ext) => lowerNewName.endsWith(ext))) {
+		return newName;
+	}
+	return origExt ? `${newName}${origExt}` : newName;
 }
 
 // Row shapes that <DeleteConfirm> and <MoveDialog> accept.
@@ -611,3 +626,5 @@ export default function FolderTree() {
 		</>
 	);
 }
+
+export { withPreservedExtension };
