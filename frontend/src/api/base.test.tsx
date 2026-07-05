@@ -12,6 +12,7 @@ function makeConfig(apiBase: string, wsBase = ""): EngramConfig {
 		clerkWaitlistMode: false,
 		apiBase,
 		wsBase,
+		tracingEnabled: false,
 	};
 }
 

@@ -7,6 +7,11 @@ import { useConfig } from "@/config-context";
 // a hook dependency into every call site.
 let _apiBase = "";
 let _wsBase = "";
+// Distributed trace beacon dark-launch gate (config.ts `tracingEnabled`).
+// Same module-level-singleton pattern as apiBase/wsBase: `observability/
+// trace.ts` is a plain module (no React), so it reads this instead of the
+// `useConfig()` hook. Default false: no traceparent, no beacon, ever.
+let _tracingEnabled = false;
 
 // Combines the configured apiBase with a path. Strips the `/api` prefix
 // on saas (where apiBase = `https://api.engram.page` and the host-rewrite
@@ -48,4 +53,12 @@ export function getApiBase(): string {
 
 export function getWsBase(): string {
 	return _wsBase;
+}
+
+export function setTracingEnabled(v: boolean) {
+	_tracingEnabled = v;
+}
+
+export function getTracingEnabled(): boolean {
+	return _tracingEnabled;
 }

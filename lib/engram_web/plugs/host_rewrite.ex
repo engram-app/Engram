@@ -32,7 +32,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
   @api_top_segments ~w(
     notes folders search vaults attachments oauth mcp auth admin billing
     tasks health user me onboarding bootstrap api-keys connections tags sync
-    logs embed-status openapi
+    logs telemetry embed-status openapi
   )
 
   # Test-only accessor exposing the @api_top_segments allowlist so the

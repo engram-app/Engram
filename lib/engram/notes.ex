@@ -1876,7 +1876,11 @@ defmodule Engram.Notes do
           EngramWeb.Endpoint.broadcast("sync:#{user.id}:#{vault.id}", "notes.batch", %{
             op: "upsert",
             vault_id: vault.id,
-            notes: digest
+            notes: digest,
+            # Not routed through Broadcast.emit/3 (this dispatch predates the
+            # per-item chokepoint), so stamp the traceparent directly. nil when
+            # no span / OTEL off; clients skip a nil traceparent.
+            traceparent: Engram.Observability.Otel.current_traceparent()
           })
       end
 
