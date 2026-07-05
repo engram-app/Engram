@@ -2841,12 +2841,14 @@ jobs:
       contents: read
     env:
       PG_CONTAINER: engram-n1-compat-${{ github.run_id }}
-      # Per-runner temp dir, NOT a shared /tmp path. Concurrent n1-compat jobs
-      # land on different runners that share the host /tmp, so a fixed
-      # /tmp/prev-release let one job's `rm -rf` yank another's worktree mid-run
-      # (failing with a misleading "working directory ... No such file" in the
-      # deps step). runner.temp is unique per runner and auto-reaped.
-      PREV_DIR: ${{ runner.temp }}/prev-release
+      # Run-scoped path (matches PG_CONTAINER above), NOT a fixed /tmp path.
+      # Concurrent n1-compat jobs from different runs share the host /tmp, so a
+      # fixed /tmp/prev-release let one job's `rm -rf` yank another's worktree
+      # mid-run (misleading "working directory ... No such file" in the deps
+      # step). run_id is unique per run; the leading `rm -rf` still clears a
+      # same-run stale dir. (runner.temp would auto-reap but isn't available in
+      # a job-level env: block — the runner context is step-only.)
+      PREV_DIR: /tmp/prev-release-${{ github.run_id }}
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v7
