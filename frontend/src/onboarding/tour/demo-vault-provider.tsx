@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { resetActiveVaultToStored } from "../../api/active-vault";
 
 interface DemoVaultData {
 	vault: DemoVault;
@@ -49,7 +50,12 @@ export function DemoVaultProvider({ children }: { children: ReactNode }) {
 		setData(json);
 	}, []);
 
-	const deactivate = useCallback(() => setData(null), []);
+	const deactivate = useCallback(() => {
+		setData(null);
+		// A demo vault may be the live selection; restore the real one so the app
+		// stops sending `demo-vault-*` to the API once the tour ends.
+		resetActiveVaultToStored();
+	}, []);
 
 	const value = useMemo<DemoVaultCtx>(
 		() => ({

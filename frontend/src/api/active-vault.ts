@@ -5,6 +5,15 @@ const STORAGE_KEY = "engram.activeVaultId";
 let activeVaultId: string | null = readStored();
 const listeners = new Set<() => void>();
 
+// The onboarding tour renders fake vaults (`demo-vault-*`) and gates a step on
+// switching to one. Those ids are client-only fixtures: persisting one poisons
+// the real active vault across reloads (every request then ships
+// `X-Vault-Id: demo-vault-*` → backend 404s), so they update the in-memory
+// selection but must never reach localStorage.
+function isDemoVaultId(id: string | null): boolean {
+	return id?.startsWith("demo-vault-") ?? false;
+}
+
 function readStored(): string | null {
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
@@ -45,7 +54,24 @@ export function setActiveVaultId(id: string | null) {
 		return;
 	}
 	activeVaultId = id;
-	writeStored(id);
+	// Demo vault selections stay in memory only (see isDemoVaultId).
+	if (!isDemoVaultId(id)) {
+		writeStored(id);
+	}
+	listeners.forEach((l) => {
+		l();
+	});
+}
+
+// Restore the in-memory selection to the persisted (real) vault, dropping any
+// transient demo selection. Called when the tour deactivates so the app does
+// not keep sending a `demo-vault-*` id to the real API.
+export function resetActiveVaultToStored() {
+	const stored = readStored();
+	if (activeVaultId === stored) {
+		return;
+	}
+	activeVaultId = stored;
 	listeners.forEach((l) => {
 		l();
 	});
