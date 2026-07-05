@@ -28,17 +28,31 @@ defmodule Engram.Sync.Broadcast do
   """
 
   alias Engram.Logger.Metadata
+  alias Engram.Observability.Otel
 
   require Logger
+  require OpenTelemetry.Tracer, as: Tracer
 
   @buffer_key :__engram_sync_broadcast_buffer__
 
   @doc """
   Broadcasts `event` on `topic` with `payload`, or buffers it when a deferral is
   active in the calling process.
+
+  When `payload` is a map, the calling span's `traceparent` (nil when there is
+  no span, or OTEL is off) is stamped onto it here, at call time, so it
+  reflects the request/job that produced the change rather than whatever
+  happens to be active later when a deferred buffer flushes. The browser
+  parents its render span onto this request/job span, so the render lands in
+  the same trace as the change that triggered it (a sibling of the
+  `sync.fanout` span below, not a child of it: stamping here, before the
+  fan-out span exists, keeps the render in the originating trace even when a
+  deferred buffer flushes the broadcast under a different or absent span).
   """
   @spec emit(String.t(), String.t(), map()) :: :ok
   def emit(topic, event, payload) do
+    payload = stamp_traceparent(payload)
+
     case Process.get(@buffer_key) do
       nil ->
         broadcast_now(topic, event, payload)
@@ -109,8 +123,13 @@ defmodule Engram.Sync.Broadcast do
   """
   @spec emit_from(pid(), String.t(), String.t(), map()) :: :ok
   def emit_from(pid, topic, event, payload) when is_pid(pid) do
+    payload = stamp_traceparent(payload)
     log_emit(topic, event, payload, "from")
-    _ = EngramWeb.Endpoint.broadcast_from(pid, topic, event, payload)
+
+    Tracer.with_span "sync.fanout", %{attributes: %{"engram.event_type" => event}} do
+      _ = EngramWeb.Endpoint.broadcast_from(pid, topic, event, payload)
+    end
+
     :ok
   end
 
@@ -118,12 +137,28 @@ defmodule Engram.Sync.Broadcast do
   # breadcrumb FIRST so the log lines up with the receiver's traced
   # `sync join`/`sync leave` — the broadcast is fastlaned PubSub → socket (the
   # sync channel has no `handle_out`), so this log is the only server-side proof
-  # a broadcast fired.
+  # a broadcast fired. The `sync.fanout` span wraps only the actual dispatch
+  # (not the breadcrumb log, not a deferred buffer's wait), giving the
+  # browser's render span (leg B) a parent distinct from the request/job span
+  # that produced the change (leg A).
   defp broadcast_now(topic, event, payload) do
     log_emit(topic, event, payload, "fanout")
-    _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
+
+    Tracer.with_span "sync.fanout", %{attributes: %{"engram.event_type" => event}} do
+      _ = EngramWeb.Endpoint.broadcast(topic, event, payload)
+    end
+
     :ok
   end
+
+  # Stamps the active span's traceparent onto a map payload; non-map payloads
+  # (none of the current callers pass one, but this keeps emit/3's contract
+  # honest) pass through unchanged.
+  defp stamp_traceparent(payload) when is_map(payload) do
+    Map.put(payload, :traceparent, Otel.current_traceparent())
+  end
+
+  defp stamp_traceparent(payload), do: payload
 
   # Shared delivery breadcrumb for both legs (`fanout` = broadcast to all,
   # `from` = broadcast_from excluding the pusher).

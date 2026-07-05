@@ -18,6 +18,7 @@ const testConfig: EngramConfig = {
 	clerkWaitlistMode: false,
 	apiBase: "",
 	wsBase: "",
+	tracingEnabled: false,
 };
 
 function renderAt(path: string) {

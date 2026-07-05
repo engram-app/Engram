@@ -1,6 +1,19 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beacon, tracingEnabled } from "../observability/trace";
 import { __resetNoteChangeBatch, handleNoteChanged, handleNotesBatch } from "./channel";
+
+// Stub the tracing gate + beacon buffer; keep the real parseTraceparent so
+// the render beacon's id extraction is exercised end to end. The buffer's
+// own transport/flush is covered by observability/trace.test.ts.
+vi.mock("../observability/trace", async (importActual) => {
+	const actual = await importActual<typeof import("../observability/trace")>();
+	return {
+		...actual,
+		tracingEnabled: vi.fn(() => false),
+		beacon: { enqueue: vi.fn(), flush: vi.fn() },
+	};
+});
 
 function mockQueryClient(foldersData?: unknown) {
 	return {
@@ -161,6 +174,64 @@ describe("handleNoteChanged", () => {
 			"7",
 		);
 		expect(qc.invalidateQueries).toHaveBeenCalled();
+	});
+});
+
+describe("handleNoteChanged render beacon (leg B)", () => {
+	const TP = `00-${"a".repeat(32)}-${"b".repeat(16)}-01`;
+
+	beforeEach(() => {
+		vi.mocked(tracingEnabled).mockReturnValue(false);
+		vi.mocked(beacon.enqueue).mockClear();
+	});
+
+	it("enqueues a render beacon parented to the payload traceparent when tracing on", () => {
+		vi.mocked(tracingEnabled).mockReturnValue(true);
+		const qc = mockQueryClient();
+		handleNoteChanged(
+			{ event_type: "upsert", path: "n.md", vault_id: "7", traceparent: TP },
+			qc,
+			"7",
+		);
+
+		expect(beacon.enqueue).toHaveBeenCalledTimes(1);
+		const entry = vi.mocked(beacon.enqueue).mock.lastCall?.[0];
+		if (!entry) {
+			throw new Error("expected a render beacon to be enqueued");
+		}
+		expect(entry.name).toBe("browser.live_sync.render");
+		expect(entry.trace_id).toBe("a".repeat(32));
+		expect(entry.parent_span_id).toBe("b".repeat(16));
+		expect(entry.attributes["engram.surface"]).toBe("web");
+		expect(entry.attributes["engram.event_type"]).toBe("upsert");
+	});
+
+	it("enqueues nothing when tracing is disabled (zero-cost guarantee)", () => {
+		const qc = mockQueryClient();
+		handleNoteChanged(
+			{ event_type: "upsert", path: "n.md", vault_id: "7", traceparent: TP },
+			qc,
+			"7",
+		);
+		expect(beacon.enqueue).not.toHaveBeenCalled();
+	});
+
+	it("enqueues nothing when the payload carries no traceparent", () => {
+		vi.mocked(tracingEnabled).mockReturnValue(true);
+		const qc = mockQueryClient();
+		handleNoteChanged({ event_type: "upsert", path: "n.md", vault_id: "7" }, qc, "7");
+		expect(beacon.enqueue).not.toHaveBeenCalled();
+	});
+
+	it("does not beacon a change dropped by the cross-vault guard", () => {
+		vi.mocked(tracingEnabled).mockReturnValue(true);
+		const qc = mockQueryClient();
+		handleNoteChanged(
+			{ event_type: "upsert", path: "n.md", vault_id: "9", traceparent: TP },
+			qc,
+			"7",
+		);
+		expect(beacon.enqueue).not.toHaveBeenCalled();
 	});
 });
 

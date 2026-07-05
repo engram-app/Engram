@@ -259,6 +259,25 @@ defmodule Engram.NotesBatchUpsertTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
     end
 
+    test "carries a w3c traceparent when the batch runs inside a span", %{
+      user: user,
+      vault: vault
+    } do
+      require OpenTelemetry.Tracer, as: Tracer
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      Tracer.with_span "req" do
+        assert {:ok, _} =
+                 Notes.batch_upsert_notes(user, vault, [
+                   %{"path" => "trace.md", "content" => "# T", "mtime" => 1.0}
+                 ])
+      end
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "notes.batch", payload: payload}
+      assert payload.traceparent =~ ~r/\A00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]\z/
+    end
+
     test "error entries are excluded from the digest", %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
