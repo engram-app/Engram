@@ -37,6 +37,11 @@ defmodule Engram.Vector.QdrantReqOptsTest do
       # Force retries ON so a regression (search using the indexing opts)
       # shows up as extra attempts.
       ServiceConfig.put_override(:qdrant_retry, :transient)
+      # Pin a generous receive_timeout: under full-suite load the BEAM scheduler
+      # can starve the Bypass handler past search's 5s fail-fast, so Req times
+      # out before the 503 lands and the attempt counter reads 0 (#886). We're
+      # asserting attempt COUNT, not fail-fast latency, so a wide budget is safe.
+      ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
       %{bypass: bypass}
     end
 

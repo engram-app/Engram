@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setUpgradeHandler } from "@/api/client";
 import { UpgradeDialogProvider, useUpgradeDialog } from "./upgrade-dialog-provider";
 
@@ -25,6 +25,14 @@ function renderWithRouter(ui: React.ReactNode) {
 }
 
 describe("UpgradeDialogProvider", () => {
+	// Pre-pay vitest's cold on-demand transform of the lazy dialog chunk HERE,
+	// outside any findByText timeout window. Under full-suite CPU starvation that
+	// transform (>1s) can blow the render assertion's 5s budget (#867); warming
+	// the module cache first makes every lazy() render resolve fast.
+	beforeAll(async () => {
+		await import("./upgrade-required-dialog");
+	}, 30_000);
+
 	beforeEach(() => {
 		setUpgradeHandler(null);
 	});
