@@ -2,7 +2,7 @@
 
 import pytest
 
-from helpers.vault import read_note, write_note
+from helpers.vault import wait_for_exact_content, write_note
 
 
 @pytest.mark.asyncio
@@ -21,6 +21,5 @@ async def test_b_creates_a_receives(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     # A pulls
     await cdp_a.trigger_full_sync()
 
-    # Verify file in A's vault
-    a_content = read_note(vault_a, path)
-    assert "Reverse Sync" in a_content, "A did not receive B's note"
+    # Verify the FULL body landed in A's vault (poll — pull write is async)
+    wait_for_exact_content(vault_a, path, content, timeout=15)

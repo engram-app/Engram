@@ -63,6 +63,12 @@ config :engram, Oban,
   # latency cost.
   stage_interval: :timer.seconds(5),
   queues: [
+    # The 2026-07-03 OOM crash-loop was NOT caused by embed concurrency — it was
+    # the Lingua language-detector loading ~945 MB of full-accuracy n-gram models
+    # off-heap during indexing (fixed via `low_accuracy_mode: true` → ~135 MB; see
+    # lib/engram/keyword_index/lang_detect.ex + docs/context/lingua-language-detection-memory.md).
+    # With that bounded, embed concurrency is back to 5 (peak ≈ 560 MB, safe under
+    # the 1024 MB task). ObanQueueConfigTest keeps a sane ceiling as a tripwire.
     embed: 5,
     reindex: 1,
     maintenance: 2,
@@ -116,6 +122,8 @@ config :logger, :default_formatter,
     :clerk_user_id,
     :client_version,
     :column,
+    :conn_id,
+    :device_id,
     :drift_kind,
     :duration_ms,
     :error_kind,
@@ -156,11 +164,14 @@ config :logger, :default_formatter,
     :route,
     :row_id,
     :server_version,
+    :span_id,
     :status,
     :storage_key,
     :table,
     :tool,
+    :topic,
     :total_count,
+    :trace_id,
     :user_id,
     :vault_id,
     :worker
@@ -195,7 +206,12 @@ config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 # runtime.exs (gated on SENTRY_DSN).
 config :sentry,
   context_lines: 5,
-  before_send: {Engram.Sentry.Scrubber, :scrub}
+  before_send: {Engram.Sentry.Scrubber, :scrub},
+  client: Engram.Observability.SentryFinchClient
+
+# OpenTelemetry tracing is off by default. runtime.exs flips the
+# exporter to :otlp only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+config :opentelemetry, traces_exporter: :none
 
 # Full-jitter window (ms) advertised to clients in the sync-channel join reply.
 # On reconnect after a drop (e.g. a graceful node drain), clients wait
@@ -208,11 +224,17 @@ config :engram, :reconnect_jitter_max_ms, 5_000
 # are deleted daily by Engram.Workers.ClientLogsPruner (Engram#792).
 config :engram, :client_logs_retention_days, 30
 
-# ex_aws HTTP client. We override the stock `ExAws.Request.Hackney` adapter
-# because it only matches hackney's 4-tuple reply; hackney 4.x returns a
-# 3-tuple for body-less responses (HEAD), which breaks S3.head_object/exists?.
-# Engram.Storage.ExAwsHackney is the stock adapter plus that missing clause.
-config :ex_aws, :http_client, Engram.Storage.ExAwsHackney
+# ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
+# Finch pool, so the backend carries no hackney dependency. :req_opts sets the
+# per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles
+# body-less (HEAD) responses natively, so no shim is needed for S3.exists?.
+config :ex_aws, :http_client, ExAws.Request.Req
+config :ex_aws, :req_opts, receive_timeout: 30_000
+
+# joken_jwks drives its Tesla client with Erlang's built-in httpc adapter, so
+# the JWKS verification path needs no hackney. dev.exs and test.exs set this
+# too; pinning it in base config keeps prod off Tesla's default adapter.
+config :tesla, JokenJwks.HttpFetcher, adapter: Tesla.Adapter.Httpc
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

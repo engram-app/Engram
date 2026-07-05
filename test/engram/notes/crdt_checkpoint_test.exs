@@ -94,6 +94,112 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── #902 revert gap: checkpoint must not clobber a newer committed write ───
+
+  test "checkpoint does NOT revert a REST write that committed after the doc snapshot", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # The live room holds a doc that still projects the ORIGINAL "before" content,
+    # captured at the note's current version. This is the stale-room snapshot.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    captured_version = raw_note.version
+
+    # A concurrent REST write commits NEW content and bumps the row version —
+    # this is the deliver_out gap: it landed after the doc snapshot was taken.
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "committed after"})
+
+    # The debounced checkpoint now fires with the stale doc. Fenced on the
+    # captured version, it must ABORT rather than overwrite the newer row.
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        captured_version: captured_version
+      )
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+
+    assert fresh.content == "committed after",
+           "checkpoint reverted a committed REST write (the #902 gap)"
+  end
+
+  # ── /changes feed integrity: checkpoint must advance updated_at ────────────
+
+  test "checkpoint advances updated_at so the /changes timestamp feed sees the edit", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    before_updated_at = raw_note.updated_at
+
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok =
+      CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before CHANGED")
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+
+    # The content-write branch persists via update_all, which does NOT
+    # auto-manage timestamps. If updated_at is not set explicitly, a CRDT edit
+    # is invisible to GET /api/notes/changes (it filters + orders on updated_at)
+    # — silent non-propagation of committed CRDT content.
+    assert DateTime.compare(fresh.updated_at, before_updated_at) == :gt,
+           "checkpoint must bump updated_at or the /changes timestamp feed silently drops the edit"
+  end
+
+  # ── Fence success path: captured_version == current still writes ───────────
+
+  test "checkpoint with captured_version matching the current row writes, bumps version, prunes",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    captured_version = raw_note.version
+
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok =
+      CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before FENCED")
+
+    # Seed a tail row to prove the success path still prunes.
+    {:ok, {ct, n}} = Crypto.encrypt_crdt_state("fake_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: n,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    :ok =
+      CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc,
+        captured_version: captured_version
+      )
+
+    # Version matched → the CAS wrote (did not spuriously abort on equal versions).
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert fresh.content == "before FENCED"
+    assert fresh.version == captured_version + 1
+
+    # Success path prunes the consumed tail.
+    {:ok, tail_after} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note.id), :count)
+      end)
+
+    assert tail_after == 0
+  end
+
   # ── Virtual field integrity: title/path not corrupted ─────────────────────
 
   test "checkpoint does not corrupt title or path_hmac on a note with a non-trivial path", ctx do

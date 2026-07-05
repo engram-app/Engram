@@ -2,7 +2,7 @@
 
 import pytest
 
-from helpers.vault import wait_for_file, write_note
+from helpers.vault import wait_for_exact_content, write_note
 
 
 @pytest.mark.asyncio
@@ -21,6 +21,5 @@ async def test_live_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     # Wait for A's push to land on server
     api_sync.wait_for_note(path, timeout=10)
 
-    # B should receive via channel — poll for file (no manual pull!)
-    b_content = wait_for_file(vault_b, path, timeout=15)
-    assert "Live Sync Test" in b_content, "B did not receive A's note via channel"
+    # B should receive via channel — poll until the FULL body arrives (no manual pull!)
+    wait_for_exact_content(vault_b, path, content, timeout=15)

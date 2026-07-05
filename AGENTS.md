@@ -337,6 +337,7 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 | `docs/context/channel-event-contract.md` | Phoenix Channel events, conflict flow, plugin integration |
 | `docs/context/database-schema-rls.md` | Full SQL schema, RLS policies, Ecto enforcement |
 | `docs/context/chunking-retrieval-strategy.md` | Chunking priorities, rejected strategies |
+| `docs/context/lingua-language-detection-memory.md` | **Lingua NIF memory** — the `low_accuracy_mode` dial (~945 MB full vs ~135 MB trigram-only, off-heap, one-time global load); caused the #891 OOM crash-loop |
 | `docs/context/environment-variables.md` | All env vars by category |
 | `docs/context/testing-strategy.md` | Test layers, ExUnit tooling, CI pipeline |
 | `docs/context/deploy-prod.md` | AWS ECS deploy, backups, observability, security checklist |

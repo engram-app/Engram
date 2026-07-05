@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.614",
+      version: "0.5.624",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -12,6 +12,7 @@ defmodule Engram.MixProject do
       deps: deps(),
       package: package(),
       listeners: [Phoenix.CodeReloader],
+      releases: releases(),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore.exs",
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
@@ -46,6 +47,17 @@ defmodule Engram.MixProject do
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  # Release app-boot-order overrides. `opentelemetry_exporter` must boot
+  # before `opentelemetry` (its dependency), and `opentelemetry` is marked
+  # `:temporary` so an SDK crash cannot take down the whole release.
+  defp releases do
+    [
+      engram: [
+        applications: [opentelemetry_exporter: :permanent, opentelemetry: :temporary]
+      ]
+    ]
+  end
 
   defp package do
     [
@@ -101,23 +113,10 @@ defmodule Engram.MixProject do
       # HTTP client (Qdrant, Voyage AI)
       {:req, "~> 0.5"},
 
-      # HTTP transport. The two real runtime consumers are ex_aws (S3 + KMS,
-      # via our Engram.Storage.ExAwsHackney http_client) and Sentry (prod error
-      # reporting, via its default Sentry.HackneyClient). joken_jwks lists
-      # hackney as an optional dep but we drive its Tesla client with the httpc
-      # adapter (config/dev.exs + config/test.exs; prod falls back to Tesla's
-      # httpc default), so the JWKS path does NOT use hackney.
-      #
-      # 1.x (< 4.0.1) carries GHSA-gp9c-pm5m-5cxr (high — ssl:connect/2
-      # post-handshake upgrade has no timeout) plus three moderate/low
-      # CRLF/SSRF advisories, so we pin the 4.x line.
-      #
-      # `override: true` because ex_aws and joken_jwks still declare a
-      # conservative `~> 1.x` requirement on hackney as an OPTIONAL dep. Both
-      # ex_aws and Sentry use only the classic `:hackney.request/5` (+ body/1)
-      # API, which 4.x preserves (ex_aws 2.7.0 already advertises `~> 4.0`).
-      # The forced 4.x ex_aws S3/KMS path is exercised by the e2e suite.
-      {:hackney, "~> 4.4", override: true},
+      # Finch: the HTTP/2-capable client (Mint-based) that Req rides on. Used
+      # directly by Engram.Observability.SentryFinchClient and by ex_aws via
+      # ExAws.Request.Req. This is the backend's single HTTP stack: no hackney.
+      {:finch, "~> 0.23"},
 
       # Rate limiting
       {:hammer, "~> 7.3"},
@@ -129,6 +128,17 @@ defmodule Engram.MixProject do
       {:prom_ex, "~> 1.11"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
+
+      # OpenTelemetry (traces). Boot order is enforced by the release
+      # app-order override in `releases/0` (exporter :permanent so it boots
+      # first, opentelemetry :temporary so an SDK crash cannot take the node
+      # down). Listed exporter-first here only to match, for readability.
+      {:opentelemetry_exporter, "~> 1.10"},
+      {:opentelemetry, "~> 1.7"},
+      {:opentelemetry_api, "~> 1.5"},
+      {:opentelemetry_phoenix, "~> 2.0"},
+      {:opentelemetry_bandit, "~> 0.3"},
+      {:opentelemetry_ecto, "~> 1.2"},
 
       # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
       # and self-host)

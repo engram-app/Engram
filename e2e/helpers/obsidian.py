@@ -131,11 +131,19 @@ class ObsidianInstance:
             "debounceMs": 500,
             "liveSyncEnabled": True,
             "maxFileSizeMB": 5,
+            # Ship client logs suite-wide (default is off). Every device's
+            # receive/materialize lines (categories channel/ws/pull) then land
+            # in client_logs, correlated to the #908 server breadcrumbs, so a
+            # delivery flake's FIRST failing run carries client-side evidence
+            # (non-deterministic flakes can't be reproduced on demand). Read by
+            # helpers/log_oracle.py::wait_for_delivery.
+            "remoteLoggingEnabled": True,
         }
-        # Opt the plugin into the file-level CRDT sync path (spec §12a). Gated by
-        # the E2E_ENABLE_CRDT env so the legacy e2e jobs stay on the REST push/
-        # pull path while a dedicated CRDT job runs the same harness with CRDT on.
-        # Requires the backend to advertise the `crdt:` topic (CRDT_ENABLED=true).
+        # Explicitly pin the file-level CRDT sync path (spec §12a) for the
+        # dedicated CRDT job. NOTE: since plugin #148 enableCrdt DEFAULTS to
+        # true, so even without this key the general suite runs CRDT whenever
+        # the backend advertises the `crdt:` topic (CRDT_ENABLED=true) —
+        # omitting it does NOT pin the legacy REST path.
         if os.environ.get("E2E_ENABLE_CRDT") == "true":
             settings["enableCrdt"] = True
         if self.client_id:

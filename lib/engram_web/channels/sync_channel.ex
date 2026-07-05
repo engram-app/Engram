@@ -11,9 +11,13 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
+  alias Engram.Crypto.HMAC
   alias Engram.Crypto.RotationGate
+  alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias EngramWeb.Presence
+
+  require Logger
 
   # ---------------------------------------------------------------------------
   # Join
@@ -69,17 +73,71 @@ defmodule EngramWeb.SyncChannel do
 
   @impl true
   def handle_info({:after_join, params}, socket) do
-    device_id = Map.get(params, "device_id", "unknown")
+    device_id = socket.assigns[:device_id] || Map.get(params, "device_id", "unknown")
+    conn_id = socket.assigns[:conn_id]
     vault_id = socket.assigns.vault.id
+
+    log_meta =
+      Metadata.with_category(:info, :websocket,
+        conn_id: conn_id,
+        device_id: device_id,
+        topic: socket.topic,
+        user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id))
+      )
+
+    Logger.info("sync join", log_meta)
+
+    warn_if_duplicate_device(socket, device_id, conn_id)
 
     {:ok, _} =
       Presence.track(socket, device_id, %{
         joined_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        vault_id: vault_id
+        vault_id: vault_id,
+        conn_id: conn_id
       })
 
     push(socket, "presence_state", Presence.list(socket))
     {:noreply, socket}
+  end
+
+  # A zombie channel = two live sockets for one device. If this device already
+  # has a tracked presence on this topic when a second socket joins, that is the
+  # direct server-side fingerprint. Note: a fast reconnect can briefly overlap
+  # (old presence not yet reaped), so this can occasionally fire on a healthy
+  # churn; it is warn-level and rare, and the conn_ids disambiguate.
+  defp warn_if_duplicate_device(socket, device_id, conn_id) do
+    case Map.get(Presence.list(socket), device_id) do
+      %{metas: metas} when metas != [] ->
+        existing = metas |> Enum.map(& &1[:conn_id]) |> Enum.reject(&is_nil/1) |> Enum.join(",")
+
+        Logger.warning(
+          "duplicate live channel",
+          Metadata.with_category(:warning, :websocket,
+            conn_id: conn_id,
+            device_id: device_id,
+            topic: socket.topic,
+            reason: "existing_conn_ids=#{existing}"
+          )
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  @impl true
+  def terminate(reason, socket) do
+    Logger.info(
+      "sync leave",
+      Metadata.with_category(:info, :websocket,
+        conn_id: socket.assigns[:conn_id],
+        device_id: socket.assigns[:device_id],
+        topic: socket.topic,
+        reason: inspect(reason)
+      )
+    )
+
+    :ok
   end
 
   # ---------------------------------------------------------------------------

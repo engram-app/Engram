@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 
 import pytest
 
@@ -67,8 +68,13 @@ async def test_apikey_push_oauth_receives(
         original_settings = await swap_to_oauth(cdp_a, tokens)
         await wait_for_stream(cdp_a)
 
-        # B (API key) creates a note
-        path = "E2E/CrossAuthApikeyToOauth.md"
+        # B (API key) creates a note. Unique path per run: these tests share the
+        # session-scoped sync_user, so a fixed path left over from a failed
+        # attempt would make the rerun's identical re-push hit the server's
+        # hash-equal broadcast-skip (idempotent no-op) and never deliver — a
+        # deterministic rerun failure. Unique paths keep every attempt a fresh,
+        # broadcasting insert (same rerun-safety approach as test_58/test_59).
+        path = f"E2E/CrossAuthApikeyToOauth-{uuid.uuid4().hex[:12]}.md"
         content = "# API Key → OAuth\nPushed by API key client, received by OAuth"
         write_note(vault_b, path, content)
 
@@ -109,8 +115,9 @@ async def test_oauth_push_apikey_receives(
         assert await cdp_a.check_stream_connected(), "A (OAuth) not connected"
         assert await cdp_b.check_stream_connected(), "B (API key) not connected"
 
-        # A (OAuth) creates a note and syncs
-        path = "E2E/CrossAuthOauthToApikey.md"
+        # A (OAuth) creates a note and syncs. Unique path per run for rerun-safety
+        # (see test_apikey_push_oauth_receives).
+        path = f"E2E/CrossAuthOauthToApikey-{uuid.uuid4().hex[:12]}.md"
         content = "# OAuth → API Key\nPushed by OAuth client, received by API key"
         write_note(vault_a, path, content)
 
@@ -144,7 +151,10 @@ async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_b, api_sync):
     connected = await cdp_b.check_stream_connected()
     assert connected, "B's WebSocket channel is not connected"
 
-    path = "E2E/RapidEdits.md"
+    # Unique path per run for rerun-safety (shared sync_user; see
+    # test_apikey_push_oauth_receives). The final "Version 5 of 5" would hash-equal
+    # a leftover from a prior attempt and never re-broadcast.
+    path = f"E2E/RapidEdits-{uuid.uuid4().hex[:12]}.md"
 
     # Fire 5 rapid edits (no sleep between them)
     for i in range(1, 6):
@@ -170,7 +180,9 @@ async def test_rapid_api_edits_content_not_stale(vault_b, cdp_b, api_sync):
     connected = await cdp_b.check_stream_connected()
     assert connected, "B's WebSocket channel is not connected"
 
-    path = "E2E/RapidEditsStale.md"
+    # Unique path per run for rerun-safety (shared sync_user; see
+    # test_apikey_push_oauth_receives).
+    path = f"E2E/RapidEditsStale-{uuid.uuid4().hex[:12]}.md"
 
     # Rapid-fire edits
     for i in range(1, 8):

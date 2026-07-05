@@ -34,10 +34,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 # WS round-trip budget under e2e-clerk load (2-worker xdist + Clerk-auth
-# latency). 10s flaked repeatedly (#643); matches test_78's proven 30s
-# budget (#565). These tests only run under e2e-clerk (skipif below), so a
-# single generous constant is correct — no variant branching needed.
-RT_TIMEOUT = 30
+# latency). 10s flaked repeatedly (#643). Tightened 30s → 15s: this is a
+# live-sync latency property — a 30s budget would mask a real broadcast
+# regression. If 15s flakes, profile the xdist contention; do not re-widen.
+RT_TIMEOUT = 15
 
 
 def _log_latency(label: str, t0: float) -> float:

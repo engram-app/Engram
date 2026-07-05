@@ -142,3 +142,9 @@ config :engram, :limits_enforced, true
 
 # Legal seeder skipped at boot in tests — SeederTest seeds per-case.
 config :engram, :seed_legal_on_boot, false
+
+# Real span contexts (so trace-correlation logic is testable) but no
+# export.
+config :opentelemetry,
+  traces_exporter: :none,
+  sampler: :always_on

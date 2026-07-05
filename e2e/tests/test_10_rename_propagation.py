@@ -6,7 +6,8 @@ mv would not trigger the plugin's rename handler).
 
 import pytest
 
-from helpers.vault import read_note, wait_for_file, write_note
+from helpers.log_oracle import wait_for_delivery
+from helpers.vault import read_note, write_note
 
 
 @pytest.mark.asyncio
@@ -34,6 +35,6 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     await cdp_b.trigger_full_sync()
 
     # Verify: B has new path, does NOT have old path
-    b_content = wait_for_file(vault_b, new_path, timeout=10)
+    b_content = wait_for_delivery(vault_b, new_path, api_sync, timeout=10)
     assert "Rename Test" in b_content, "B should have the renamed file"
     assert not (vault_b / old_path).exists(), "B should not have the old path"
