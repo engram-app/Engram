@@ -2915,16 +2915,23 @@ defmodule Engram.Notes do
   `{:ok, %{deleted: 0}}` — same idempotency contract as `rename_folder/4`,
   which returns `{:ok, 0}` for an empty target.
 
-  Side effects per real note (skipped for markers, matching `rename_folder`):
+  Side effects per real note:
   - Decrement usage meter.
   - Enqueue `DeleteNoteIndex` worker to clean up Qdrant points.
   - Broadcast `note_changed` with `event_type: "delete"`.
 
+  Side effects per deleted marker (folder itself, and any sub-marker caught
+  by the prefix scan): broadcast `note_changed` with `event_type: "delete"`
+  and `path` set to the marker's own folder path. No index cleanup (markers
+  carry no embedding). This is the empty-folder fix: without it, deleting a
+  folder with no descendant notes emitted zero broadcasts and other clients
+  never learned the folder was gone.
+
   PubSub disclosure: broadcasts are not transactional. A batch caller that
   composes this on top of `Repo.transaction` (see `batch_delete_folders/2`)
-  will leak per-note delete events for cascades that get rolled back. Same
-  caveat as `batch_delete_notes/3` — the systemic fix (after-commit hooks)
-  is tracked as a follow-up.
+  will leak per-note and per-marker delete events for cascades that get
+  rolled back. Same caveat as `batch_delete_notes/3`, the systemic fix
+  (after-commit hooks) is tracked as a follow-up.
   """
   @spec delete_folder(map(), map(), String.t()) ::
           {:ok, %{deleted: non_neg_integer()}} | {:error, term()}
@@ -2957,7 +2964,7 @@ defmodule Engram.Notes do
       now = DateTime.utc_now()
       ids = Enum.map(matches, & &1.id)
 
-      {real_notes, _markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
+      {real_notes, markers} = Enum.split_with(matches, fn r -> r.kind == "note" end)
 
       Repo.with_tenant(user.id, fn ->
         seq = Engram.Vaults.next_seq!(vault.id)
@@ -2976,12 +2983,25 @@ defmodule Engram.Notes do
         updated
       end)
 
-      # Side effects outside the transaction context — Qdrant cleanup + broadcasts.
-      # Markers carry no embedding and no path, so skip them.
+      # Side effects outside the transaction context, so they never fire if
+      # the update_all above rolled back. Qdrant cleanup + broadcasts.
+      # Markers carry no embedding, so they skip the index-cleanup enqueue.
       Enum.each(real_notes, fn note ->
         _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
         :ok = broadcast_change(user.id, vault.id, "delete", note.path)
+      end)
+
+      # Root cause of the empty-folder-lingers-in-tab-B bug: an empty folder's
+      # cascade matches ONLY its own marker row (no descendant notes), so
+      # skipping markers here left this branch with zero broadcasts. The web
+      # client's note_changed handler invalidates the folders list on ANY
+      # event regardless of path, so a minimal delete event carrying the
+      # marker's own folder path is enough for other tabs to drop it. Same
+      # emission style and position as the real-note loop above: after the
+      # Repo.with_tenant transaction returns, so it never fires on rollback.
+      Enum.each(markers, fn marker ->
+        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder)
       end)
 
       {:ok, %{deleted: length(matches)}}
@@ -3004,8 +3024,8 @@ defmodule Engram.Notes do
   transaction.
 
   PubSub disclosure (same caveat as `batch_delete_notes/3`): `delete_folder/3`
-  fires `note_changed` broadcasts per affected real note inside the transaction.
-  Subscribers may receive delete events for cascades that get rolled back when
+  fires `note_changed` broadcasts per affected real note and marker inside the
+  transaction. Subscribers may receive delete events for cascades that get rolled back when
   a later id in the batch fails. After-commit hooks are tracked as a follow-up.
   """
   @spec batch_delete_folders(map(), map(), [integer()]) ::

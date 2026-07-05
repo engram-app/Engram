@@ -81,4 +81,22 @@ defmodule Engram.NotesBroadcastTest do
       assert payload["path"] == "New/Child.md"
     end
   end
+
+  describe "delete_folder/3 empty-folder broadcast" do
+    test "deleting an empty folder still broadcasts a note_changed delete event", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Empty")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Empty"}
+      }
+    end
+  end
 end

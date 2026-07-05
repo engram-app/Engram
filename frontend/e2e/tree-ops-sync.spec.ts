@@ -292,4 +292,64 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxA.close();
 		await ctxB.close();
 	});
+
+	test("delete non-empty folder propagates to a second tab", async ({ browser, baseURL }) => {
+		const email = `e2e-tree-delf-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treedelf-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "Doomed");
+		await upsertNote(baseURL!, token, vault.id, "Doomed/inside.md", "inside body\n");
+		// A surviving root note to anchor both tabs.
+		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await signInForNote(pageA, email, vault.id, anchorId);
+		await signInForNote(pageB, email, vault.id, anchorId);
+
+		await expect(row(pageA, "Doomed")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "Doomed")).toBeVisible({ timeout: 10_000 });
+
+		await openContextMenu(pageA, "Doomed");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+
+		await expect(row(pageA, "Doomed")).toHaveCount(0, { timeout: 10_000 });
+		await expect(row(pageB, "Doomed")).toHaveCount(0, { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
+	test("delete EMPTY folder propagates to a second tab", async ({ browser, baseURL }) => {
+		const email = `e2e-tree-delef-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treedelef-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "Empty");
+		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await signInForNote(pageA, email, vault.id, anchorId);
+		await signInForNote(pageB, email, vault.id, anchorId);
+
+		await expect(row(pageA, "Empty")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "Empty")).toBeVisible({ timeout: 10_000 });
+
+		await openContextMenu(pageA, "Empty");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+
+		await expect(row(pageA, "Empty")).toHaveCount(0, { timeout: 10_000 });
+		// Predicted red: with no descendant notes, the backend may emit no
+		// broadcast, so tab B never invalidates and the folder lingers.
+		await expect(row(pageB, "Empty")).toHaveCount(0, { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
 });
