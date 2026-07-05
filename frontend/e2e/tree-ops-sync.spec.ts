@@ -235,4 +235,61 @@ test.describe("web tree ops sync (web to web)", () => {
 		await ctxA.close();
 		await ctxB.close();
 	});
+
+	test("move folder propagates to a second tab with its child", async ({ browser, baseURL }) => {
+		const email = `e2e-tree-mvf-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treemvf-${Date.now()}`);
+		await createFolder(baseURL!, token, vault.id, "Parent");
+		await createFolder(baseURL!, token, vault.id, "Movable");
+		const { id: childId } = await upsertNote(
+			baseURL!,
+			token,
+			vault.id,
+			"Movable/leaf.md",
+			"leaf body\n",
+		);
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await signInForNote(pageA, email, vault.id, childId);
+		await signInForNote(pageB, email, vault.id, childId);
+
+		await expect(row(pageA, "Movable")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "Parent")).toBeVisible({ timeout: 10_000 });
+
+		// Move the Movable folder under Parent via the Move dialog.
+		await openContextMenu(pageA, "Movable");
+		await pickAction(pageA, "Move to…");
+		await pickMoveTarget(pageA, "Parent");
+
+		// Convergence: in tab B, Movable is now under Parent, carrying its child.
+		await expandFolder(pageB, "Parent");
+		await expect(row(pageB, "Movable")).toBeVisible({ timeout: 10_000 });
+		await expandFolder(pageB, "Movable");
+		await expect(row(pageB, "leaf")).toBeVisible({ timeout: 10_000 });
+
+		// Old location clears: Movable is no longer a root-level folder. Collapse
+		// Parent so its subtree hides; Movable must then be absent (it now exists
+		// only under the collapsed Parent, not at root).
+		await row(pageB, "Parent").click();
+		await expect(row(pageB, "Parent")).toHaveAttribute("aria-expanded", "false");
+		await expect(row(pageB, "Movable")).toHaveCount(0, { timeout: 10_000 });
+
+		// Content sync must survive the folder move. Tabs are anchored on the leaf
+		// note (id stable). Re-expand to reach it, then edit in A and converge in B.
+		await expandFolder(pageB, "Parent");
+		await expandFolder(pageB, "Movable");
+		const edA = pageA.locator(".cm-content");
+		const edB = pageB.locator(".cm-content");
+		await edA.click();
+		await pageA.keyboard.press("Control+End");
+		await pageA.keyboard.type(" EDIT-AFTER-FOLDER-MOVE");
+		await expect(edB).toContainText("EDIT-AFTER-FOLDER-MOVE", { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
 });
