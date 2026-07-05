@@ -63,7 +63,9 @@ defmodule Engram.Vector.Qdrant do
 
   def req_opts(:search) do
     put_api_key(
-      receive_timeout: 5_000,
+      # Default 5s fail-fast; overridable per-process so a Bypass test can pin a
+      # generous budget and not misread scheduler starvation as a real timeout.
+      receive_timeout: ServiceConfig.get(:qdrant_search_timeout, 5_000),
       retry: false,
       max_retries: 0,
       connect_options: [protocols: [:http1]]
