@@ -4,11 +4,21 @@ interface Props {
 	initial: string;
 	kind: "file" | "folder";
 	error?: string;
+	// Fired on every keystroke, in addition to onCommit. Headless-tree's own
+	// hotkeys-core feature listens for Enter/Escape on the tree container in
+	// the native bubble phase, which fires before this input's React
+	// onKeyDown (React's delegated listener sits higher up the DOM, so it
+	// runs later in the same bubble). That means HT's built-in
+	// completeRenaming/abortRenaming hotkeys can win the race and read HT's
+	// own `renamingValue` state before onCommit ever runs. Keeping that state
+	// in sync on every change (not just at commit time) makes either commit
+	// path read the correct, up-to-date value.
+	onChange?: (value: string) => void;
 	onCommit: (next: string) => void;
 	onCancel: () => void;
 }
 
-export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props) {
+export function RenameInput({ initial, kind, error, onChange, onCommit, onCancel }: Props) {
 	const [value, setValue] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -33,7 +43,10 @@ export function RenameInput({ initial, kind, error, onCommit, onCancel }: Props)
 				data-testid="tree-rename-input"
 				type="text"
 				value={value}
-				onChange={(e) => setValue(e.target.value)}
+				onChange={(e) => {
+					setValue(e.target.value);
+					onChange?.(e.target.value);
+				}}
 				onKeyDown={(e) => {
 					if (e.key === "Enter") {
 						e.preventDefault();

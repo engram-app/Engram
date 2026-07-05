@@ -112,19 +112,22 @@ export function TreeRow({ instance, onContextMenu, onLongPress, onFolderHover }:
 				<RenameInput
 					initial={leafName(item)}
 					kind={item.kind === "folder" ? "folder" : "file"}
+					// RenameInput owns the input value directly, so HT's own
+					// renamingValue state (normally fed by
+					// getRenameInputProps().onChange) never sees these keystrokes.
+					// HT's hotkeys-core feature listens for Enter on the tree
+					// container in the native bubble phase, which fires before
+					// this input's React onKeyDown (React's delegated listener
+					// sits higher up the DOM and runs later in the same bubble).
+					// That means HT's own completeRenaming hotkey can win the
+					// race and commit with a stale renamingValue before onCommit
+					// below ever runs. Sync on every keystroke, not only at
+					// commit, so whichever path completes the rename first reads
+					// the current typed value.
+					onChange={(value) => tree.applySubStateUpdate("renamingValue", value)}
 					onCommit={(value) => {
-						const treeWithRename = tree as unknown as {
-							completeRenaming: () => void;
-							getRenamingValue: () => string;
-							applySubStateUpdate?: (k: "renamingValue", updater: () => string) => void;
-							setState?: (
-								updater: (s: { renamingValue?: string }) => { renamingValue?: string },
-							) => void;
-						};
-						// RenameInput owns the input value; sync it onto HT renaming state before completing.
-						// HT exposes renamingValue via state — bypass cleanly by writing through setState if present.
-						treeWithRename.setState?.((s) => ({ ...s, renamingValue: value }));
-						treeWithRename.completeRenaming();
+						tree.applySubStateUpdate("renamingValue", value);
+						tree.completeRenaming();
 					}}
 					onCancel={() => tree.abortRenaming()}
 				/>
