@@ -231,7 +231,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "renamed/f.md", note.id, "")
 
-      # Body preserved — the pre-fix code wiped this to "".
+      # Body preserved. The pre-fix code wiped this to "".
       doc = SharedDoc.get_doc(room)
       assert CrdtBridge.text_of(doc) == "child body"
 

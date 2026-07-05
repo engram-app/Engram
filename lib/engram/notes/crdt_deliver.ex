@@ -96,7 +96,7 @@ defmodule Engram.Notes.CrdtDeliver do
             # caller that reached deliver-out with UNLOADED content. The
             # folder-rename cascade is the latter: it scans meta columns only, so
             # `note.content` is nil -> "". Ingesting "" would diff the live doc's
-            # body down to empty and clear its frontmatter — a silent wipe of an
+            # body down to empty and clear its frontmatter: a silent wipe of an
             # open, unedited note. Skip the plaintext push; the announce (step 2)
             # still fires so enrolled clients re-pull. A real clear-to-empty
             # arrives as a CRDT edit, never through this deliver-out fallback.
