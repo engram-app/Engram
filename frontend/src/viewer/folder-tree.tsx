@@ -581,7 +581,10 @@ export default function FolderTree() {
 					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					position={dialog.position}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
-					onClose={() => setDialog({ kind: "none" })}
+					// The action itself may open another dialog (delete/move) that
+					// shares this same state slot. Only clear it if it's still the
+					// context menu, so we do not stomp on a freshly opened dialog.
+					onClose={() => setDialog((prev) => (prev.kind === "context" ? { kind: "none" } : prev))}
 				/>
 			)}
 			{dialog.kind === "drawer" && (
@@ -589,7 +592,8 @@ export default function FolderTree() {
 					title={titleForItem(dialog.itemId)}
 					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
 					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
-					onClose={() => setDialog({ kind: "none" })}
+					// Same reasoning as the context menu above.
+					onClose={() => setDialog((prev) => (prev.kind === "drawer" ? { kind: "none" } : prev))}
 				/>
 			)}
 		</>

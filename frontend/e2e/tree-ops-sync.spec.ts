@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { createVault, registerAndLogin, signInForNote, upsertNote } from "./support/api";
-import { commitRename, openContextMenu, pickAction, row, treeRoot } from "./support/tree";
+import {
+	commitRename,
+	confirmDelete,
+	openContextMenu,
+	pickAction,
+	row,
+	treeRoot,
+} from "./support/tree";
 
 test.describe("web tree ops sync (web to web)", () => {
 	test("smoke: signed-in tab shows the folder tree with a seeded note", async ({
@@ -68,6 +75,36 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-RENAME");
 		await expect(edB).toContainText("EDIT-AFTER-RENAME", { timeout: 10_000 });
+
+		await ctxA.close();
+		await ctxB.close();
+	});
+
+	test("delete note propagates to a second tab", async ({ browser, baseURL }) => {
+		const email = `e2e-tree-del-${Date.now()}@test.com`;
+		const token = await registerAndLogin(baseURL!, email);
+		const vault = await createVault(baseURL!, token, `treedel-${Date.now()}`);
+		const { id: keepId } = await upsertNote(baseURL!, token, vault.id, "keep.md", "keep body\n");
+		await upsertNote(baseURL!, token, vault.id, "trash.md", "trash body\n");
+
+		const ctxA = await browser.newContext();
+		const pageA = await ctxA.newPage();
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		// Anchor both tabs on the note that survives, so neither navigates to a
+		// deleted route.
+		await signInForNote(pageA, email, vault.id, keepId);
+		await signInForNote(pageB, email, vault.id, keepId);
+
+		await expect(row(pageA, "trash")).toBeVisible({ timeout: 10_000 });
+		await expect(row(pageB, "trash")).toBeVisible({ timeout: 10_000 });
+
+		await openContextMenu(pageA, "trash");
+		await pickAction(pageA, "Delete");
+		await confirmDelete(pageA);
+
+		await expect(row(pageA, "trash")).toHaveCount(0, { timeout: 10_000 });
+		await expect(row(pageB, "trash")).toHaveCount(0, { timeout: 10_000 });
 
 		await ctxA.close();
 		await ctxB.close();
