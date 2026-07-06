@@ -487,8 +487,23 @@ jobs:
           # Build locally only if this daemon doesn't already have the layers.
           IMAGE_LOCAL="engram-ci:${HASH}"
           if ! docker image inspect "$IMAGE_LOCAL" >/dev/null 2>&1; then
-            ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
-              docker compose -f ci/compose.yml build engram
+            # The buildkit/docker daemon on the isolated pool can be reclaimed
+            # mid-`mix release`, dropping the gRPC transport with `graceful_stop`
+            # (#567) — a host/daemon event, not a build error. The build is
+            # idempotent (cache-reused), so retry a few times before failing the
+            # whole job; the daemon typically comes back within seconds.
+            for attempt in 1 2 3; do
+              if ENGRAM_CI_IMAGE="$IMAGE_LOCAL" \
+                   docker compose -f ci/compose.yml build engram; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::CI image build failed after 3 attempts"
+                exit 1
+              fi
+              echo "::warning::build attempt $attempt failed (daemon reclaimed?) — retrying in 15s"
+              sleep 15
+            done
             docker image inspect "$IMAGE_LOCAL" >/dev/null
           fi
 

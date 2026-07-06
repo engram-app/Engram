@@ -61,15 +61,25 @@ async def test_activity_log_records_push_then_clears(vault_a, cdp_a, api_sync):
     wrote = False
     try:
         # ── 1. Deterministically push the note via the engine ────────────────
+        # Ensure the CRDT channel is live first. push_file_now routes a small
+        # note via the CRDT path, which returns "CRDT push ok" WITHOUT verifying
+        # the channel is joined — so if an upstream auth-swap test (test_47/48/49)
+        # on this shared session-scoped instance left the channel dead-but-set,
+        # the Y.Doc update is silently dropped and the note never reaches the
+        # server (#915). Force a live channel so the push actually lands.
+        if not await cdp_a.check_stream_connected():
+            await cdp_a.reconnect_stream()
+        await cdp_a.wait_for_stream_connected()
+
         # push_file_now() creates via app.vault.create() and awaits pushFile()
         # directly, bypassing the handleModify debounce. It also appends a
         # 'push' entry to syncLog so the activity log assertion has a target.
         await cdp_a.push_file_now(path, "# activity log test")
         wrote = True
 
-        # Confirm the push reached the server (the helper awaits pushFile, so
-        # this should be immediate — the wait_for_note is belt-and-braces).
-        api_sync.wait_for_note(path, timeout=5)
+        # Confirm the push reached the server. Load-tolerant budget: under runner
+        # contention CRDT propagation can lag past a tight window (#915).
+        api_sync.wait_for_note(path, timeout=15)
 
         # ── 3. Open Sync Center and assert push entry present ────────────────
         await cdp_a.open_sync_center()
