@@ -531,6 +531,21 @@ jobs:
     # a skipped prebuild would drag them into skip. e2e-browser stays gated.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
+    env:
+      # Same builder image the release Dockerfile pins (ELIXIR_VERSION/OTP_VERSION
+      # ARGs), pre-pulled onto every runner by .github/setup-runner.sh and mirrored
+      # to the LAN registry. `mix deps.get`/`mix compile` run INSIDE this image,
+      # bind-mounted at a fixed /app, instead of bare-metal on the host — see the
+      # "Normalize source mtimes" step's comment and docs/context/ci-mix-compile-cache-runner-path.md
+      # for why: Mix's compile manifest embeds the absolute project root path
+      # (confirmed by decoding a real compile.elixir manifest), and the isolated
+      # runner pool never gives two runs the same host checkout path
+      # (actions-runner-runner-N differs per runner), so a bare-metal compile
+      # invalidates the ENTIRE cached _build on every run regardless of mtimes.
+      # A bind mount is a real mountpoint (unlike a symlink), so /app resolves
+      # identically via getcwd() on every runner — exactly how prebuild-ci-image's
+      # Docker build already avoids this bug.
+      MIX_BUILDER_IMAGE: "${{ env.LOCAL_REGISTRY }}/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
@@ -566,11 +581,19 @@ jobs:
 
       - name: Resolve OTP/Elixir version
         id: beam
+        # Queried from INSIDE the builder image, not the host — the cache key
+        # must reflect what's actually compiling now that mix runs in the
+        # container (host toolchain is a separately-installed, different OTP
+        # patch version; see docs/context/ci-mix-compile-cache-runner-path.md).
         run: |
-          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
-          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
-          ELX=$(elixir --short-version)
-          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+          docker pull -q "$MIX_BUILDER_IMAGE" >/dev/null
+          TAG=$(docker run --rm "$MIX_BUILDER_IMAGE" sh -c '
+            OTP=$(erl -eval "io:format(\"~s\",[erlang:system_info(otp_release)]),halt()" -noshell)
+            ERTS=$(erl -eval "io:format(\"~s\",[erlang:system_info(version)]),halt()" -noshell)
+            ELX=$(elixir --short-version)
+            echo "otp${OTP}-erts${ERTS}-elx${ELX}"
+          ')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Compute cache keys
         id: keys
@@ -628,8 +651,21 @@ jobs:
         # on exact match; restore-keys partial hits set it to ''.
         # On a partial hit, `mix deps.get` reconciles the lockfile
         # against the restored deps/ and fetches the delta.
+        #
+        # Runs inside MIX_BUILDER_IMAGE, bind-mounted at /app, so Mix's
+        # absolute-project-root check (embedded in the compile manifest)
+        # sees the SAME path on every runner. hex/rebar/mix archive caches
+        # are named Docker volumes — persist on whichever runner host they
+        # land on, avoided re-fetching every run (best-effort, not required
+        # for correctness).
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: mix deps.get
+        run: |
+          docker run --rm \
+            -v "$PWD:/app" -w /app \
+            -v mix-hex-cache:/root/.hex -v mix-mix-cache:/root/.mix -v mix-rebar-cache:/root/.cache/rebar3 \
+            -e HEX_MIRROR="${HEX_MIRROR:-}" \
+            "$MIX_BUILDER_IMAGE" \
+            sh -c 'mix local.hex --force --if-missing && mix local.rebar --force --if-missing && mix deps.get'
 
       - name: Compile :dev and :test (parallel)
         run: |
@@ -648,9 +684,26 @@ jobs:
           # it fails fast with "module Ecto.* is not loaded". deps.compile builds
           # them; it is a near no-op when _build was restored warm (lockfile
           # unchanged). Parallel per env to mirror the app-compile parallelism.
-          MIX_ENV=dev  mix deps.compile >/tmp/deps-dev.log 2>&1 &
+          #
+          # Each `mix` invocation runs inside MIX_BUILDER_IMAGE bind-mounted at
+          # /app (not bare-metal on the host) — see docs/context/ci-mix-compile-cache-runner-path.md.
+          # A bind mount is a real mountpoint, so /app resolves identically via
+          # getcwd() regardless of which runner this lands on, keeping Mix's
+          # absolute-project-root check (embedded in the compile manifest)
+          # satisfied across runs on different runners.
+          run_mix() {
+            docker run --rm \
+              -v "$PWD:/app" -w /app \
+              -v mix-hex-cache:/root/.hex -v mix-mix-cache:/root/.mix -v mix-rebar-cache:/root/.cache/rebar3 \
+              -e MIX_ENV="$1" \
+              -e HEX_MIRROR="${HEX_MIRROR:-}" \
+              "$MIX_BUILDER_IMAGE" \
+              sh -c "mix local.hex --force --if-missing && mix local.rebar --force --if-missing && $2"
+          }
+
+          run_mix dev  "mix deps.compile" >/tmp/deps-dev.log 2>&1 &
           dpid_dev=$!
-          MIX_ENV=test mix deps.compile >/tmp/deps-test.log 2>&1 &
+          run_mix test "mix deps.compile" >/tmp/deps-test.log 2>&1 &
           dpid_test=$!
           drc_dev=0; drc_test=0
           wait "$dpid_dev"  || drc_dev=$?
@@ -661,9 +714,9 @@ jobs:
             echo "deps.compile failed (dev=$drc_dev test=$drc_test)" >&2
             exit 1
           fi
-          MIX_ENV=dev  mix compile --warnings-as-errors --no-deps-check >/tmp/compile-dev.log 2>&1 &
+          run_mix dev  "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-dev.log 2>&1 &
           pid_dev=$!
-          MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
+          run_mix test "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-test.log 2>&1 &
           pid_test=$!
           # Capture exit codes WITHOUT aborting under `set -e`. A bare
           # `wait "$pid"; rc=$?` lets a failing wait trip `set -e` and kill the
