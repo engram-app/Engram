@@ -58,6 +58,33 @@ defmodule EngramWeb.NotesControllerTest do
 
       assert json_response(conn, 401)
     end
+
+    test "adopts a client-supplied uuidv7 id on create", %{conn: conn} do
+      client_minted = UUIDv7.generate()
+
+      conn =
+        post(conn, "/api/notes", %{
+          id: client_minted,
+          path: "Test/ClientId.md",
+          content: "# Client minted",
+          mtime: 1_000.0
+        })
+
+      assert %{"note" => note} = json_response(conn, 200)
+      assert note["id"] == client_minted
+    end
+
+    test "falls back to server-minted id when none supplied", %{conn: conn} do
+      conn =
+        post(conn, "/api/notes", %{
+          path: "Test/ServerId.md",
+          content: "# Server minted",
+          mtime: 1_000.0
+        })
+
+      assert %{"note" => note} = json_response(conn, 200)
+      assert {:ok, _} = Ecto.UUID.cast(note["id"])
+    end
   end
 
   # ---------------------------------------------------------------------------
