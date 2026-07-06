@@ -97,34 +97,53 @@ defmodule Engram.NotesClientMintTest do
       assert Engram.UsageMeters.notes_count(user.id) == 1
     end
 
-    test "moves a live id to a new path without double-counting" do
+    # NOTE (2026-07-06): a prior test here asserted that upserting a LIVE note's
+    # id at a new path MOVES it (destroying the original at the old path). That
+    # was the id-collision data-loss vector — removed. Moving a live note by id
+    # is now rejected (see "rejects a live id-collision ..." below). A real
+    # rename tombstones the old path first and is covered by
+    # "resurrects a tombstoned id at a new path (rename)" above, which also
+    # asserts the usage counter is not double-counted.
+
+    # DATA-LOSS GUARD (prod incident 2026-07-06): on the wire, "rename A->B"
+    # and "a DIFFERENT note that reuses A's note_id" are indistinguishable — a
+    # single upsert to path B carrying a note_id already live at path A. The
+    # old behavior MOVED + crdt-merged the live A row onto B, silently
+    # destroying A and bleeding its content across notes. A live id-collision
+    # must be REJECTED (conflict), never moved. Legit renames delete-first
+    # (tombstone) and take the resurrect path above, so they are unaffected.
+    test "rejects a live id-collision instead of collapsing two distinct notes" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
       id = UUIDv7.generate()
 
-      {:ok, _note} =
+      {:ok, _a} =
         Engram.Notes.upsert_note(user, vault, %{
           "id" => id,
           "path" => "A.md",
-          "content" => "# Hi\nbody"
+          "content" => "AAA original body"
         })
 
-      assert Engram.UsageMeters.notes_count(user.id) == 1
-
-      {:ok, moved} =
+      # A different note at a different path reuses A's live note_id.
+      result =
         Engram.Notes.upsert_note(user, vault, %{
           "id" => id,
           "path" => "B.md",
-          "content" => "# Hi\nbody"
+          "content" => "BBB different body"
         })
 
-      assert moved.id == id
-      assert moved.path == "B.md"
-      assert Engram.UsageMeters.notes_count(user.id) == 1
+      # A survives intact at its original path — NOT moved, NOT merged.
+      assert {:ok, a_still} = Engram.Notes.get_note(user, vault, "A.md")
+      assert a_still.id == id
+      assert a_still.content =~ "AAA original body"
+      refute a_still.content =~ "BBB"
 
-      assert {:ok, _} = Engram.Notes.get_note(user, vault, "B.md")
-      assert {:error, :not_found} = Engram.Notes.get_note(user, vault, "A.md")
+      # The colliding push is surfaced as a conflict, not silently applied.
+      assert {:error, :version_conflict, _} = result
+
+      # Exactly one note exists — the collision did not create/duplicate rows.
+      assert Engram.UsageMeters.notes_count(user.id) == 1
     end
 
     test "a fresh id at a new path still inserts normally" do
