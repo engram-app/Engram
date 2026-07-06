@@ -428,6 +428,23 @@ defmodule Engram.Notes do
 
           {:ok, note}
 
+        {:ok, {:ok, {:moved, prev_hash, note, _merged_text, _content_hash}}} ->
+          # An id-keyed rename moved an existing row to a new path (move_note).
+          # Re-embed only when the content actually changed (a pure rename keeps
+          # the same hash), but ALWAYS broadcast: the move persisted a real
+          # change (path/seq/version), and skipping the broadcast on hash
+          # equality would strand peers with the old-path delete and no
+          # new-path upsert until they next pull.
+          _ =
+            if prev_hash != note.content_hash do
+              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+            end
+
+          note = decrypt_or_raise!(note, user)
+          maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+          {:ok, note}
+
         {:ok, {:conflict, existing}} ->
           # Concurrent-insert race: two clients both saw nil on the lookup and
           # both tried to INSERT the same new path. The loser's ON CONFLICT DO
@@ -642,7 +659,13 @@ defmodule Engram.Notes do
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
               end
 
-            {:ok, {prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+            # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
+            # the caller broadcasts unconditionally: a rename keeps the same
+            # content_hash but persisted a new path/seq/version, and the plain
+            # `prev_hash != content_hash` broadcast guard would skip it — leaving
+            # peers with the old-path delete but no new-path upsert (the note
+            # vanishes on them until their next pull).
+            {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->
             {:error, changeset}
