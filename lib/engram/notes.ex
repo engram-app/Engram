@@ -869,6 +869,29 @@ defmodule Engram.Notes do
     fetch_note_by_id(user, vault, id, :all)
   end
 
+  @doc """
+  True when a live note with `note_id` exists in `vault_id` for `user`.
+
+  Ownership check for the CRDT channel: doc_id is now the note_id, so the
+  channel validates the id belongs to the vault (no decrypt, no path_hmac).
+  Tenant-scoped via `Repo.with_tenant/2` — a bare query would trip the
+  tenant guard.
+  """
+  @spec note_in_vault?(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def note_in_vault?(user, vault_id, note_id) do
+    query =
+      from(n in Note,
+        where:
+          n.id == ^note_id and n.user_id == ^user.id and n.vault_id == ^vault_id and
+            is_nil(n.deleted_at)
+      )
+
+    case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
+      {:ok, exists?} -> exists?
+      _ -> false
+    end
+  end
+
   # Shared shell for by-id fetches; `fields: :meta` skips the content column
   # and its decrypt for callers that only need path/folder/tags (#863) —
   # same projection pattern the changes feeds use.
