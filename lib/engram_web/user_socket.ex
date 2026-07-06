@@ -34,7 +34,11 @@ defmodule EngramWeb.UserSocket do
 
         Logger.warning(
           "auth rejected",
-          Metadata.with_category(:warning, :auth, reason: label)
+          Metadata.with_category(
+            :warning,
+            :auth,
+            [reason: label] ++ Engram.Auth.TokenDebug.metadata(token)
+          )
         )
 
         :error
