@@ -252,10 +252,9 @@ describe("useRenameFolder", () => {
 });
 
 describe("useDeleteNote", () => {
-	it("DELETEs /notes/by-id/:id and invalidates folders + folder list + removes note", async () => {
+	it("DELETEs /notes/by-id/:id and invalidates folders + folder list + note", async () => {
 		del.mockResolvedValue({ deleted: true });
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
-		const removeSpy = vi.spyOn(qc, "removeQueries");
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
 		await act(async () => {
@@ -267,8 +266,10 @@ describe("useDeleteNote", () => {
 		expect(del).toHaveBeenCalledWith("/notes/by-id/42");
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
-		// The optimistic onMutate removes the note's body cache, keyed by id.
-		expect(removeSpy).toHaveBeenCalledWith({ queryKey: ["note", "42", "42"] });
+		// onMutate invalidates (not removes) the note's cache, keyed by id, so a
+		// mounted useNote(id) observer on the open note reconnects instead of
+		// orphaning on a destroyed Query object.
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42", "42"] });
 	});
 
 	it("surfaces backend errors as ApiError", async () => {

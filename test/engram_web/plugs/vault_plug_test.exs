@@ -96,6 +96,41 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
     end
   end
 
+  # ── Structured rejection reason (diagnosability) ───────────────────────────
+  #
+  # The plug assigns :reject_reason rather than emitting its own log; RequestLogger
+  # folds it into the single request-stop line (see request_logger_test.exs), so
+  # the reason is queryable in Loki without doubling ingest on the 4xx path.
+
+  describe "assigns a reject reason" do
+    test "malformed (non-uuid) vault id → vault_id_malformed", %{user: user} do
+      conn =
+        conn_with_user(user)
+        |> put_req_header("x-vault-id", "demo-vault-2")
+        |> VaultPlug.call([])
+
+      assert conn.halted
+      assert conn.status == 404
+      assert conn.assigns[:reject_reason] == "vault_id_malformed"
+    end
+
+    test "well-formed but unknown vault id → vault_not_found", %{user: user} do
+      conn =
+        conn_with_user(user)
+        |> put_req_header("x-vault-id", "00000000-0000-0000-0000-000000999999")
+        |> VaultPlug.call([])
+
+      assert conn.assigns[:reject_reason] == "vault_not_found"
+    end
+
+    test "no header and no default vault → no_default_vault" do
+      new_user = insert(:user)
+      conn = conn_with_user(new_user) |> VaultPlug.call([])
+
+      assert conn.assigns[:reject_reason] == "no_default_vault"
+    end
+  end
+
   # ── API key vault restriction ──────────────────────────────────────────────
 
   describe "API key access checks" do
