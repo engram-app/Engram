@@ -177,6 +177,10 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Stamps app.user_id on the request span right after Auth resolves
+      # current_user. No current_vault at this scope, so app.vault_id is
+      # simply absent from these spans.
+      EngramWeb.Plugs.TraceUserAttrs,
       # Gate deleted (410) / suspended (403) accounts off the management plane.
       # A user soft-deleted by the inactivity sweep or admin-suspended still
       # holds a valid JWT; without this they could mint API keys, CRUD vaults,
@@ -254,6 +258,9 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Stamps app.user_id on the request span (no current_vault at this
+      # onboarding scope, so app.vault_id stays absent here too).
+      EngramWeb.Plugs.TraceUserAttrs,
       EngramWeb.Plugs.AccountLifecycle,
       EngramWeb.Plugs.RotationLockCheck
     ]
@@ -335,7 +342,10 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.RequireApiRpsBudget,
       EngramWeb.Plugs.EnforceSearchCap,
       EngramWeb.Plugs.RequireApiWriteEnabled,
-      EngramWeb.Plugs.VaultPlug
+      EngramWeb.Plugs.VaultPlug,
+      # Runs last so both current_user and current_vault are resolved:
+      # stamps app.user_id AND app.vault_id on the request span.
+      EngramWeb.Plugs.TraceUserAttrs
     ]
 
     # Notes CRUD
