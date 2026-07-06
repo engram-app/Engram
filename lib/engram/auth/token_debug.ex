@@ -28,13 +28,13 @@ defmodule Engram.Auth.TokenDebug do
 
   defp safe_peek(fun, token) do
     case fun.(token) do
-      {:ok, map} -> map
+      {:ok, map} when is_map(map) -> map
       _ -> %{}
     end
   rescue
     _ -> %{}
   end
 
-  defp hash_sub(nil), do: nil
-  defp hash_sub(sub), do: Engram.Crypto.HMAC.hash_user_id(sub)
+  defp hash_sub(sub) when is_binary(sub), do: Engram.Crypto.HMAC.hash_user_id(sub)
+  defp hash_sub(_), do: nil
 end

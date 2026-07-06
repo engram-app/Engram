@@ -33,4 +33,14 @@ defmodule Engram.Auth.TokenDebugTest do
              sub_hash: nil
            ]
   end
+
+  test "does not raise when sub claim is a number, and sub_hash is nil" do
+    token = Engram.Auth.TokenDebugTest.Fixtures.hs256(%{"iss" => "engram", "sub" => 12_345})
+
+    md = Engram.Auth.TokenDebug.metadata(token)
+
+    assert md[:alg] == "HS256"
+    assert md[:iss] == "engram"
+    assert md[:sub_hash] == nil
+  end
 end
