@@ -184,7 +184,7 @@ defmodule Engram.MixProject do
       # Tidewave MCP — runtime introspection of the running dev app
       # (project_eval, DB queries, logs). Dev-only: it is RCE by design
       # and is mounted in the endpoint behind a code_reloading? guard.
-      {:tidewave, "~> 0.5.0", only: :dev}
+      {:tidewave, "~> 0.6.1", only: :dev}
     ]
   end
 
