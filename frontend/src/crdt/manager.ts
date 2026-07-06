@@ -16,19 +16,20 @@ interface Entry {
  */
 export const REMOTE_ORIGIN = "remote";
 
-/** Local IndexedDB namespace for CRDT docs. The wire doc_id stays
- *  `${vaultId}/${path}` — only the local DB name carries this prefix, so a
+/** Local IndexedDB namespace for CRDT docs. The wire doc_id is the bare
+ *  note_id (globally unique, rename-stable); this prefix exists purely so a
  *  logout wipe can enumerate-and-delete without touching other same-origin
  *  DBs (Clerk, etc.). */
 export const CRDT_IDB_PREFIX = "engram-crdt/";
 
 export interface CrdtManagerOptions {
-	/** Namespaces IndexedDB store names and doc ids per vault. */
+	/** Kept for construction compatibility; no longer used to namespace doc
+	 *  ids (note_id is already globally unique). */
 	dbPrefix: string;
 	/** Emitted on every local Y.Doc update (origin !== REMOTE_ORIGIN). */
 	onUpdate: (docId: string, update: Uint8Array, origin: unknown) => void;
 	/** IndexedDB persistence failure (e.g. quota). Sync continues over the WS. */
-	onPersistError?: (path: string, err: unknown) => void;
+	onPersistError?: (noteId: string, err: unknown) => void;
 }
 
 export class CrdtManager {
@@ -42,43 +43,45 @@ export class CrdtManager {
 		this.opts = opts;
 	}
 
-	/** Vault-scoped doc id — IndexedDB store name AND channel topic key. */
-	docId(path: string): string {
-		return `${this.opts.dbPrefix}/${path}`;
+	/** The doc id — identity over the note's stable note_id. Used as both the
+	 *  wire doc_id and (with CRDT_IDB_PREFIX) the local IndexedDB key. Rename-
+	 *  stable: a path/move never changes this since note_id doesn't change. */
+	docId(noteId: string): string {
+		return noteId;
 	}
 
-	async getDoc(path: string): Promise<Y.Doc> {
-		return (await this.entry(path)).doc;
+	async getDoc(noteId: string): Promise<Y.Doc> {
+		return (await this.entry(noteId)).doc;
 	}
 
 	/** The shared Y.Text bound to CodeMirror via yCollab. */
-	async getSharedText(path: string): Promise<Y.Text> {
-		return (await this.entry(path)).text;
+	async getSharedText(noteId: string): Promise<Y.Text> {
+		return (await this.entry(noteId)).text;
 	}
 
 	/** Apply a binary Yjs update from the server (suppresses re-send). */
-	async applyRemoteUpdate(path: string, update: Uint8Array): Promise<void> {
-		const e = await this.entry(path);
+	async applyRemoteUpdate(noteId: string, update: Uint8Array): Promise<void> {
+		const e = await this.entry(noteId);
 		Y.applyUpdate(e.doc, update, REMOTE_ORIGIN);
 	}
 
-	async encodeStateVector(path: string): Promise<Uint8Array> {
-		return Y.encodeStateVector((await this.entry(path)).doc);
+	async encodeStateVector(noteId: string): Promise<Uint8Array> {
+		return Y.encodeStateVector((await this.entry(noteId)).doc);
 	}
 
-	async encodeStateAsUpdate(path: string, sv?: Uint8Array): Promise<Uint8Array> {
-		return Y.encodeStateAsUpdate((await this.entry(path)).doc, sv);
+	async encodeStateAsUpdate(noteId: string, sv?: Uint8Array): Promise<Uint8Array> {
+		return Y.encodeStateAsUpdate((await this.entry(noteId)).doc, sv);
 	}
 
-	/** True if a Y.Doc entry is currently live for this path (opened via openDoc
+	/** True if a Y.Doc entry is currently live for this note (opened via openDoc
 	 *  or active via enrollment). False after closeDoc. Used to drop late inbound
 	 *  frames instead of resurrecting a closed doc. */
-	hasDoc(path: string): boolean {
-		return this.docs.has(this.docId(path));
+	hasDoc(noteId: string): boolean {
+		return this.docs.has(this.docId(noteId));
 	}
 
-	closeDoc(path: string): void {
-		const id = this.docId(path);
+	closeDoc(noteId: string): void {
+		const id = this.docId(noteId);
 		const e = this.docs.get(id);
 		if (!e) {
 			return;
@@ -101,11 +104,11 @@ export class CrdtManager {
 	 * crossed (>500 KB AND >1000 client-IDs). Seeds the flattened plaintext with
 	 * LOCAL origin so the server adopts the reset lineage. Returns true if flattened.
 	 */
-	async flattenIfBloated(path: string): Promise<boolean> {
-		if (!this.docs.has(this.docId(path))) {
+	async flattenIfBloated(noteId: string): Promise<boolean> {
+		if (!this.docs.has(this.docId(noteId))) {
 			return false; // doc not live (closed or never opened) — never resurrect
 		}
-		const e = await this.entry(path);
+		const e = await this.entry(noteId);
 		const encoded = Y.encodeStateAsUpdate(e.doc);
 		const clientIds = Y.decodeStateVector(Y.encodeStateVector(e.doc)).size;
 		if (encoded.length < CrdtManager.MAX_CONTENT_BYTES || clientIds < CrdtManager.MAX_CLIENT_IDS) {
@@ -126,12 +129,12 @@ export class CrdtManager {
 			fmTypes.set(k, v);
 		});
 
-		const id = this.docId(path);
+		const id = this.docId(noteId);
 		e.doc.destroy();
 		await e.persistence.clearData();
 		await e.persistence.destroy();
 		this.docs.delete(id);
-		const fresh = await this.entry(path);
+		const fresh = await this.entry(noteId);
 		fresh.doc.transact(() => {
 			fresh.text.insert(0, plaintext); // local origin → propagated to the server
 			const after = frontmatterMaps(fresh.doc);
@@ -148,8 +151,8 @@ export class CrdtManager {
 		return true;
 	}
 
-	private async entry(path: string): Promise<Entry> {
-		const id = this.docId(path);
+	private async entry(noteId: string): Promise<Entry> {
+		const id = this.docId(noteId);
 		const cached = this.docs.get(id);
 		if (cached) {
 			await cached.ready;
@@ -158,7 +161,7 @@ export class CrdtManager {
 		const doc = new Y.Doc();
 		const persistence = new IndexeddbPersistence(CRDT_IDB_PREFIX + id, doc);
 		const text = doc.getText("content");
-		persistence.on("error", (err: unknown) => this.opts.onPersistError?.(path, err));
+		persistence.on("error", (err: unknown) => this.opts.onPersistError?.(noteId, err));
 		// Single listener: local updates go to the channel; remote-origin updates
 		// are skipped. No disk-flush listener — the web has no local file.
 		doc.on("update", (update: Uint8Array, origin: unknown) => {

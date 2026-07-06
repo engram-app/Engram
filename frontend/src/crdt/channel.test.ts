@@ -17,7 +17,7 @@ describe("CrdtChannel", () => {
 		await ch.startSync("n.md");
 		await ch.startSync("n.md");
 		expect(send).toHaveBeenCalledTimes(1);
-		expect(send.mock.calls[0]![0]).toContain("/n.md"); // docId
+		expect(send.mock.calls[0]![0]).toBe("n.md"); // docId is the note_id, identity
 		expect(typeof send.mock.calls[0]![1]).toBe("string"); // base64 frame
 	});
 

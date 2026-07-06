@@ -60,17 +60,32 @@ describe("NotePage (CRDT)", () => {
 		useNoteMock.mockReturnValue({ data: NOTE, isLoading: false, error: null });
 	});
 
-	it("opens + enrolls the CRDT doc for a .md note", async () => {
+	it("opens + enrolls the CRDT doc for a .md note, keyed by note_id (not path)", async () => {
 		render(<NotePage />);
-		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("folder/note.md"));
-		expect(enroll).toHaveBeenCalledWith("folder/note.md");
+		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
+		expect(enroll).toHaveBeenCalledWith("note-1");
 	});
 
-	it("closes the doc on unmount", async () => {
+	it("closes the doc on unmount, keyed by note_id", async () => {
 		const { unmount } = render(<NotePage />);
 		await waitFor(() => expect(openDoc).toHaveBeenCalled());
 		unmount();
-		expect(closeDoc).toHaveBeenCalledWith("folder/note.md");
+		expect(closeDoc).toHaveBeenCalledWith("note-1");
+	});
+
+	// The CRDT gate is markdown-only (mirrors the server's crdt_deliver.ex
+	// gate). note_id carries no extension, so note-page.tsx checks the current
+	// path before ever calling openDoc/enroll.
+	it("does not open the CRDT doc for a non-markdown note (e.g. canvas)", async () => {
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, path: "folder/note.canvas" },
+			isLoading: false,
+			error: null,
+		});
+		render(<NotePage />);
+		await waitFor(() => expect(screen.getByText("note")).toBeInTheDocument());
+		expect(openDoc).not.toHaveBeenCalled();
+		expect(enroll).not.toHaveBeenCalled();
 	});
 
 	it("reading view renders live Y.Text content, not stale REST content", async () => {
@@ -92,7 +107,7 @@ describe("NotePage (CRDT)", () => {
 		render(<NotePage />);
 
 		// Wait for openDoc to resolve and handle to be set
-		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("folder/note.md"));
+		await waitFor(() => expect(openDoc).toHaveBeenCalledWith("note-1"));
 
 		// Switch to reading view
 		fireEvent.click(screen.getByRole("button", { name: /reading view/i }));

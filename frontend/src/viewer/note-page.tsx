@@ -42,28 +42,35 @@ export default function NotePage() {
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 
 	const path = note?.path ?? null;
+	const noteId = note?.id ?? null;
+	// CRDT manages MARKDOWN only — mirrors the server-side `.md` gate
+	// (crdt_deliver.ex). note_id carries no extension, so the check has to
+	// happen here, at the one call site that still has the current path.
+	const isMarkdown = path?.endsWith(".md") ?? false;
 
-	// Open the CRDT doc on .md note mount; enroll for the STEP1 handshake; close
-	// on note switch / unmount. yCollab (in NoteEditor) owns convergence — there
-	// is no REST autosave, 3-way merge, or conflict UI on this path anymore.
+	// Open the CRDT doc on .md note mount, keyed by the note's stable note_id
+	// (NOT path — a rename/move must not tear down and rebuild the live doc);
+	// enroll for the STEP1 handshake; close on note switch / unmount. yCollab
+	// (in NoteEditor) owns convergence — there is no REST autosave, 3-way
+	// merge, or conflict UI on this path anymore.
 	useEffect(() => {
-		if (!path) {
+		if (!(noteId && isMarkdown)) {
 			return;
 		}
 		let cancelled = false;
-		openDoc(path).then((h) => {
+		openDoc(noteId).then((h) => {
 			if (cancelled || !h) {
 				return;
 			}
 			setHandle(h);
-			enroll(path);
+			enroll(noteId);
 		});
 		return () => {
 			cancelled = true;
 			setHandle(null);
-			closeDoc(path);
+			closeDoc(noteId);
 		};
-	}, [path]);
+	}, [noteId, isMarkdown]);
 
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);

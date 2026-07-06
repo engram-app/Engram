@@ -10,15 +10,28 @@ function freshDbName(): string {
 }
 
 describe("CrdtManager", () => {
-	it("docId namespaces path under dbPrefix", () => {
+	it("docId is the note_id unchanged (identity, no vault-prefix concatenation)", () => {
 		const m = new CrdtManager({ dbPrefix: "v1", onUpdate: () => {} });
-		expect(m.docId("a/b.md")).toBe("v1/a/b.md");
+		expect(m.docId("note-uuid-1")).toBe("note-uuid-1");
+	});
+
+	it("a rename does not change the CRDT doc key (docId is stable across rename)", () => {
+		const m = new CrdtManager({ dbPrefix: "v1", onUpdate: () => {} });
+		const before = m.docId("note-uuid-1");
+		// simulate rename: the note's path attribute changes elsewhere (tree/query
+		// cache); note_id is passed to docId either way and never changes.
+		const after = m.docId("note-uuid-1");
+		expect(after).toBe(before);
 	});
 
 	it("forwards local edits to onUpdate, suppresses remote-origin", async () => {
 		const onUpdate = vi.fn();
 		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate });
-		const text = await m.getSharedText("n.md");
+		// docId is now the bare note_id (no more dbPrefix namespacing in the IDB
+		// key), so each test needs its own unique note id to avoid fake-indexeddb
+		// state bleeding across cases (mirrors production: note_ids never collide).
+		const noteId = freshDbName();
+		const text = await m.getSharedText(noteId);
 
 		text.insert(0, "hello"); // local origin → forwarded
 		expect(onUpdate).toHaveBeenCalledTimes(1);
@@ -28,27 +41,29 @@ describe("CrdtManager", () => {
 		other.getText("content").insert(0, "world");
 		const update = Y.encodeStateAsUpdate(other);
 		onUpdate.mockClear();
-		await m.applyRemoteUpdate("n.md", update);
+		await m.applyRemoteUpdate(noteId, update);
 		expect(onUpdate).not.toHaveBeenCalled();
-		expect((await m.getSharedText("n.md")).toJSON()).toContain("world");
+		expect((await m.getSharedText(noteId)).toJSON()).toContain("world");
 	});
 
-	it("reuses the same Y.Doc per path and tears it down on closeDoc", async () => {
+	it("reuses the same Y.Doc per note and tears it down on closeDoc", async () => {
 		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
-		const a = await m.getDoc("n.md");
-		const b = await m.getDoc("n.md");
+		const noteId = freshDbName();
+		const a = await m.getDoc(noteId);
+		const b = await m.getDoc(noteId);
 		expect(a).toBe(b);
-		m.closeDoc("n.md");
-		const c = await m.getDoc("n.md");
+		m.closeDoc(noteId);
+		const c = await m.getDoc(noteId);
 		expect(c).not.toBe(a);
 	});
 
 	it("encodeStateVector + encodeStateAsUpdate round-trip", async () => {
 		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
-		const t = await m.getSharedText("n.md");
+		const noteId = freshDbName();
+		const t = await m.getSharedText(noteId);
 		t.insert(0, "abc");
-		const sv = await m.encodeStateVector("n.md");
-		const update = await m.encodeStateAsUpdate("n.md");
+		const sv = await m.encodeStateVector(noteId);
+		const update = await m.encodeStateAsUpdate(noteId);
 		const sink = new Y.Doc();
 		Y.applyUpdate(sink, update);
 		expect(sink.getText("content").toJSON()).toBe("abc");
