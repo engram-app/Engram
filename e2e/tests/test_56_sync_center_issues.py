@@ -34,7 +34,7 @@ NOTE_PATH = f"{SEED_DIR}/TooLarge.md"
 _11MB_CONTENT = "# Too-Large Note\n" + ("x" * (11 * 1024 * 1024))
 
 
-async def _wait_for_issue(cdp, path: str, timeout: float = 20) -> list[dict]:
+async def _wait_for_issue(cdp, path: str, timeout: float = 30) -> list[dict]:
     """Poll get_issue_groups() until an issue for `path` appears.
 
     Returns the full groups list once the issue is found.
@@ -63,6 +63,12 @@ async def test_too_large_issue_ignore(vault_a, cdp_a):
         wrote = True
 
         # ── 2. Full sync so the engine pushes and records the 413 rejection ──
+        # Accept the sync gate first: an upstream auth-swap test (test_47/48/49)
+        # sharing this session-scoped instance can leave the gate closed
+        # (syncBlocked), which makes fullSync short-circuit {pulled:0,pushed:0}
+        # — the 413 never fires and no too_large issue is recorded (#915). Assert
+        # the precondition here rather than trusting a neighbor's cleanup.
+        await cdp_a.accept_sync_gate()
         await cdp_a.trigger_full_sync()
 
         # ── 3. Open Sync Center ───────────────────────────────────────────────
