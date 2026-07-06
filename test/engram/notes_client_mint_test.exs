@@ -162,4 +162,48 @@ defmodule Engram.NotesClientMintTest do
       assert Engram.UsageMeters.notes_count(user.id) == 1
     end
   end
+
+  # EXISTING-VAULT UPGRADE SAFETY (2026-07-06).
+  #
+  # Every other test here (and the whole e2e suite) exercises a FRESH vault:
+  # each note is created in-session with a uniquely minted id, so client and
+  # server ids always agree. An EXISTING vault upgraded to id-keying is
+  # different — the server already holds ids for pre-existing notes, but the
+  # plugin's note_id sidecar starts empty and mints its OWN ids until it learns
+  # the server's. That divergence is the shape that produced the corruption
+  # incident. These tests reproduce the upgraded-client behavior (a client
+  # supplying an id that disagrees with the server's) and pin that it can never
+  # corrupt. This is the reusable pattern for testing upgrade/migration issues:
+  # seed pre-existing SERVER state, then drive the UPGRADED client's divergent
+  # behavior and assert no data loss.
+  describe "existing-vault upgrade safety (divergent client ids)" do
+    test "a pre-existing note re-pushed with a DIFFERENT client id updates in place, no duplicate" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault = insert(:vault, user: user)
+
+      # Pre-existing note: created before id-keying, so the SERVER minted its id.
+      {:ok, server_note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "note.md", "content" => "v1"})
+
+      server_id = server_note.id
+
+      # Upgraded client doesn't know the server id yet and mints its own, then
+      # pushes the SAME path. Path-match must win: the row keeps its server id
+      # (client id ignored), content updates, and NO second note is created.
+      client_id = UUIDv7.generate()
+
+      {:ok, updated} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "id" => client_id,
+          "path" => "note.md",
+          "content" => "v2"
+        })
+
+      assert updated.id == server_id
+      refute updated.id == client_id
+      assert updated.content =~ "v2"
+      assert Engram.UsageMeters.notes_count(user.id) == 1
+    end
+  end
 end
