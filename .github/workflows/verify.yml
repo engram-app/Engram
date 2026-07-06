@@ -533,9 +533,8 @@ jobs:
     runs-on: [self-hosted, linux, x64, isolated]
     env:
       # Same builder image the release Dockerfile pins (ELIXIR_VERSION/OTP_VERSION
-      # ARGs), pre-pulled onto every runner by .github/setup-runner.sh and mirrored
-      # to the LAN registry. `mix deps.get`/`mix compile` run INSIDE this image,
-      # bind-mounted at a fixed /app, instead of bare-metal on the host — see the
+      # ARGs). `mix deps.get`/`mix compile` run INSIDE this image, bind-mounted
+      # at a fixed /app, instead of bare-metal on the host — see the
       # "Normalize source mtimes" step's comment and docs/context/ci-mix-compile-cache-runner-path.md
       # for why: Mix's compile manifest embeds the absolute project root path
       # (confirmed by decoding a real compile.elixir manifest), and the isolated
@@ -545,12 +544,20 @@ jobs:
       # A bind mount is a real mountpoint (unlike a symlink), so /app resolves
       # identically via getcwd() on every runner — exactly how prebuild-ci-image's
       # Docker build already avoids this bug.
-      # Hardcoded, not `${{ env.LOCAL_REGISTRY }}` -- GitHub Actions rejects the
-      # `env` context inside a job-level `env:` block (even referencing a
-      # workflow-level var), failing the whole run at parse time with zero
-      # jobs created ("workflow file issue"). Keep in sync with LOCAL_REGISTRY
-      # at the top of this file if that ever changes.
-      MIX_BUILDER_IMAGE: "10.0.20.214:5001/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
+      # Bare Docker Hub tag, NOT the LOCAL_REGISTRY (:5001) mirror -- that
+      # registry only actually has the engram-ci build images this workflow
+      # pushes itself; hexpm/elixir was never pushed there (confirmed live:
+      # "manifest unknown" pulling it from :5001). Docker Hub pulls on this
+      # runner pool already transparently route through a caching proxy at
+      # :5000 (docs/context/runner-vm-setup.md Gotcha #6), so the bare tag is
+      # both correct and already cached -- it's the same tag prebuild-ci-image
+      # pulls successfully via the Dockerfile's own BUILDER_IMAGE arg.
+      #
+      # Also can't be `${{ env.LOCAL_REGISTRY }}` even if it were needed --
+      # GitHub Actions rejects the `env` context inside a job-level `env:`
+      # block, even referencing a workflow-level var (fails the whole run at
+      # parse time with zero jobs created, "workflow file issue").
+      MIX_BUILDER_IMAGE: "hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
