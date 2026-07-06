@@ -24,8 +24,16 @@ function loadAuthState(): {
 
 async function clerkSignIn(page: Page, email: string) {
 	await page.goto("/sign-in/");
+	// global-setup's waitUntilEmailResolvable confirms the email resolves on ONE
+	// Clerk replica, but a later clerk.signIn can hit a lagging replica and still
+	// 'No user found' (#455) — cross-replica eventual consistency, not a logic
+	// bug, so riding it out is the correct handling. The old flat 5×1s=5s budget
+	// was too tight under CI load; back off to a ~20s budget. Any error that is
+	// NOT 'No user found' is a real failure and rethrows immediately.
+	const deadline = Date.now() + 20_000;
+	let backoff = 500;
 	let lastErr: unknown;
-	for (let attempt = 0; attempt < 5; attempt++) {
+	while (Date.now() < deadline) {
 		try {
 			await clerk.signIn({ page, emailAddress: email });
 			lastErr = undefined;
@@ -35,7 +43,8 @@ async function clerkSignIn(page: Page, email: string) {
 				throw err;
 			}
 			lastErr = err;
-			await page.waitForTimeout(1000);
+			await page.waitForTimeout(Math.min(backoff, Math.max(0, deadline - Date.now())));
+			backoff = Math.min(backoff * 2, 4000);
 		}
 	}
 	if (lastErr) {

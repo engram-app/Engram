@@ -80,17 +80,21 @@ test.describe("SPA viewer live-update (#277)", () => {
 		await expect(edA).toContainText("base line.", { timeout: 10_000 });
 		await expect(edB).toContainText("base line.", { timeout: 10_000 });
 
-		// Distinct concurrent edits, one per tab (appending at end-of-doc means
-		// the two inserts land at the same anchor as concurrent CRDT ops; the
-		// CRDT orders them deterministically by client id so both substrings are
-		// always present regardless of order).
+		// Distinct concurrent edits, one per tab, both appended at end-of-doc so
+		// they land at the same anchor as concurrent CRDT ops. Use insertText
+		// (single `insertText` input event → one CM6 transaction → one atomic
+		// CRDT insert) rather than `type` (one op PER CHARACTER): with per-char
+		// ops the two tabs' characters interleave at the shared anchor — still
+		// correct convergence, but each block stops being a contiguous substring
+		// so the toContainText asserts below flake (#843). One atomic op per
+		// block keeps each string contiguous while still racing concurrently.
 		await edA.click();
 		await pageA.keyboard.press("Control+End");
-		await pageA.keyboard.type(" AAA-from-tab-a");
+		await pageA.keyboard.insertText(" AAA-from-tab-a");
 
 		await edB.click();
 		await pageB.keyboard.press("Control+End");
-		await pageB.keyboard.type(" BBB-from-tab-b");
+		await pageB.keyboard.insertText(" BBB-from-tab-b");
 
 		// Both edits must converge in BOTH editors via the CRDT channel.
 		// If either assertion times out here, that is a real CRDT convergence bug
