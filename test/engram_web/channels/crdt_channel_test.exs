@@ -186,10 +186,17 @@ defmodule EngramWeb.CrdtChannelTest do
       random_note_id = Ecto.UUID.generate()
       tiny_b64 = Base.encode64(<<0>>)
 
-      push(socket, "crdt_msg", %{"doc_id" => random_note_id, "b64" => tiny_b64})
+      log =
+        capture_log(fn ->
+          push(socket, "crdt_msg", %{"doc_id" => random_note_id, "b64" => tiny_b64})
 
-      refute_push "crdt_msg", _payload, 300
+          refute_push "crdt_msg", _payload, 300
+        end)
+
       refute CrdtRegistry.lookup(random_note_id)
+
+      assert log =~ "dropped crdt_msg",
+             "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
     end
 
     test "malformed base64 is silently ignored — no crash",
