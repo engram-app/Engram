@@ -15,10 +15,12 @@ end
 defmodule Engram.Auth.TokenDebugTest do
   use ExUnit.Case, async: true
 
+  alias Engram.Auth.TokenDebug
+
   test "peeks header + claims of an unverified HS256 JWT" do
     # token below is signed with a throwaway secret; TokenDebug must NOT verify it.
     token = Engram.Auth.TokenDebugTest.Fixtures.hs256(%{"iss" => "engram", "sub" => "user_123"})
-    md = Engram.Auth.TokenDebug.metadata(token)
+    md = TokenDebug.metadata(token)
     assert md[:alg] == "HS256"
     assert md[:iss] == "engram"
     assert md[:sub_hash] == Engram.Crypto.HMAC.hash_user_id("user_123")
@@ -26,7 +28,7 @@ defmodule Engram.Auth.TokenDebugTest do
   end
 
   test "returns all-nil metadata for a non-JWT string without raising" do
-    assert Engram.Auth.TokenDebug.metadata("not-a-jwt") == [
+    assert TokenDebug.metadata("not-a-jwt") == [
              alg: nil,
              kid: nil,
              iss: nil,
@@ -37,7 +39,7 @@ defmodule Engram.Auth.TokenDebugTest do
   test "does not raise when sub claim is a number, and sub_hash is nil" do
     token = Engram.Auth.TokenDebugTest.Fixtures.hs256(%{"iss" => "engram", "sub" => 12_345})
 
-    md = Engram.Auth.TokenDebug.metadata(token)
+    md = TokenDebug.metadata(token)
 
     assert md[:alg] == "HS256"
     assert md[:iss] == "engram"
