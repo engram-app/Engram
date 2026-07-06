@@ -21,7 +21,7 @@ defmodule Engram.Auth.TokenDebugTest do
     md = Engram.Auth.TokenDebug.metadata(token)
     assert md[:alg] == "HS256"
     assert md[:iss] == "engram"
-    assert md[:sub_hash] == :crypto.hash(:sha256, "user_123") |> Base.encode16(case: :lower)
+    assert md[:sub_hash] == Engram.Crypto.HMAC.hash_user_id("user_123")
     refute md[:sub_hash] == "user_123"
   end
 

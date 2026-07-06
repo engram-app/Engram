@@ -2,15 +2,13 @@ defmodule Engram.Auth.TokenDebug do
   @moduledoc """
   Best-effort, NON-verifying peek at a token's header + claims, for attributing
   auth rejections in logs. Never raises, never verifies a signature, never logs
-  raw sub (hashed with sha256-hex).
+  raw sub.
 
-  The sha256 hash here is intentionally NOT the keyed `Engram.Crypto.HMAC.hash_user_id/1`
-  used elsewhere for our internal `users.id`: this module hashes the JWT `sub`
-  claim from an as-yet-unverified, possibly-rejected token, which may be an
-  external issuer's subject id (Clerk, device flow, etc), not our own user id.
-  Reusing the keyed helper would conflate two different id spaces under one
-  key. Plain sha256-hex still gives stable, joinable, non-reversible labels
-  for correlating repeated rejections from the same presented token.
+  `sub_hash` uses the same keyed `Engram.Crypto.HMAC.hash_user_id/1` helper as
+  the `user_id` log metadata in `Engram.Logs`, `UserSocket`, `SyncChannel`, and
+  `CRDTChannel`. For internal JWTs, `sub` is our own `users.id`, so hashing it
+  with the same key produces the same hash used everywhere else, letting a
+  rejected internal-JWT `sub` correlate to that user's other log lines.
   """
 
   @spec metadata(String.t()) :: keyword()
@@ -38,5 +36,5 @@ defmodule Engram.Auth.TokenDebug do
   end
 
   defp hash_sub(nil), do: nil
-  defp hash_sub(sub), do: :crypto.hash(:sha256, sub) |> Base.encode16(case: :lower)
+  defp hash_sub(sub), do: Engram.Crypto.HMAC.hash_user_id(sub)
 end
