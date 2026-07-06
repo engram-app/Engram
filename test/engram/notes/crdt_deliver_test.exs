@@ -33,10 +33,10 @@ defmodule Engram.Notes.CrdtDeliverTest do
         payload: %{"doc_id" => doc_id}
       }
 
-      assert doc_id == "#{vault.id}/a.md"
+      assert doc_id == note_id
     end
 
-    test "announces even when no room is live (no crash, vault-prefixed nested path)",
+    test "announces even when no room is live (no crash, nested path content-type check)",
          %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
       note_id = Ecto.UUID.generate()
@@ -48,7 +48,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
         payload: %{"doc_id" => doc_id}
       }
 
-      assert doc_id == "#{vault.id}/deep/nest/b.md"
+      assert doc_id == note_id
     end
   end
 
@@ -129,7 +129,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
          %{user: user, vault: vault} do
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
-      {:ok, _note} =
+      {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{
           "path" => "w.md",
           "content" => "hi",
@@ -141,7 +141,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
         payload: %{"doc_id" => doc_id}
       }
 
-      assert doc_id == "#{vault.id}/w.md"
+      assert doc_id == note.id
     end
   end
 

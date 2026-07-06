@@ -35,7 +35,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault} = Vaults.create_vault(user, %{name: "CrdtE2E"})
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "e2e.md", "content" => "base"})
-    doc_id = "#{vault.id}/e2e.md"
+    doc_id = note.id
     topic = "crdt:#{user.id}:#{vault.id}"
 
     socket_a_raw = user_socket(user)

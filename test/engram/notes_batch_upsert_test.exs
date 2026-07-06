@@ -448,7 +448,7 @@ defmodule Engram.NotesBatchUpsertTest do
     # post-commit signal clients use to pull the merged state.
     test "batch update reaches a live CRDT room (deliver-out)", ctx do
       %{user: user, vault: vault} = ctx
-      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "live.md", "content" => "base"})
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "live.md", "content" => "base"})
 
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
@@ -463,7 +463,7 @@ defmodule Engram.NotesBatchUpsertTest do
                      },
                      500
 
-      assert doc_id == "#{vault.id}/live.md"
+      assert doc_id == note.id
     end
 
     test "batch insert stores the doc's projected text as content", ctx do
