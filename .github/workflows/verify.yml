@@ -607,6 +607,26 @@ jobs:
           ')
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Build mix builder image (adds build-essential + hex/rebar)
+        # The bare hexpm/elixir image has no C toolchain, so any NIF dep
+        # (e.g. bcrypt_elixir) fails with `"make" not found in the path`.
+        # The release Dockerfile's builder stage installs build-essential
+        # before its own mix commands for the same reason — mirror that
+        # here, plus bake in `mix local.hex`/`local.rebar` so later `docker
+        # run` invocations don't redo it. Built once per job (fast rebuild
+        # on repeat hosts via Docker's own layer cache); the actual fix this
+        # job depends on is /app being a fixed bind-mount path, which this
+        # derived image inherits unchanged from MIX_BUILDER_IMAGE.
+        run: |
+          docker build -t engram-mix-builder:ci --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" - <<EOF
+          FROM ${MIX_BUILDER_IMAGE}
+          ARG HEX_MIRROR=""
+          ENV HEX_MIRROR=\${HEX_MIRROR}
+          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
+              && rm -rf /var/lib/apt/lists/*
+          RUN mix local.hex --force && mix local.rebar --force
+          EOF
+
       - name: Compute cache keys
         id: keys
         env:
@@ -664,20 +684,17 @@ jobs:
         # On a partial hit, `mix deps.get` reconciles the lockfile
         # against the restored deps/ and fetches the delta.
         #
-        # Runs inside MIX_BUILDER_IMAGE, bind-mounted at /app, so Mix's
-        # absolute-project-root check (embedded in the compile manifest)
-        # sees the SAME path on every runner. hex/rebar/mix archive caches
-        # are named Docker volumes — persist on whichever runner host they
-        # land on, avoided re-fetching every run (best-effort, not required
-        # for correctness).
+        # Runs inside engram-mix-builder:ci (built above, build-essential +
+        # hex/rebar baked in), bind-mounted at /app, so Mix's absolute-
+        # project-root check (embedded in the compile manifest) sees the
+        # SAME path on every runner.
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           docker run --rm \
             -v "$PWD:/app" -w /app \
-            -v mix-hex-cache:/root/.hex -v mix-mix-cache:/root/.mix -v mix-rebar-cache:/root/.cache/rebar3 \
             -e HEX_MIRROR="${HEX_MIRROR:-}" \
-            "$MIX_BUILDER_IMAGE" \
-            sh -c 'mix local.hex --force --if-missing && mix local.rebar --force --if-missing && mix deps.get'
+            engram-mix-builder:ci \
+            mix deps.get
 
       - name: Compile :dev and :test (parallel)
         run: |
@@ -697,20 +714,20 @@ jobs:
           # them; it is a near no-op when _build was restored warm (lockfile
           # unchanged). Parallel per env to mirror the app-compile parallelism.
           #
-          # Each `mix` invocation runs inside MIX_BUILDER_IMAGE bind-mounted at
-          # /app (not bare-metal on the host) — see docs/context/ci-mix-compile-cache-runner-path.md.
-          # A bind mount is a real mountpoint, so /app resolves identically via
-          # getcwd() regardless of which runner this lands on, keeping Mix's
+          # Each `mix` invocation runs inside engram-mix-builder:ci (built
+          # above) bind-mounted at /app (not bare-metal on the host) — see
+          # docs/context/ci-mix-compile-cache-runner-path.md. A bind mount is
+          # a real mountpoint, so /app resolves identically via getcwd()
+          # regardless of which runner this lands on, keeping Mix's
           # absolute-project-root check (embedded in the compile manifest)
           # satisfied across runs on different runners.
           run_mix() {
             docker run --rm \
               -v "$PWD:/app" -w /app \
-              -v mix-hex-cache:/root/.hex -v mix-mix-cache:/root/.mix -v mix-rebar-cache:/root/.cache/rebar3 \
               -e MIX_ENV="$1" \
               -e HEX_MIRROR="${HEX_MIRROR:-}" \
-              "$MIX_BUILDER_IMAGE" \
-              sh -c "mix local.hex --force --if-missing && mix local.rebar --force --if-missing && $2"
+              engram-mix-builder:ci \
+              sh -c "$2"
           }
 
           run_mix dev  "mix deps.compile" >/tmp/deps-dev.log 2>&1 &
