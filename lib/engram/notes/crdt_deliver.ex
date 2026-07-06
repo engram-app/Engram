@@ -62,7 +62,7 @@ defmodule Engram.Notes.CrdtDeliver do
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
       push_to_live_room(user_id, note_id, content)
-      announce(user_id, vault_id, path)
+      announce(user_id, vault_id, note_id)
     end
 
     :ok
@@ -223,12 +223,13 @@ defmodule Engram.Notes.CrdtDeliver do
 
   # Step 2 — discovery announce. Mirrors the channel's own `crdt_doc_ready`
   # event (CrdtChannel.ensure_room/2); the plugin handles both identically.
-  defp announce(user_id, vault_id, path) do
+  # doc_id is the note_id (a UUID), matching the channel's doc_id keying.
+  defp announce(user_id, vault_id, note_id) do
     _ =
       EngramWeb.Endpoint.broadcast(
         "crdt:#{user_id}:#{vault_id}",
         "crdt_doc_ready",
-        %{"doc_id" => "#{vault_id}/#{path}"}
+        %{"doc_id" => note_id}
       )
 
     :ok

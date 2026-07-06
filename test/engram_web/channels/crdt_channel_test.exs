@@ -3,7 +3,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
   import ExUnit.CaptureLog
 
-  alias Engram.{Crypto, Notes, Vaults}
+  alias Engram.{Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
   alias Yex.Sync.SharedDoc
@@ -42,7 +42,7 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault,
       note: note,
       other_user: other_user,
-      doc_id: "#{vault.id}/p.md"
+      doc_id: note.id
     }
   end
 
@@ -157,13 +157,47 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtBridge.text_of(client) == "base"
     end
 
-    # NOTE: the self-bootstrap of an unknown doc_id (a brand-new note arriving
-    # over CRDT before any REST row exists) is covered room-free at the Notes
-    # layer — see Notes.get_or_bootstrap_note/3 in notes_test.exs. Exercising it
-    # through the channel here would spin a :global CRDT room whose terminate-time
-    # snapshot flush crashes once the sandbox owner exits, cascading the Repo
-    # down for the rest of the suite. The full channel→room path is covered by
-    # the e2e suite instead.
+    # ---------------------------------------------------------------------
+    # doc_id IS the note_id — ownership validation, not path_hmac lookup
+    # ---------------------------------------------------------------------
+
+    test "crdt_msg routes to the room for a doc_id that IS the note_id", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      note = Fixtures.insert_note!(user, vault, path: "a.md")
+
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+
+      refute_reply ref, :error
+      assert_push "crdt_msg", %{"doc_id" => reply_doc_id}, 3000
+      assert reply_doc_id == note.id
+      assert CrdtRegistry.lookup(note.id)
+    end
+
+    test "crdt_msg for a note_id not in the vault is dropped — no room, no crash", %{
+      socket: socket
+    } do
+      random_note_id = Ecto.UUID.generate()
+      tiny_b64 = Base.encode64(<<0>>)
+
+      log =
+        capture_log(fn ->
+          push(socket, "crdt_msg", %{"doc_id" => random_note_id, "b64" => tiny_b64})
+
+          refute_push "crdt_msg", _payload, 300
+        end)
+
+      refute CrdtRegistry.lookup(random_note_id)
+
+      assert log =~ "dropped crdt_msg",
+             "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
+    end
 
     test "malformed base64 is silently ignored — no crash",
          %{socket: socket, doc_id: doc_id} do
@@ -189,14 +223,11 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     # -------------------------------------------------------------------------
-    # Log hygiene: path must appear in metadata, not the message body
+    # Log hygiene: doc_id (note_id) must appear in metadata, not the message body
     # -------------------------------------------------------------------------
 
-    test "dropped-frame warning carries path in metadata, not the message body",
+    test "dropped-frame warning carries doc_id in metadata, not the message body",
          %{socket: socket, doc_id: doc_id} do
-      # Extract the note path portion (everything after the vault_id prefix).
-      [_vault_id, note_path] = String.split(doc_id, "/", parts: 2)
-
       log =
         capture_log(fn ->
           push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => "!!!not_valid_base64!!!"})
@@ -209,9 +240,9 @@ defmodule EngramWeb.CrdtChannelTest do
       assert log =~ "dropped crdt_msg",
              "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
 
-      # The raw note path must NOT appear in the log message body.
-      refute String.contains?(log, note_path),
-             "Expected path #{inspect(note_path)} to be in metadata only, but it appeared in: #{inspect(log)}"
+      # The raw doc_id (note_id) must NOT appear in the log message body.
+      refute String.contains?(log, doc_id),
+             "Expected doc_id #{inspect(doc_id)} to be in metadata only, but it appeared in: #{inspect(log)}"
     end
 
     test "second crdt_msg for the same doc reuses the cached room", %{

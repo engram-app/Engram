@@ -369,15 +369,21 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              insert_new_note(
-                base_attrs,
-                user,
-                sanitized_path,
-                folder,
-                tags,
-                client_id,
-                lookup_query
-              )
+              case existing_by_client_id(client_id, vault) do
+                %Note{} = prior ->
+                  move_note(prior, base_attrs, user, sanitized_path, folder)
+
+                nil ->
+                  insert_new_note(
+                    base_attrs,
+                    user,
+                    sanitized_path,
+                    folder,
+                    tags,
+                    client_id,
+                    lookup_query
+                  )
+              end
 
             existing ->
               do_update_note(existing, base_attrs, user, sanitized_path, folder, tags, opts)
@@ -420,6 +426,23 @@ defmodule Engram.Notes do
               )
           end
 
+          {:ok, note}
+
+        {:ok, {:ok, {:moved, prev_hash, note, _merged_text, _content_hash}}} ->
+          # An id-keyed rename moved an existing row to a new path (move_note).
+          # Re-embed only when the content actually changed (a pure rename keeps
+          # the same hash), but ALWAYS broadcast: the move persisted a real
+          # change (path/seq/version), and skipping the broadcast on hash
+          # equality would strand peers with the old-path delete and no
+          # new-path upsert until they next pull.
+          _ =
+            if prev_hash != note.content_hash do
+              Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+            end
+
+          note = decrypt_or_raise!(note, user)
+          maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
+          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -547,6 +570,107 @@ defmodule Engram.Notes do
               {:error, changeset}
           end
         end
+    end
+  end
+
+  # Id-keyed rename support (Phase I): the plugin renames a note by keeping
+  # the same client-minted id across `DELETE old` -> `POST new {id: same}`.
+  # `delete_note/3` is a soft delete, so the tombstone row still holds PK=id
+  # when the re-push lands. Looking the id up here (instead of assuming it is
+  # free) is what lets upsert_note tell "reused id, move it" apart from
+  # "fresh id, insert it".
+  #
+  # Runs inside the caller's `Repo.with_tenant` txn, so RLS already scopes
+  # `Repo.get` to this user; the vault_id check below additionally guards
+  # against a cross-vault id (same user, different vault) and a folder
+  # marker sharing the id space. `Repo.get` has no soft-delete default scope
+  # (Note carries no query default, only `note_by_path_query` filters
+  # `deleted_at` explicitly), so this returns tombstones as well as live rows.
+  defp existing_by_client_id(nil, _vault), do: nil
+
+  defp existing_by_client_id(client_id, vault) do
+    case Ecto.UUID.cast(client_id) do
+      {:ok, uuid} ->
+        case Repo.get(Note, uuid) do
+          %Note{vault_id: vault_id, kind: "note"} = note when vault_id == vault.id -> note
+          _ -> nil
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  # Moves/resurrects an existing row (found by client id, not by path) to
+  # `sanitized_path`. Mirrors `do_rewrite_note/5`'s crdt-merge / encrypt /
+  # phase_b / okf / seq / version+1 pipeline exactly, with three differences:
+  #
+  #   1. Clears the tombstone (`deleted_at: nil`) unconditionally.
+  #   2. Restores the usage counter when the row WAS tombstoned (delete_note
+  #      decremented it); a live-note move must NOT double-count.
+  #   3. Never short-circuits on hash equality like `do_update_note` does: a
+  #      pure rename has identical content but a changed path, so the row
+  #      must always be rewritten to move the path/path_hmac.
+  #
+  # `Note.changeset/2` already carries the `notes_user_vault_path_v2` unique
+  # constraint, so a rare race (another live note grabbed the target path
+  # between the lookup and this update) surfaces as `{:error, changeset}`
+  # instead of raising and aborting the tenant transaction.
+  defp move_note(prior, base_attrs, user, sanitized_path, folder) do
+    was_tombstoned = not is_nil(prior.deleted_at)
+
+    with {:ok, crdt} <- maybe_merge_crdt(prior, base_attrs.content, user, prior.id) do
+      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
+
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: merged_title,
+          tags: crdt.tags,
+          content_hash: crdt.content_hash
+      }
+
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, prior.id) do
+        phase_b =
+          inject_phase_b_fields(
+            encrypted,
+            user,
+            prior.id,
+            sanitized_path,
+            folder,
+            crdt.tags
+          )
+          |> inject_okf_fields(user, prior.id, crdt.merged_text)
+          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        seq = Engram.Vaults.next_seq!(prior.vault_id)
+
+        changeset =
+          prior
+          |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
+          |> Ecto.Changeset.put_change(:seq, seq)
+          |> Ecto.Changeset.put_change(:deleted_at, nil)
+
+        case Repo.update(changeset) do
+          {:ok, updated} ->
+            _ =
+              if was_tombstoned do
+                :ok = UsageMeters.inc_notes_count(user.id, 1)
+              end
+
+            # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
+            # the caller broadcasts unconditionally: a rename keeps the same
+            # content_hash but persisted a new path/seq/version, and the plain
+            # `prev_hash != content_hash` broadcast guard would skip it — leaving
+            # peers with the old-path delete but no new-path upsert (the note
+            # vanishes on them until their next pull).
+            {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
+      end
     end
   end
 
@@ -772,88 +896,6 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns the note at `path`, creating an empty one if it doesn't exist yet.
-
-  Used by the CRDT channel's self-bootstrap: a brand-new note arrives as a CRDT
-  update before any REST row exists, so the row must be created on first
-  reference (the incoming update populates the body, materialized on checkpoint).
-  Without this a note could never be created over the CRDT path (chicken-and-egg).
-  """
-  @spec get_or_bootstrap_note(map(), map(), String.t()) ::
-          {:ok, Note.t()}
-          | {:error, Ecto.Changeset.t()}
-          | {:error, :version_conflict, Note.t()}
-          | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
-          | {:error, atom()}
-  def get_or_bootstrap_note(user, vault, path) do
-    # Sanitize FIRST so the lookup keys on the SAME path upsert_note persists
-    # under. The CRDT wire doc_id keeps the raw (possibly dirty) path, but the
-    # note is stored at the sanitized path. Without sanitizing here, get_note for
-    # a dirty path never matches the stored note, so every crdt_msg re-bootstraps
-    # via upsert_note(content: "") and repeatedly wipes the body — the note never
-    # materializes at the clean path (see e2e tests/crdt illegal-path test).
-    sanitized = PathSanitizer.sanitize(path)
-
-    case get_note(user, vault, sanitized) do
-      {:ok, note} ->
-        {:ok, note}
-
-      {:error, :not_found} ->
-        # A soft-deleted row at this path means the STEP1 is STALE (the note was
-        # deleted or renamed away) — refuse rather than bootstrap. The unique
-        # index is partial (deleted_at IS NULL), so the empty insert would slip
-        # through and silently resurrect the note server-side: the e2e
-        # "RenameOld.md still on server" / delete-ghost failures.
-        if deleted_note_exists?(user, vault, sanitized) do
-          {:error, :not_found}
-        else
-          case upsert_note(user, vault, %{"path" => sanitized, "content" => ""}) do
-            {:ok, note} ->
-              {:ok, note}
-
-            {:error, :version_conflict, _existing} ->
-              # Lost the insert race to a concurrent creator — usually the same
-              # device's REST push for the note this STEP1 announces. The row
-              # exists now, so resolve to it instead of dropping the frame: a
-              # dropped STEP1 is never retried (plugin enrollment is
-              # once-per-session) and pins the receiver's file empty forever.
-              # Re-fetch via get_note so a row deleted in the interim still
-              # resolves to :not_found rather than resurrecting.
-              get_note(user, vault, sanitized)
-
-            other ->
-              other
-          end
-        end
-    end
-  end
-
-  # True when a soft-deleted row exists at `path` (live rows excluded by the
-  # caller's get_note miss). Multiple deleted rows can share a path_hmac —
-  # existence is all the bootstrap guard needs.
-  defp deleted_note_exists?(user, vault, path) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        hmac = Crypto.hmac_field(filter_key, path)
-
-        query =
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
-                not is_nil(n.deleted_at)
-          )
-
-        case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
-          {:ok, exists?} -> exists?
-          _ -> false
-        end
-
-      _ ->
-        false
-    end
-  end
-
-  @doc """
   Gets a note by its primary key id, scoped to the given user + vault.
 
   Returns `{:ok, note}` when found and owned by the caller, `{:error, :not_found}`
@@ -867,6 +909,29 @@ defmodule Engram.Notes do
   @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note_by_id(user, vault, id) when is_binary(id) do
     fetch_note_by_id(user, vault, id, :all)
+  end
+
+  @doc """
+  True when a live note with `note_id` exists in `vault_id` for `user`.
+
+  Ownership check for the CRDT channel: doc_id is now the note_id, so the
+  channel validates the id belongs to the vault (no decrypt, no path_hmac).
+  Tenant-scoped via `Repo.with_tenant/2` — a bare query would trip the
+  tenant guard.
+  """
+  @spec note_in_vault?(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def note_in_vault?(user, vault_id, note_id) do
+    query =
+      from(n in Note,
+        where:
+          n.id == ^note_id and n.user_id == ^user.id and n.vault_id == ^vault_id and
+            is_nil(n.deleted_at)
+      )
+
+    case Repo.with_tenant(user.id, fn -> Repo.exists?(query) end) do
+      {:ok, exists?} -> exists?
+      _ -> false
+    end
   end
 
   # Shared shell for by-id fetches; `fields: :meta` skips the content column

@@ -3,7 +3,6 @@ import { type Channel, Socket } from "phoenix";
 import {
 	enrollIfLive as crdtEnrollIfLive,
 	handleFrame as crdtHandleFrame,
-	docPathFromDocId,
 	notifyCrdtChannelError,
 	notifyCrdtChannelJoined,
 	resyncOpenDocs,
@@ -395,13 +394,15 @@ export async function connectChannel({
 	});
 	const crdtTopic = `crdt:${userId}:${vaultId}`;
 	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2 });
+	// doc_id IS the note_id on the wire (id-keyed CRDT doc_id) — no path
+	// splitting needed.
 	crdtChannel.on("crdt_msg", (p: { doc_id: string; b64: string }) => {
-		crdtHandleFrame(docPathFromDocId(p.doc_id), p.b64).catch((err) =>
+		crdtHandleFrame(p.doc_id, p.b64).catch((err) =>
 			console.warn("CRDT frame handling error (dropped)", err),
 		);
 	});
 	crdtChannel.on("crdt_doc_ready", (p: { doc_id: string }) => {
-		crdtEnrollIfLive(docPathFromDocId(p.doc_id));
+		crdtEnrollIfLive(p.doc_id);
 	});
 	crdtChannel
 		.join()

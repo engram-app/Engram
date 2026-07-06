@@ -3,9 +3,9 @@ defmodule EngramWeb.CrdtChannel do
   Base64-in-JSON Yjs sync transport (posture C, file-level), spec §12a.
 
   ONE topic per vault: `crdt:{user_id}:{vault_id}`. The document is
-  identified by `doc_id = "{vault_id}/{path}"` inside each `crdt_msg`
+  identified by `doc_id = "{note_id}"` inside each `crdt_msg`
   payload; `b64` base64-decodes to a standard y-protocols messageSync frame.
-  The channel resolves doc_id → note_id (path_hmac lookup via Notes.get_note/3),
+  doc_id IS the note_id; the channel validates it belongs to the vault,
   lazily starts + observes the singleton `CrdtDoc` room per doc, and relays
   y-protocols broadcasts back out as `crdt_msg` events tagged with the
   originating `doc_id`. Auth mirrors SyncChannel.
@@ -161,8 +161,9 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # doc_id embeds the cleartext note path — keep it OUT of the message body
-  # (RedactFilter scrubs only metadata keys; :path is on its list).
+  # doc_id is now the note_id (a UUID, no longer a cleartext path). Keep it out
+  # of the message body regardless, and keep the `path:` metadata key so it
+  # still routes through RedactFilter's existing scrub list unchanged.
   defp log_dropped(doc_id, reason) do
     Logger.warning(
       "crdt_channel: dropped crdt_msg → #{inspect(reason)}",
@@ -190,8 +191,8 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # Lazily start + observe the room for `doc_id`, caching it in assigns. On the
-  # first reference, resolves doc_id → note_id via path_hmac lookup, then calls
-  # CrdtRegistry.ensure_started and SharedDoc.observe so {:yjs, frame, room}
+  # first reference, validates doc_id (the note_id) belongs to the vault, then
+  # calls CrdtRegistry.ensure_started and SharedDoc.observe so {:yjs, frame, room}
   # broadcasts arrive as handle_info messages in this channel process.
   defp ensure_room(socket, doc_id) do
     case Map.fetch(socket.assigns.rooms, doc_id) do
@@ -227,32 +228,19 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # doc_id is "{vault_id}/{path}". Strip the vault prefix (everything before
-  # the first slash) and look up the note by path via the HMAC-keyed index.
+  # doc_id IS the note_id (client-minted UUIDv7). Validate the note exists in
+  # this vault before starting/observing its room. No path_hmac indirection.
   defp resolve_note_id(user, vault, doc_id) do
-    case String.split(doc_id, "/", parts: 2) do
-      [_vault_prefix, path] when path != "" ->
-        # Self-bootstrap a brand-new note that arrives over CRDT before any REST
-        # row exists (Notes.get_or_bootstrap_note); otherwise the update is
-        # dropped and the note could never be created over the CRDT path.
-        case Notes.get_or_bootstrap_note(user, vault, path) do
-          {:ok, note} ->
-            {:ok, note.id}
-
-          other ->
-            # doc_id embeds the cleartext note path — keep it in metadata only
-            # (RedactFilter scrubs :path; interpolating it into the body would
-            # let it slip through to Loki/CloudWatch unredacted).
-            Logger.warning(
-              "crdt_channel: could not resolve/bootstrap note → #{inspect(other)}",
-              Metadata.with_category(:warning, :sync, path: doc_id)
-            )
-
-            :error
+    case Ecto.UUID.cast(doc_id) do
+      {:ok, note_id} ->
+        if Notes.note_in_vault?(user, vault.id, note_id) do
+          {:ok, note_id}
+        else
+          {:error, :not_found}
         end
 
-      _ ->
-        :error
+      :error ->
+        {:error, :bad_doc_id}
     end
   end
 

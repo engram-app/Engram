@@ -130,4 +130,41 @@ defmodule Engram.NotesBroadcastTest do
       }
     end
   end
+
+  describe "id-keyed rename move broadcast" do
+    test "moving a tombstoned id to a new path broadcasts a new-path upsert (unchanged content)",
+         %{user: user, vault: vault} do
+      id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "A.md",
+          "content" => "# Rename\nbody",
+          "id" => id
+        })
+
+      :ok = Notes.delete_note(user, vault, "A.md")
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      # Re-push the SAME id at a new path (the rename's new-path push). Content
+      # is identical, so without the move's unconditional broadcast the
+      # hash-equal guard would suppress this — stranding peers with the delete
+      # of A.md but never an upsert of B.md.
+      {:ok, moved} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "B.md",
+          "content" => "# Rename\nbody",
+          "id" => id
+        })
+
+      assert moved.id == id
+      assert moved.path == "B.md"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "path" => "B.md", "id" => ^id}
+      }
+    end
+  end
 end

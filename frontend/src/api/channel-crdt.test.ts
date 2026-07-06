@@ -53,7 +53,6 @@ const sessionMock = vi.hoisted(() => ({
 	enrollIfLive: vi.fn(),
 	notifyCrdtChannelJoined: vi.fn(),
 	notifyCrdtChannelError: vi.fn(),
-	docPathFromDocId: (id: string) => id.slice(id.indexOf("/") + 1),
 	resyncOpenDocs: vi.fn(),
 	scheduleRehandshake: vi.fn(),
 }));
@@ -84,7 +83,7 @@ describe("crdt channel wiring", () => {
 	// background notes announced by the server do not materialize Y.Docs on
 	// clients that have not opened them. Coverage is preserved: we still verify
 	// the event is routed; the guarding logic itself is tested in session.test.ts.
-	it("routes crdt_msg → handleFrame and crdt_doc_ready → enrollIfLive", async () => {
+	it("routes crdt_msg → handleFrame and crdt_doc_ready → enrollIfLive by note_id doc_id", async () => {
 		await connectChannel({
 			userId: "u1",
 			vaultId: "v1",
@@ -92,10 +91,11 @@ describe("crdt channel wiring", () => {
 			queryClient: {} as any,
 		});
 		const ch = channels.get("crdt:u1:v1");
-		ch.__emit("crdt_msg", { doc_id: "v1/a.md", b64: "Zm9v" });
-		ch.__emit("crdt_doc_ready", { doc_id: "v1/a.md" });
-		expect(sessionMock.handleFrame).toHaveBeenCalledWith("a.md", "Zm9v");
-		expect(sessionMock.enrollIfLive).toHaveBeenCalledWith("a.md");
+		ch.__emit("crdt_msg", { doc_id: "note-uuid-1", b64: "Zm9v" });
+		ch.__emit("crdt_doc_ready", { doc_id: "note-uuid-1" });
+		// doc_id IS the note_id now — no path splitting.
+		expect(sessionMock.handleFrame).toHaveBeenCalledWith("note-uuid-1", "Zm9v");
+		expect(sessionMock.enrollIfLive).toHaveBeenCalledWith("note-uuid-1");
 	});
 
 	it("joins the CRDT channel with crdt_proto: 2", async () => {
@@ -113,7 +113,7 @@ describe("crdt channel wiring", () => {
 	// oversized frames into scheduleRehandshake = an infinite resend loop, so
 	// lock the exact dispatch here.
 	describe("crdt_msg push reason dispatch", () => {
-		const DOC = "v1/note.md";
+		const DOC = "note-uuid-2";
 
 		async function connectAndPush() {
 			await connectChannel({
