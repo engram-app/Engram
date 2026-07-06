@@ -545,7 +545,12 @@ jobs:
       # A bind mount is a real mountpoint (unlike a symlink), so /app resolves
       # identically via getcwd() on every runner — exactly how prebuild-ci-image's
       # Docker build already avoids this bug.
-      MIX_BUILDER_IMAGE: "${{ env.LOCAL_REGISTRY }}/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
+      # Hardcoded, not `${{ env.LOCAL_REGISTRY }}` -- GitHub Actions rejects the
+      # `env` context inside a job-level `env:` block (even referencing a
+      # workflow-level var), failing the whole run at parse time with zero
+      # jobs created ("workflow file issue"). Keep in sync with LOCAL_REGISTRY
+      # at the top of this file if that ever changes.
+      MIX_BUILDER_IMAGE: "10.0.20.214:5001/hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
