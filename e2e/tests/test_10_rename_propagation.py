@@ -2,6 +2,11 @@
 
 Uses CDP vault.rename() to trigger Obsidian's handleRename (filesystem
 mv would not trigger the plugin's rename handler).
+
+Post id-keying (#925/#180): the renamed note keeps its stable note_id and
+its live CRDT room; the server moves/resurrects the row by id rather than
+delete+recreate. This suite pairs backend main against plugin main to verify
+the two note_id-keyed sides agree.
 """
 
 import pytest
