@@ -369,15 +369,21 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              insert_new_note(
-                base_attrs,
-                user,
-                sanitized_path,
-                folder,
-                tags,
-                client_id,
-                lookup_query
-              )
+              case existing_by_client_id(client_id, vault) do
+                %Note{} = prior ->
+                  move_note(prior, base_attrs, user, sanitized_path, folder)
+
+                nil ->
+                  insert_new_note(
+                    base_attrs,
+                    user,
+                    sanitized_path,
+                    folder,
+                    tags,
+                    client_id,
+                    lookup_query
+                  )
+              end
 
             existing ->
               do_update_note(existing, base_attrs, user, sanitized_path, folder, tags, opts)
@@ -547,6 +553,101 @@ defmodule Engram.Notes do
               {:error, changeset}
           end
         end
+    end
+  end
+
+  # Id-keyed rename support (Phase I): the plugin renames a note by keeping
+  # the same client-minted id across `DELETE old` -> `POST new {id: same}`.
+  # `delete_note/3` is a soft delete, so the tombstone row still holds PK=id
+  # when the re-push lands. Looking the id up here (instead of assuming it is
+  # free) is what lets upsert_note tell "reused id, move it" apart from
+  # "fresh id, insert it".
+  #
+  # Runs inside the caller's `Repo.with_tenant` txn, so RLS already scopes
+  # `Repo.get` to this user; the vault_id check below additionally guards
+  # against a cross-vault id (same user, different vault) and a folder
+  # marker sharing the id space. `Repo.get` has no soft-delete default scope
+  # (Note carries no query default, only `note_by_path_query` filters
+  # `deleted_at` explicitly), so this returns tombstones as well as live rows.
+  defp existing_by_client_id(nil, _vault), do: nil
+
+  defp existing_by_client_id(client_id, vault) do
+    case Ecto.UUID.cast(client_id) do
+      {:ok, uuid} ->
+        case Repo.get(Note, uuid) do
+          %Note{vault_id: vault_id, kind: "note"} = note when vault_id == vault.id -> note
+          _ -> nil
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  # Moves/resurrects an existing row (found by client id, not by path) to
+  # `sanitized_path`. Mirrors `do_rewrite_note/5`'s crdt-merge / encrypt /
+  # phase_b / okf / seq / version+1 pipeline exactly, with three differences:
+  #
+  #   1. Clears the tombstone (`deleted_at: nil`) unconditionally.
+  #   2. Restores the usage counter when the row WAS tombstoned (delete_note
+  #      decremented it); a live-note move must NOT double-count.
+  #   3. Never short-circuits on hash equality like `do_update_note` does: a
+  #      pure rename has identical content but a changed path, so the row
+  #      must always be rewritten to move the path/path_hmac.
+  #
+  # `Note.changeset/2` already carries the `notes_user_vault_path_v2` unique
+  # constraint, so a rare race (another live note grabbed the target path
+  # between the lookup and this update) surfaces as `{:error, changeset}`
+  # instead of raising and aborting the tenant transaction.
+  defp move_note(prior, base_attrs, user, sanitized_path, folder) do
+    was_tombstoned = not is_nil(prior.deleted_at)
+
+    with {:ok, crdt} <- maybe_merge_crdt(prior, base_attrs.content, user, prior.id) do
+      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
+
+      merged_attrs = %{
+        base_attrs
+        | content: crdt.merged_text,
+          title: merged_title,
+          tags: crdt.tags,
+          content_hash: crdt.content_hash
+      }
+
+      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, prior.id) do
+        phase_b =
+          inject_phase_b_fields(
+            encrypted,
+            user,
+            prior.id,
+            sanitized_path,
+            folder,
+            crdt.tags
+          )
+          |> inject_okf_fields(user, prior.id, crdt.merged_text)
+          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        seq = Engram.Vaults.next_seq!(prior.vault_id)
+
+        changeset =
+          prior
+          |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
+          |> Ecto.Changeset.put_change(:seq, seq)
+          |> Ecto.Changeset.put_change(:deleted_at, nil)
+
+        case Repo.update(changeset) do
+          {:ok, updated} ->
+            _ =
+              if was_tombstoned do
+                :ok = UsageMeters.inc_notes_count(user.id, 1)
+              end
+
+            {:ok, {prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
+      end
     end
   end
 
