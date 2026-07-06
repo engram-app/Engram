@@ -531,6 +531,33 @@ jobs:
     # a skipped prebuild would drag them into skip. e2e-browser stays gated.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated]
+    env:
+      # Same builder image the release Dockerfile pins (ELIXIR_VERSION/OTP_VERSION
+      # ARGs). `mix deps.get`/`mix compile` run INSIDE this image, bind-mounted
+      # at a fixed /app, instead of bare-metal on the host — see the
+      # "Normalize source mtimes" step's comment and docs/context/ci-mix-compile-cache-runner-path.md
+      # for why: Mix's compile manifest embeds the absolute project root path
+      # (confirmed by decoding a real compile.elixir manifest), and the isolated
+      # runner pool never gives two runs the same host checkout path
+      # (actions-runner-runner-N differs per runner), so a bare-metal compile
+      # invalidates the ENTIRE cached _build on every run regardless of mtimes.
+      # A bind mount is a real mountpoint (unlike a symlink), so /app resolves
+      # identically via getcwd() on every runner — exactly how prebuild-ci-image's
+      # Docker build already avoids this bug.
+      # Bare Docker Hub tag, NOT the LOCAL_REGISTRY (:5001) mirror -- that
+      # registry only actually has the engram-ci build images this workflow
+      # pushes itself; hexpm/elixir was never pushed there (confirmed live:
+      # "manifest unknown" pulling it from :5001). Docker Hub pulls on this
+      # runner pool already transparently route through a caching proxy at
+      # :5000 (docs/context/runner-vm-setup.md Gotcha #6), so the bare tag is
+      # both correct and already cached -- it's the same tag prebuild-ci-image
+      # pulls successfully via the Dockerfile's own BUILDER_IMAGE arg.
+      #
+      # Also can't be `${{ env.LOCAL_REGISTRY }}` even if it were needed --
+      # GitHub Actions rejects the `env` context inside a job-level `env:`
+      # block, even referencing a workflow-level var (fails the whole run at
+      # parse time with zero jobs created, "workflow file issue").
+      MIX_BUILDER_IMAGE: "hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim"
     outputs:
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
@@ -540,14 +567,65 @@ jobs:
       - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ + deps/ for incremental compile
+          # Full history required: the mtime-normalize step below runs
+          # `git log -1 -- <file>` per file to find its true last-modifying
+          # commit. The default shallow clone (depth 1) has only the tip
+          # commit, so every existing file resolves to that ONE commit's
+          # timestamp instead of its real last-change time — silently
+          # defeating the whole point (every file ends up "recently
+          # touched" again, indistinguishable from a fresh checkout).
+          fetch-depth: 0
+
+      - name: Normalize source mtimes to last-commit-time
+        # actions/checkout always stamps every file with a fresh "now" mtime.
+        # Mix's staleness check is `current_mtime > manifest_mtime` (no content-hash
+        # fallback), and the restored _build cache's manifest holds the OLD mtimes
+        # from whenever it was last compiled — so a fresh checkout makes every file
+        # look newer than the manifest expects and forces a full recompile every
+        # run, regardless of how good the cache-key match is. Resetting each
+        # source file's mtime to its actual last-commit time makes unchanged files
+        # land back at (or before) the mtime the manifest already recorded, so only
+        # genuinely-changed files are recompiled. See
+        # docs/context/ci-mix-compile-cache-runner-path.md.
+        run: |
+          git ls-files -z -- lib test/support mix.exs mix.lock config \
+            | xargs -0 -P 8 -I{} sh -c 'touch -d "@$(git log -1 --format=%ct -- "{}")" "{}"'
 
       - name: Resolve OTP/Elixir version
         id: beam
+        # Queried from INSIDE the builder image, not the host — the cache key
+        # must reflect what's actually compiling now that mix runs in the
+        # container (host toolchain is a separately-installed, different OTP
+        # patch version; see docs/context/ci-mix-compile-cache-runner-path.md).
         run: |
-          OTP=$(erl -eval 'io:format("~s",[erlang:system_info(otp_release)]),halt()' -noshell)
-          ERTS=$(erl -eval 'io:format("~s",[erlang:system_info(version)]),halt()' -noshell)
-          ELX=$(elixir --short-version)
-          echo "tag=otp${OTP}-erts${ERTS}-elx${ELX}" >> "$GITHUB_OUTPUT"
+          docker pull -q "$MIX_BUILDER_IMAGE" >/dev/null
+          TAG=$(docker run --rm "$MIX_BUILDER_IMAGE" sh -c '
+            OTP=$(erl -eval "io:format(\"~s\",[erlang:system_info(otp_release)]),halt()" -noshell)
+            ERTS=$(erl -eval "io:format(\"~s\",[erlang:system_info(version)]),halt()" -noshell)
+            ELX=$(elixir --short-version)
+            echo "otp${OTP}-erts${ERTS}-elx${ELX}"
+          ')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build mix builder image (adds build-essential + hex/rebar)
+        # The bare hexpm/elixir image has no C toolchain, so any NIF dep
+        # (e.g. bcrypt_elixir) fails with `"make" not found in the path`.
+        # The release Dockerfile's builder stage installs build-essential
+        # before its own mix commands for the same reason — mirror that
+        # here, plus bake in `mix local.hex`/`local.rebar` so later `docker
+        # run` invocations don't redo it. Built once per job (fast rebuild
+        # on repeat hosts via Docker's own layer cache); the actual fix this
+        # job depends on is /app being a fixed bind-mount path, which this
+        # derived image inherits unchanged from MIX_BUILDER_IMAGE.
+        run: |
+          docker build -t engram-mix-builder:ci --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" - <<EOF
+          FROM ${MIX_BUILDER_IMAGE}
+          ARG HEX_MIRROR=""
+          ENV HEX_MIRROR=\${HEX_MIRROR}
+          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
+              && rm -rf /var/lib/apt/lists/*
+          RUN mix local.hex --force && mix local.rebar --force
+          EOF
 
       - name: Compute cache keys
         id: keys
@@ -605,8 +683,18 @@ jobs:
         # on exact match; restore-keys partial hits set it to ''.
         # On a partial hit, `mix deps.get` reconciles the lockfile
         # against the restored deps/ and fetches the delta.
+        #
+        # Runs inside engram-mix-builder:ci (built above, build-essential +
+        # hex/rebar baked in), bind-mounted at /app, so Mix's absolute-
+        # project-root check (embedded in the compile manifest) sees the
+        # SAME path on every runner.
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: mix deps.get
+        run: |
+          docker run --rm \
+            -v "$PWD:/app" -w /app \
+            -e HEX_MIRROR="${HEX_MIRROR:-}" \
+            engram-mix-builder:ci \
+            mix deps.get
 
       - name: Compile :dev and :test (parallel)
         run: |
@@ -625,9 +713,26 @@ jobs:
           # it fails fast with "module Ecto.* is not loaded". deps.compile builds
           # them; it is a near no-op when _build was restored warm (lockfile
           # unchanged). Parallel per env to mirror the app-compile parallelism.
-          MIX_ENV=dev  mix deps.compile >/tmp/deps-dev.log 2>&1 &
+          #
+          # Each `mix` invocation runs inside engram-mix-builder:ci (built
+          # above) bind-mounted at /app (not bare-metal on the host) — see
+          # docs/context/ci-mix-compile-cache-runner-path.md. A bind mount is
+          # a real mountpoint, so /app resolves identically via getcwd()
+          # regardless of which runner this lands on, keeping Mix's
+          # absolute-project-root check (embedded in the compile manifest)
+          # satisfied across runs on different runners.
+          run_mix() {
+            docker run --rm \
+              -v "$PWD:/app" -w /app \
+              -e MIX_ENV="$1" \
+              -e HEX_MIRROR="${HEX_MIRROR:-}" \
+              engram-mix-builder:ci \
+              sh -c "$2"
+          }
+
+          run_mix dev  "mix deps.compile" >/tmp/deps-dev.log 2>&1 &
           dpid_dev=$!
-          MIX_ENV=test mix deps.compile >/tmp/deps-test.log 2>&1 &
+          run_mix test "mix deps.compile" >/tmp/deps-test.log 2>&1 &
           dpid_test=$!
           drc_dev=0; drc_test=0
           wait "$dpid_dev"  || drc_dev=$?
@@ -638,9 +743,9 @@ jobs:
             echo "deps.compile failed (dev=$drc_dev test=$drc_test)" >&2
             exit 1
           fi
-          MIX_ENV=dev  mix compile --warnings-as-errors --no-deps-check >/tmp/compile-dev.log 2>&1 &
+          run_mix dev  "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-dev.log 2>&1 &
           pid_dev=$!
-          MIX_ENV=test mix compile --warnings-as-errors --no-deps-check >/tmp/compile-test.log 2>&1 &
+          run_mix test "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-test.log 2>&1 &
           pid_test=$!
           # Capture exit codes WITHOUT aborting under `set -e`. A bare
           # `wait "$pid"; rc=$?` lets a failing wait trip `set -e` and kill the
