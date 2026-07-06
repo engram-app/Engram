@@ -3,7 +3,7 @@
 _Last verified: 2026-07-05_
 
 ## Status
-Diagnosed with ground-truth confirmation. Fix: run `mix deps.get`/`mix compile` inside the release Docker image (bind-mounted at a fixed `/app`) instead of bare-metal on the host, plus an independent mtime-normalization step. Pending live-CI verification of the combined fix.
+**Fixed and verified live 2026-07-05.** Confirmed on a real CI run: cache produced on `runner-7`, restored and reused on `runner-2` (a different runner) with **zero files recompiled** (no `Compiling N files` line at all, just `Generated engram app`) — job runtime dropped from ~4-6.5 minutes (full recompile every run) to 45 seconds.
 
 ## What This Is
 The `prebuild-mix` job in `.github/workflows/verify.yml` caches `deps/`, `_build/dev`, and `_build/test` via `actions/cache@v6`, keyed on `mix-deps-<BEAM_TAG>-<hash(mix.lock)>`. The intent (per the job's own comments and `docs/superpowers/plans/2026-06-29-lan-primary-ci-caching.md`) is that source-only changes recompile incrementally instead of from scratch. In practice, **every single run recompiled the entire codebase** (328/340 `.ex` files — essentially all of `lib/` + `test/support`), even when the cache step reported `Cache hit for: ...` / `Cache restored successfully` on all three caches.
@@ -32,6 +32,9 @@ This is **independent of the mtime issue** (checkout resetting mtimes to "now" i
 - **Live test 1** (mtime fix only, shallow checkout — `fetch-depth: 1` default): `Compiling 320 files (.ex)` / `332 files (.ex)`. Root cause: shallow clone means `git log -1 -- <file>` only sees the tip commit, so every file resolved to that one (recent) timestamp instead of its true last-change time — the touch script ran (no error) but was silently a no-op in effect.
 - **Live test 2** (mtime fix with `fetch-depth: 0` fixed, confirmed correct per-file historical timestamps applied): **still** `Compiling 320 files (.ex)` / `332 files (.ex)`. Run 1 landed on `runner-5`; run 2 landed on `runner-1` — different absolute checkout paths, matching the manifest decode finding.
 - Direct manifest decode (see Root Cause) is the conclusive evidence: element 6 of the `compile.elixir` manifest tuple is the literal absolute project root string.
+- **Live test 3** (Docker-wrap, bare `hexpm/elixir` image, no build tools): failed — `bcrypt_elixir` NIF dependency errored with `"make" not found in the path`. Fixed by building a small derived image (`engram-mix-builder:ci`) with `build-essential`/`git`/hex/rebar baked in.
+- **Live test 4** (Docker-wrap + build-essential, first run under the new container-based cache key): `Compiling 320 files (.ex)` / `332 files (.ex)` — expected, this was a genuine cold-cache miss (the cache key changed: OTP/erts is now queried from inside the container, `erts15.1.2`, not the host's `erts15.2.7.8`). Cache saved successfully at the end.
+- **Live test 5 (the real test)**: a second run against that freshly-saved cache. Producer run landed on `runner-7`; this run landed on `runner-2` — a genuinely different runner. Result: **zero files compiled** (`Cache hit for: ...` on all three caches, then only `Generated engram app`, no `Compiling N files` line at all). Job runtime: 45 seconds (`02:45:00` → `02:45:45`), down from ~4-6.5 minutes. This conclusively confirms the fix.
 
 This is a **different** mechanism from `docs/context/docker-build-cache-pitfalls.md` (the Dockerfile's own `--mount=type=cache` for the *Docker image* build in `prebuild-ci-image` — that build's `WORKDIR /app` is host-invariant by construction, so it never hits this class of bug).
 
