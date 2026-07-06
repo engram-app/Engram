@@ -1490,15 +1490,14 @@ export function useRenameNote() {
 
 			// Deliberately do NOT re-path the note-body cache (`['note', vaultId,
 			// id]`) here. An open editor (note-page.tsx) keys its CRDT doc on
-			// `note.path`; flipping the path optimistically makes it close the old
-			// doc and openDoc/enroll the NEW path before the rename has committed.
-			// The CRDT channel bootstraps a note for any path it sees (crdt_channel
-			// resolve_note_id -> get_or_bootstrap_note), so that premature enroll
-			// materialises an empty note at the new path, and the rename POST then
-			// 409s on the now-existing target: a stable duplicate that only surfaces
-			// under load (the bootstrap wins the race). Let onSettled's refetch move
-			// the note cache to the new path AFTER the server confirms the rename,
-			// exactly as the (passing) folder-move path already does.
+			// `note.id`, which is stable across a rename, so this no longer risks
+			// tearing down/reopening the live doc or racing the CRDT channel's
+			// bootstrap-by-path. It's skipped anyway because there's no rollback
+			// for this cache entry (see the onError note below) — flipping `path`
+			// optimistically would show an unconfirmed path if the rename POST
+			// fails. Let onSettled's refetch move the note cache to the new path
+			// AFTER the server confirms the rename, exactly as the (passing)
+			// folder-move path already does.
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -1603,12 +1602,12 @@ export function useRenameFolder() {
 
 			// Deliberately do NOT re-path cached `['note', vaultId, id]` entries for
 			// descendants here. An open child note's editor keys its CRDT doc on
-			// `note.path`; flipping the path optimistically makes it openDoc/enroll
-			// the re-pathed doc before the folder rename has committed, and the CRDT
-			// channel bootstraps a note for any path it sees, materialising a
-			// duplicate at the new path that then 409s the rename. onSettled's
-			// `['note', vaultId]` refetch moves the note caches after the server
-			// confirms, matching the (passing) folder-move path.
+			// `note.id`, which is stable across a folder rename, so there's no
+			// doc-reopen or bootstrap-by-path race to avoid anymore. Still skipped
+			// because there's no rollback wired for these entries — an optimistic
+			// `path` flip would show an unconfirmed path if the rename fails.
+			// onSettled's `['note', vaultId]` refetch moves the note caches after
+			// the server confirms, matching the (passing) folder-move path.
 			return ctx;
 		},
 		onError: (err, _vars, ctx) => {
@@ -2068,12 +2067,13 @@ export function useBatchMoveNotes() {
 			}
 
 			// Deliberately do NOT re-path the moved notes' `['note', vaultId, id]`
-			// caches here. An open editor keys its CRDT doc on `note.path`; flipping
-			// it before the move commits makes the editor openDoc/enroll the new path,
-			// and the CRDT channel bootstraps a note for any path it sees, creating a
-			// duplicate at the destination that then 409s the move. onSuccess's
-			// `['note', vaultId]` refetch re-paths the note cache after the server
-			// confirms (the folder-list + count patches below keep the tree snappy).
+			// caches here. An open editor keys its CRDT doc on `note.id`, which is
+			// stable across a move, so there's no doc-reopen or bootstrap-by-path
+			// race to avoid anymore. Still skipped because there's no rollback
+			// wired for these entries — an optimistic `path` flip would show an
+			// unconfirmed path if the move fails. onSuccess's `['note', vaultId]`
+			// refetch re-paths the note cache after the server confirms (the
+			// folder-list + count patches below keep the tree snappy).
 
 			// Bump folder counts: each source loses what it shed, the target gains
 			// the total moved. Two reasons, both load-bearing: (1) keeps the folder

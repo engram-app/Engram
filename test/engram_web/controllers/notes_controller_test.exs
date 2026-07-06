@@ -85,6 +85,39 @@ defmodule EngramWeb.NotesControllerTest do
       assert %{"note" => note} = json_response(conn, 200)
       assert {:ok, _} = Ecto.UUID.cast(note["id"])
     end
+
+    test "rejects a client-supplied id colliding with another user's note, and leaves it untouched",
+         %{conn: conn} do
+      other_user = insert(:user)
+      other_vault = insert(:vault, user: other_user, is_default: true)
+
+      {:ok, other_note} =
+        Engram.Notes.upsert_note(other_user, other_vault, %{
+          path: "Test/Other.md",
+          content: "# Other user's note",
+          mtime: 1_000.0
+        })
+
+      # Attacker (the authed conn's user) tries to adopt another tenant's note
+      # PK at a brand-new path in their own vault. The PK unique index makes
+      # the `ON CONFLICT DO NOTHING` insert a no-op; the tenant-scoped re-fetch
+      # by path then finds nothing, so this must 422 rather than silently
+      # falling back to a server-minted id or, worse, exposing/overwriting A's row.
+      conn =
+        post(conn, "/api/notes", %{
+          id: other_note.id,
+          path: "Test/Collide.md",
+          content: "# Hijack attempt",
+          mtime: 2_000.0
+        })
+
+      assert json_response(conn, 422)
+
+      {:ok, unchanged} = Engram.Notes.get_note_by_id(other_user, other_vault, other_note.id)
+      assert unchanged.path == "Test/Other.md"
+      assert unchanged.content == "# Other user's note"
+      assert unchanged.version == 1
+    end
   end
 
   # ---------------------------------------------------------------------------
