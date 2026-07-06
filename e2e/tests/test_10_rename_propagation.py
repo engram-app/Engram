@@ -4,6 +4,8 @@ Uses CDP vault.rename() to trigger Obsidian's handleRename (filesystem
 mv would not trigger the plugin's rename handler).
 """
 
+import uuid
+
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
@@ -13,8 +15,17 @@ from helpers.vault import read_note, write_note
 @pytest.mark.asyncio
 async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     """A renames a synced file, B should see the new path (not delete+create)."""
-    old_path = "E2E/RenameOld.md"
-    new_path = "E2E/RenameNew.md"
+    # Unique per-run paths (rerun-safety): the Obsidian A/B instances are
+    # session-scoped and NOT reset between pytest-rerunfailures attempts, so a
+    # fixed path lets a prior attempt's leftover RenameNew on B — plus its
+    # "RenameOld was renamed away" synced state — resurrection-DELETE the fresh
+    # RenameOld this attempt creates on A, stranding it 404 for the whole
+    # wait_for_note window. A fresh suffix each invocation makes every attempt
+    # collision-free (same pattern as test_49). Old/new share one suffix so the
+    # rename maps them as a pair.
+    suffix = uuid.uuid4().hex[:12]
+    old_path = f"E2E/RenameOld-{suffix}.md"
+    new_path = f"E2E/RenameNew-{suffix}.md"
 
     # A creates the note
     write_note(vault_a, old_path, "# Rename Test\nThis file will be renamed.")
