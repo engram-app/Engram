@@ -148,7 +148,7 @@ defmodule Engram.MixProject do
 
       # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
       # and self-host)
-      {:sentry, "~> 10.0"},
+      {:sentry, "~> 13.2"},
 
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},
