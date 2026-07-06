@@ -226,8 +226,9 @@ defmodule EngramWeb.CrdtChannelTest do
     # Log hygiene: doc_id (note_id) must appear in metadata, not the message body
     # -------------------------------------------------------------------------
 
-    test "dropped-frame warning carries doc_id in metadata, not the message body",
+    test "dropped-frame warning exposes the note_id unredacted for diagnosis",
          %{socket: socket, doc_id: doc_id} do
+      # doc_id here is a valid note_id UUID (setup fixture).
       log =
         capture_log(fn ->
           push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => "!!!not_valid_base64!!!"})
@@ -236,13 +237,38 @@ defmodule EngramWeb.CrdtChannelTest do
           refute_push "crdt_msg", _, 300
         end)
 
-      # The warning must have fired (non-vacuous check).
       assert log =~ "dropped crdt_msg",
              "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
 
-      # The raw doc_id (note_id) must NOT appear in the log message body.
-      refute String.contains?(log, doc_id),
-             "Expected doc_id #{inspect(doc_id)} to be in metadata only, but it appeared in: #{inspect(log)}"
+      # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
+      # lost the dropped edit — it must be visible (was redacted under :path,
+      # which blocked the 2026-07-06 incident triage).
+      assert String.contains?(log, doc_id),
+             "Expected note_id #{inspect(doc_id)} to be visible in the log, got: #{inspect(log)}"
+
+      # ...but only via metadata, never interpolated into the message body.
+      [_meta_and_level, msg] = String.split(log, "[warning]", parts: 2)
+
+      refute String.contains?(msg, doc_id),
+             "note_id must live in metadata, not the message body: #{inspect(msg)}"
+    end
+
+    test "a non-UUID doc_id stays redacted — never leaks a cleartext path",
+         %{socket: socket} do
+      # A stale path-keyed client sends a path as the doc_id. It is NOT a UUID,
+      # so it must fall back to the redacted :path metadata key and never appear.
+      secret_path = "PrivateFolder/Secret Note.md"
+
+      log =
+        capture_log(fn ->
+          push(socket, "crdt_msg", %{"doc_id" => secret_path, "b64" => Base.encode64(<<0>>)})
+          refute_push "crdt_msg", _, 300
+        end)
+
+      assert log =~ "dropped crdt_msg"
+
+      refute String.contains?(log, secret_path),
+             "A cleartext path in doc_id must never appear in logs: #{inspect(log)}"
     end
 
     test "second crdt_msg for the same doc reuses the cached room", %{
