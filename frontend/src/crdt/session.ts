@@ -85,7 +85,6 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 	// channel is assigned before any update tick fires.
 	let channel: CrdtChannel;
 	const manager = new CrdtManager({
-		dbPrefix: opts.vaultId,
 		onUpdate: (docId, update) => channel.sendUpdateRaw(docId, update),
 		onPersistError: opts.onPersistError,
 	});

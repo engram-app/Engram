@@ -23,9 +23,6 @@ export const REMOTE_ORIGIN = "remote";
 export const CRDT_IDB_PREFIX = "engram-crdt/";
 
 export interface CrdtManagerOptions {
-	/** Kept for construction compatibility; no longer used to namespace doc
-	 *  ids (note_id is already globally unique). */
-	dbPrefix: string;
 	/** Emitted on every local Y.Doc update (origin !== REMOTE_ORIGIN). */
 	onUpdate: (docId: string, update: Uint8Array, origin: unknown) => void;
 	/** IndexedDB persistence failure (e.g. quota). Sync continues over the WS. */

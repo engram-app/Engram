@@ -5,7 +5,6 @@ import { CrdtManager } from "./manager";
 
 function mkManager() {
 	return new CrdtManager({
-		dbPrefix: `v-${Math.random().toString(36).slice(2)}`,
 		onUpdate: () => {},
 	});
 }

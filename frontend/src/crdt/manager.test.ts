@@ -3,7 +3,7 @@ import * as Y from "yjs";
 import { frontmatterMaps } from "./frontmatter-doc";
 import { CrdtManager } from "./manager";
 
-function freshDbName(): string {
+function freshId(): string {
 	// Each test gets an isolated IndexedDB store name so fake-indexeddb state
 	// never bleeds across cases.
 	return `vault-${Math.random().toString(36).slice(2)}`;
@@ -11,12 +11,12 @@ function freshDbName(): string {
 
 describe("CrdtManager", () => {
 	it("docId is the note_id unchanged (identity, no vault-prefix concatenation)", () => {
-		const m = new CrdtManager({ dbPrefix: "v1", onUpdate: () => {} });
+		const m = new CrdtManager({ onUpdate: () => {} });
 		expect(m.docId("note-uuid-1")).toBe("note-uuid-1");
 	});
 
 	it("a rename does not change the CRDT doc key (docId is stable across rename)", () => {
-		const m = new CrdtManager({ dbPrefix: "v1", onUpdate: () => {} });
+		const m = new CrdtManager({ onUpdate: () => {} });
 		const before = m.docId("note-uuid-1");
 		// simulate rename: the note's path attribute changes elsewhere (tree/query
 		// cache); note_id is passed to docId either way and never changes.
@@ -26,11 +26,11 @@ describe("CrdtManager", () => {
 
 	it("forwards local edits to onUpdate, suppresses remote-origin", async () => {
 		const onUpdate = vi.fn();
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate });
+		const m = new CrdtManager({ onUpdate });
 		// docId is now the bare note_id (no more dbPrefix namespacing in the IDB
 		// key), so each test needs its own unique note id to avoid fake-indexeddb
 		// state bleeding across cases (mirrors production: note_ids never collide).
-		const noteId = freshDbName();
+		const noteId = freshId();
 		const text = await m.getSharedText(noteId);
 
 		text.insert(0, "hello"); // local origin → forwarded
@@ -47,8 +47,8 @@ describe("CrdtManager", () => {
 	});
 
 	it("reuses the same Y.Doc per note and tears it down on closeDoc", async () => {
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
-		const noteId = freshDbName();
+		const m = new CrdtManager({ onUpdate: () => {} });
+		const noteId = freshId();
 		const a = await m.getDoc(noteId);
 		const b = await m.getDoc(noteId);
 		expect(a).toBe(b);
@@ -58,8 +58,8 @@ describe("CrdtManager", () => {
 	});
 
 	it("encodeStateVector + encodeStateAsUpdate round-trip", async () => {
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
-		const noteId = freshDbName();
+		const m = new CrdtManager({ onUpdate: () => {} });
+		const noteId = freshId();
 		const t = await m.getSharedText(noteId);
 		t.insert(0, "abc");
 		const sv = await m.encodeStateVector(noteId);
@@ -74,7 +74,7 @@ describe("CrdtManager", () => {
 		// y-indexeddb never fires `synced` once destroy() runs, so a plain
 		// `whenSynced`-based ready promise would hang forever. entry() must race
 		// ready against a destroy signal so awaiters ALWAYS resume.
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		const m = new CrdtManager({ onUpdate: () => {} });
 		const p = m.getSharedText("hang.md"); // awaits entry().ready
 		// Close mid-load: destroys the doc + persistence before `synced` fires.
 		m.closeDoc("hang.md");
@@ -88,7 +88,7 @@ describe("CrdtManager", () => {
 	});
 
 	it("flattenIfBloated on a non-live path is a no-op and does not create a doc", async () => {
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		const m = new CrdtManager({ onUpdate: () => {} });
 		await m.getDoc("notes/x.md");
 		m.closeDoc("notes/x.md");
 		const flattened = await m.flattenIfBloated("notes/x.md");
@@ -97,7 +97,7 @@ describe("CrdtManager", () => {
 	});
 
 	it("flattenIfBloated preserves frontmatter maps (#814)", async () => {
-		const m = new CrdtManager({ dbPrefix: freshDbName(), onUpdate: () => {} });
+		const m = new CrdtManager({ onUpdate: () => {} });
 		const path = "notes/fm.md";
 		const doc = await m.getDoc(path);
 		const maps = frontmatterMaps(doc);
