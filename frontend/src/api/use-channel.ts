@@ -2,7 +2,12 @@ import { useEffect, useRef } from "react";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { installCrdtResyncTriggers } from "../crdt/session";
 import { useActiveVaultId } from "./active-vault";
-import { connectChannel, disconnectChannel } from "./channel";
+import {
+	connectChannel,
+	disconnectChannel,
+	installSocketHealthTriggers,
+	reconnectWithFreshToken,
+} from "./channel";
 import { installCursorSyncTriggers, runCursorSync } from "./cursor-sync";
 import { useMe } from "./queries";
 import { queryClient } from "./query-client";
@@ -33,7 +38,7 @@ export function useChannel() {
 			return;
 		}
 
-		connectChannel({
+		const connectOpts = {
 			userId,
 			vaultId,
 			getToken: () => getTokenRef.current(),
@@ -41,7 +46,8 @@ export function useChannel() {
 			// Reconnect (and initial connect) → backfill missed changes via the
 			// durable cursor feed. Single-flight dedupes against the mount run below.
 			onSocketOpen: () => runCursorSync(vaultId, queryClient),
-		});
+		};
+		connectChannel(connectOpts);
 
 		// Run on mount + on every window focus; returns a listener cleanup.
 		const removeTriggers = installCursorSyncTriggers(vaultId, queryClient);
@@ -51,10 +57,21 @@ export function useChannel() {
 		// open docs when the tab comes back to the foreground.
 		const removeCrdtResync = installCrdtResyncTriggers();
 
+		// Re-establish a socket that went dead during a long idle / laptop sleep.
+		// The triggers above assume the socket is alive; this one refreshes the
+		// token and reconnects the transport in place (no CRDT-session teardown,
+		// so an open editor keeps its live doc). A live socket on a short wake just
+		// backfills — the online-event path the focus-only trigger misses.
+		const removeHealthTriggers = installSocketHealthTriggers(
+			() => reconnectWithFreshToken(() => getTokenRef.current()),
+			() => runCursorSync(vaultId, queryClient),
+		);
+
 		return () => {
 			disconnectChannel();
 			removeTriggers();
 			removeCrdtResync();
+			removeHealthTriggers();
 		};
 	}, [userId, vaultId]);
 }
