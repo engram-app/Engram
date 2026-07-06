@@ -540,6 +540,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ + deps/ for incremental compile
+          # Full history required: the mtime-normalize step below runs
+          # `git log -1 -- <file>` per file to find its true last-modifying
+          # commit. The default shallow clone (depth 1) has only the tip
+          # commit, so every existing file resolves to that ONE commit's
+          # timestamp instead of its real last-change time — silently
+          # defeating the whole point (every file ends up "recently
+          # touched" again, indistinguishable from a fresh checkout).
+          fetch-depth: 0
 
       - name: Normalize source mtimes to last-commit-time
         # actions/checkout always stamps every file with a fresh "now" mtime.
