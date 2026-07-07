@@ -94,6 +94,52 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── deliver-out gap: a web-editor edit (CRDT checkpoint) must reach clients ─
+  # that are not actively enrolled in the note's room (e.g. Obsidian). REST/MCP
+  # writes announce via CrdtDeliver; the checkpoint is the ONLY path that
+  # persists a web edit and did not announce, so the edit never reached Obsidian
+  # live nor on the next discovery. The checkpoint must announce crdt_doc_ready
+  # (doc_id = note_id) on content change so a lazily-enrolled client pulls it.
+
+  test "checkpoint announces crdt_doc_ready on content change so obsidian pulls the web edit",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok =
+      CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDITED")
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "crdt_doc_ready",
+      payload: %{"doc_id" => doc_id}
+    }
+
+    assert doc_id == note.id
+  end
+
+  test "checkpoint does NOT announce when text is unchanged (compaction — no re-pull spam)",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+
+    # Rebuild the doc from stored state WITHOUT editing the text — this is the
+    # idle compaction path (hash-equal), which must not touch seq/content and
+    # must not announce.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}
+  end
+
   # ── #902 revert gap: checkpoint must not clobber a newer committed write ───
 
   test "checkpoint does NOT revert a REST write that committed after the doc snapshot", ctx do

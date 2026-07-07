@@ -40,6 +40,13 @@ defmodule EngramWeb.CrdtChannel do
   @msg_limit 240
   @msg_scale_ms 10_000
 
+  # Account-wide ceiling = @msg_limit × this. A user may run several devices,
+  # each with the full per-device budget, but the account total is capped so a
+  # single account can't multiply its budget without bound by opening many
+  # sockets or forging device ids (the WS transport has no connect-level
+  # limiter). 10 ≈ "up to ten busy devices per account" before the ceiling bites.
+  @account_multiplier 10
+
   @impl true
   def join("crdt:" <> ids, params, socket) do
     proto = Map.get(params, "crdt_proto", 1)
@@ -95,9 +102,7 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
-    user = socket.assigns.current_user
-
-    with :ok <- check_rate(user.id),
+    with :ok <- check_rate(socket),
          {:ok, frame} <- decode_frame(b64),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
@@ -188,11 +193,42 @@ defmodule EngramWeb.CrdtChannel do
     )
   end
 
-  defp check_rate(user_id) do
+  # Rate-limit per DEVICE (not per account) so a single user's multiple devices
+  # (desktop + laptop + web app, or two e2e Obsidian instances sharing one
+  # session user) each get the full budget instead of self-DoSing against one
+  # shared bucket. TWO layers:
+  #
+  #   1. per-device — `crdt_msg:<user_id>:<device>`. The `user_id` prefix is
+  #      SERVER-derived, so the client-supplied device/conn id can only REFINE
+  #      within its own tenant: it can never collide with another user's bucket
+  #      (no cross-user griefing) nor spend anything but its own allowance.
+  #   2. per-account ceiling — `crdt_msg:acct:<user_id>` at @account_multiplier×.
+  #      Caps total account throughput so forging device ids / opening many
+  #      sockets can't multiply the budget without bound.
+  #
+  # Both must allow. Per-device is checked first so a device that's already over
+  # its own budget doesn't also consume from the account ceiling.
+  defp check_rate(socket) do
     limit = effective_msg_limit()
+    user_id = socket.assigns.current_user.id
+    device = socket.assigns[:device_id] || socket.assigns[:conn_id] || "u"
 
-    case EngramWeb.RateLimiter.hit("crdt_msg:#{user_id}", @msg_scale_ms, limit, :other) do
-      {:allow, _} -> :ok
+    with {:allow, _} <-
+           EngramWeb.RateLimiter.hit(
+             "crdt_msg:#{user_id}:#{device}",
+             @msg_scale_ms,
+             limit,
+             :other
+           ),
+         {:allow, _} <-
+           EngramWeb.RateLimiter.hit(
+             "crdt_msg:acct:#{user_id}",
+             @msg_scale_ms,
+             limit * @account_multiplier,
+             :other
+           ) do
+      :ok
+    else
       {:deny, _} -> {:error, :rate_limited}
     end
   end

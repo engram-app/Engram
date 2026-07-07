@@ -20,7 +20,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Enqueue, Helpers, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.EmbedNote
 
   require Logger
@@ -71,8 +71,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
       content_hash = Crypto.hmac_content_hash(key, text)
       tags = Helpers.extract_tags(text)
 
-      # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction) — the fun returns the bare hash.
-      {:ok, prev_hash} =
+      # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction). The
+      # fun returns {prev_hash, path}: prev_hash drives the embed/deliver guard,
+      # path feeds the post-commit deliver-out announce (needs the decrypted
+      # virtual path, only available inside the tenant txn).
+      {:ok, {prev_hash, path}} =
         Repo.with_tenant(user_id, fn ->
           # `note.path` / `note.folder` / `note.title` are VIRTUAL — a bare
           # Repo.get! leaves them nil. Materialize through the decrypt path so
@@ -97,7 +100,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               )
 
             prune_tail(note_id, watermark)
-            prev
+            {prev, note.path}
           else
             # Re-derive title from the note's decrypted (sanitized-at-write) path.
             title = Helpers.extract_title(text, note.path)
@@ -149,7 +152,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             case Repo.update_all(fenced_query, set: set) do
               {1, _} ->
                 prune_tail(note_id, watermark)
-                prev
+                {prev, note.path}
 
               {0, _} ->
                 # The row advanced since our snapshot — a newer write is already
@@ -162,14 +165,27 @@ defmodule Engram.Notes.CrdtCheckpoint do
                   Metadata.with_category(:info, :sync, note_id: note_id)
                 )
 
-                content_hash
+                {content_hash, note.path}
             end
           end
         end)
 
       _ =
         if prev_hash != content_hash do
-          Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
+          _ = Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
+
+          # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
+          # which (unlike REST/MCP writes) never announced. A client not
+          # actively enrolled in the room — e.g. Obsidian — thus never
+          # discovered the edit, live or on next pull. Announce so it opens a
+          # room and pulls the just-persisted state. Announce-ONLY (not full
+          # deliver_out): live observers already converged via real-time frame
+          # relay, and the room-state push would `GenServer.call` self on the
+          # unbind path (checkpoint runs inside the room process there).
+          # `prev_hash != content_hash` fires only on a committed content change
+          # (compaction returns prev==hash; the #902 stale-abort returns hash),
+          # so idle compactions and aborted writes raise no spurious re-pull.
+          CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
         end
 
       :ok

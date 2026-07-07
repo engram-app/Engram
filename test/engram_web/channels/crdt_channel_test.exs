@@ -3,6 +3,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
   import ExUnit.CaptureLog
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
@@ -34,7 +35,7 @@ defmodule EngramWeb.CrdtChannelTest do
       )
 
     {:ok, _, joined} = result
-    Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined.channel_pid)
+    Sandbox.allow(Repo, self(), joined.channel_pid)
 
     %{
       socket: joined,
@@ -419,17 +420,96 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
     end
 
+    @tag capture_log: true
     test "crdt_msg beyond the rate limit is rejected with rate_limited error",
-         %{socket: socket, doc_id: doc_id} do
-      # Limit override = 2 (see describe setup above). Push a tiny valid b64
-      # frame three times; the third must be denied.
+         %{socket: socket} do
+      # Limit override = 2 (see describe setup above). Push a tiny valid frame
+      # three times; the third must be denied. Uses a NON-EXISTENT note_id:
+      # check_rate runs before ensure_room, so this exercises the limiter
+      # without the allowed frames binding a room — a room-bind on the first two
+      # frames can delay the third's reply past the assert window under load.
       tiny_b64 = Base.encode64(<<0>>)
+      absent = Ecto.UUID.generate()
 
-      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
-      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
-      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    # These target check_rate, which runs BEFORE ensure_room, so they push a
+    # NON-EXISTENT note_id: the limiter counts every frame, but an allowed frame
+    # just drops (no room started) — avoiding the room terminate-flush cascade
+    # that starting a real room in a unit test triggers. @tag capture_log hides
+    # the expected "dropped crdt_msg" warnings.
+    @tag capture_log: true
+    test "the limit is per-device: one device hitting the cap does not throttle another device of the same user",
+         %{user: user, vault: vault} do
+      tiny_b64 = Base.encode64(<<0>>)
+      absent = Ecto.UUID.generate()
+      topic = "crdt:#{user.id}:#{vault.id}"
+
+      # Device A exhausts its own budget (override = 2).
+      {:ok, _, sock_a} =
+        user_socket(user)
+        |> Phoenix.Socket.assign(:device_id, "dev-a")
+        |> subscribe_and_join(EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
+
+      Sandbox.allow(Repo, self(), sock_a.channel_pid)
+
+      push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      ref_a = push(sock_a, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref_a, :error, %{reason: "rate_limited"}, 3000
+
+      # Device B — SAME user, different device — has a fresh budget: its first
+      # frame must NOT be rate-limited (a per-user bucket would already be spent).
+      {:ok, _, sock_b} =
+        user_socket(user)
+        |> Phoenix.Socket.assign(:device_id, "dev-b")
+        |> subscribe_and_join(EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
+
+      Sandbox.allow(Repo, self(), sock_b.channel_pid)
+
+      ref_b = push(sock_b, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      refute_reply ref_b, :error, %{reason: "rate_limited"}, 300
+    end
+
+    @tag capture_log: true
+    test "buckets are user-scoped: a forged device_id cannot drain another user's budget",
+         %{socket: socket, user: user, other_user: other_user} do
+      tiny_b64 = Base.encode64(<<0>>)
+      absent = Ecto.UUID.generate()
+
+      # Attacker (other_user) forges device_id to the VICTIM's user id, trying to
+      # land in the victim's rate bucket, and hammers from their OWN vault.
+      insert(:user_limit_override, user: other_user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, atk_vault} = Vaults.create_vault(other_user, %{name: "AtkVault"})
+
+      {:ok, _, atk_sock} =
+        user_socket(other_user)
+        |> Phoenix.Socket.assign(:device_id, to_string(user.id))
+        |> subscribe_and_join(
+          EngramWeb.CrdtChannel,
+          "crdt:#{other_user.id}:#{atk_vault.id}",
+          %{"crdt_proto" => 2}
+        )
+
+      Sandbox.allow(Repo, self(), atk_sock.channel_pid)
+
+      # Attacker exhausts its OWN (user-scoped) bucket (override = 2).
+      push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      ref_atk = push(atk_sock, "crdt_msg", %{"doc_id" => absent, "b64" => tiny_b64})
+      assert_reply ref_atk, :error, %{reason: "rate_limited"}, 3000
+
+      # The victim's bucket is untouched — the server-derived user_id prefix
+      # means the forged device_id landed in the attacker's own tenant. The
+      # victim pushes an absent note_id too (limiter counts it, no room).
+      victim_absent = Ecto.UUID.generate()
+      ref_victim = push(socket, "crdt_msg", %{"doc_id" => victim_absent, "b64" => tiny_b64})
+      refute_reply ref_victim, :error, %{reason: "rate_limited"}, 300
     end
   end
 
