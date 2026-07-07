@@ -1,17 +1,18 @@
 """Test 66: Remote logging toggle stops server flush when disabled.
 
 User path covered:
-  1. Enable remote logging via settings.remoteLoggingEnabled = true.
+  1. Enable remote logging via settings.diagnosticsEnabled = true.
   2. Log 25 entries via rlog() singleton (above the flush threshold of 20).
   3. Wait for auto-flush to deliver them to the server.
-  4. Disable remote logging via settings.remoteLoggingEnabled = false.
+  4. Disable remote logging via settings.diagnosticsEnabled = false.
   5. Log 25 more entries tagged "after-disable".
   6. Wait the same interval — assert the after-disable entries do NOT appear
      on the server (logging is suppressed).
 
 Implementation notes vs plan draft:
-  - Plan used settings.remoteLogging; real field is settings.remoteLoggingEnabled
-    (src/types.ts line 14).
+  - Remote logging is one facet of the single settings.diagnosticsEnabled toggle
+    (plugin collapsed remoteLoggingEnabled/diagnosticMode/tracingEnabled into it,
+    src/types.ts); saveSettings() gates rlog().setEnabled on it.
   - Plan used plugin.remoteLog?.info() — the rlog singleton is module-level
     (src/remote-log.ts), not a property on the plugin instance.  We access it
     via app.plugins.plugins['engram-vault-sync'].syncEngine (which indirectly
@@ -44,11 +45,16 @@ AFTER_MARKER = "test66-after-disable"
 
 
 async def _set_remote_logging(cdp, enabled: bool) -> None:
-    """Toggle remoteLoggingEnabled on one instance via saveSettings."""
+    """Toggle remote logging on one instance via saveSettings.
+
+    Remote logging is a facet of the single ``diagnosticsEnabled`` toggle (the
+    plugin collapsed remoteLoggingEnabled/diagnosticMode/tracingEnabled into it);
+    saveSettings() gates rlog().setEnabled on ``diagnosticsEnabled``.
+    """
     await cdp.evaluate(
         f"(async () => {{"
         f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
-        f"  p.settings.remoteLoggingEnabled = {str(enabled).lower()};"
+        f"  p.settings.diagnosticsEnabled = {str(enabled).lower()};"
         f"  await p.saveSettings();"
         f"}})()",
         await_promise=True,
@@ -57,7 +63,7 @@ async def _set_remote_logging(cdp, enabled: bool) -> None:
 
 @pytest.mark.asyncio
 async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
-    """Logs generated after remoteLoggingEnabled=false do not reach the server.
+    """Logs generated after diagnosticsEnabled=false do not reach the server.
 
     Both sync-pair instances are toggled. test_16/66 aside, remote logging is
     seeded ON suite-wide (helpers/obsidian.py, backend #909), so instance B
@@ -71,10 +77,10 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
     # Setup: capture original setting on both instances.
     # ------------------------------------------------------------------ #
     original_enabled_a = await cdp_a.evaluate(
-        f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLoggingEnabled"
+        f"app.plugins.plugins['{PLUGIN_ID}'].settings.diagnosticsEnabled"
     )
     original_enabled_b = await cdp_b.evaluate(
-        f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLoggingEnabled"
+        f"app.plugins.plugins['{PLUGIN_ID}'].settings.diagnosticsEnabled"
     )
 
     try:
@@ -153,7 +159,7 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
 
     finally:
         # ------------------------------------------------------------------ #
-        # Restore: reset remoteLoggingEnabled on both instances, clean up
+        # Restore: reset diagnosticsEnabled on both instances, clean up
         # seeded notes.
         # ------------------------------------------------------------------ #
         await _set_remote_logging(cdp_a, bool(original_enabled_a))

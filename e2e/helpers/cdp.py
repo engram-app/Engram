@@ -1142,11 +1142,16 @@ class CdpClient:
         return result if isinstance(result, str) else ""
 
     async def enable_remote_logging(self) -> None:
-        """Enable remote logging via plugin settings and trigger save."""
+        """Enable remote logging via plugin settings and trigger save.
+
+        Remote logging is one facet of the single ``diagnosticsEnabled`` toggle
+        (plugin collapsed remoteLoggingEnabled/diagnosticMode/tracingEnabled into
+        it); saveSettings() gates rlog().setEnabled on it.
+        """
         js = f"""
         (async function() {{
             const plugin = {PLUGIN_PATH};
-            plugin.settings.remoteLoggingEnabled = true;
+            plugin.settings.diagnosticsEnabled = true;
             await plugin.saveSettings();
             return 'enabled';
         }})()

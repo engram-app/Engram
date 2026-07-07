@@ -1,7 +1,7 @@
 """Test 81: suite-wide remote logging is on by default.
 
 Regression guard for the harness seed in helpers/obsidian.py
-(``remoteLoggingEnabled: True``). Unlike test_16, this test NEVER calls
+(``diagnosticsEnabled: True``). Unlike test_16, this test NEVER calls
 ``enable_remote_logging`` — the whole point is that every device already
 ships client logs without a per-test opt-in, so a delivery flake's first
 failing run carries client-side evidence (consumed by
@@ -25,7 +25,7 @@ async def test_client_logs_ship_without_opt_in(vault_a, cdp_a, api_sync):
     await cdp_a.trigger_full_sync()
     await cdp_a.flush_remote_logs()
 
-    plugin_categories = {"push", "pull", "lifecycle", "pacer", "channel", "ws"}
+    plugin_categories = {"push", "pull", "lifecycle", "channel", "ws"}
     plugin_logs = []
     logs = []
     deadline = time.monotonic() + 10
@@ -42,6 +42,6 @@ async def test_client_logs_ship_without_opt_in(vault_a, cdp_a, api_sync):
     assert len(plugin_logs) >= 1, (
         "Suite-wide remote logging appears OFF: no plugin-generated log shipped "
         "without an explicit enable_remote_logging() call. Check the "
-        "remoteLoggingEnabled seed in helpers/obsidian.py. "
+        "diagnosticsEnabled seed in helpers/obsidian.py. "
         f"Categories seen: {[l.get('category') for l in logs]}"
     )
