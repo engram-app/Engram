@@ -3,6 +3,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
   import ExUnit.CaptureLog
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Crypto, Fixtures, Notes, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
   alias Engram.Repo
@@ -34,7 +35,7 @@ defmodule EngramWeb.CrdtChannelTest do
       )
 
     {:ok, _, joined} = result
-    Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), joined.channel_pid)
+    Sandbox.allow(Repo, self(), joined.channel_pid)
 
     %{
       socket: joined,
@@ -430,6 +431,37 @@ defmodule EngramWeb.CrdtChannelTest do
       ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
 
       assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    test "the limit is per-device: one device hitting the cap does not throttle another device of the same user",
+         %{user: user, vault: vault, doc_id: doc_id} do
+      tiny_b64 = Base.encode64(<<0>>)
+      topic = "crdt:#{user.id}:#{vault.id}"
+
+      # Device A exhausts its own budget (override = 2).
+      {:ok, _, sock_a} =
+        user_socket(user)
+        |> Phoenix.Socket.assign(:device_id, "dev-a")
+        |> subscribe_and_join(EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
+
+      Sandbox.allow(Repo, self(), sock_a.channel_pid)
+
+      push(sock_a, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      push(sock_a, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      ref_a = push(sock_a, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      assert_reply ref_a, :error, %{reason: "rate_limited"}, 3000
+
+      # Device B — SAME user, different device — has a fresh budget: its first
+      # frame must NOT be rate-limited (a per-user bucket would already be spent).
+      {:ok, _, sock_b} =
+        user_socket(user)
+        |> Phoenix.Socket.assign(:device_id, "dev-b")
+        |> subscribe_and_join(EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
+
+      Sandbox.allow(Repo, self(), sock_b.channel_pid)
+
+      ref_b = push(sock_b, "crdt_msg", %{"doc_id" => doc_id, "b64" => tiny_b64})
+      refute_reply ref_b, :error, %{reason: "rate_limited"}, 300
     end
   end
 

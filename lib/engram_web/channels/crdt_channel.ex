@@ -95,9 +95,7 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
-    user = socket.assigns.current_user
-
-    with :ok <- check_rate(user.id),
+    with :ok <- check_rate(socket),
          {:ok, frame} <- decode_frame(b64),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
@@ -188,13 +186,29 @@ defmodule EngramWeb.CrdtChannel do
     )
   end
 
-  defp check_rate(user_id) do
+  defp check_rate(socket) do
     limit = effective_msg_limit()
 
-    case EngramWeb.RateLimiter.hit("crdt_msg:#{user_id}", @msg_scale_ms, limit, :other) do
+    case EngramWeb.RateLimiter.hit(rate_key(socket), @msg_scale_ms, limit, :other) do
       {:allow, _} -> :ok
       {:deny, _} -> {:error, :rate_limited}
     end
+  end
+
+  # Rate-limit per DEVICE, not per account. A single user's multiple devices
+  # (e.g. desktop + laptop + the web app, or two e2e Obsidian instances sharing
+  # one session user) must not share one budget: per-account throttling makes
+  # legit multi-device editing self-DoS and silently drop frames. Per-connection
+  # is also the correct granularity for a real-time message channel — a scripted
+  # flood originates from ONE connection and is capped here; flooding via many
+  # devices/sockets is capped at socket connect. Falls back to conn_id, then the
+  # user id, for clients that send no device id.
+  defp rate_key(socket) do
+    scope =
+      socket.assigns[:device_id] || socket.assigns[:conn_id] ||
+        to_string(socket.assigns.current_user.id)
+
+    "crdt_msg:#{scope}"
   end
 
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
