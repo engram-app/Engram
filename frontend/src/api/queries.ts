@@ -712,6 +712,13 @@ export function useUpdateProfile() {
 	});
 }
 
+export function useReportBug() {
+	return useMutation({
+		mutationFn: (body: { description: string; surface: "web"; app_version: string }) =>
+			api.post<{ report: { id: string; status: string } }>("/reports", body),
+	});
+}
+
 export function useDeleteSelf() {
 	return useMutation<void, Error, { password: string }>({
 		mutationFn: async ({ password }) => {

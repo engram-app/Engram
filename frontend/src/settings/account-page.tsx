@@ -4,6 +4,7 @@ import { DangerZoneSection } from "./account/danger-zone-section";
 import { EmailSection } from "./account/email-section";
 import { PasswordSection } from "./account/password-section";
 import { ProfileSection } from "./account/profile-section";
+import { ReportBugSection } from "./account/report-bug-section";
 import { SessionsSection } from "./account/sessions-section";
 
 // OAuth providers enabled on this Clerk instance. Confirm against the instance
@@ -25,6 +26,7 @@ export default function AccountPage() {
 			<PasswordSection />
 			<ConnectedAccountsSection providers={[...OAUTH_PROVIDERS]} />
 			<SessionsSection />
+			<ReportBugSection />
 			<DangerZoneSection />
 		</article>
 	);
