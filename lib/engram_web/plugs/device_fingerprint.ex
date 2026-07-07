@@ -37,6 +37,11 @@ defmodule EngramWeb.Plugs.DeviceFingerprint do
         v -> v
       end
 
+    hash_ua(ua)
+  end
+
+  @doc "12-char lowercase sha256 hex of a User-Agent string. Shared by the report controller."
+  def hash_ua(ua) when is_binary(ua) do
     :crypto.hash(:sha256, ua)
     |> Base.encode16(case: :lower)
     |> binary_part(0, 12)

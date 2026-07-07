@@ -1,4 +1,5 @@
 defmodule Engram.Support.IssueReport do
+  @moduledoc "Schema for a user-submitted issue report."
   use Ecto.Schema
   import Ecto.Changeset
 
