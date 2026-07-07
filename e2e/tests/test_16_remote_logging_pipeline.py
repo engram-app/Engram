@@ -39,7 +39,7 @@ async def test_remote_logging_plugin_pipeline(vault_a, cdp_a, api_sync):
     await cdp_a.flush_remote_logs()
 
     # Poll GET /logs for plugin-generated entries (retry for timing)
-    plugin_categories = {"push", "pull", "lifecycle", "pacer"}
+    plugin_categories = {"push", "pull", "lifecycle", "channel"}
     plugin_logs = []
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:

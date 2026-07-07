@@ -136,8 +136,10 @@ class ObsidianInstance:
             # in client_logs, correlated to the #908 server breadcrumbs, so a
             # delivery flake's FIRST failing run carries client-side evidence
             # (non-deterministic flakes can't be reproduced on demand). Read by
-            # helpers/log_oracle.py::wait_for_delivery.
-            "remoteLoggingEnabled": True,
+            # helpers/log_oracle.py::wait_for_delivery. Remote logging is a facet
+            # of the single diagnosticsEnabled toggle (plugin collapsed the three
+            # legacy diagnostics flags into it).
+            "diagnosticsEnabled": True,
         }
         # Explicitly pin the file-level CRDT sync path (spec §12a) for the
         # dedicated CRDT job. NOTE: since plugin #148 enableCrdt DEFAULTS to
