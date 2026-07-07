@@ -194,10 +194,26 @@ report "sobelow" sobelow || FAILED=1
 # ── Release smoke (dependency changes only) ──────────────────────────────
 # `mix release` assembly runs a duplicate-module check that `mix test` never
 # does. Two deps vendoring the same module names (for example hackney's h2 and
-# grpcbox's ts_chatterbox) only blow up here. Run it when mix.exs/mix.lock
-# changed vs origin/main, so normal pushes stay fast.
-if git diff --name-only origin/main...HEAD 2>/dev/null | grep -qE '^mix\.(exs|lock)$'; then
-  echo "▸ Release smoke: mix.exs/mix.lock changed, running MIX_ENV=prod mix release --overwrite"
+# grpcbox's ts_chatterbox) only blow up here.
+#
+# Trigger ONLY on changes that can actually break release assembly: mix.lock,
+# rel/, or mix.exs lines OTHER than the version bump. The version policy above
+# forces a mix.exs bump on every deployable branch, so triggering on any
+# mix.exs change made the smoke run on essentially every PR's first push —
+# and in a fresh worktree (_build/prod is cold by design, see post-checkout)
+# that is a ~5 min full prod compile for a change that cannot introduce
+# duplicate modules. A bare version bump is exempt; real dep/release-config
+# changes still pay.
+release_smoke_needed=false
+if git diff --name-only origin/main...HEAD -- mix.lock rel 2>/dev/null | grep -q .; then
+  release_smoke_needed=true
+elif git diff origin/main...HEAD -- mix.exs 2>/dev/null \
+  | grep -E '^[+-]' | grep -vE '^\+\+\+|^---' | grep -v 'version:' | grep -q .; then
+  release_smoke_needed=true
+fi
+
+if [ "$release_smoke_needed" = "true" ]; then
+  echo "▸ Release smoke: mix.lock/rel/non-version mix.exs change, running MIX_ENV=prod mix release --overwrite"
   if MIX_ENV=prod mix release --overwrite >"$QUALITY_LOGDIR/release.log" 2>&1; then
     echo "  ✓ mix release"
   else

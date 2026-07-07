@@ -40,6 +40,12 @@ defmodule EngramWeb.CrdtChannel do
   @msg_limit 240
   @msg_scale_ms 10_000
 
+  # Handshake (STEP1/STEP2) budget — separate from @msg_limit so connect-time
+  # enrollment (one STEP1 per note) can never starve edit frames (the
+  # 2026-07-07 incident trigger on a ~230-note vault). 2400/10s enrolls a
+  # 2400-note vault inside one window; bounded, not exempt (see frame_class).
+  @hs_limit 2400
+
   # Account-wide ceiling = @msg_limit × this. A user may run several devices,
   # each with the full per-device budget, but the account total is capped so a
   # single account can't multiply its budget without bound by opening many
@@ -102,7 +108,15 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
-    with :ok <- check_rate(socket),
+    # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
+    # handshakes ride their own, larger bucket than edit frames: connect-time
+    # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
+    # ~230-note vault a single per-frame budget let enrollment starve the
+    # user's real edits for the whole window (2026-07-07 cross-file-overwrite
+    # incident trigger). The full base64 decode runs only AFTER the limiter
+    # allows the frame, so an over-budget flood is still rejected at ETS-lookup
+    # cost, never at MB-scale decode cost.
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
@@ -208,21 +222,56 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Both must allow. Per-device is checked first so a device that's already over
   # its own budget doesn't also consume from the account ceiling.
-  defp check_rate(socket) do
-    limit = effective_msg_limit()
+  # Classify WITHOUT decoding the payload: the first 4 base64 chars decode to
+  # the frame's first 3 bytes. Yjs v1 wire layout (Yex.Sync doctests):
+  # <<0, 0, ..>> STEP1, <<0, 1, ..>> STEP2, <<0, 2, ..>> update — all subtype
+  # values < 128, so single-byte varints and the prefix match is exact.
+  #
+  # STEP1 is non-mutating (server just replies with a diff) and rides the
+  # handshake lane unconditionally. STEP2 MUTATES the doc exactly like an
+  # update (y_ex routes both into apply_update), so only SMALL STEP2 frames —
+  # the near-empty echo replies connect enrollment produces in bulk — get the
+  # handshake lane; a large STEP2 is a state-bearing mutation and pays the
+  # edit budget. Without the size gate a client could relabel every edit as
+  # STEP2 and mutate at 10x the intended cap.
+  @hs_step2_max_b64 4096
+
+  defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
+    case Base.decode64(prefix) do
+      {:ok, <<0, 0, _>>} -> :handshake
+      {:ok, <<0, 1, _>>} when byte_size(b64) <= @hs_step2_max_b64 -> :handshake
+      _ -> :edit
+    end
+  end
+
+  # Shorter than 4 b64 chars cannot carry a valid handshake prefix; the edit
+  # lane is the conservative default.
+  defp frame_class_b64(_), do: :edit
+
+  defp check_rate(socket, class) do
+    {key_prefix, limit} =
+      case class do
+        # Handshakes get a 10x-larger bucket, NOT an exemption: STEP2 carries
+        # full doc state, so an unbounded handshake lane would be a flood
+        # vector. 2400/10s enrolls a 2400-note vault in one window while still
+        # capping abuse; edits keep their own untouched budget either way.
+        :handshake -> {"crdt_hs", effective_hs_limit()}
+        :edit -> {"crdt_msg", effective_msg_limit()}
+      end
+
     user_id = socket.assigns.current_user.id
     device = socket.assigns[:device_id] || socket.assigns[:conn_id] || "u"
 
     with {:allow, _} <-
            EngramWeb.RateLimiter.hit(
-             "crdt_msg:#{user_id}:#{device}",
+             "#{key_prefix}:#{user_id}:#{device}",
              @msg_scale_ms,
              limit,
              :other
            ),
          {:allow, _} <-
            EngramWeb.RateLimiter.hit(
-             "crdt_msg:acct:#{user_id}",
+             "#{key_prefix}:acct:#{user_id}",
              @msg_scale_ms,
              limit * @account_multiplier,
              :other
@@ -306,7 +355,12 @@ defmodule EngramWeb.CrdtChannel do
     defp effective_msg_limit do
       Application.get_env(:engram, :crdt_msg_rate_limit_override) || @msg_limit
     end
+
+    defp effective_hs_limit do
+      Application.get_env(:engram, :crdt_hs_rate_limit_override) || @hs_limit
+    end
   else
     defp effective_msg_limit, do: @msg_limit
+    defp effective_hs_limit, do: @hs_limit
   end
 end
