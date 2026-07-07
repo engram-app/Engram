@@ -68,6 +68,21 @@ defmodule Engram.Notes.CrdtDeliver do
     :ok
   end
 
+  @doc """
+  Discovery-only delivery: announce `crdt_doc_ready` (doc_id = note_id) without
+  the live-room state push. For the CRDT checkpoint — a CRDT-origin write whose
+  live observers already converged via real-time frame relay, so the room push
+  is redundant AND unsafe from the room's own unbind process (it would
+  `GenServer.call` self). The announce is the only missing piece: it lets a
+  client NOT enrolled in the room (e.g. Obsidian with the note closed) open one
+  and pull the just-persisted edit. Path-gated to `.md` like `deliver_out/5`.
+  """
+  @spec announce_ready(String.t(), String.t(), String.t(), String.t()) :: :ok
+  def announce_ready(user_id, vault_id, path, note_id) do
+    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, note_id)
+    :ok
+  end
+
   # Step 1 — converge a live room onto the just-committed state, if one exists.
   # Non-creating lookup so an external write never spins a room for a note
   # nobody is observing.

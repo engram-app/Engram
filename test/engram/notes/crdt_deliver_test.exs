@@ -52,6 +52,30 @@ defmodule Engram.Notes.CrdtDeliverTest do
     end
   end
 
+  describe "announce_ready/4 — discovery-only (checkpoint path)" do
+    test "announces crdt_doc_ready for a .md note without touching any room",
+         %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      note_id = Ecto.UUID.generate()
+
+      assert :ok = CrdtDeliver.announce_ready(user.id, vault.id, "a.md", note_id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "crdt_doc_ready",
+        payload: %{"doc_id" => ^note_id}
+      }
+    end
+
+    test "does NOT announce for a non-.md note", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      note_id = Ecto.UUID.generate()
+
+      assert :ok = CrdtDeliver.announce_ready(user.id, vault.id, "board.canvas", note_id)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}
+    end
+  end
+
   describe "deliver_out/5 — live-room frame push" do
     # These are PRIMARY-path tests: a real note row exists and deliver-out
     # applies its stored merge-lineage state. Rooms start EMPTY (production
