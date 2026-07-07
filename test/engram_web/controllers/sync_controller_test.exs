@@ -41,19 +41,36 @@ defmodule EngramWeb.SyncControllerTest do
       assert is_binary(note["content_hash"])
     end
 
-    test "includes each note's stable id (client id reconciliation hook)", %{conn: conn} do
+    test "includes each note's CORRECT stable id (client id reconciliation hook)",
+         %{conn: conn, user: user, vault: vault} do
       # The plugin uses this to learn the authoritative note_id for every
       # existing note on an id-keying upgrade, instead of minting divergent
-      # ids (the 2026-07-06 corruption trigger).
+      # ids (the 2026-07-06 corruption trigger). The id must be the note's
+      # ACTUAL id — a wrong-but-valid UUID would re-create the divergence.
       post(conn, "/api/notes", %{path: "Test/A.md", content: "# Alpha", mtime: 1_000.0})
+      # The POST provisioned the DEK in the DB, but the in-struct context user
+      # is stale — load it so get_note's path_hmac derivation resolves.
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, real} = Engram.Notes.get_note(user, vault, "Test/A.md")
 
       body = conn |> get("/api/sync/manifest") |> json_response(200)
       note = Enum.find(body["notes"], &(&1["path"] == "Test/A.md"))
 
-      assert note != nil, "expected the note in the manifest, got: #{inspect(body["notes"])}"
+      assert note["id"] == real.id
+    end
 
-      assert {:ok, _} = Ecto.UUID.cast(note["id"]),
-             "manifest note must carry a valid UUID id, got: #{inspect(note["id"])}"
+    test "includes each attachment's stable id", %{conn: conn} do
+      post(conn, "/api/attachments", %{
+        path: "photos/img.png",
+        content_base64: Base.encode64("binary data"),
+        mtime: 1_000.0
+      })
+
+      body = conn |> get("/api/sync/manifest") |> json_response(200)
+      att = hd(body["attachments"])
+
+      assert {:ok, _} = Ecto.UUID.cast(att["id"]),
+             "manifest attachment must carry a valid UUID id, got: #{inspect(att["id"])}"
     end
 
     test "includes attachments with path and content_hash", %{conn: conn} do

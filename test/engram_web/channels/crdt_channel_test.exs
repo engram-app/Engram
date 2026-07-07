@@ -251,6 +251,12 @@ defmodule EngramWeb.CrdtChannelTest do
 
       refute String.contains?(msg, doc_id),
              "note_id must live in metadata, not the message body: #{inspect(msg)}"
+
+      # The drop must be attributable — user_id + vault_id (both non-sensitive
+      # UUIDs) let a lost edit be traced to who hit it (the 2026-07-06 drops
+      # carried neither).
+      assert log =~ "user_id=", "drop log must carry user_id for attribution: #{inspect(log)}"
+      assert log =~ "vault_id=", "drop log must carry vault_id for attribution: #{inspect(log)}"
     end
 
     test "a non-UUID doc_id stays redacted — never leaks a cleartext path",

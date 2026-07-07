@@ -5,6 +5,7 @@ defmodule Engram.NotesClientMintTest do
   use Engram.DataCase, async: true
 
   import Engram.Factory
+  import ExUnit.CaptureLog
 
   test "upsert_note honors client-supplied uuidv7 id" do
     user = insert(:user)
@@ -126,12 +127,17 @@ defmodule Engram.NotesClientMintTest do
         })
 
       # A different note at a different path reuses A's live note_id.
-      result =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "B.md",
-          "content" => "BBB different body"
-        })
+      {result, log} =
+        with_log(fn ->
+          Engram.Notes.upsert_note(user, vault, %{
+            "id" => id,
+            "path" => "B.md",
+            "content" => "BBB different body"
+          })
+        end)
+
+      # The rejection is logged loudly under a greppable key (Loki monitoring).
+      assert log =~ "note_id_collision_rejected"
 
       # A survives intact at its original path — NOT moved, NOT merged.
       assert {:ok, a_still} = Engram.Notes.get_note(user, vault, "A.md")
