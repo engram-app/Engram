@@ -9,7 +9,7 @@ import uuid
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
-from helpers.vault import read_note, write_note
+from helpers.vault import read_note, wait_for_file, wait_for_file_gone, write_note
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     # Sync to B
     await cdp_b.trigger_full_sync()
-    assert (vault_b / old_path).exists(), "B should have the note before rename"
+    wait_for_file(vault_b, old_path, timeout=10)  # B has the note before rename
 
     # A renames via Obsidian's vault API (triggers handleRename → POST /notes/rename)
     await cdp_a.rename_file(old_path, new_path)
@@ -44,7 +44,9 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     # B pulls
     await cdp_b.trigger_full_sync()
 
-    # Verify: B has new path, does NOT have old path
+    # Verify: B has new path, does NOT have old path. The rename reaches B as two
+    # separate events (delete old-path + upsert new-path), so the old-path removal
+    # can lag the new-path arrival — poll for it rather than asserting a snapshot.
     b_content = wait_for_delivery(vault_b, new_path, api_sync, timeout=10)
     assert "Rename Test" in b_content, "B should have the renamed file"
-    assert not (vault_b / old_path).exists(), "B should not have the old path"
+    wait_for_file_gone(vault_b, old_path, timeout=10)  # B no longer has the old path
