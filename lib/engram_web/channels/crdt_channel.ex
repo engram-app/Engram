@@ -107,13 +107,13 @@ defmodule EngramWeb.CrdtChannel do
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
 
       {:error, :frame_too_large} ->
-        log_dropped(doc_id, :frame_too_large)
+        log_dropped(socket, doc_id, :frame_too_large)
         {:reply, {:error, %{reason: "frame_too_large"}}, socket}
 
       err ->
         # Surface drops rather than swallowing them silently — a dropped frame
         # (bad base64 or unresolvable doc_id) means a lost edit.
-        log_dropped(doc_id, err)
+        log_dropped(socket, doc_id, err)
         {:noreply, socket}
     end
   end
@@ -161,13 +161,30 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # doc_id is now the note_id (a UUID, no longer a cleartext path). Keep it out
-  # of the message body regardless, and keep the `path:` metadata key so it
-  # still routes through RedactFilter's existing scrub list unchanged.
-  defp log_dropped(doc_id, reason) do
+  # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
+  # lost a dropped edit (redacting it under :path blocked the 2026-07-06
+  # incident triage), so log a well-formed doc_id under the un-redacted
+  # :note_id key. A doc_id that is NOT a UUID came from a stale path-keyed
+  # client and may be a real cleartext path — keep those under the redacted
+  # :path key so nothing sensitive ever leaks. The message body never carries
+  # the id either way.
+  defp log_dropped(socket, doc_id, reason) do
+    id_meta =
+      case Ecto.UUID.cast(doc_id) do
+        {:ok, note_id} -> [note_id: note_id]
+        :error -> [path: doc_id]
+      end
+
+    # Attribute the drop to a user + vault so a lost edit can be traced to who
+    # hit it (the 2026-07-06 drops carried neither, so they were unattributable).
+    attribution = [
+      user_id: socket.assigns.current_user.id,
+      vault_id: socket.assigns.vault.id
+    ]
+
     Logger.warning(
       "crdt_channel: dropped crdt_msg → #{inspect(reason)}",
-      Metadata.with_category(:warning, :sync, path: doc_id)
+      Metadata.with_category(:warning, :sync, attribution ++ id_meta)
     )
   end
 

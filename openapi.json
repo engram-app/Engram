@@ -669,6 +669,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "id": {
+            "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "path": {
             "type": "string",
             "x-struct": null,
@@ -676,6 +683,7 @@
           }
         },
         "required": [
+          "id",
           "path"
         ],
         "title": "ManifestEntry",

@@ -7,10 +7,15 @@ defmodule EngramWeb.Schemas.ManifestEntry do
     title: "ManifestEntry",
     type: :object,
     properties: %{
+      id: %Schema{
+        type: :string,
+        format: :uuid,
+        description: "Stable note/attachment id — lets a client reconcile its path↔id map."
+      },
       path: %Schema{type: :string},
       content_hash: %Schema{type: :string, nullable: true}
     },
-    required: [:path]
+    required: [:id, :path]
   })
 end
 

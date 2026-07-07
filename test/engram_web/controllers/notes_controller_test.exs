@@ -118,6 +118,40 @@ defmodule EngramWeb.NotesControllerTest do
       assert unchanged.content == "# Other user's note"
       assert unchanged.version == 1
     end
+
+    test "rejects a client id colliding with the user's OWN live note (409), leaving it intact",
+         %{conn: conn} do
+      # End-to-end wire contract for the 2026-07-06 corruption guard: a push to
+      # a NEW path that reuses a note_id already LIVE at another path in the same
+      # vault must 409 — never move/merge the live note onto the new path (which
+      # destroyed the original and bled its content across notes pre-fix).
+      id = UUIDv7.generate()
+
+      post(conn, "/api/notes", %{
+        id: id,
+        path: "Test/A.md",
+        content: "# A original",
+        mtime: 1_000.0
+      })
+
+      conn2 =
+        post(conn, "/api/notes", %{
+          id: id,
+          path: "Test/B.md",
+          content: "# B different",
+          mtime: 2_000.0
+        })
+
+      assert json_response(conn2, 409)
+
+      # A survives intact at its original path — not moved, not merged.
+      a = conn |> get("/api/notes/Test/A.md") |> json_response(200)
+      assert a["content"] =~ "A original"
+      refute a["content"] =~ "B different"
+
+      # B was never created — the live note was not relocated there.
+      assert conn |> get("/api/notes/Test/B.md") |> json_response(404)
+    end
   end
 
   # ---------------------------------------------------------------------------

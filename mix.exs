@@ -4,7 +4,7 @@ defmodule Engram.MixProject do
   def project do
     [
       app: :engram,
-      version: "0.5.635",
+      version: "0.5.638",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -148,7 +148,7 @@ defmodule Engram.MixProject do
 
       # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
       # and self-host)
-      {:sentry, "~> 10.0"},
+      {:sentry, "~> 13.2"},
 
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},
@@ -184,7 +184,7 @@ defmodule Engram.MixProject do
       # Tidewave MCP — runtime introspection of the running dev app
       # (project_eval, DB queries, logs). Dev-only: it is RCE by design
       # and is mounted in the endpoint behind a code_reloading? guard.
-      {:tidewave, "~> 0.5.0", only: :dev}
+      {:tidewave, "~> 0.6.1", only: :dev}
     ]
   end
 
