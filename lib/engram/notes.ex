@@ -369,21 +369,16 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(lookup_query) do
             nil ->
-              case existing_by_client_id(client_id, vault) do
-                %Note{} = prior ->
-                  move_note(prior, base_attrs, user, sanitized_path, folder)
-
-                nil ->
-                  insert_new_note(
-                    base_attrs,
-                    user,
-                    sanitized_path,
-                    folder,
-                    tags,
-                    client_id,
-                    lookup_query
-                  )
-              end
+              upsert_pathless(
+                client_id,
+                vault,
+                base_attrs,
+                user,
+                sanitized_path,
+                folder,
+                tags,
+                lookup_query
+              )
 
             existing ->
               do_update_note(existing, base_attrs, user, sanitized_path, folder, tags, opts)
@@ -465,6 +460,24 @@ defmodule Engram.Notes do
           # Phase B.3: virtual path/folder/tags need to be populated from
           # ciphertext before the controller serializes the conflict response.
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
+
+        {:ok, {:id_collision, live}} ->
+          # A push carried a note_id that already names a LIVE note at another
+          # path. Refused to move/merge (that destroys the live note). Log with
+          # a distinct, greppable key so this class — invisible until the
+          # 2026-07-06 corruption incident — is monitorable in Loki, then hand
+          # back a conflict so the client reconciles (re-mints its id / pulls).
+          Logger.warning(
+            "note_id_collision_rejected",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: live.id,
+              server_version: live.version
+            )
+          )
+
+          {:error, :version_conflict, decrypt_or_raise!(live, user)}
 
         {:ok, {:error, changeset}} ->
           {:error, changeset}
@@ -586,6 +599,40 @@ defmodule Engram.Notes do
   # marker sharing the id space. `Repo.get` has no soft-delete default scope
   # (Note carries no query default, only `note_by_path_query` filters
   # `deleted_at` explicitly), so this returns tombstones as well as live rows.
+  # No live note exists at this path. Route by the client-supplied note_id.
+  # Must run inside the caller's `Repo.with_tenant` block (does tenant-scoped
+  # reads/writes).
+  defp upsert_pathless(
+         client_id,
+         vault,
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         tags,
+         lookup_query
+       ) do
+    case existing_by_client_id(client_id, vault) do
+      %Note{deleted_at: nil} = live ->
+        # Live id-collision: this note_id already names a LIVE note at a
+        # DIFFERENT path (there is no live note at THIS path — the lookup
+        # missed). "rename A->B" and "a different note that reuses A's id" are
+        # indistinguishable on the wire, and move_note would relocate +
+        # crdt-merge A onto B, silently destroying A and bleeding its content
+        # across notes (prod incident 2026-07-06). A real rename tombstones the
+        # old path first (delete_note) and takes the resurrect branch below; a
+        # live match here is a duplicate-id bug, so reject it as a conflict
+        # rather than collapsing two distinct notes.
+        {:id_collision, live}
+
+      %Note{} = prior ->
+        move_note(prior, base_attrs, user, sanitized_path, folder)
+
+      nil ->
+        insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query)
+    end
+  end
+
   defp existing_by_client_id(nil, _vault), do: nil
 
   defp existing_by_client_id(client_id, vault) do

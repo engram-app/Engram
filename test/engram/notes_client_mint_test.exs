@@ -5,6 +5,7 @@ defmodule Engram.NotesClientMintTest do
   use Engram.DataCase, async: true
 
   import Engram.Factory
+  import ExUnit.CaptureLog
 
   test "upsert_note honors client-supplied uuidv7 id" do
     user = insert(:user)
@@ -97,34 +98,58 @@ defmodule Engram.NotesClientMintTest do
       assert Engram.UsageMeters.notes_count(user.id) == 1
     end
 
-    test "moves a live id to a new path without double-counting" do
+    # NOTE (2026-07-06): a prior test here asserted that upserting a LIVE note's
+    # id at a new path MOVES it (destroying the original at the old path). That
+    # was the id-collision data-loss vector — removed. Moving a live note by id
+    # is now rejected (see "rejects a live id-collision ..." below). A real
+    # rename tombstones the old path first and is covered by
+    # "resurrects a tombstoned id at a new path (rename)" above, which also
+    # asserts the usage counter is not double-counted.
+
+    # DATA-LOSS GUARD (prod incident 2026-07-06): on the wire, "rename A->B"
+    # and "a DIFFERENT note that reuses A's note_id" are indistinguishable — a
+    # single upsert to path B carrying a note_id already live at path A. The
+    # old behavior MOVED + crdt-merged the live A row onto B, silently
+    # destroying A and bleeding its content across notes. A live id-collision
+    # must be REJECTED (conflict), never moved. Legit renames delete-first
+    # (tombstone) and take the resurrect path above, so they are unaffected.
+    test "rejects a live id-collision instead of collapsing two distinct notes" do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
       id = UUIDv7.generate()
 
-      {:ok, _note} =
+      {:ok, _a} =
         Engram.Notes.upsert_note(user, vault, %{
           "id" => id,
           "path" => "A.md",
-          "content" => "# Hi\nbody"
+          "content" => "AAA original body"
         })
 
+      # A different note at a different path reuses A's live note_id.
+      {result, log} =
+        with_log(fn ->
+          Engram.Notes.upsert_note(user, vault, %{
+            "id" => id,
+            "path" => "B.md",
+            "content" => "BBB different body"
+          })
+        end)
+
+      # The rejection is logged loudly under a greppable key (Loki monitoring).
+      assert log =~ "note_id_collision_rejected"
+
+      # A survives intact at its original path — NOT moved, NOT merged.
+      assert {:ok, a_still} = Engram.Notes.get_note(user, vault, "A.md")
+      assert a_still.id == id
+      assert a_still.content =~ "AAA original body"
+      refute a_still.content =~ "BBB"
+
+      # The colliding push is surfaced as a conflict, not silently applied.
+      assert {:error, :version_conflict, _} = result
+
+      # Exactly one note exists — the collision did not create/duplicate rows.
       assert Engram.UsageMeters.notes_count(user.id) == 1
-
-      {:ok, moved} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "B.md",
-          "content" => "# Hi\nbody"
-        })
-
-      assert moved.id == id
-      assert moved.path == "B.md"
-      assert Engram.UsageMeters.notes_count(user.id) == 1
-
-      assert {:ok, _} = Engram.Notes.get_note(user, vault, "B.md")
-      assert {:error, :not_found} = Engram.Notes.get_note(user, vault, "A.md")
     end
 
     test "a fresh id at a new path still inserts normally" do
@@ -140,6 +165,50 @@ defmodule Engram.NotesClientMintTest do
         })
 
       assert note.id == id
+      assert Engram.UsageMeters.notes_count(user.id) == 1
+    end
+  end
+
+  # EXISTING-VAULT UPGRADE SAFETY (2026-07-06).
+  #
+  # Every other test here (and the whole e2e suite) exercises a FRESH vault:
+  # each note is created in-session with a uniquely minted id, so client and
+  # server ids always agree. An EXISTING vault upgraded to id-keying is
+  # different — the server already holds ids for pre-existing notes, but the
+  # plugin's note_id sidecar starts empty and mints its OWN ids until it learns
+  # the server's. That divergence is the shape that produced the corruption
+  # incident. These tests reproduce the upgraded-client behavior (a client
+  # supplying an id that disagrees with the server's) and pin that it can never
+  # corrupt. This is the reusable pattern for testing upgrade/migration issues:
+  # seed pre-existing SERVER state, then drive the UPGRADED client's divergent
+  # behavior and assert no data loss.
+  describe "existing-vault upgrade safety (divergent client ids)" do
+    test "a pre-existing note re-pushed with a DIFFERENT client id updates in place, no duplicate" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault = insert(:vault, user: user)
+
+      # Pre-existing note: created before id-keying, so the SERVER minted its id.
+      {:ok, server_note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "note.md", "content" => "v1"})
+
+      server_id = server_note.id
+
+      # Upgraded client doesn't know the server id yet and mints its own, then
+      # pushes the SAME path. Path-match must win: the row keeps its server id
+      # (client id ignored), content updates, and NO second note is created.
+      client_id = UUIDv7.generate()
+
+      {:ok, updated} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "id" => client_id,
+          "path" => "note.md",
+          "content" => "v2"
+        })
+
+      assert updated.id == server_id
+      refute updated.id == client_id
+      assert updated.content =~ "v2"
       assert Engram.UsageMeters.notes_count(user.id) == 1
     end
   end
