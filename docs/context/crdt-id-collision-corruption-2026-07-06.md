@@ -58,9 +58,13 @@ collision was **ruled out** (74 bits of `crypto.getRandomValues`).
 
 **Recommended plugin fix (needs runtime confirmation via the new logs first):** on the
 id-keying upgrade, do a **full id reconciliation** — learn the server's id for *every*
-existing note (via the full manifest/reconcile, which carries ids) into `NoteIdMap`
-**before** minting or pushing anything. Only genuinely new notes should mint.
-Do NOT blind-fix without confirming the exact learn-gap from prod logs / a repro.
+existing note into `NoteIdMap` **before** minting or pushing anything. Only genuinely new
+notes should mint. **Backend hook shipped in this PR:** `GET /sync/manifest` now returns
+`id` on every note/attachment entry (`ManifestEntry.id`), so the plugin can populate the
+whole path↔id map in one call on upgrade instead of guessing. The plugin also must not
+send CRDT frames under an unconfirmed id, and must re-key the CRDT room if the backend
+returns a different id than it guessed. Do NOT blind-fix without confirming the exact
+learn-gap from prod logs / a repro.
 
 ## Why the tests missed it — and the fix
 

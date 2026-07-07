@@ -41,6 +41,21 @@ defmodule EngramWeb.SyncControllerTest do
       assert is_binary(note["content_hash"])
     end
 
+    test "includes each note's stable id (client id reconciliation hook)", %{conn: conn} do
+      # The plugin uses this to learn the authoritative note_id for every
+      # existing note on an id-keying upgrade, instead of minting divergent
+      # ids (the 2026-07-06 corruption trigger).
+      post(conn, "/api/notes", %{path: "Test/A.md", content: "# Alpha", mtime: 1_000.0})
+
+      body = conn |> get("/api/sync/manifest") |> json_response(200)
+      note = Enum.find(body["notes"], &(&1["path"] == "Test/A.md"))
+
+      assert note != nil, "expected the note in the manifest, got: #{inspect(body["notes"])}"
+
+      assert {:ok, _} = Ecto.UUID.cast(note["id"]),
+             "manifest note must carry a valid UUID id, got: #{inspect(note["id"])}"
+    end
+
     test "includes attachments with path and content_hash", %{conn: conn} do
       post(conn, "/api/attachments", %{
         path: "photos/img.png",

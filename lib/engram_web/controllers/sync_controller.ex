@@ -204,7 +204,7 @@ defmodule EngramWeb.SyncController do
         Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
           aad = path_aad(:notes, id, dek_version)
           path = decrypt_path!(path_ct, path_nonce, dek, aad)
-          %{path: path, content_hash: hash}
+          %{id: id, path: path, content_hash: hash}
         end)
       end)
       |> Enum.sort_by(& &1.path)
@@ -214,7 +214,7 @@ defmodule EngramWeb.SyncController do
         Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash} ->
           aad = path_aad(:attachments, id, dek_version)
           path = decrypt_path!(path_ct, path_nonce, dek, aad)
-          %{path: path, content_hash: hash}
+          %{id: id, path: path, content_hash: hash}
         end)
       end)
       |> Enum.sort_by(& &1.path)
