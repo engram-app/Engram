@@ -35,6 +35,11 @@ from helpers.obsidian import ObsidianInstance
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
+# The SPA is served by the backend at the API host root (strip the `/api`
+# suffix). A browser-SPA peer (helpers/web_spa.py) loads this.
+SPA_URL = os.environ.get("ENGRAM_SPA_URL") or (
+    API_URL[:-4] if API_URL.endswith("/api") else API_URL
+)
 PLUGIN_SRC = Path(os.environ.get("ENGRAM_PLUGIN_SRC", Path(__file__).parent.parent / "plugin"))
 OBSIDIAN_BIN = Path.home() / "Applications" / "Obsidian.AppImage"
 
@@ -182,14 +187,24 @@ def clerk_client(auth_provider):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def sync_user(ts, auth_provider):
-    """Shared user for Obsidian A + B.
+def sync_password():
+    """Password for `sync_user`, exposed so a browser SPA peer can sign in.
+
+    The Obsidian/API clients authenticate with the API key, but the SPA's
+    local-auth login needs the email+password — which `sync_user` otherwise
+    generated inline and discarded. Sourcing it here lets both share one user.
+    """
+    return secrets.token_urlsafe(32)
+
+
+@pytest.fixture(scope="session")
+def sync_user(ts, auth_provider, sync_password):
+    """Shared user for Obsidian A + B (and the browser SPA peer).
 
     Returns: (email, provider_user_id, api_key)
     """
     email = f"e2e-sync-{ts}+clerk_test@example.com"
-    password = secrets.token_urlsafe(32)
-    provider_user_id, api_key = auth_provider.provision_user(email, password)
+    provider_user_id, api_key = auth_provider.provision_user(email, sync_password)
     # Lift pricing v2 §G Free-tier defaults (api_rps_cap=0, api_write_enabled=false)
     # before any api-key-authed request hits the user — mirrors
     # EngramWeb.ConnCase.grant_api_write!/1 for the e2e layer.
@@ -331,6 +346,33 @@ def api_sync(sync_user, sync_client_id):
     except Exception:
         pass
     return api
+
+
+@pytest.fixture(scope="session")
+def sync_vault_id(api_sync, sync_client_id):
+    """Server vault id the browser SPA peer targets (seeds `activeVaultId`).
+
+    `api_sync` already registered this vault (idempotent by client_id); a
+    re-register returns the same row, so we read its id here. Shape-robust:
+    the response may nest the vault under `vault` or return it flat.
+    """
+    resp, status = api_sync.register_vault(f"e2e-sync-vault-w{_WORKER}", sync_client_id)
+    vault = resp.get("vault", resp) if isinstance(resp, dict) else {}
+    vid = vault.get("id") or vault.get("vault_id") or vault.get("uuid")
+    assert vid, f"no vault id in /vaults/register response (status={status}): {resp}"
+    return vid
+
+
+@pytest.fixture
+async def web(sync_user, sync_password):
+    """A real headless-Chromium peer on the SPA, signed in as `sync_user`
+    (same server vault as Obsidian A/B). Function-scoped: fresh tab per test."""
+    from helpers.web_spa import WebSpaPeer
+
+    peer = WebSpaPeer(SPA_URL, sync_user[0], sync_password)
+    await peer.start()
+    yield peer
+    await peer.stop()
 
 
 @pytest.fixture(scope="session")
