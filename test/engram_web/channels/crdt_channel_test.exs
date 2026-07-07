@@ -449,6 +449,23 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     @tag capture_log: true
+    test "a LARGE STEP2 pays the edit budget — relabeled mutations don't get the 10x lane",
+         %{socket: socket} do
+      # STEP2 mutates the doc exactly like an update (y_ex applies both via
+      # apply_update). Only the near-empty enrollment echo STEP2s ride the
+      # handshake lane; a state-bearing STEP2 must count as an edit or a client
+      # could relabel every mutation as <<0, 1, ..>> and bypass the edit cap.
+      big_step2_b64 = Base.encode64(<<0, 1>> <> :binary.copy(<<7>>, 4_096))
+      absent = Ecto.UUID.generate()
+
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
     test "the handshake bucket is still bounded (flood shield, not an exemption)",
          %{socket: socket} do
       Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)

@@ -108,14 +108,16 @@ defmodule EngramWeb.CrdtChannel do
 
   @impl true
   def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
-    # Decode BEFORE the rate check so the frame can be classified: sync
-    # handshakes (STEP1/STEP2) ride their own, larger bucket than edit frames.
-    # Connect-time enrollment fires one STEP1 per note, so on a ~230-note vault
-    # a single per-frame budget let enrollment starve the user's real edits for
-    # the whole window (2026-07-07 cross-file-overwrite incident trigger).
-    # decode_frame's size cap still rejects oversized payloads up front.
-    with {:ok, frame} <- decode_frame(b64),
-         :ok <- check_rate(socket, frame_class(frame)),
+    # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
+    # handshakes ride their own, larger bucket than edit frames: connect-time
+    # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
+    # ~230-note vault a single per-frame budget let enrollment starve the
+    # user's real edits for the whole window (2026-07-07 cross-file-overwrite
+    # incident trigger). The full base64 decode runs only AFTER the limiter
+    # allows the frame, so an over-budget flood is still rejected at ETS-lookup
+    # cost, never at MB-scale decode cost.
+    with :ok <- check_rate(socket, frame_class_b64(b64)),
+         {:ok, frame} <- decode_frame(b64),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
       {:noreply, socket}
@@ -220,13 +222,31 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Both must allow. Per-device is checked first so a device that's already over
   # its own budget doesn't also consume from the account ceiling.
-  # Yjs v1 wire layout (Yex.Sync doctests): messageType 0 = sync, then the sync
-  # subtype — 0 = STEP1 (state vector), 1 = STEP2 (state), 2 = update. STEP1 and
-  # STEP2 are the enrollment/catch-up handshake; everything else (updates,
-  # awareness, unknown) counts as an edit frame.
-  defp frame_class(<<0, 0, _::binary>>), do: :handshake
-  defp frame_class(<<0, 1, _::binary>>), do: :handshake
-  defp frame_class(_), do: :edit
+  # Classify WITHOUT decoding the payload: the first 4 base64 chars decode to
+  # the frame's first 3 bytes. Yjs v1 wire layout (Yex.Sync doctests):
+  # <<0, 0, ..>> STEP1, <<0, 1, ..>> STEP2, <<0, 2, ..>> update — all subtype
+  # values < 128, so single-byte varints and the prefix match is exact.
+  #
+  # STEP1 is non-mutating (server just replies with a diff) and rides the
+  # handshake lane unconditionally. STEP2 MUTATES the doc exactly like an
+  # update (y_ex routes both into apply_update), so only SMALL STEP2 frames —
+  # the near-empty echo replies connect enrollment produces in bulk — get the
+  # handshake lane; a large STEP2 is a state-bearing mutation and pays the
+  # edit budget. Without the size gate a client could relabel every edit as
+  # STEP2 and mutate at 10x the intended cap.
+  @hs_step2_max_b64 4096
+
+  defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
+    case Base.decode64(prefix) do
+      {:ok, <<0, 0, _>>} -> :handshake
+      {:ok, <<0, 1, _>>} when byte_size(b64) <= @hs_step2_max_b64 -> :handshake
+      _ -> :edit
+    end
+  end
+
+  # Shorter than 4 b64 chars cannot carry a valid handshake prefix; the edit
+  # lane is the conservative default.
+  defp frame_class_b64(_), do: :edit
 
   defp check_rate(socket, class) do
     {key_prefix, limit} =
