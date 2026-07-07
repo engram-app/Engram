@@ -21,5 +21,13 @@ defmodule Engram.Support do
     %IssueReport{}
     |> IssueReport.changeset(params)
     |> Repo.insert()
+    |> case do
+      {:ok, report} ->
+        Engram.Notifications.Discord.notify_report(report, user.email)
+        {:ok, report}
+
+      other ->
+        other
+    end
   end
 end
