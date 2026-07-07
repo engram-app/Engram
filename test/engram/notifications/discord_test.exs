@@ -32,4 +32,16 @@ defmodule Engram.Notifications.DiscordTest do
     assert content =~ "…"
     assert String.length(content) < 2200
   end
+
+  test "build_report_payload/2 disables mention parsing to prevent @everyone/@here injection" do
+    payload = Discord.build_report_payload(report(), "todd@example.com")
+    assert payload.allowed_mentions == %{parse: []}
+  end
+
+  test "build_report_payload/2 disables mentions even when description contains @everyone" do
+    malicious = %{report() | description: "@everyone please check this bug"}
+    payload = Discord.build_report_payload(malicious, "a@b.com")
+    assert payload.content =~ "@everyone"
+    assert payload.allowed_mentions == %{parse: []}
+  end
 end

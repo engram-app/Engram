@@ -34,11 +34,12 @@ defmodule Engram.Notifications.Discord do
     > #{String.slice(report.description, 0, @desc_limit)}#{ellipsis(report.description)}
     """
 
-    %{content: content}
+    %{content: content, allowed_mentions: %{parse: []}}
   end
 
-  defp ellipsis(s) when byte_size(s) > @desc_limit, do: "…"
-  defp ellipsis(_), do: ""
+  defp ellipsis(s) do
+    if String.length(s) > @desc_limit, do: "…", else: ""
+  end
 
   defp post(url, payload) do
     case Req.post(url, json: payload, receive_timeout: 10_000, retry: :transient, max_retries: 2) do
