@@ -328,6 +328,66 @@ def cdp_c(obsidian_c):
 
 
 # ---------------------------------------------------------------------------
+# Resumed-device fixture (dedicated instance pair, function-scoped)
+#
+# A stop/mutate-data.json/restart cycle must never touch the session-scoped
+# A/B/C fixtures the rest of the suite depends on, so this is its own pair on
+# its own ports/displays. It shares sync_user/sync_client_id with session A/B
+# so it lands on the SAME server vault api_sync polls (client_id upsert is
+# idempotent — four "devices" on one vault is exactly the multi-device shape
+# under test).
+# ---------------------------------------------------------------------------
+
+RESUMED_CDP_PORT_A = _worker_port("E2E_CDP_PORT_RESUMED_A", "9350")
+RESUMED_CDP_PORT_B = _worker_port("E2E_CDP_PORT_RESUMED_B", "9351")
+RESUMED_DISPLAY_BASE = int(os.environ.get("E2E_DISPLAY_BASE_RESUMED") or "150") - _WORKER * 2
+assert RESUMED_DISPLAY_BASE - 1 >= 1, (
+    f"RESUMED_DISPLAY_BASE={RESUMED_DISPLAY_BASE} too low for worker {_WORKER}"
+)
+
+
+@pytest.fixture
+def fresh_instance_pair(sync_user, sync_client_id):
+    """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
+
+    Function-scoped so a mid-test restart can't poison the session fixtures.
+    """
+    inst_a = ObsidianInstance(
+        name="ResumedA",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),
+        cdp_port=RESUMED_CDP_PORT_A,
+        display=f":{RESUMED_DISPLAY_BASE}",
+        api_url=API_URL,
+        api_key=sync_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=sync_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-a"),
+    )
+    inst_b = ObsidianInstance(
+        name="ResumedB",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-b"),
+        cdp_port=RESUMED_CDP_PORT_B,
+        display=f":{RESUMED_DISPLAY_BASE - 1}",
+        api_url=API_URL,
+        api_key=sync_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=sync_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-b"),
+    )
+    inst_a.start()
+    inst_b.start()
+    cdp_a = CdpClient(port=inst_a.cdp_port)
+    cdp_b = CdpClient(port=inst_b.cdp_port)
+    try:
+        yield inst_a, inst_b, cdp_a, cdp_b
+    finally:
+        inst_a.stop()
+        inst_b.stop()
+
+
+# ---------------------------------------------------------------------------
 # API clients (always use API key — works with any auth provider)
 # ---------------------------------------------------------------------------
 
