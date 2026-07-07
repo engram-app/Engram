@@ -15,12 +15,12 @@ immediate read-after-write.
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import pytest
 
-from helpers.vault import delete_note, read_note, wait_for_content, wait_for_file_gone, write_note
+from helpers.log_oracle import wait_for_delivery
+from helpers.vault import delete_note, wait_for_content, wait_for_file_gone, write_note
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E2E_ENABLE_CRDT") != "true",
@@ -32,11 +32,15 @@ CRDT_TIMEOUT = 30
 
 
 async def _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, body, marker):
-    """Create `path` on A and wait until B has it on disk — a shared CRDT base."""
+    """Create `path` on A and wait until B has it on disk live — a shared CRDT base.
+
+    No pull backstop: this is the first time `path` exists on B, so the
+    delivery oracle's non-empty guard correctly signals arrival.
+    """
     write_note(vault_a, path, body)
     api_sync.wait_for_note_content(path, marker, timeout=CRDT_TIMEOUT)
-    await cdp_b.trigger_full_sync()
-    wait_for_content(vault_b, path, marker, timeout=CRDT_TIMEOUT)
+    content = wait_for_delivery(vault_b, path, api_sync, timeout=CRDT_TIMEOUT)
+    assert marker in content, f"B never received the shared base for {path}"
 
 
 @pytest.mark.asyncio
@@ -51,8 +55,7 @@ async def test_discovery_creates_file_on_b(vault_a, vault_b, cdp_a, cdp_b, api_s
     write_note(vault_a, path, "# Discovery\nbody authored on device A")
     api_sync.wait_for_note_content(path, "device A", timeout=CRDT_TIMEOUT)
 
-    await cdp_b.trigger_full_sync()
-    content = wait_for_content(vault_b, path, "device A", timeout=CRDT_TIMEOUT)
+    content = wait_for_delivery(vault_b, path, api_sync, timeout=CRDT_TIMEOUT)
     assert "body authored on device A" in content
 
 
@@ -70,12 +73,10 @@ async def test_concurrent_edits_both_survive(vault_a, vault_b, cdp_a, cdp_b, api
     write_note(vault_a, path, "shared base\nFROM_A\n")
     write_note(vault_b, path, "shared base\nFROM_B\n")
 
-    # Drive convergence in both directions.
-    for _ in range(3):
-        await asyncio.sleep(3)
-        await cdp_a.trigger_full_sync()
-        await cdp_b.trigger_full_sync()
-
+    # Both sides converge live over the y-protocols handshake — no pull
+    # backstop. Both files already exist (from the shared base above), so
+    # the content-aware poll (not the oracle's non-empty guard) proves the
+    # other side's edit actually arrived.
     a_final = wait_for_content(vault_a, path, "FROM_B", timeout=CRDT_TIMEOUT)
     b_final = wait_for_content(vault_b, path, "FROM_A", timeout=CRDT_TIMEOUT)
     assert "FROM_A" in a_final and "FROM_B" in a_final, f"A lost an edit: {a_final!r}"
@@ -91,10 +92,11 @@ async def test_no_conflict_modal_on_divergence(vault_a, vault_b, cdp_a, cdp_b, a
 
     write_note(vault_a, path, "base line\nA change\n")
     write_note(vault_b, path, "base line\nB change\n")
-    for _ in range(3):
-        await asyncio.sleep(3)
-        await cdp_a.trigger_full_sync()
-        await cdp_b.trigger_full_sync()
+
+    # Wait for the merge to actually converge live before checking for a
+    # modal — otherwise "no modal yet" would be a race, not a guarantee.
+    wait_for_content(vault_a, path, "B change", timeout=CRDT_TIMEOUT)
+    wait_for_content(vault_b, path, "A change", timeout=CRDT_TIMEOUT)
 
     # No conflict modal open in either app.
     for cdp in (cdp_a, cdp_b):
@@ -124,11 +126,6 @@ async def test_delete_propagates(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "delete me\n", "delete me")
 
     delete_note(vault_a, path)
-    for _ in range(3):
-        await asyncio.sleep(2)
-        await cdp_a.trigger_full_sync()
-        await cdp_b.trigger_full_sync()
-
     wait_for_file_gone(vault_b, path, timeout=CRDT_TIMEOUT)
 
 
@@ -140,10 +137,6 @@ async def test_edit_after_discovery_round_trips(vault_a, vault_b, cdp_a, cdp_b, 
     await _establish_on_both(vault_a, vault_b, cdp_b, api_sync, path, "origin A\n", "origin A")
 
     write_note(vault_b, path, "origin A\nappended on B\n")
-    for _ in range(3):
-        await asyncio.sleep(3)
-        await cdp_b.trigger_full_sync()
-        await cdp_a.trigger_full_sync()
 
     a_content = wait_for_content(vault_a, path, "appended on B", timeout=CRDT_TIMEOUT)
     assert "origin A" in a_content and "appended on B" in a_content
