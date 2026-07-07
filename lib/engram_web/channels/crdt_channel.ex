@@ -40,6 +40,13 @@ defmodule EngramWeb.CrdtChannel do
   @msg_limit 240
   @msg_scale_ms 10_000
 
+  # Account-wide ceiling = @msg_limit × this. A user may run several devices,
+  # each with the full per-device budget, but the account total is capped so a
+  # single account can't multiply its budget without bound by opening many
+  # sockets or forging device ids (the WS transport has no connect-level
+  # limiter). 10 ≈ "up to ten busy devices per account" before the ceiling bites.
+  @account_multiplier 10
+
   @impl true
   def join("crdt:" <> ids, params, socket) do
     proto = Map.get(params, "crdt_proto", 1)
@@ -186,29 +193,44 @@ defmodule EngramWeb.CrdtChannel do
     )
   end
 
+  # Rate-limit per DEVICE (not per account) so a single user's multiple devices
+  # (desktop + laptop + web app, or two e2e Obsidian instances sharing one
+  # session user) each get the full budget instead of self-DoSing against one
+  # shared bucket. TWO layers:
+  #
+  #   1. per-device — `crdt_msg:<user_id>:<device>`. The `user_id` prefix is
+  #      SERVER-derived, so the client-supplied device/conn id can only REFINE
+  #      within its own tenant: it can never collide with another user's bucket
+  #      (no cross-user griefing) nor spend anything but its own allowance.
+  #   2. per-account ceiling — `crdt_msg:acct:<user_id>` at @account_multiplier×.
+  #      Caps total account throughput so forging device ids / opening many
+  #      sockets can't multiply the budget without bound.
+  #
+  # Both must allow. Per-device is checked first so a device that's already over
+  # its own budget doesn't also consume from the account ceiling.
   defp check_rate(socket) do
     limit = effective_msg_limit()
+    user_id = socket.assigns.current_user.id
+    device = socket.assigns[:device_id] || socket.assigns[:conn_id] || "u"
 
-    case EngramWeb.RateLimiter.hit(rate_key(socket), @msg_scale_ms, limit, :other) do
-      {:allow, _} -> :ok
+    with {:allow, _} <-
+           EngramWeb.RateLimiter.hit(
+             "crdt_msg:#{user_id}:#{device}",
+             @msg_scale_ms,
+             limit,
+             :other
+           ),
+         {:allow, _} <-
+           EngramWeb.RateLimiter.hit(
+             "crdt_msg:acct:#{user_id}",
+             @msg_scale_ms,
+             limit * @account_multiplier,
+             :other
+           ) do
+      :ok
+    else
       {:deny, _} -> {:error, :rate_limited}
     end
-  end
-
-  # Rate-limit per DEVICE, not per account. A single user's multiple devices
-  # (e.g. desktop + laptop + the web app, or two e2e Obsidian instances sharing
-  # one session user) must not share one budget: per-account throttling makes
-  # legit multi-device editing self-DoS and silently drop frames. Per-connection
-  # is also the correct granularity for a real-time message channel — a scripted
-  # flood originates from ONE connection and is capped here; flooding via many
-  # devices/sockets is capped at socket connect. Falls back to conn_id, then the
-  # user id, for clients that send no device id.
-  defp rate_key(socket) do
-    scope =
-      socket.assigns[:device_id] || socket.assigns[:conn_id] ||
-        to_string(socket.assigns.current_user.id)
-
-    "crdt_msg:#{scope}"
   end
 
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
