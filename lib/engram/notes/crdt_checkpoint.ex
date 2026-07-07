@@ -172,7 +172,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
       _ =
         if prev_hash != content_hash do
-          Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
+          _ = Enqueue.enqueue(EmbedNote.new_debounced(note_id), "embed_note")
 
           # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
           # which (unlike REST/MCP writes) never announced. A client not
