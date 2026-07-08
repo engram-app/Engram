@@ -141,7 +141,10 @@ defmodule EngramWeb.CrdtChannel do
 
       err ->
         # Surface drops rather than swallowing them silently — a dropped frame
-        # (bad base64) means a lost edit.
+        # (bad base64, non-UUID doc_id from a stale path-keyed client, or
+        # room_unavailable) means a lost edit. These stay reply-less: a
+        # non-UUID doc_id may be a cleartext path (never echo it back), and
+        # the sender has no actionable heal for the others.
         log_dropped(socket, doc_id, err)
         {:noreply, socket}
     end
