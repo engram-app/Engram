@@ -260,15 +260,15 @@ defmodule Engram.MCP.Handlers do
     text = args["text"] || ""
 
     case Notes.get_note(user, vault, path) do
-      {:ok, note} ->
-        content = String.trim_trailing(note.content, "\n") <> "\n" <> text
-
-        case Notes.upsert_note(user, vault, %{
-               "path" => path,
-               "content" => content,
-               "mtime" => now()
-             }) do
+      {:ok, _note} ->
+        # Read-modify-write via the CAS helper: a write landing between the
+        # read and the upsert must trigger a re-read + rebuild, not be deleted
+        # by the full-content merge (2026-07-07: MCP appends erased).
+        case rmw_upsert(user, vault, path, fn content ->
+               String.trim_trailing(content, "\n") <> "\n" <> text
+             end) do
           {:ok, _} -> {:ok, "Note appended to: #{path}"}
+          {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
           {:error, _} -> {:ok, "Failed to append to note: #{path}"}
         end
 
@@ -306,9 +306,11 @@ defmodule Engram.MCP.Handlers do
           case Notes.upsert_note(user, vault, %{
                  "path" => path,
                  "content" => new_content,
-                 "mtime" => now()
+                 "mtime" => now(),
+                 "base_hash" => note.content_hash
                }) do
             {:ok, _} -> {:ok, "Replaced #{count} occurrence(s) in #{path}"}
+            {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
             {:error, _} -> {:ok, "Failed to patch note: #{path}"}
           end
         else
@@ -373,9 +375,11 @@ defmodule Engram.MCP.Handlers do
           case Notes.upsert_note(user, vault, %{
                  "path" => path,
                  "content" => final_content,
-                 "mtime" => now()
+                 "mtime" => now(),
+                 "base_hash" => note.content_hash
                }) do
             {:ok, _} -> {:ok, "Section '#{heading}' updated in #{path}"}
+            {:error, :version_conflict, _} -> {:ok, "Note changed concurrently; retry: #{path}"}
             {:error, _} -> {:ok, "Failed to update section in #{path}"}
           end
         end
@@ -498,6 +502,30 @@ defmodule Engram.MCP.Handlers do
   end
 
   # -- Private helpers --
+
+  @doc false
+  # Read-modify-write with compare-and-swap (Phase 0, identity-as-CRDT).
+  # Declares the read row's content_hash as `base_hash` so a write landing
+  # between the read and the upsert 409s instead of being deleted by the
+  # full-content merge, then retries ONCE on a fresh read. `rebuild` receives
+  # the current content and returns the new content. Public (doc: false) so
+  # the CAS interleaving is unit-testable with a racing rebuild fun.
+  def rmw_upsert(user, vault, path, rebuild, attempt \\ 0) do
+    with {:ok, note} <- Notes.get_note(user, vault, path) do
+      case Notes.upsert_note(user, vault, %{
+             "path" => path,
+             "content" => rebuild.(note.content),
+             "mtime" => now(),
+             "base_hash" => note.content_hash
+           }) do
+        {:error, :version_conflict, _} when attempt == 0 ->
+          rmw_upsert(user, vault, path, rebuild, 1)
+
+        other ->
+          other
+      end
+    end
+  end
 
   defp do_replace(content, find, replace, -1) do
     count = content |> String.split(find) |> length() |> Kernel.-(1)

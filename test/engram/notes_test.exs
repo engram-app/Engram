@@ -107,6 +107,81 @@ defmodule Engram.NotesTest do
   # ---------------------------------------------------------------------------
 
   describe "upsert_note/3" do
+    # Phase 0 (identity-as-CRDT): the documented-but-missing stale-base gate.
+    # The three-way CRDT merge diffs incoming FULL content against the stored
+    # snapshot — a stale client's push whose diff says "these paragraphs don't
+    # exist" thereby deletes newer content "convergently" (prod incident
+    # 2026-07-07, plugin reconnect clobber). A writer that declares the base it
+    # read (`base_hash` = the row's content_hash at read time) must 409 when
+    # the row has moved, so the client re-reads/merges instead of clobbering.
+    test "base_hash mismatch returns version_conflict instead of merging a stale write",
+         %{user: user, vault: vault} do
+      {:ok, v1} =
+        Notes.upsert_note(user, vault, %{"path" => "cas.md", "content" => "one", "mtime" => 1.0})
+
+      stale_base = v1.content_hash
+
+      # The row moves (someone else's write).
+      {:ok, v2} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "cas.md",
+          "content" => "one\ntwo",
+          "mtime" => 2.0
+        })
+
+      # A write declaring the OLD base must be refused with the server note.
+      assert {:error, :version_conflict, server_note} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas.md",
+                 "content" => "one\nstale rewrite",
+                 "mtime" => 3.0,
+                 "base_hash" => stale_base
+               })
+
+      assert server_note.id == v2.id
+
+      # Nothing was merged — the newer content is intact.
+      {:ok, fresh} = Notes.get_note(user, vault, "cas.md")
+      assert fresh.content == "one\ntwo"
+    end
+
+    test "base_hash matching the current row proceeds normally", %{user: user, vault: vault} do
+      {:ok, v1} =
+        Notes.upsert_note(user, vault, %{"path" => "cas2.md", "content" => "one", "mtime" => 1.0})
+
+      assert {:ok, updated} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas2.md",
+                 "content" => "one\ntwo",
+                 "mtime" => 2.0,
+                 "base_hash" => v1.content_hash
+               })
+
+      assert updated.content == "one\ntwo"
+    end
+
+    test "absent base_hash keeps the merge behavior (legacy clients)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "cas3.md", "content" => "one", "mtime" => 1.0})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "cas3.md",
+          "content" => "one\ntwo",
+          "mtime" => 2.0
+        })
+
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{
+                 "path" => "cas3.md",
+                 "content" => "one\nthree",
+                 "mtime" => 3.0
+               })
+    end
+
     test "creates a new note", %{user: user, vault: vault} do
       assert {:ok, note} =
                Notes.upsert_note(user, vault, %{
