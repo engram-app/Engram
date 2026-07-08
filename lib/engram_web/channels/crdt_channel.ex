@@ -129,9 +129,19 @@ defmodule EngramWeb.CrdtChannel do
         log_dropped(socket, doc_id, :frame_too_large)
         {:reply, {:error, %{reason: "frame_too_large"}}, socket}
 
+      {:error, :not_found} = err ->
+        # Unknown note_id: the frame is undeliverable, and the SENDER is the
+        # one who must act — this is the create-race cross-wire signature
+        # (client keyed to an id the server never adopted, 2026-07-07). Reply
+        # so the plugin can trigger its live id-map reconcile immediately
+        # (ensureNoteIdMapped, plugin v1.11.22) instead of talking into the
+        # void until a cold-start reconcile (#955).
+        log_dropped(socket, doc_id, err)
+        {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
+
       err ->
         # Surface drops rather than swallowing them silently — a dropped frame
-        # (bad base64 or unresolvable doc_id) means a lost edit.
+        # (bad base64) means a lost edit.
         log_dropped(socket, doc_id, err)
         {:noreply, socket}
     end

@@ -200,6 +200,21 @@ defmodule EngramWeb.CrdtChannelTest do
              "Expected 'dropped crdt_msg' warning in log, got: #{inspect(log)}"
     end
 
+    test "crdt_msg for an unknown note_id REPLIES note_not_found so the client can heal (#955)",
+         %{socket: socket} do
+      # The silent drop left the sending client talking into the void — the
+      # 2026-07-07 create-race cross-wire stayed invisible client-side until a
+      # cold-start reconcile. The error reply lets the plugin trigger its live
+      # id-map reconcile (ensureNoteIdMapped, v1.11.22) immediately.
+      random_note_id = Ecto.UUID.generate()
+      tiny_b64 = Base.encode64(<<0>>)
+
+      capture_log(fn ->
+        ref = push(socket, "crdt_msg", %{"doc_id" => random_note_id, "b64" => tiny_b64})
+        assert_reply ref, :error, %{reason: "note_not_found", doc_id: ^random_note_id}, 500
+      end)
+    end
+
     test "malformed base64 is silently ignored — no crash",
          %{socket: socket, doc_id: doc_id} do
       push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => "!!!not_valid_base64!!!"})
