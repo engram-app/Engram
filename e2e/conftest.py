@@ -351,6 +351,11 @@ def _oauth_ws_warm(cdp_a, clerk_client):
         clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="warm")
         try:
             original = await swap_to_oauth(cdp_a, tokens)
+            # From here on cdp_a wears the throwaway OAuth identity, whose
+            # Clerk user the outer finally deletes. restore_auth must run on
+            # EVERY exit path, or the session-scoped cdp_a serves the rest of
+            # the suite as a deleted user and one diagnosable warm-up failure
+            # cascades into dozens of misleading auth errors downstream.
             try:
                 await wait_for_stream(cdp_a, timeout=120)
             except TimeoutError as e:
@@ -360,11 +365,23 @@ def _oauth_ws_warm(cdp_a, clerk_client):
                     "first-connect cost, not the behavior under test -- check "
                     "backend/Clerk health before assuming a real regression."
                 ) from e
-            await restore_auth(cdp_a, original)
+            finally:
+                try:
+                    await restore_auth(cdp_a, original)
+                except Exception as restore_exc:  # noqa: BLE001 - must not mask the warm-up error
+                    # Best-effort on the failure path: swallowing here keeps the
+                    # original timeout as the reported cause; the cascade risk it
+                    # leaves behind is exactly what this restore tried to avoid,
+                    # so make the attempt loudly visible.
+                    print(f"_oauth_ws_warm: restore_auth failed after warm-up error: {restore_exc}")
             await wait_for_stream(cdp_a, timeout=120)
         finally:
             clerk_client.delete_user(clerk_user_id)
 
+    # NOTE: a temporary event loop on purpose (session fixture, sync context).
+    # It leaves CdpClient._ws bound to the closed loop; the first real test's
+    # _ensure_connected ping fails and reconnects -- relied-upon self-healing,
+    # not an accident. Don't "fix" the first-ping failure you see in logs.
     asyncio.run(_warm())
 
 
