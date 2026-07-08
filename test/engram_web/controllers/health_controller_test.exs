@@ -1,6 +1,8 @@
 defmodule EngramWeb.HealthControllerTest do
   use EngramWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
+
   setup tags do
     if tags[:auth] do
       Application.put_env(:engram, :auth_provider, :local)
@@ -35,6 +37,107 @@ defmodule EngramWeb.HealthControllerTest do
       refute Map.has_key?(body["checks"], "qdrant")
       refute Map.has_key?(body["checks"], "redis")
       refute Map.has_key?(body["checks"], "s3")
+    end
+  end
+
+  describe "GET /health/deep cluster readiness gate (clustered deploys only)" do
+    setup do
+      # The log-once flag is node-global; reset around every test in this
+      # block so grace-expired test ordering can't leak between tests.
+      log_once_key = {EngramWeb.HealthController, :cluster_grace_expired_logged}
+      :persistent_term.erase(log_once_key)
+
+      on_exit(fn ->
+        :persistent_term.erase(log_once_key)
+        Application.delete_env(:engram, :dns_cluster_query)
+        Application.delete_env(:engram, :cluster_readiness_opts)
+      end)
+    end
+
+    test "omits the cluster check entirely when not clustered (self-host shape unchanged)", %{
+      conn: conn
+    } do
+      conn = get(conn, "/api/health/deep")
+      refute Map.has_key?(json_response(conn, 200)["checks"], "cluster")
+    end
+
+    test "503 while other nodes are discoverable but unjoined (boot window)", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 1_000,
+        grace_ms: 60_000
+      )
+
+      conn = get(conn, "/api/health/deep")
+      body = json_response(conn, 503)
+      assert body["status"] == "degraded"
+      assert body["checks"]["cluster"] == "waiting: cluster_unjoined"
+    end
+
+    test "200 once a peer is joined", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [:"engram@10.0.0.9"] end,
+        resolver: fn _ -> ["10.0.0.9"] end
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok"
+    end
+
+    test "200 when legitimately alone (first task / scale-to-1)", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> [] end
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok: alone"
+    end
+
+    test "200 with warning once the boot grace expires — a discovery outage cannot wedge a deploy",
+         %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 120_000,
+        grace_ms: 60_000
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok: unjoined_grace_expired"
+    end
+
+    test "logs the grace-expired warning only once, then debug — a sustained split must not spam the alert",
+         %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 120_000,
+        grace_ms: 60_000
+      )
+
+      first_log = capture_log(fn -> get(conn, "/api/health/deep") end)
+      assert first_log =~ "cluster readiness: unjoined past boot grace"
+
+      # Second probe of the same sustained split must not repeat the
+      # warning — test.exs pins `logger level: :warning`, so a debug-level
+      # re-log is silently dropped rather than needing string matching here.
+      second_log = capture_log(fn -> get(conn, "/api/health/deep") end)
+      refute second_log =~ "cluster readiness: unjoined past boot grace"
     end
   end
 

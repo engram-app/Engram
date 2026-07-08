@@ -4741,7 +4741,7 @@
     "/api/health/deep": {
       "get": {
         "callbacks": {},
-        "description": "Checks dependencies whose absence fails every request (Postgres). 503 when degraded.",
+        "description": "Checks dependencies whose absence fails every request (Postgres), plus BEAM cluster join on clustered deploys. 503 when degraded.",
         "operationId": "health-deep",
         "parameters": [],
         "responses": {
