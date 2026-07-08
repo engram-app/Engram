@@ -129,6 +129,26 @@ describe("OAuthAuthorizePage", () => {
 		).toBeInTheDocument();
 	});
 
+	it("renders consent when scope is ABSENT — scope is optional per RFC 6749 §4.1.1", async () => {
+		// Claude Code's MCP re-auth flow omits scope (legal); the backend already
+		// defaults it (oauth.ex: params["scope"] || "mcp"). Requiring it here
+		// bricked every scope-less connect with 'Invalid authorization request'
+		// (found 2026-07-08 during the #951 vault-deletion recovery).
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Code",
+			kind: "mcp",
+		});
+		const NO_SCOPE_QS =
+			"?client_id=cli&redirect_uri=https://app/cb&response_type=code" +
+			"&code_challenge=abc&code_challenge_method=S256&state=xyz";
+		renderAt(NO_SCOPE_QS);
+		expect(await screen.findByText(/Claude Code/u)).toBeInTheDocument();
+		expect(
+			screen.queryByRole("heading", { name: /invalid authorization request/iu }),
+		).not.toBeInTheDocument();
+	});
+
 	it("shows the unknown-client alert when the client lookup fails", async () => {
 		fetchOAuthClient.mockRejectedValue(new Error("oauth client lookup failed: 404"));
 		renderAt(VALID_QS);
