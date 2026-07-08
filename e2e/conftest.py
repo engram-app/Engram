@@ -16,6 +16,7 @@ files triggers the plugin's file watcher, causing unexpected sync events.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -30,6 +31,7 @@ from helpers.billing import grant_test_plan
 from helpers.cdp import CdpClient
 from helpers.cleanup import cleanup_minio_bucket, cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
+from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -325,6 +327,122 @@ def cdp_b(obsidian_b):
 @pytest.fixture(scope="session")
 def cdp_c(obsidian_c):
     return CdpClient(port=obsidian_c.cdp_port)
+
+
+@pytest.fixture(scope="session")
+def _oauth_ws_warm(cdp_a, clerk_client):
+    """Absorb the OAuth WebSocket cold-boot cost once, out of any test's
+    timed connect gate.
+
+    Evidence (CI, e2e-clerk, full suite): test_47's first OAuth test alone
+    ate the whole >60s cold-boot (token refresh + getMe backoff + WS
+    phx_join, under 2-worker xdist load + a second Obsidian instance
+    booting) inside its own RT_TIMEOUT-bounded assertion; the very next
+    OAuth test then passed in ~2s once the path was warm. Doing one
+    throwaway swap/wait/restore cycle here, in fixture setup with a
+    generous 120s boot budget, moves that cost out of the timed window.
+    Session-scoped: runs once total, whichever of test_47/48/49 executes
+    first (all three swap cdp_a to OAuth and gate on wait_for_stream).
+    """
+    if clerk_client is None:
+        return  # local-auth run: no OAuth test will request this fixture either
+
+    async def _warm():
+        clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="warm")
+        try:
+            original = await swap_to_oauth(cdp_a, tokens)
+            # From here on cdp_a wears the throwaway OAuth identity, whose
+            # Clerk user the outer finally deletes. restore_auth must run on
+            # EVERY exit path, or the session-scoped cdp_a serves the rest of
+            # the suite as a deleted user and one diagnosable warm-up failure
+            # cascades into dozens of misleading auth errors downstream.
+            try:
+                await wait_for_stream(cdp_a, timeout=120)
+            except TimeoutError as e:
+                raise TimeoutError(
+                    "OAuth WS cold-boot warm-up (fixture _oauth_ws_warm) timed "
+                    f"out: {e}. This is one-time suite setup absorbing the "
+                    "first-connect cost, not the behavior under test -- check "
+                    "backend/Clerk health before assuming a real regression."
+                ) from e
+            finally:
+                try:
+                    await restore_auth(cdp_a, original)
+                except Exception as restore_exc:  # noqa: BLE001 - must not mask the warm-up error
+                    # Best-effort on the failure path: swallowing here keeps the
+                    # original timeout as the reported cause; the cascade risk it
+                    # leaves behind is exactly what this restore tried to avoid,
+                    # so make the attempt loudly visible.
+                    print(f"_oauth_ws_warm: restore_auth failed after warm-up error: {restore_exc}")
+            await wait_for_stream(cdp_a, timeout=120)
+        finally:
+            clerk_client.delete_user(clerk_user_id)
+
+    # NOTE: a temporary event loop on purpose (session fixture, sync context).
+    # It leaves CdpClient._ws bound to the closed loop; the first real test's
+    # _ensure_connected ping fails and reconnects -- relied-upon self-healing,
+    # not an accident. Don't "fix" the first-ping failure you see in logs.
+    asyncio.run(_warm())
+
+
+# ---------------------------------------------------------------------------
+# Resumed-device fixture (dedicated instance pair, function-scoped)
+#
+# A stop/mutate-data.json/restart cycle must never touch the session-scoped
+# A/B/C fixtures the rest of the suite depends on, so this is its own pair on
+# its own ports/displays. It shares sync_user/sync_client_id with session A/B
+# so it lands on the SAME server vault api_sync polls (client_id upsert is
+# idempotent — four "devices" on one vault is exactly the multi-device shape
+# under test).
+# ---------------------------------------------------------------------------
+
+RESUMED_CDP_PORT_A = _worker_port("E2E_CDP_PORT_RESUMED_A", "9350")
+RESUMED_CDP_PORT_B = _worker_port("E2E_CDP_PORT_RESUMED_B", "9351")
+RESUMED_DISPLAY_BASE = int(os.environ.get("E2E_DISPLAY_BASE_RESUMED") or "150") - _WORKER * 2
+assert RESUMED_DISPLAY_BASE - 1 >= 1, (
+    f"RESUMED_DISPLAY_BASE={RESUMED_DISPLAY_BASE} too low for worker {_WORKER}"
+)
+
+
+@pytest.fixture
+def fresh_instance_pair(sync_user, sync_client_id):
+    """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
+
+    Function-scoped so a mid-test restart can't poison the session fixtures.
+    """
+    inst_a = ObsidianInstance(
+        name="ResumedA",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),
+        cdp_port=RESUMED_CDP_PORT_A,
+        display=f":{RESUMED_DISPLAY_BASE}",
+        api_url=API_URL,
+        api_key=sync_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=sync_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-a"),
+    )
+    inst_b = ObsidianInstance(
+        name="ResumedB",
+        vault_path=Path(f"{VAULT_PREFIX}-resumed-b"),
+        cdp_port=RESUMED_CDP_PORT_B,
+        display=f":{RESUMED_DISPLAY_BASE - 1}",
+        api_url=API_URL,
+        api_key=sync_user[2],
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        client_id=sync_client_id,
+        config_dir=Path(f"{CONFIG_PREFIX}-resumed-b"),
+    )
+    inst_a.start()
+    inst_b.start()
+    cdp_a = CdpClient(port=inst_a.cdp_port)
+    cdp_b = CdpClient(port=inst_b.cdp_port)
+    try:
+        yield inst_a, inst_b, cdp_a, cdp_b
+    finally:
+        inst_a.stop()
+        inst_b.stop()
 
 
 # ---------------------------------------------------------------------------

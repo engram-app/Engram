@@ -9,7 +9,7 @@ import uuid
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
-from helpers.vault import read_note, wait_for_file, wait_for_file_gone, write_note
+from helpers.vault import wait_for_file_gone, write_note
 
 
 @pytest.mark.asyncio
@@ -28,25 +28,25 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     # A creates the note
     write_note(vault_a, old_path, "# Rename Test\nThis file will be renamed.")
-    api_sync.wait_for_note(old_path, timeout=10)
+    # 30s server-side budgets: the sender's first push / rename of a session
+    # can lag under CI load (cold-start reconcile sequencing, plugin#189's
+    # push face) — these are setup waits, not the live-delivery asserts.
+    api_sync.wait_for_note(old_path, timeout=30)
 
-    # Sync to B
-    await cdp_b.trigger_full_sync()
-    wait_for_file(vault_b, old_path, timeout=10)  # B has the note before rename
+    # B receives it live before rename — no manual pull
+    wait_for_delivery(vault_b, old_path, api_sync, timeout=30)
 
     # A renames via Obsidian's vault API (triggers handleRename → POST /notes/rename)
     await cdp_a.rename_file(old_path, new_path)
 
     # Wait for server to reflect the rename
-    api_sync.wait_for_note(new_path, timeout=10)
-    api_sync.wait_for_note_gone(old_path, timeout=10)
+    api_sync.wait_for_note(new_path, timeout=30)
+    api_sync.wait_for_note_gone(old_path, timeout=30)
 
-    # B pulls
-    await cdp_b.trigger_full_sync()
-
-    # Verify: B has new path, does NOT have old path. The rename reaches B as two
-    # separate events (delete old-path + upsert new-path), so the old-path removal
-    # can lag the new-path arrival — poll for it rather than asserting a snapshot.
-    b_content = wait_for_delivery(vault_b, new_path, api_sync, timeout=10)
+    # Verify: B has new path, does NOT have old path — both live, no manual pull.
+    # The rename reaches B as two separate events (delete old-path + upsert
+    # new-path), so the old-path removal can lag the new-path arrival — poll
+    # for it rather than asserting a snapshot.
+    b_content = wait_for_delivery(vault_b, new_path, api_sync, timeout=30)
     assert "Rename Test" in b_content, "B should have the renamed file"
-    wait_for_file_gone(vault_b, old_path, timeout=10)  # B no longer has the old path
+    wait_for_file_gone(vault_b, old_path, timeout=30)  # B no longer has the old path

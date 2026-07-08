@@ -2,12 +2,13 @@
 
 import pytest
 
+from helpers.log_oracle import wait_for_delivery
 from helpers.vault import list_notes, read_note, write_note
 
 
 @pytest.mark.asyncio
 async def test_bidirectional_multi_file(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """Both sides create multiple files; after sync, both vaults have all of them."""
+    """Both sides create multiple files; after live sync, both vaults have all of them."""
     a_files = {
         "E2E/Multi/FromA-1.md": "# From A 1\nFirst file from A",
         "E2E/Multi/FromA-2.md": "# From A 2\nSecond file from A",
@@ -31,9 +32,11 @@ async def test_bidirectional_multi_file(vault_a, vault_b, cdp_a, cdp_b, api_sync
     for path in list(a_files) + list(b_files):
         api_sync.wait_for_note(path, timeout=15)
 
-    # Both sides pull to receive the other's files
-    await cdp_a.trigger_full_sync()
-    await cdp_b.trigger_full_sync()
+    # A receives B's files live, B receives A's files live — no manual pull.
+    for path in b_files:
+        wait_for_delivery(vault_a, path, api_sync, timeout=30)
+    for path in a_files:
+        wait_for_delivery(vault_b, path, api_sync, timeout=30)
 
     # Verify A has all 6 files
     for path in list(a_files) + list(b_files):
