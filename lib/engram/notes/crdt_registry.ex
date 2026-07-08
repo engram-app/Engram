@@ -42,6 +42,30 @@ defmodule Engram.Notes.CrdtRegistry do
   end
 
   @doc """
+  Terminate a note's live room WITHOUT running its unbind checkpoint:
+  unregister the :global name first (so lookups stop resolving to the dying
+  pid — NOTE: :global registration uses the INNER term `{:crdt_doc, id}`, not
+  the `{:global, …}` wrapper `global_name/1` returns for GenServer `name:`),
+  then a brutal `:kill` (untrappable, skips terminate → unbind → checkpoint).
+  Safe on dead/absent rooms (both steps are idempotent no-ops). Used by the
+  deliver-out quarantine (a room that failed to converge must not persist)
+  and vault deletion (a room must not outlive its vault, #954). Nothing is
+  lost: every room update is already in the durable tail-log.
+  """
+  @spec terminate_room(String.t()) :: :ok
+  def terminate_room(note_id) when is_binary(note_id) do
+    case :global.whereis_name({:crdt_doc, note_id}) do
+      :undefined ->
+        :ok
+
+      pid when is_pid(pid) ->
+        _ = :global.unregister_name({:crdt_doc, note_id})
+        Process.exit(pid, :kill)
+        :ok
+    end
+  end
+
+  @doc """
   Idempotently start (or find) the singleton room for `note_id`.
 
   Returns `{:ok, pid}` whether the room was just started or was already
