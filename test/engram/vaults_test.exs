@@ -553,6 +553,14 @@ defmodule Engram.VaultsTest do
       assert Engram.Notes.CrdtRegistry.lookup(note.id) == nil
     end
 
+    test "kill_live_rooms_for_vault never raises (post-commit cleanup)", %{user: user} do
+      # Runs inside delete_vault's post-commit tap: a raise there would 500 a
+      # COMMITTED delete and skip the GateCache eviction. Cleanup must not
+      # fail the write (same convention as CrdtDeliver). A non-UUID vault_id
+      # makes Repo.all raise Ecto.Query.CastError — stand-in for any DB error.
+      assert :ok = Engram.Notes.kill_live_rooms_for_vault(user.id, "not-a-uuid")
+    end
+
     test "soft-deletes vault by setting deleted_at", %{user: user} do
       {:ok, vault} = Vaults.create_vault(user, %{name: "Temp"})
       assert {:ok, deleted} = Vaults.delete_vault(user, vault.id)

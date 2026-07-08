@@ -635,6 +635,22 @@ defmodule Engram.Notes do
 
     Enum.each(ids, &Engram.Notes.CrdtRegistry.terminate_room/1)
     :ok
+  rescue
+    # Runs in delete_vault's post-commit tap: a raise here would surface as a
+    # failure of an already-COMMITTED delete and skip the GateCache eviction
+    # that follows. Cleanup never fails the write; orphaned rooms are killed
+    # by deliver-time quarantine anyway.
+    e ->
+      Logger.warning(
+        "crdt vault room teardown failed",
+        Metadata.with_category(:warning, :sync,
+          user_id: user_id,
+          vault_id: vault_id,
+          error: Exception.message(e)
+        )
+      )
+
+      :ok
   end
 
   # Id-keyed rename support (Phase I): the plugin renames a note by keeping
