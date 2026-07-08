@@ -106,6 +106,28 @@ class ObsidianInstance:
         if self.config_dir.exists():
             shutil.rmtree(self.config_dir, ignore_errors=True)
 
+    def read_data_json(self) -> dict:
+        """Read the plugin's persisted data.json without mutating it.
+
+        Companion to mutate_data_json — used by tests that need to poll
+        persisted state (e.g. waiting for syncCursor to appear) rather than
+        rewrite it.
+        """
+        p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def mutate_data_json(self, mutator) -> None:
+        """Stop-state helper: rewrite the plugin's persisted data.json.
+
+        Call only while the instance is stopped. `mutator` receives the parsed
+        dict and mutates in place (e.g. wipe noteIds, keep syncCursor) so tests
+        can construct RESUMED-device states no fresh boot produces.
+        """
+        p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        mutator(data)
+        p.write_text(json.dumps(data), encoding="utf-8")
+
     def _prepare_vault(self) -> None:
         """Create vault directory with plugin files and pre-configured settings."""
         if self.vault_path.exists():

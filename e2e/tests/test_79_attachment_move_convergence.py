@@ -7,11 +7,12 @@ tombstone is what makes the move converge for a client that pulls the change
 feed (the offline / catch-up path) — without it, the pull would see only the
 repointed row at the new path and keep a stale duplicate at the old path.
 
-These tests assert convergence through an explicit pull (`trigger_full_sync`)
-rather than racing live-socket delivery: the pull path is the one the tombstone
-exists for, and it's deterministic under parallel CI load. Each test cleans up
-server-side state first so it is safe under pytest reruns (a move mutates shared
-vault state irreversibly, so a re-run must start from a known-clean slate).
+These tests assert live delivery first, then convergence through an explicit
+pull (`trigger_full_sync`): the pull path is the one the tombstone exists for
+(catch-up after an offline window), and it's deterministic under parallel CI
+load. Each test cleans up server-side state first so it is safe under pytest
+reruns (a move mutates shared vault state irreversibly, so a re-run must start
+from a known-clean slate).
 """
 
 import asyncio
@@ -48,10 +49,10 @@ async def test_web_move_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api_s
     new_path = "E2E/attachments/move79pull-new.png"
     _seed_clean(api_sync, old_path, new_path)
 
-    # Seed via the API (web-origin upload → immediately on the server), then B pulls.
+    # Seed via the API (web-origin upload → immediately on the server); B
+    # receives it live — no manual pull.
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
-    await cdp_b.trigger_full_sync()
     wait_for_binary_delivery(vault_b, old_path, api_sync, timeout=CONVERGE_TIMEOUT)
 
     # Web-originated move: repoint live row + insert old-path tombstone.
@@ -59,8 +60,13 @@ async def test_web_move_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api_s
     api_sync.wait_for_attachment(new_path)
     api_sync.wait_for_attachment_gone(old_path)
 
-    # B converges on its next pull: the tombstone trashes old, the repointed row
-    # writes new — no duplicate left at the old path.
+    # B receives the move live first — proves live delivery isn't dead.
+    assert wait_for_binary_delivery(vault_b, new_path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
+
+    # B also converges on its next explicit pull: the tombstone trashes old,
+    # the repointed row writes new — no duplicate left at the old path. This
+    # pull-convergence path (not the live broadcast) is what the durable
+    # tombstone exists for — see module docstring.
     await cdp_b.trigger_full_sync()
     assert wait_for_binary_delivery(vault_b, new_path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
     wait_for_file_gone(vault_b, old_path, timeout=CONVERGE_TIMEOUT)
@@ -80,10 +86,9 @@ async def test_web_move_converges_after_offline_window(
     new_path = "E2E/attachments/move79offline-new.png"
     _seed_clean(api_sync, old_path, new_path)
 
-    # Seed via the API, then B pulls a copy.
+    # Seed via the API; B receives a copy live before going offline.
     assert api_sync.upload_attachment(old_path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(old_path)
-    await cdp_b.trigger_full_sync()
     wait_for_binary_delivery(vault_b, old_path, api_sync, timeout=CONVERGE_TIMEOUT)
 
     # Take B offline so it misses the ephemeral move broadcasts entirely.

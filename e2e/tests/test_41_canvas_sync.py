@@ -2,14 +2,16 @@
 
 Canvas files are JSON text treated as TEXT_EXTENSIONS in the plugin.
 They sync through the same pushNote path as markdown but with a
-different extension. Verifies the full round-trip preserves JSON structure.
+different extension. Verifies the full round-trip preserves JSON structure,
+received live on B with no manual pull.
 """
 
 import json
 
 import pytest
 
-from helpers.vault import wait_for_file, write_note
+from helpers.log_oracle import wait_for_delivery
+from helpers.vault import wait_for_content, write_note
 
 
 CANVAS_CONTENT = json.dumps({
@@ -25,7 +27,7 @@ CANVAS_CONTENT = json.dumps({
 
 @pytest.mark.asyncio
 async def test_canvas_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """Canvas JSON file syncs A→B with structure preserved."""
+    """Canvas JSON file syncs A→B live with structure preserved."""
     path = "E2E/TestCanvas41.canvas"
 
     # A creates a canvas file
@@ -38,9 +40,8 @@ async def test_canvas_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     note = api_sync.wait_for_note(path, timeout=10)
     assert note is not None, "Canvas should be on server"
 
-    # B syncs
-    await cdp_b.trigger_full_sync()
-    b_raw = wait_for_file(vault_b, path, timeout=15)
+    # B receives it live — no manual pull
+    b_raw = wait_for_delivery(vault_b, path, api_sync, timeout=30)
 
     # Verify JSON structure is preserved
     b_data = json.loads(b_raw)
@@ -51,13 +52,13 @@ async def test_canvas_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
 @pytest.mark.asyncio
 async def test_canvas_modify_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
-    """Modifying a canvas on A propagates changes to B."""
+    """Modifying a canvas on A propagates changes to B live."""
     path = "E2E/TestCanvasMod41.canvas"
 
-    # Create base canvas
+    # Create base canvas, B receives it live
     write_note(vault_a, path, CANVAS_CONTENT)
     api_sync.wait_for_note(path, timeout=10)
-    await cdp_b.trigger_full_sync()
+    wait_for_delivery(vault_b, path, api_sync, timeout=30)
 
     # Modify canvas — add a node
     modified = json.loads(CANVAS_CONTENT)
@@ -69,8 +70,10 @@ async def test_canvas_modify_sync(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     api_sync.wait_for_note_content(path, "New node", timeout=10)
 
-    # B syncs
-    await cdp_b.trigger_full_sync()
-    b_raw = wait_for_file(vault_b, path, timeout=15)
+    # B receives the modification live. B's file already exists (from the
+    # base canvas above) so the delivery oracle's non-empty guard can't
+    # detect this specific update; wait_for_content polls for the new node's
+    # text instead — still a pure vault-disk poll, no pull involved.
+    b_raw = wait_for_content(vault_b, path, "New node", timeout=30)
     b_data = json.loads(b_raw)
     assert len(b_data["nodes"]) == 3, "Modified canvas should have 3 nodes"

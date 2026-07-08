@@ -74,6 +74,10 @@ class WebSpaPeer:
     def _editor(self):
         return self._page.locator(".cm-content")
 
+    def editor_locator(self):
+        """Public CM6 content locator, for auto-retrying `expect(...)` asserts."""
+        return self._editor()
+
     async def append(self, text: str) -> None:
         """Append `text` at end-of-doc as one atomic CM6 transaction (one CRDT op)."""
         ed = self._editor()

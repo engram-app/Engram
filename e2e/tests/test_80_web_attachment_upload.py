@@ -42,6 +42,10 @@ async def test_web_upload_converges_via_pull(vault_a, vault_b, cdp_a, cdp_b, api
     assert api_sync.upload_attachment(path, TINY_PNG, "image/png") == 200
     api_sync.wait_for_attachment(path)
 
-    # B converges on its next explicit pull — the deterministic convergence path.
+    # B receives the upload live first — proves live delivery isn't dead.
+    assert wait_for_binary_delivery(vault_b, path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG
+
+    # B also converges on its next explicit pull — the deterministic
+    # convergence path this test is actually about (see module docstring).
     await cdp_b.trigger_full_sync()
     assert wait_for_binary_delivery(vault_b, path, api_sync, timeout=CONVERGE_TIMEOUT) == TINY_PNG

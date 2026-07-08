@@ -35,7 +35,9 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping cross-auth sync tests",
 )
 
-RT_TIMEOUT = 10
+# ponytail: 30s is a load-tuned CI budget, not a latency proof — 5 rapid
+# edits must settle end-to-end on a shared loaded runner (was 10, flaked).
+RT_TIMEOUT = 30
 
 
 def _log_latency(label: str, t0: float) -> float:
@@ -51,7 +53,7 @@ def _log_latency(label: str, t0: float) -> float:
 
 @pytest.mark.asyncio
 async def test_apikey_push_oauth_receives(
-    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_user, clerk_client
+    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_user, clerk_client, _oauth_ws_warm
 ):
     """API key client (B) pushes a note → OAuth client (A) receives via WebSocket.
 
@@ -96,7 +98,7 @@ async def test_apikey_push_oauth_receives(
 
 @pytest.mark.asyncio
 async def test_oauth_push_apikey_receives(
-    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_user, clerk_client
+    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_user, clerk_client, _oauth_ws_warm
 ):
     """OAuth client (A) pushes a note → API key client (B) receives via WebSocket.
 
