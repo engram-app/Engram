@@ -4,6 +4,8 @@ The orchestration test the suite never had: every hop is LIVE (no manual
 pull), and the final read-back asserts all interfaces agree on the content.
 """
 
+import uuid
+
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
@@ -11,7 +13,7 @@ from helpers.vault import read_note, wait_for_content, write_note
 
 pytestmark = pytest.mark.asyncio
 
-PATH = "E2E/Orchestra.md"
+PATH = f"E2E/Orchestra-{uuid.uuid4().hex[:12]}.md"
 RT_TIMEOUT = 30  # generous: this hop crosses MCP + WebSocket delivery
 
 
