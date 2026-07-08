@@ -74,6 +74,33 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             await_promise=True,
         )
 
+    # Wait for Obsidian's vault index to pick up the externally-seeded
+    # node_modules/ folder BEFORE opening the Advanced tab. The scanner runs
+    # exactly ONCE, synchronously, at tab render (renderIgnoreWarnings calls
+    # app.vault.getFolderByPath) and never re-scans — so if the folder is not
+    # in the vault cache at render time, the warning row can NEVER appear no
+    # matter how long the DOM is polled afterwards. That is why bumping the
+    # DOM wait 5s -> 20s did not help (run 28919928915 failed the 20s window
+    # too): the failure is state-at-render-time, not render latency. Under
+    # full-suite CI load the inotify -> vault-index tick for an external
+    # mkdir can lag well past the moment we open the tab.
+    indexed = False
+    deadline = asyncio.get_event_loop().time() + 30
+    while asyncio.get_event_loop().time() < deadline:
+        indexed = await cdp_a.evaluate(
+            "Boolean(app.vault.getFolderByPath('node_modules'))"
+        )
+        if indexed:
+            break
+        await asyncio.sleep(0.2)
+    assert indexed, (
+        "Obsidian's vault index never picked up the externally-seeded "
+        "node_modules/ folder within 30 s — the scanner's precondition "
+        "failed, not the warning-row render. Check the vault file watcher "
+        "(inotify) in this environment before suspecting "
+        "renderIgnoreWarnings()."
+    )
+
     try:
         # Open the Obsidian settings modal and navigate to the plugin + Advanced tab.
         await cdp_a.evaluate(
