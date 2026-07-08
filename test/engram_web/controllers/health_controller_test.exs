@@ -38,6 +38,79 @@ defmodule EngramWeb.HealthControllerTest do
     end
   end
 
+  describe "GET /health/deep cluster readiness gate (clustered deploys only)" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:engram, :dns_cluster_query)
+        Application.delete_env(:engram, :cluster_readiness_opts)
+      end)
+    end
+
+    test "omits the cluster check entirely when not clustered (self-host shape unchanged)", %{
+      conn: conn
+    } do
+      conn = get(conn, "/api/health/deep")
+      refute Map.has_key?(json_response(conn, 200)["checks"], "cluster")
+    end
+
+    test "503 while other nodes are discoverable but unjoined (boot window)", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 1_000,
+        grace_ms: 60_000
+      )
+
+      conn = get(conn, "/api/health/deep")
+      body = json_response(conn, 503)
+      assert body["status"] == "degraded"
+      assert body["checks"]["cluster"] == "waiting: cluster_unjoined"
+    end
+
+    test "200 once a peer is joined", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [:"engram@10.0.0.9"] end,
+        resolver: fn _ -> ["10.0.0.9"] end
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok"
+    end
+
+    test "200 when legitimately alone (first task / scale-to-1)", %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> [] end
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok: alone"
+    end
+
+    test "200 with warning once the boot grace expires — a discovery outage cannot wedge a deploy",
+         %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 120_000,
+        grace_ms: 60_000
+      )
+
+      conn = get(conn, "/api/health/deep")
+      assert json_response(conn, 200)["checks"]["cluster"] == "ok: unjoined_grace_expired"
+    end
+  end
+
   describe "GET /health/diagnostics (admin-only full dep matrix)" do
     @tag :auth
     test "rejects unauthenticated requests with 401", %{conn: conn} do

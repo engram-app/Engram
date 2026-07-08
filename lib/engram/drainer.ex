@@ -1,13 +1,23 @@
 defmodule Engram.Drainer do
   @moduledoc """
-  Graceful drain run from `Engram.Application.prep_stop/1` on SIGTERM.
+  Graceful drain, split across the two OTP shutdown hooks:
 
-  Order matters: stop pulling NEW work (Oban), let the ALB stop routing new
-  requests (it already deregistered us), give in-flight work a short grace,
-  then disconnect from peers so survivors observe a clean `nodedown` instead
-  of a later `noproc`/`noconnection`. The Phoenix endpoint drains in-flight
-  HTTP/WebSocket connections separately during supervisor teardown (Thousand
-  Island shutdown_timeout + socket_drano).
+    * `drain/1` — from `Engram.Application.prep_stop/1` on SIGTERM, BEFORE the
+      supervision tree stops: stop pulling NEW work (Oban, local-only) and
+      give in-flight work a short grace.
+    * `disconnect_peers/1` — from `Engram.Application.stop/1`, AFTER the
+      supervision tree (endpoint + socket drain included) has stopped:
+      disconnect cluster peers so survivors observe a clean `nodedown`
+      instead of a later `noproc`/`noconnection`.
+
+  Peer disconnect deliberately happens LAST. Disconnecting during prep_stop
+  (as originally shipped in #742) severed PubSub while the endpoint was still
+  draining WS clients for up to ~25s — clients on the dying node silently
+  missed cross-node note_changed fan-out for that window, and the node kept
+  emitting cluster_peers=0 samples that lingered via metric staleness (the
+  post-deploy cluster-degraded blips). The Phoenix endpoint drains in-flight
+  HTTP/WebSocket connections during supervisor teardown (Thousand Island
+  shutdown_timeout + the UserSocket drainer), all with the cluster intact.
   """
 
   alias Engram.Logger.Metadata
@@ -19,8 +29,6 @@ defmodule Engram.Drainer do
   @spec drain(keyword()) :: :ok
   def drain(opts \\ []) do
     pause_oban = Keyword.get(opts, :pause_oban, &default_pause_oban/0)
-    peers = Keyword.get(opts, :peers, &Node.list/0)
-    disconnect = Keyword.get(opts, :disconnect, &Node.disconnect/1)
     grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)
 
     Logger.info(
@@ -30,6 +38,14 @@ defmodule Engram.Drainer do
 
     pause_oban.()
     if grace_ms > 0, do: Process.sleep(grace_ms)
+
+    :ok
+  end
+
+  @spec disconnect_peers(keyword()) :: :ok
+  def disconnect_peers(opts \\ []) do
+    peers = Keyword.get(opts, :peers, &Node.list/0)
+    disconnect = Keyword.get(opts, :disconnect, &Node.disconnect/1)
 
     Enum.each(peers.(), fn node ->
       Logger.info(
