@@ -615,6 +615,54 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert fresh.type_hmac == Crypto.hmac_field(filter_key, "reference")
   end
 
+  # ── #954: deleted note/user must be a QUIET skip, not a raise-noise storm ──
+  # Vault deletion (force-purge) hard-deletes rows while rooms live on; each
+  # room tick/exit then raised Ecto.NoResultsError — caught, but logged at
+  # error (Sentry + Loki storms, 2026-07-07 19:03). A missing row is an
+  # EXPECTED lifecycle state, not an error.
+
+  test "checkpoint on a DELETED note skips quietly — no raise, no error log", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # Hard-delete the row out from under the live room (the force-purge shape).
+    Repo.with_tenant(user.id, fn ->
+      Repo.delete_all(from(l in CrdtUpdateLog, where: l.note_id == ^note.id))
+      Repo.delete_all(from(n in Note, where: n.id == ^note.id))
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+      end)
+
+    refute log =~ "checkpoint raised", "deleted note must not raise: #{log}"
+    refute log =~ "[error]", "deleted note is expected lifecycle, not an error: #{log}"
+  end
+
+  test "checkpoint on a DELETED user skips quietly — no raise, no error log", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # A user id that never existed models the deleted-user shape without
+    # fighting FK cascades (matches the existing user-row-gone test).
+    gone_user_id = Ecto.UUID.generate()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = CrdtCheckpoint.checkpoint(gone_user_id, vault.id, note.id, doc)
+      end)
+
+    refute log =~ "checkpoint raised", "deleted user must not raise: #{log}"
+    refute log =~ "[error]", "deleted user is expected lifecycle, not an error: #{log}"
+  end
+
   test "checkpoint nulls OKF fields when a live edit removes frontmatter", ctx do
     %{user: user, vault: vault} = ctx
 
