@@ -184,8 +184,18 @@ defmodule Engram.Notes.CrdtDeliverTest do
   # ---------------------------------------------------------------------------
 
   describe "deliver_out/5 — state-load failure handling" do
-    test "decrypt failure skips the room push (no plaintext re-encode) but still announces",
+    test "decrypt failure QUARANTINES the room (killed, no unbind) and still announces",
          %{user: user, vault: vault} do
+      # Semantic flip from "skip the push, leave the room alive": a room we
+      # could not converge is a poisoned cache — it serves its stale doc to
+      # every client the announce triggers to re-pull, blocking delivery of
+      # the committed write, and (pre Phase-0 union) its next checkpoint
+      # reverted the row. Kill it brutally (no unbind checkpoint — never
+      # persist a doc we could not converge); the next join re-binds a fresh
+      # room hydrated from the row, which holds the merged truth.
+      # The bare room is start_link'ed to this test process; the quarantine
+      # kill would propagate over the link, so trap exits.
+      Process.flag(:trap_exit, true)
       {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "orig"})
 
       # Corrupt the stored CRDT state so decrypt fails (ciphertext mismatch).
@@ -197,6 +207,7 @@ defmodule Engram.Notes.CrdtDeliverTest do
         end)
 
       room = start_bare_room(note.id, "orig")
+      ref = Process.monitor(room)
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
       log =
@@ -205,13 +216,39 @@ defmodule Engram.Notes.CrdtDeliverTest do
           assert_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 1000
         end)
 
-      # The room was NOT mutated — a plaintext ingest would have re-encoded
-      # "orig updated" on the room's lineage.
-      doc = SharedDoc.get_doc(room)
-      assert CrdtBridge.text_of(doc) == "orig"
+      # The poisoned room must be gone — killed, not gracefully stopped
+      # (a graceful stop would run unbind → checkpoint of the stale doc).
+      assert_receive {:DOWN, ^ref, :process, ^room, :killed}, 1000
+      assert CrdtRegistry.lookup(note.id) == nil
 
       # The degradation is loud (Sentry captures Logger.error).
       assert log =~ "crdt deliver state load failed"
+    end
+
+    test "apply_update failure QUARANTINES the room (killed) — no stale cache survives",
+         %{user: user, vault: vault} do
+      Process.flag(:trap_exit, true)
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s2.md", "content" => "orig"})
+
+      # Store VALIDLY-ENCRYPTED garbage: decrypt succeeds, Yex.apply_update fails.
+      {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state("not a yjs update", user, note.id)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          )
+        end)
+
+      room = start_bare_room(note.id, "orig")
+      ref = Process.monitor(room)
+
+      capture_log(fn ->
+        assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "s2.md", note.id, "orig updated")
+      end)
+
+      assert_receive {:DOWN, ^ref, :process, ^room, :killed}, 1000
+      assert CrdtRegistry.lookup(note.id) == nil
     end
 
     test "a row without CRDT state falls back to plaintext ingest (legacy row)",

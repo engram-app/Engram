@@ -336,6 +336,8 @@ defmodule Engram.Notes do
     mtime = attrs["mtime"] || attrs[:mtime]
     client_id = attrs["id"] || attrs[:id]
 
+    opts = put_base_hash_opt(opts, attrs)
+
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
          {:ok, hash} <- content_hash(user, content) do
@@ -461,6 +463,23 @@ defmodule Engram.Notes do
           # ciphertext before the controller serializes the conflict response.
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
+        {:ok, {:stale_base, existing}} ->
+          # Phase 0 stale-base gate: the writer declared a base_hash the row no
+          # longer holds. Refused to merge (a stale full-content push deletes
+          # newer content convergently — 2026-07-07 reconnect clobber). Distinct
+          # greppable key so the rate is monitorable in Loki.
+          Logger.warning(
+            "note_stale_base_rejected",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: existing.id,
+              server_version: existing.version
+            )
+          )
+
+          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
+
         {:ok, {:id_collision, live}} ->
           # A push carried a note_id that already names a LIVE note at another
           # path. Refused to move/merge (that destroys the live note). Log with
@@ -583,6 +602,19 @@ defmodule Engram.Notes do
               {:error, changeset}
           end
         end
+    end
+  end
+
+  # Phase 0 stale-base gate: a writer that declares the content_hash it READ
+  # (`base_hash`) gets compare-and-swap semantics — if the row moved, the
+  # write 409s instead of CRDT-merging. The merge diffs incoming FULL content
+  # against the stored snapshot, so a stale full-content push deletes newer
+  # content "convergently" (prod incident 2026-07-07). Absent base_hash keeps
+  # the merge behavior for legacy clients.
+  defp put_base_hash_opt(opts, attrs) do
+    case attrs["base_hash"] || attrs[:base_hash] do
+      base when is_binary(base) -> Keyword.put(opts, :base_hash, base)
+      _ -> opts
     end
   end
 
@@ -761,29 +793,47 @@ defmodule Engram.Notes do
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
   defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts \\ []) do
-    if is_binary(existing.content_hash) and
-         existing.content_hash == base_attrs.content_hash and
-         not Keyword.get(opts, :force, false) do
-      # Idempotent re-push (plugin retry, offline-queue replay, MCP re-write):
-      # the incoming content hashes identically to the stored merged content,
-      # so the CRDT diff is a provable no-op. Skip the whole pipeline — CRDT
-      # decrypt/merge/re-encrypt, field re-encryption, the row rewrite (TOAST
-      # + WAL churn on the content blob), the version bump, and the seq
-      # allocation — and return the row unchanged. The caller skips the
-      # note_changed broadcast on hash equality, so other devices don't
-      # reconcile a phantom change. Tradeoff: a same-content push with a newer
-      # mtime keeps the stored mtime; sync state is hash/seq-based, so nothing
-      # keys off it. Tombstones never reach here (note_by_path_query filters
-      # deleted_at), so delete → re-push still resurrects via the insert path.
-      # Repair paths that re-derive persisted fields from unchanged content
-      # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
-      # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
-      # incoming content (hash-equal to the stored merged content by the guard
-      # above), so callers thread the same digest fields either way.
-      {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
-    else
-      do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
+    base_hash = Keyword.get(opts, :base_hash)
+
+    cond do
+      is_binary(existing.content_hash) and
+        existing.content_hash == base_attrs.content_hash and
+          not Keyword.get(opts, :force, false) ->
+        idempotent_repush(existing, base_attrs)
+
+      is_binary(base_hash) and is_binary(existing.content_hash) and
+          existing.content_hash != base_hash ->
+        # Stale base declared: the row moved since this writer read it. Refuse
+        # to merge (see upsert_note — a stale full-content push deletes newer
+        # content convergently); the writer re-reads and retries or surfaces a
+        # conflict. Matches the long-documented-but-missing 409 contract.
+        {:stale_base, existing}
+
+      true ->
+        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder)
     end
+  end
+
+  # Idempotent re-push (plugin retry, offline-queue replay, MCP re-write):
+  # the incoming content hashes identically to the stored merged content,
+  # so the CRDT diff is a provable no-op. Skip the whole pipeline — CRDT
+  # decrypt/merge/re-encrypt, field re-encryption, the row rewrite (TOAST
+  # + WAL churn on the content blob), the version bump, and the seq
+  # allocation — and return the row unchanged. The caller skips the
+  # note_changed broadcast on hash equality, so other devices don't
+  # reconcile a phantom change. Tradeoff: a same-content push with a newer
+  # mtime keeps the stored mtime; sync state is hash/seq-based, so nothing
+  # keys off it. Tombstones never reach here (note_by_path_query filters
+  # deleted_at), so delete → re-push still resurrects via the insert path.
+  # Repair paths that re-derive persisted fields from unchanged content
+  # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
+  # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
+  # incoming content (hash-equal to the stored merged content by the guard
+  # in do_update_note), so callers thread the same digest fields either way.
+  # Checked BEFORE the stale-base gate: a hash-equal push is a no-op whatever
+  # base the writer declared.
+  defp idempotent_repush(existing, base_attrs) do
+    {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
 
   defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder) do

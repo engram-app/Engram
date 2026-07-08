@@ -11,9 +11,12 @@ defmodule EngramWeb.NotesController do
     operation_id: "notes-upsert",
     summary: "Create or update a note",
     description:
-      "Creates a note or updates the existing one at the same path. Concurrent edits are guarded " <>
-        "by mtime — a stale write returns 409 with the current server note. Notes over 10MB are " <>
-        "rejected with 413, and exceeding the plan's note cap returns 402.",
+      "Creates a note or updates the existing one at the same path. Updates are merged " <>
+        "convergently (CRDT) with the stored content. Optionally pass `base_hash` — the " <>
+        "`content_hash` you last read — for compare-and-swap semantics: if the note changed " <>
+        "since that read, the write returns 409 with the current server note instead of " <>
+        "merging. Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
+        "returns 402.",
     tags: ["Notes"],
     request_body:
       {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},

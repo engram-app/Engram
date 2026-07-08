@@ -169,6 +169,82 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "checkpoint reverted a committed REST write (the #902 gap)"
   end
 
+  # ── Phase 0 (identity-as-CRDT): checkpoint must be MONOTONE ─────────────────
+  # The version fence only aborts when the row moved AFTER capture. A room whose
+  # doc missed a deliver_out (decrypt blip, KMS outage) is behind writes that
+  # committed BEFORE capture: the fence passes and the stale doc used to
+  # overwrite both notes.content AND crdt_state, destroying the REST/MCP write
+  # entirely (prod incident 2026-07-07: MCP work-log appends erased on plugin
+  # reconnect). Fix: checkpoint folds the row's stored state into the doc state
+  # (Yjs union, same lineage as deliver_out) before materializing — the output
+  # can only grow, never regress, regardless of what the room missed.
+
+  test "checkpoint UNIONS the row's stored state — a stale room doc cannot erase a REST write",
+       ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # The room doc is built from the ORIGINAL state and diverges with a live
+    # edit — but it never receives the REST write below (a missed deliver_out).
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
+
+    # REST/MCP write commits new merged content + state, bumping the version —
+    # BEFORE the checkpoint captures anything, so no fence can catch this.
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before APPEND"})
+
+    # Room exits (unbind path: no captured_version). Today this blindly writes
+    # "before EDIT" over "before APPEND" — content AND crdt_state regress.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+
+    assert fresh.content =~ "APPEND",
+           "checkpoint erased a committed REST write the room doc never saw"
+
+    assert fresh.content =~ "EDIT",
+           "checkpoint lost the room's own live edit"
+
+    # The persisted CRDT state must also carry the union: rebuilding a doc from
+    # it must project the merged text (the row state is the durable truth the
+    # next bind hydrates from — content alone converging is not enough).
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_state} = Crypto.decrypt_crdt_state(after_note, user)
+    {:ok, rebuilt} = CrdtBridge.doc_from_state(after_state)
+    rebuilt_text = CrdtBridge.text_of(rebuilt)
+    assert rebuilt_text =~ "APPEND"
+    assert rebuilt_text =~ "EDIT"
+  end
+
+  test "checkpoint ABORTS (row untouched) when the row's stored state cannot be read", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Divergent room doc, as above.
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
+
+    # Corrupt the stored state so it cannot be decrypted: the checkpoint can no
+    # longer prove its write is a superset of the durable truth, so it must not
+    # write at all (unreadable ≠ absent — overwriting could destroy data).
+    Repo.with_tenant(user.id, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: <<0, 1, 2, 3>>, crdt_state_nonce: <<0::96>>]
+      )
+    end)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_note.version == note.version, "checkpoint wrote despite unreadable stored state"
+
+    assert after_note.crdt_state_ciphertext == <<0, 1, 2, 3>>,
+           "checkpoint replaced a stored state it could not read"
+  end
+
   # ── /changes feed integrity: checkpoint must advance updated_at ────────────
 
   test "checkpoint advances updated_at so the /changes timestamp feed sees the edit", ctx do

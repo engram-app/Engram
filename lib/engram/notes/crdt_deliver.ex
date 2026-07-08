@@ -103,7 +103,26 @@ defmodule Engram.Notes.CrdtDeliver do
       room ->
         case load_merged_state(user_id, note_id) do
           {:ok, state} when is_binary(state) ->
-            room_apply(room, note_id, fn doc -> apply_state(doc, state, note_id) end)
+            # The apply runs inside the room process (update_doc discards the
+            # fun's return), so failure is signalled back by message — safe
+            # ordering: update_doc is a synchronous call, the send happens
+            # before the reply.
+            parent = self()
+
+            room_apply(room, note_id, fn doc ->
+              if apply_state(doc, state, note_id) == :apply_failed do
+                send(parent, {:crdt_deliver_apply_failed, note_id})
+              end
+
+              :ok
+            end)
+
+            receive do
+              {:crdt_deliver_apply_failed, ^note_id} ->
+                quarantine_room(room, note_id, :apply_update_failed)
+            after
+              0 -> :ok
+            end
 
           {:ok, nil} when content == "" ->
             # Empty content on a room with NO persisted CRDT state is ambiguous:
@@ -120,11 +139,33 @@ defmodule Engram.Notes.CrdtDeliver do
           {:ok, nil} ->
             room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
 
-          {:error, _reason} ->
-            # Already logged in load_merged_state. Deliberately no ingest.
-            :ok
+          {:error, reason} ->
+            # Already logged in load_merged_state. Deliberately no ingest —
+            # and the room must not survive: see quarantine_room/3.
+            quarantine_room(room, note_id, reason)
         end
     end
+  end
+
+  # Phase 0 (identity-as-CRDT): a live room we could not converge onto the
+  # committed state is a poisoned cache. Left alive, it (a) serves its stale
+  # doc to every client the announce triggers to re-pull — blocking delivery
+  # of the committed write indefinitely — and (b) would checkpoint that stale
+  # doc on exit. Unregister the name first (so lookups stop resolving to the
+  # dying pid), then kill BRUTALLY: `:kill` is untrappable and skips
+  # terminate/2 → unbind → checkpoint, which must not run for a doc we could
+  # not converge. Nothing is lost: every room update was already appended to
+  # the durable tail-log by update_v1, and the next join re-binds a fresh room
+  # hydrated from the row's merged state + tail replay.
+  defp quarantine_room(room, note_id, reason) do
+    Logger.error(
+      "crdt deliver quarantined stale room — killed for rebind from row",
+      Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
+    )
+
+    _ = :global.unregister_name(CrdtRegistry.global_name(note_id))
+    Process.exit(room, :kill)
+    :ok
   end
 
   # `:global.whereis_name` can hand back a room that is mid auto-exit, so the
@@ -164,14 +205,14 @@ defmodule Engram.Notes.CrdtDeliver do
         # The just-committed state failed to apply — the doc or the state is
         # already suspect, so plaintext-diffing into that same doc would be
         # the worst possible response (foreign-lineage re-encode on top of a
-        # broken doc). Skip; observers converge via the announce → step-1
-        # re-pull against a fresh room.
+        # broken doc). Report failure; the caller quarantines the room so the
+        # announce → re-pull lands on a FRESH room hydrated from the row.
         Logger.error(
           "crdt deliver apply_update failed — skipping push",
           Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
         )
 
-        :ok
+        :apply_failed
     end
   end
 
