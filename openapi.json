@@ -2258,6 +2258,13 @@
           ]
         },
         "properties": {
+          "base_hash": {
+            "description": "Compare-and-swap guard: the content_hash you last read for this note. If the note changed since, the write returns 409 instead of merging.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "content": {
             "type": "string",
             "x-struct": null,
@@ -2743,7 +2750,7 @@
     "/api/notes": {
       "post": {
         "callbacks": {},
-        "description": "Creates a note or updates the existing one at the same path. Concurrent edits are guarded by mtime — a stale write returns 409 with the current server note. Notes over 10MB are rejected with 413, and exceeding the plan's note cap returns 402.",
+        "description": "Creates a note or updates the existing one at the same path. Updates are merged convergently (CRDT) with the stored content. Optionally pass `base_hash` — the `content_hash` you last read — for compare-and-swap semantics: if the note changed since that read, the write returns 409 with the current server note instead of merging. Notes over 10MB are rejected with 413, and exceeding the plan's note cap returns 402.",
         "operationId": "notes-upsert",
         "parameters": [],
         "requestBody": {
