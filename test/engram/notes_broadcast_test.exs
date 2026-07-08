@@ -82,6 +82,36 @@ defmodule Engram.NotesBroadcastTest do
     end
   end
 
+  describe "rapid successive upserts broadcast (Engram#944)" do
+    test "two upserts to the same path with different content each broadcast a note_changed upsert",
+         %{user: user, vault: vault} do
+      {:ok, _base} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "canvas.canvas",
+          "content" => "base",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      # Fire the second upsert immediately after the first — no artificial
+      # delay — to mirror the e2e repro's back-to-back rapid writes.
+      {:ok, modified} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "canvas.canvas",
+          "content" => "modified",
+          "mtime" => 1.001
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "content_hash" => hash}
+      }
+
+      assert hash == modified.content_hash
+    end
+  end
+
   describe "rename_folder/4 cascade broadcast" do
     test "upsert broadcast for a renamed child carries the note id and new path", %{
       user: user,
