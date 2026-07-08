@@ -50,4 +50,3 @@ Ferritin levels between 30-300 ng/mL are considered normal...
 ## References
 - Markdown parser: `lib/engram/parsers/markdown.ex`
 - Indexing pipeline: `lib/engram/indexing.ex`
-- Chunking research (workspace): `../engram-workspace/docs/context/chunking-strategy-research.md`

@@ -1,5 +1,7 @@
 # Deploy to AWS prod
 
+_Last verified: 2026-06-18_
+
 When to read this: shipping code to `app.engram.page`, rolling back a bad deploy, or debugging the deploy pipeline.
 
 ## How it works (GitOps)

@@ -1,5 +1,7 @@
 # y-indexeddb `whenSynced` never resolves after `destroy()`
 
+_Last verified: 2026-07-02_
+
 **Trigger:** Any code that awaits `IndexeddbPersistence.whenSynced` (directly or
 via a cached promise) while `destroy()` can race the initial IndexedDB load will
 hang forever. This is a property of the library, not a usage mistake.

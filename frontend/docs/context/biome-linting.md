@@ -1,5 +1,7 @@
 # Frontend Biome Linting Setup + Gotchas
 
+_Last verified: 2026-07-01_
+
 Read this before touching `frontend/biome.json` or the `frontend-lint` CI job.
 
 ## What's set up

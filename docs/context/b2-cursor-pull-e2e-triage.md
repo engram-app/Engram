@@ -1,5 +1,7 @@
 # PR B2 (cursor-pull) — paired e2e failure triage
 
+_Last verified: 2026-06-18_
+
 **Date:** 2026-06-17
 **Context:** Plugin PR `engram-app/Engram-obsidian#109` (cursor-pull migration) paired with merged backend B1 (#628). First paired e2e run (backend run 27665339557, `e2e-clerk`) had **5 failures**. This doc captures the root-cause so it isn't rediscovered.
 
