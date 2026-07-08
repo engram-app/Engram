@@ -46,13 +46,23 @@ defmodule Engram.Cluster.Readiness do
     query = Keyword.get(opts, :query, Application.get_env(:engram, :dns_cluster_query))
 
     if is_binary(query) do
-      peers = Keyword.get(opts, :peers, &Node.list/0)
-      resolver = Keyword.get(opts, :resolver, &resolve_a/1)
-      self_ip = Keyword.get_lazy(opts, :self_ip, &self_ip/0)
+      peers = Keyword.get(opts, :peers, &Node.list/0).()
+
+      # Steady state (already joined) must never touch DNS: this runs on
+      # every /api/health/deep probe, and a hung VPC resolver must not cost
+      # the hot path anything once peers are connected.
+      other_ips =
+        if peers == [] do
+          resolver = Keyword.get(opts, :resolver, &resolve_a/1)
+          self_ip = Keyword.get_lazy(opts, :self_ip, &self_ip/0)
+          resolver.(query) -- List.wrap(self_ip)
+        else
+          []
+        end
 
       decide(%{
-        peers: peers.(),
-        other_ips: resolver.(query) -- List.wrap(self_ip),
+        peers: peers,
+        other_ips: other_ips,
         uptime_ms:
           Keyword.get_lazy(opts, :uptime_ms, fn -> elem(:erlang.statistics(:wall_clock), 0) end),
         grace_ms: Keyword.get(opts, :grace_ms, @default_grace_ms)
@@ -75,12 +85,22 @@ defmodule Engram.Cluster.Readiness do
   def decide(_state), do: :waiting
 
   # Cloud Map serves A records only (awsvpc ENI IPv4s; RELEASE_NODE is
-  # engram@<ipv4>), so AAAA is intentionally not queried. :inet_res.lookup/3
+  # engram@<ipv4>), so AAAA is intentionally not queried. :inet_res.lookup/4
   # returns [] on any resolution error → fails open to :alone above.
-  defp resolve_a(query) do
+  #
+  # Bounded to well under the ALB's 5s health-check timeout: the default
+  # retry/timeout (~6s+ worst case) means a hanging VPC resolver would pull
+  # every task from rotation instead of failing open. `opts` lets tests
+  # point at an unresponsive nameserver to prove the bound holds.
+  @doc false
+  @resolve_timeout_ms 1_500
+  @resolve_retry 1
+  def resolve_a(query, opts \\ []) do
+    resolve_opts = Keyword.merge([timeout: @resolve_timeout_ms, retry: @resolve_retry], opts)
+
     query
-    |> String.to_charlist()
-    |> :inet_res.lookup(:in, :a)
+    |> to_charlist()
+    |> :inet_res.lookup(:in, :a, resolve_opts)
     |> Enum.map(&to_string(:inet.ntoa(&1)))
   end
 

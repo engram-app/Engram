@@ -98,5 +98,33 @@ defmodule Engram.Cluster.ReadinessTest do
                  resolver: fn _ -> [] end
                )
     end
+
+    test "steady state (peer already joined) never calls the resolver — must stay out of the hot path" do
+      assert :ready =
+               Readiness.check(
+                 query: "app.engram.internal",
+                 peers: fn -> [:"engram@10.0.0.2"] end,
+                 resolver: fn _ ->
+                   raise "resolver must not be invoked when peers are already connected"
+                 end
+               )
+    end
+  end
+
+  describe "resolve_a/2 (real :inet_res call, bounded timeout)" do
+    test "fails open (returns []) within a bounded budget against an unresponsive resolver" do
+      # 192.0.2.0/24 is TEST-NET-1 (RFC 5737): reserved, guaranteed non-routable,
+      # so this never gets a real answer — it exercises the same
+      # unresponsive-resolver path a hung VPC/Cloud Map resolver would.
+      {elapsed_us, result} =
+        :timer.tc(fn ->
+          Readiness.resolve_a(~c"example.invalid", nameservers: [{{192, 0, 2, 1}, 53}])
+        end)
+
+      assert result == []
+      # Well under the 5s ALB health-check timeout (with headroom for CI jitter);
+      # the unbounded default (~6s+) would blow this.
+      assert elapsed_us < 4_000_000
+    end
   end
 end

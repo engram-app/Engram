@@ -48,7 +48,7 @@ defmodule EngramWeb.HealthController do
       %{"postgres" => check_postgres()}
       |> put_cluster_check(Engram.Cluster.Readiness.check(cluster_readiness_opts()))
 
-    all_ok = Enum.all?(checks, fn {_k, v} -> String.starts_with?(v, "ok") end)
+    all_ok = Enum.all?(checks, fn {_k, v} -> ok_status?(v) end)
     status = if all_ok, do: "ok", else: "degraded"
     http_status = if all_ok, do: 200, else: 503
 
@@ -56,6 +56,13 @@ defmodule EngramWeb.HealthController do
     |> put_status(http_status)
     |> json(%{status: status, checks: checks})
   end
+
+  # Values this controller itself produces are always exactly "ok" or
+  # "ok: <detail>" — never a bare prefix match. Keeps a future check value
+  # that merely starts with "ok" (e.g. an error message) from false-passing.
+  defp ok_status?("ok"), do: true
+  defp ok_status?("ok: " <> _), do: true
+  defp ok_status?(_), do: false
 
   # Test seam only — lets ExUnit inject peers/resolver/uptime without real
   # distribution. Unset everywhere else (empty opts = live node defaults).
@@ -67,12 +74,26 @@ defmodule EngramWeb.HealthController do
   defp put_cluster_check(checks, :ready), do: Map.put(checks, "cluster", "ok")
   defp put_cluster_check(checks, {:ready, :alone}), do: Map.put(checks, "cluster", "ok: alone")
 
+  @grace_expired_logged_key {__MODULE__, :cluster_grace_expired_logged}
+
   defp put_cluster_check(checks, {:ready, :grace_expired}) do
-    Logger.warning(
+    message =
       "cluster readiness: unjoined past boot grace — passing to avoid wedging the deploy; " <>
-        "check Cloud Map A-records, ecs_task SG (EPMD 4369 + dist ports), RELEASE_COOKIE",
-      Engram.Logger.Metadata.with_category(:warning, :lifecycle, [])
-    )
+        "check Cloud Map A-records, ecs_task SG (EPMD 4369 + dist ports), RELEASE_COOKIE"
+
+    # First observation of a sustained split logs at warning (drives the
+    # alert); every probe after that (~8/min) would otherwise duplicate it,
+    # so subsequent probes log at debug instead. A VM restart clears this
+    # naturally (persistent_term is process-free but node-scoped).
+    level =
+      if :persistent_term.get(@grace_expired_logged_key, false) do
+        :debug
+      else
+        :persistent_term.put(@grace_expired_logged_key, true)
+        :warning
+      end
+
+    Logger.log(level, message, Engram.Logger.Metadata.with_category(level, :lifecycle, []))
 
     Map.put(checks, "cluster", "ok: unjoined_grace_expired")
   end

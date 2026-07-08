@@ -1,6 +1,8 @@
 defmodule EngramWeb.HealthControllerTest do
   use EngramWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
+
   setup tags do
     if tags[:auth] do
       Application.put_env(:engram, :auth_provider, :local)
@@ -108,6 +110,33 @@ defmodule EngramWeb.HealthControllerTest do
 
       conn = get(conn, "/api/health/deep")
       assert json_response(conn, 200)["checks"]["cluster"] == "ok: unjoined_grace_expired"
+    end
+
+    test "logs the grace-expired warning only once, then debug — a sustained split must not spam the alert",
+         %{conn: conn} do
+      Application.put_env(:engram, :dns_cluster_query, "app.engram.internal")
+
+      Application.put_env(:engram, :cluster_readiness_opts,
+        peers: fn -> [] end,
+        resolver: fn _ -> ["10.0.0.9"] end,
+        self_ip: "10.0.0.7",
+        uptime_ms: 120_000,
+        grace_ms: 60_000
+      )
+
+      on_exit(fn ->
+        key = {EngramWeb.HealthController, :cluster_grace_expired_logged}
+        if :persistent_term.get(key, false), do: :persistent_term.erase(key)
+      end)
+
+      first_log = capture_log(fn -> get(conn, "/api/health/deep") end)
+      assert first_log =~ "cluster readiness: unjoined past boot grace"
+
+      # Second probe of the same sustained split must not repeat the
+      # warning — test.exs pins `logger level: :warning`, so a debug-level
+      # re-log is silently dropped rather than needing string matching here.
+      second_log = capture_log(fn -> get(conn, "/api/health/deep") end)
+      refute second_log =~ "cluster readiness: unjoined past boot grace"
     end
   end
 
