@@ -33,8 +33,8 @@ defmodule Engram.Cluster.Readiness do
 
   @default_grace_ms :timer.seconds(60)
 
-  @type status ::
-          :not_clustered | :ready | {:ready, :alone} | {:ready, :grace_expired} | :waiting
+  @type decision :: :ready | {:ready, :alone} | {:ready, :grace_expired} | :waiting
+  @type status :: :not_clustered | decision
 
   @doc """
   Evaluate readiness against the live node. All collaborators are injectable
@@ -78,7 +78,7 @@ defmodule Engram.Cluster.Readiness do
           other_ips: [String.t()],
           uptime_ms: non_neg_integer(),
           grace_ms: pos_integer()
-        }) :: status()
+        }) :: decision()
   def decide(%{peers: [_ | _]}), do: :ready
   def decide(%{other_ips: []}), do: {:ready, :alone}
   def decide(%{uptime_ms: up, grace_ms: grace}) when up >= grace, do: {:ready, :grace_expired}
