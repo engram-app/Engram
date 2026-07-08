@@ -43,8 +43,25 @@ defmodule Engram.Notes.CrdtCheckpoint do
   """
   @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t(), keyword()) :: :ok
   def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc, opts \\ []) do
-    user = Accounts.get_user!(user_id)
+    # Deleted user/note are EXPECTED lifecycle states here (vault force-purge
+    # deletes rows while rooms are still exiting) — skip quietly at :warning,
+    # never raise. Raising turned every room tick during a purge into a
+    # caught-but-logged error storm (Sentry + Loki, 2026-07-07 19:03, #954).
+    case Accounts.get_user(user_id) do
+      nil ->
+        Logger.warning(
+          "crdt checkpoint skipped — user deleted note_id=#{note_id}",
+          Metadata.with_category(:warning, :sync, note_id: note_id)
+        )
 
+        :ok
+
+      user ->
+        do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+    end
+  end
+
+  defp do_checkpoint(user, user_id, vault_id, note_id, doc, opts) do
     # Capture the prune watermark BEFORE reading/encoding the doc. Any tail row
     # inserted while we encode is NOT necessarily in the snapshot, so it must
     # survive the prune (it replays on next bind — apply_update is idempotent).
@@ -90,27 +107,34 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # Without this, extract_title falls back to the UUID and
             # inject_phase_b_fields_pub gets nil path/folder → corrupts
             # path_hmac/folder_hmac so the row stops resolving by path.
-            {:ok, note} = Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note_id), user)
+            case Repo.get(Note, note_id) do
+              # Deleted note (vault force-purge race): quiet skip, see checkpoint/5.
+              nil ->
+                {:skip, :note_deleted}
 
-            with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
-                 text = CrdtBridge.text_of(union_doc),
-                 {:ok, raw_state} <- encode(union_doc),
-                 {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
-                 {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
-                 {:ok, key} <- Crypto.dek_content_hash_key(user) do
-              content_hash = Crypto.hmac_content_hash(key, text)
-              tags = Helpers.extract_tags(text)
+              raw_note ->
+                {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
 
-              checkpoint_write(note, vault_id, note_id, watermark, opts, %{
-                text: text,
-                tags: tags,
-                content_hash: content_hash,
-                ct: ct,
-                nonce: nonce,
-                user: user
-              })
-            else
-              err -> {:abort, err}
+                with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
+                     text = CrdtBridge.text_of(union_doc),
+                     {:ok, raw_state} <- encode(union_doc),
+                     {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
+                     {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
+                     {:ok, key} <- Crypto.dek_content_hash_key(user) do
+                  content_hash = Crypto.hmac_content_hash(key, text)
+                  tags = Helpers.extract_tags(text)
+
+                  checkpoint_write(note, vault_id, note_id, watermark, opts, %{
+                    text: text,
+                    tags: tags,
+                    content_hash: content_hash,
+                    ct: ct,
+                    nonce: nonce,
+                    user: user
+                  })
+                else
+                  err -> {:abort, err}
+                end
             end
           end)
 
@@ -133,6 +157,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # so idle compactions and aborted writes raise no spurious re-pull.
                 CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
               end
+
+            :ok
+
+          {:skip, reason} ->
+            Logger.warning(
+              "crdt checkpoint skipped — #{inspect(reason)} note_id=#{note_id}",
+              Metadata.with_category(:warning, :sync, note_id: note_id)
+            )
 
             :ok
 

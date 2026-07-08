@@ -102,4 +102,25 @@ defmodule Engram.Notes.CrdtRegistryTest do
     assert :ok = Yex.Text.insert(text, 0, "café")
     assert Yex.Text.to_string(text) == "café"
   end
+
+  describe "terminate_room/1 (#954 + #953-review F2)" do
+    test "unregisters the INNER :global term synchronously, then kills" do
+      note_id = Ecto.UUID.generate()
+      pid = spawn(fn -> Process.sleep(:infinity) end)
+      :yes = :global.register_name({:crdt_doc, note_id}, pid)
+      ref = Process.monitor(pid)
+
+      assert :ok = CrdtRegistry.terminate_room(note_id)
+
+      # The name is gone IMMEDIATELY (before :global's async DOWN cleanup) —
+      # this is exactly what the old wrapped-name unregister failed to do.
+      assert :global.whereis_name({:crdt_doc, note_id}) == :undefined
+      assert CrdtRegistry.lookup(note_id) == nil
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1000
+    end
+
+    test "is a no-op for a room that is not running" do
+      assert :ok = CrdtRegistry.terminate_room(Ecto.UUID.generate())
+    end
+  end
 end

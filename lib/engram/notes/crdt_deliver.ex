@@ -104,21 +104,26 @@ defmodule Engram.Notes.CrdtDeliver do
         case load_merged_state(user_id, note_id) do
           {:ok, state} when is_binary(state) ->
             # The apply runs inside the room process (update_doc discards the
-            # fun's return), so failure is signalled back by message — safe
-            # ordering: update_doc is a synchronous call, the send happens
-            # before the reply.
+            # fun's return), so failure is signalled back by message. The
+            # message is tagged with a per-call ref: if update_doc TIMES OUT,
+            # the room may run the fun later and send the signal after our
+            # receive already returned — an untagged message would then linger
+            # in this (possibly long-lived channel) process's mailbox and be
+            # consumed by the NEXT deliver for the same note, false-quarantining
+            # a healthy room (#953 retro-review F4). A stale ref never matches.
             parent = self()
+            ref = make_ref()
 
             room_apply(room, note_id, fn doc ->
               if apply_state(doc, state, note_id) == :apply_failed do
-                send(parent, {:crdt_deliver_apply_failed, note_id})
+                send(parent, {ref, :crdt_deliver_apply_failed})
               end
 
               :ok
             end)
 
             receive do
-              {:crdt_deliver_apply_failed, ^note_id} ->
+              {^ref, :crdt_deliver_apply_failed} ->
                 quarantine_room(room, note_id, :apply_update_failed)
             after
               0 -> :ok
@@ -157,15 +162,16 @@ defmodule Engram.Notes.CrdtDeliver do
   # not converge. Nothing is lost: every room update was already appended to
   # the durable tail-log by update_v1, and the next join re-binds a fresh room
   # hydrated from the row's merged state + tail replay.
-  defp quarantine_room(room, note_id, reason) do
+  defp quarantine_room(_room, note_id, reason) do
     Logger.error(
       "crdt deliver quarantined stale room — killed for rebind from row",
       Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
     )
 
-    _ = :global.unregister_name(CrdtRegistry.global_name(note_id))
-    Process.exit(room, :kill)
-    :ok
+    # terminate_room unregisters the INNER :global term before the kill —
+    # the previous inline version passed global_name/1's {:global, …} wrapper
+    # to unregister_name, a silent no-op (#953 retro-review F2).
+    CrdtRegistry.terminate_room(note_id)
   end
 
   # `:global.whereis_name` can hand back a room that is mid auto-exit, so the

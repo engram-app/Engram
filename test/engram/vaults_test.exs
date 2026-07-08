@@ -519,6 +519,40 @@ defmodule Engram.VaultsTest do
   # ---------------------------------------------------------------------------
 
   describe "delete_vault/2" do
+    test "kills live CRDT rooms for the vault's notes (#954)", %{user: user} do
+      # Rooms outliving their vault caused the 2026-07-07 checkpoint storms:
+      # the orphaned room kept ticking against rows being deleted. Soft-delete
+      # is the choke point — clients get vault_deleted and disconnect anyway.
+      Process.flag(:trap_exit, true)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, vault} = Vaults.create_vault(user, %{name: "Rooms"})
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "r.md",
+          "content" => "x",
+          "mtime" => 1.0
+        })
+
+      {:ok, room} =
+        Yex.Sync.SharedDoc.start_link(
+          [
+            doc_name: note.id,
+            doc_option: %Yex.Doc.Options{offset_kind: :utf16},
+            auto_exit: false
+          ],
+          name: Engram.Notes.CrdtRegistry.global_name(note.id)
+        )
+
+      ref = Process.monitor(room)
+
+      assert {:ok, _} = Vaults.delete_vault(user, vault.id)
+
+      assert_receive {:DOWN, ^ref, :process, ^room, :killed}, 1000
+      assert Engram.Notes.CrdtRegistry.lookup(note.id) == nil
+    end
+
     test "soft-deletes vault by setting deleted_at", %{user: user} do
       {:ok, vault} = Vaults.create_vault(user, %{name: "Temp"})
       assert {:ok, deleted} = Vaults.delete_vault(user, vault.id)

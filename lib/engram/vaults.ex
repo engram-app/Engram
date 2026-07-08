@@ -506,10 +506,17 @@ defmodule Engram.Vaults do
     end)
     |> unwrap_transaction()
     |> tap(fn
-      # Deleting the last vault can flip the onboarding gate back to
-      # failing — drop the cached pass verdict so it re-derives.
-      {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
-      _ -> :ok
+      {:ok, deleted} ->
+        # Rooms must not outlive the vault (#954): orphaned rooms kept ticking
+        # checkpoints against rows being purged (2026-07-07 error storms).
+        # Post-commit on purpose — a rolled-back delete must not kill rooms.
+        _ = Engram.Notes.kill_live_rooms_for_vault(deleted.user_id, deleted.id)
+        # Deleting the last vault can flip the onboarding gate back to
+        # failing — drop the cached pass verdict so it re-derives.
+        Engram.Onboarding.GateCache.evict(user.id)
+
+      _ ->
+        :ok
     end)
   end
 

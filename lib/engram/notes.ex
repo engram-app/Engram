@@ -618,6 +618,25 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Kill every live CRDT room belonging to `vault_id`'s notes (#954). A room
+  must not outlive its vault: orphaned rooms kept ticking checkpoints against
+  rows being purged (the 2026-07-07 error storms). Brutal-kill via
+  CrdtRegistry.terminate_room — no unbind checkpoint runs, and nothing is
+  lost (tail-log holds every update; the vault is deleted anyway). Runs its
+  own tenant scope; lookups for room-less notes are cheap (:global whereis).
+  """
+  @spec kill_live_rooms_for_vault(String.t(), String.t()) :: :ok
+  def kill_live_rooms_for_vault(user_id, vault_id) do
+    {:ok, ids} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.all(from(n in Note, where: n.vault_id == ^vault_id, select: n.id))
+      end)
+
+    Enum.each(ids, &Engram.Notes.CrdtRegistry.terminate_room/1)
+    :ok
+  end
+
   # Id-keyed rename support (Phase I): the plugin renames a note by keeping
   # the same client-minted id across `DELETE old` -> `POST new {id: same}`.
   # `delete_note/3` is a soft delete, so the tombstone row still holds PK=id

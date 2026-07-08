@@ -225,6 +225,28 @@ defmodule Engram.Notes.CrdtDeliverTest do
       assert log =~ "crdt deliver state load failed"
     end
 
+    test "a STALE apply-failed message in the caller's mailbox does not quarantine a healthy room (#953-review F4)",
+         %{user: user, vault: vault} do
+      # A timed-out update_doc call can deliver its failure signal AFTER the
+      # receive returned, leaving it in this (long-lived, e.g. channel)
+      # process's mailbox. The signal is now ref-tagged per call, so a stale
+      # message from an earlier call can never match — the next deliver for
+      # the same note must NOT consume it and kill a healthy room.
+      Process.flag(:trap_exit, true)
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "h.md", "content" => "orig"})
+      room = start_bare_room(note.id, "")
+      ref = Process.monitor(room)
+
+      # Plant the legacy-shaped stray signal (what a timed-out earlier call
+      # would have left behind pre-fix).
+      send(self(), {:crdt_deliver_apply_failed, note.id})
+
+      assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "h.md", note.id, "orig")
+
+      refute_receive {:DOWN, ^ref, :process, ^room, :killed}, 300
+      assert CrdtRegistry.lookup(note.id) == room
+    end
+
     test "apply_update failure QUARANTINES the room (killed) — no stale cache survives",
          %{user: user, vault: vault} do
       Process.flag(:trap_exit, true)
