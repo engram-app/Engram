@@ -57,37 +57,53 @@ async def test_missed_delivery_then_local_push_no_deletion(
     wait_for_delivery(vault_b, path, api_sync, timeout=30)
 
     # B goes deaf: channel down, so the next server-side change is missed.
+    # cdp_b is SESSION-scoped: the reconnect must be guaranteed even when an
+    # assert/helper raises mid-test, or B stays deaf for every later test
+    # (same try/finally convention as test_30/test_48).
     await cdp_b.disconnect_stream()
     await asyncio.sleep(0.3)
     assert not await cdp_b.check_stream_connected(), "B's channel should be down"
 
-    # A third writer advances the server while B can't hear it.
-    api_sync.create_note(path, f"{base}\n{server_marker}\n")
-    api_sync.wait_for_note_content(path, server_marker, timeout=15)
+    try:
+        # A third writer advances the server while B can't hear it.
+        api_sync.create_note(path, f"{base}\n{server_marker}\n")
+        api_sync.wait_for_note_content(path, server_marker, timeout=15)
 
-    # B, still ignorant of the server edit, makes and pushes its OWN edit
-    # through the real plugin write path (vault.modify + pushFile) so the
-    # push declares B's stale base_hash. This is the killer push.
-    await cdp_b.push_file_now(path, f"{base}\n{local_marker}\n")
+        # B, still ignorant of the server edit, makes and pushes its OWN edit
+        # through the real plugin write path (vault.modify + pushFile) so the
+        # push declares B's stale base_hash. This is the killer push.
+        await cdp_b.push_file_now(path, f"{base}\n{local_marker}\n")
 
-    # THE invariant: no silent deletion, in either direction. Whatever the
-    # conflict flow chose (409 → conflict copy + keep-local, or merge), both
-    # markers must survive on SOME surface: the server note or B's vault
-    # (main file or conflict copy).
-    await asyncio.sleep(3)
-    server_body = (api_sync.get_note(path) or {}).get("content", "")
-    b_union = _vault_texts(vault_b, folder)
-    assert server_marker in server_body or server_marker in b_union, (
-        "the ignorant push silently deleted the server edit "
-        f"(server={server_body[:200]!r}, b_union={b_union[:300]!r})"
-    )
-    assert local_marker in b_union or local_marker in server_body, (
-        f"B's local edit vanished (server={server_body[:200]!r}, b_union={b_union[:300]!r})"
-    )
+        # THE invariant: no silent deletion, in either direction. Whatever the
+        # conflict flow chose (409 → conflict copy + keep-local, or merge),
+        # both markers must survive on SOME surface: the server note or B's
+        # vault (main file or conflict copy). Poll — the conflict flow (409 →
+        # copy write) needs a moment under CI load; a fixed sleep flakes.
+        server_body = ""
+        b_union = ""
+        deadline = 20
+        while deadline > 0:
+            server_body = (api_sync.get_note(path) or {}).get("content", "")
+            b_union = _vault_texts(vault_b, folder)
+            if (server_marker in server_body or server_marker in b_union) and (
+                local_marker in b_union or local_marker in server_body
+            ):
+                break
+            await asyncio.sleep(1)
+            deadline -= 1
+        assert server_marker in server_body or server_marker in b_union, (
+            "the ignorant push silently deleted the server edit "
+            f"(server={server_body[:200]!r}, b_union={b_union[:300]!r})"
+        )
+        assert local_marker in b_union or local_marker in server_body, (
+            f"B's local edit vanished (server={server_body[:200]!r}, b_union={b_union[:300]!r})"
+        )
+    finally:
+        # Reconnect unconditionally — the session's later tests need B live.
+        await cdp_b.reconnect_stream()
 
-    # Reconnect → B and the server converge on the same main-file content
-    # within one catch-up cycle, no restart.
-    await cdp_b.reconnect_stream()
+    # After reconnect: B and the server converge on the same main-file
+    # content within one catch-up cycle, no restart.
 
     async def _converged() -> bool:
         server = (api_sync.get_note(path) or {}).get("content", "")

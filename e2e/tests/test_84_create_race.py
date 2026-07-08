@@ -45,6 +45,10 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     # The race: an API writer (the MCP/web stand-in) and plugin A create the
     # same path concurrently. push_file_now drives the real pushFile path —
     # mint, push, adopt — while the API create mints the server's own id.
+    # Flake surface (accepted): create_note raises on non-2xx, so a transient
+    # 429/5xx on the API leg aborts the gather as an ERROR rather than a
+    # controlled assert. By contract the blind create cannot 409; if this
+    # errors in CI, suspect rate-limit starvation, not the race itself.
     await asyncio.gather(
         asyncio.to_thread(api_sync.create_note, path, f"# Raced\n\napi-content-{unique}\n"),
         cdp_a.push_file_now(path, f"# Raced\n\nplugin-content-{unique}\n"),
