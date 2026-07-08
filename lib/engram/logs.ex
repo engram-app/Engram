@@ -88,12 +88,19 @@ defmodule Engram.Logs do
   # and Loki (warn+ always; info only when the client marks it diagnostic).
   # This makes both sides of a WS connection greppable by conn_id in ONE Loki
   # query, without the read-only DB bastion.
+  #
+  # Re-emit severity is capped at :warning (see normalize_level/1 below): a
+  # client-side "error" is a bug in ONE user's plugin, not a backend failure,
+  # and must never inflate engram-prod-loki-error-rate (severity="error").
+  # The original client severity survives in `client_severity` metadata so
+  # it's still queryable/greppable in Loki.
   defp reemit_to_logger(user, entries) do
     hashed_user = HMAC.hash_user_id(to_string(user.id))
 
     Enum.each(entries, fn entry ->
       try do
-        level = normalize_level(entry["level"] || entry[:level])
+        raw_level = entry["level"] || entry[:level]
+        level = normalize_level(raw_level)
         client_cat = entry["category"] || entry[:category] || ""
         msg = "[client:#{client_cat}] #{entry["message"] || entry[:message] || ""}"
 
@@ -101,7 +108,8 @@ defmodule Engram.Logs do
           Metadata.with_category(level, :client,
             conn_id: entry["conn_id"] || entry[:conn_id],
             device_id: entry["device_id"] || entry[:device_id],
-            user_id: hashed_user
+            user_id: hashed_user,
+            client_severity: raw_level || "info"
           )
 
         # Verbose diagnostic-mode entries opt into Loki per-entry even at :info.
@@ -123,7 +131,9 @@ defmodule Engram.Logs do
     end)
   end
 
+  # Client severity is capped at :warning on re-emit — never :error — so a
+  # broken plugin loop cannot masquerade as a backend error.
   defp normalize_level("warn"), do: :warning
-  defp normalize_level("error"), do: :error
+  defp normalize_level("error"), do: :warning
   defp normalize_level(_), do: :info
 end
