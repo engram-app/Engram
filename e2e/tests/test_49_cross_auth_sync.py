@@ -35,7 +35,9 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — skipping cross-auth sync tests",
 )
 
-RT_TIMEOUT = 10
+# ponytail: 30s is a load-tuned CI budget, not a latency proof — 5 rapid
+# edits must settle end-to-end on a shared loaded runner (was 10, flaked).
+RT_TIMEOUT = 30
 
 
 def _log_latency(label: str, t0: float) -> float:

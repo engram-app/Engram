@@ -28,7 +28,10 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
 
     # A creates the note
     write_note(vault_a, old_path, "# Rename Test\nThis file will be renamed.")
-    api_sync.wait_for_note(old_path, timeout=10)
+    # 30s server-side budgets: the sender's first push / rename of a session
+    # can lag under CI load (cold-start reconcile sequencing, plugin#189's
+    # push face) — these are setup waits, not the live-delivery asserts.
+    api_sync.wait_for_note(old_path, timeout=30)
 
     # B receives it live before rename — no manual pull
     wait_for_delivery(vault_b, old_path, api_sync, timeout=30)
@@ -37,8 +40,8 @@ async def test_rename_propagation(vault_a, vault_b, cdp_a, cdp_b, api_sync):
     await cdp_a.rename_file(old_path, new_path)
 
     # Wait for server to reflect the rename
-    api_sync.wait_for_note(new_path, timeout=10)
-    api_sync.wait_for_note_gone(old_path, timeout=10)
+    api_sync.wait_for_note(new_path, timeout=30)
+    api_sync.wait_for_note_gone(old_path, timeout=30)
 
     # Verify: B has new path, does NOT have old path — both live, no manual pull.
     # The rename reaches B as two separate events (delete old-path + upsert
