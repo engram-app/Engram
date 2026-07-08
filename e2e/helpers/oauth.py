@@ -219,14 +219,18 @@ async def restore_auth(cdp, original_settings_json: str) -> None:
     logger.info("Plugin auth restored: %s", result)
 
 
-async def wait_for_stream(cdp, timeout: float = 30) -> None:
+async def wait_for_stream(cdp, timeout: float = 60) -> None:
     """Poll until WebSocket channel is connected after auth change.
 
-    30s (was 15s) matches the sibling RT_TIMEOUT that #643 bumped 10s->30s for
-    the same reason: under e2e-clerk load (2-worker xdist + Clerk latency) the
-    OAuth connect chain — token refresh + getMe (with 2s/4s retry backoff) + WS
-    phx_join — legitimately exceeds 15s. #643 raised the propagation wait but
-    missed this connect gate (different file).
+    60s (was 30s, which was 15s before #643): under full-suite e2e-clerk load
+    (2-worker xdist + Clerk latency + a SECOND Obsidian instance booting) the
+    OAuth connect chain — token refresh + getMe (2s/4s retry backoff) + WS
+    phx_join — intermittently exceeded 30s (test_47/test_48). reruns=0
+    (test-confidence-wave) exposed this: reruns had been silently doubling
+    the effective wait. This is a budget bump only — plugin-obsidian#186
+    diagnoses a SEPARATE post-connect delivery race (never-seen CRDT note
+    lost between `crdt:` join and the `crdt_doc_ready` announce) that this
+    gate does not touch; that fix is tracked there, not here.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
