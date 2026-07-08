@@ -16,6 +16,7 @@ files triggers the plugin's file watcher, causing unexpected sync events.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -30,6 +31,7 @@ from helpers.billing import grant_test_plan
 from helpers.cdp import CdpClient
 from helpers.cleanup import cleanup_minio_bucket, cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
+from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -325,6 +327,45 @@ def cdp_b(obsidian_b):
 @pytest.fixture(scope="session")
 def cdp_c(obsidian_c):
     return CdpClient(port=obsidian_c.cdp_port)
+
+
+@pytest.fixture(scope="session")
+def _oauth_ws_warm(cdp_a, clerk_client):
+    """Absorb the OAuth WebSocket cold-boot cost once, out of any test's
+    timed connect gate.
+
+    Evidence (CI, e2e-clerk, full suite): test_47's first OAuth test alone
+    ate the whole >60s cold-boot (token refresh + getMe backoff + WS
+    phx_join, under 2-worker xdist load + a second Obsidian instance
+    booting) inside its own RT_TIMEOUT-bounded assertion; the very next
+    OAuth test then passed in ~2s once the path was warm. Doing one
+    throwaway swap/wait/restore cycle here, in fixture setup with a
+    generous 120s boot budget, moves that cost out of the timed window.
+    Session-scoped: runs once total, whichever of test_47/48/49 executes
+    first (all three swap cdp_a to OAuth and gate on wait_for_stream).
+    """
+    if clerk_client is None:
+        return  # local-auth run: no OAuth test will request this fixture either
+
+    async def _warm():
+        clerk_user_id, tokens = await provision_oauth_tokens(clerk_client, API_URL, label="warm")
+        try:
+            original = await swap_to_oauth(cdp_a, tokens)
+            try:
+                await wait_for_stream(cdp_a, timeout=120)
+            except TimeoutError as e:
+                raise TimeoutError(
+                    "OAuth WS cold-boot warm-up (fixture _oauth_ws_warm) timed "
+                    f"out: {e}. This is one-time suite setup absorbing the "
+                    "first-connect cost, not the behavior under test -- check "
+                    "backend/Clerk health before assuming a real regression."
+                ) from e
+            await restore_auth(cdp_a, original)
+            await wait_for_stream(cdp_a, timeout=120)
+        finally:
+            clerk_client.delete_user(clerk_user_id)
+
+    asyncio.run(_warm())
 
 
 # ---------------------------------------------------------------------------

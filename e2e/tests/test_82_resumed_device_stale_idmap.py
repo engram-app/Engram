@@ -29,11 +29,39 @@ regression guard for that behavior; see task-A2-report.md for the full
 investigation (churn-note variant, in-memory map dumps, routing-log traces).
 """
 
+import asyncio
+import time
+
 import pytest
 
 from helpers.vault import wait_for_content, write_note
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _wait_for_persisted_cursor(cdp, inst, timeout: float = 60, interval: float = 1.0) -> dict:
+    """Poll persist+read until data.json has earned a non-empty syncCursor.
+
+    The plugin only earns syncCursor from its first /sync/changes cycle.
+    Phase 1's wait_for_content proves the CONTENT arrived, but under CI load
+    that cycle's cursor write can still be in flight a moment later — a
+    single persist_plugin_data() call can race it and snapshot a cursor-less
+    data.json (CI-only failure: setup precondition, not the mutate-under-
+    test behavior). Poll instead of asserting on one persist.
+    """
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        await cdp.persist_plugin_data()
+        last = inst.read_data_json()
+        if last.get("syncCursor"):
+            return last
+        await asyncio.sleep(interval)
+    raise TimeoutError(
+        f"data.json never earned a syncCursor within {timeout}s "
+        f"(test_82 setup precondition, not the behavior under test); "
+        f"last snapshot had keys={sorted(last)}"
+    )
 
 
 async def test_resumed_device_with_stale_idmap_syncs_both_ways(
@@ -49,7 +77,7 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
     wait_for_content(inst_b.vault_path, "E2E/Resumed-push-seed.md", "original", timeout=30)
 
     # Phase 2: flush B's state, stop it, wipe the id map but KEEP the cursor.
-    await cdp_b.persist_plugin_data()
+    await _wait_for_persisted_cursor(cdp_b, inst_b)
     inst_b.stop()
 
     def wipe_map(data):
