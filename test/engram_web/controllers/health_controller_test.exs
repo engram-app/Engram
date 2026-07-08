@@ -42,7 +42,13 @@ defmodule EngramWeb.HealthControllerTest do
 
   describe "GET /health/deep cluster readiness gate (clustered deploys only)" do
     setup do
+      # The log-once flag is node-global; reset around every test in this
+      # block so grace-expired test ordering can't leak between tests.
+      log_once_key = {EngramWeb.HealthController, :cluster_grace_expired_logged}
+      :persistent_term.erase(log_once_key)
+
       on_exit(fn ->
+        :persistent_term.erase(log_once_key)
         Application.delete_env(:engram, :dns_cluster_query)
         Application.delete_env(:engram, :cluster_readiness_opts)
       end)
@@ -123,11 +129,6 @@ defmodule EngramWeb.HealthControllerTest do
         uptime_ms: 120_000,
         grace_ms: 60_000
       )
-
-      on_exit(fn ->
-        key = {EngramWeb.HealthController, :cluster_grace_expired_logged}
-        if :persistent_term.get(key, false), do: :persistent_term.erase(key)
-      end)
 
       first_log = capture_log(fn -> get(conn, "/api/health/deep") end)
       assert first_log =~ "cluster readiness: unjoined past boot grace"
