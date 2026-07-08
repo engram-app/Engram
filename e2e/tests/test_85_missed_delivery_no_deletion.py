@@ -1,4 +1,4 @@
-"""Test 83: missed delivery + ignorant local push must NOT delete server content.
+"""Test 85: missed delivery + ignorant local push must NOT delete server content.
 
 Encodes the core 2026-07-07 failure chain (identity-as-CRDT handoff A5b):
 

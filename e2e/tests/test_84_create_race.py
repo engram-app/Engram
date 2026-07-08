@@ -1,4 +1,4 @@
-"""Test 82: create-race — two writers create the SAME path near-simultaneously.
+"""Test 84: create-race — two writers create the SAME path near-simultaneously.
 
 Encodes the 2026-07-07 production incident (identity-as-CRDT handoff A5a):
 an API/MCP writer and the plugin both create one path within the plugin's
