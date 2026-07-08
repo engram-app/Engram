@@ -39,8 +39,14 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     unique = uuid.uuid4().hex[:12]
     path = f"E2E/CreateRace-{unique}/Raced.md"
 
-    await cdp_a.wait_for_stream_connected(timeout=20)
-    await cdp_b.wait_for_stream_connected(timeout=20)
+    # These tests run LAST (highest numbers) and inherit the whole suite's
+    # socket churn — the stream can sit mid-backoff at test start (CI run
+    # 28936382212: "Stream not connected after 20s"). Force a known-good
+    # connection instead of waiting out the backoff timer.
+    for cdp in (cdp_a, cdp_b):
+        if not await cdp.check_stream_connected():
+            await cdp.reconnect_stream()
+        await cdp.wait_for_stream_connected(timeout=20)
 
     # The race: an API writer (the MCP/web stand-in) and plugin A create the
     # same path concurrently. push_file_now drives the real pushFile path —

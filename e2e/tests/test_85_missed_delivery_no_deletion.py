@@ -48,8 +48,14 @@ async def test_missed_delivery_then_local_push_no_deletion(
     server_marker = f"server-edit-{unique}"
     local_marker = f"local-edit-{unique}"
 
-    await cdp_a.wait_for_stream_connected(timeout=20)
-    await cdp_b.wait_for_stream_connected(timeout=20)
+    # These tests run LAST (highest numbers) and inherit the whole suite's
+    # socket churn — the stream can sit mid-backoff at test start (CI run
+    # 28936382212: "Stream not connected after 20s"). Force a known-good
+    # connection instead of waiting out the backoff timer.
+    for cdp in (cdp_a, cdp_b):
+        if not await cdp.check_stream_connected():
+            await cdp.reconnect_stream()
+        await cdp.wait_for_stream_connected(timeout=20)
 
     # Seed: A creates, B receives — both devices synced on a base version.
     base = f"# Missed Delivery\n\nbase-{unique}\n"
