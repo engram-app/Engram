@@ -421,6 +421,67 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     @tag capture_log: true
+    test "sync handshake frames (STEP1/STEP2) do NOT consume the edit budget",
+         %{socket: socket} do
+      # 2026-07-07 incident: connect enrollment fires one STEP1 per note, so a
+      # ~230-note vault blew the 240/10s crdt_msg limit on every connect and the
+      # user's real edits were dropped for the window. Handshake frames must ride
+      # a SEPARATE (larger) bucket so enrollment can never starve edits.
+      # Yjs v1 layout (Yex.Sync doctest): <<0, 0, ..>> step1, <<0, 1, ..>> step2,
+      # <<0, 2, ..>> update.
+      step1_b64 = Base.encode64(<<0, 0, 0>>)
+      step2_b64 = Base.encode64(<<0, 1, 0>>)
+      update_b64 = Base.encode64(<<0, 2, 0>>)
+      absent = Ecto.UUID.generate()
+
+      # 4 handshake frames — double the edit override of 2 — all must pass.
+      for b64 <- [step1_b64, step1_b64, step2_b64, step2_b64] do
+        ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => b64})
+        refute_reply ref, :error, %{reason: "rate_limited"}, 100
+      end
+
+      # The edit budget (2) is UNTOUCHED by those handshakes: two updates pass,
+      # the third is denied.
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => update_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => update_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => update_b64})
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
+    test "a LARGE STEP2 pays the edit budget — relabeled mutations don't get the 10x lane",
+         %{socket: socket} do
+      # STEP2 mutates the doc exactly like an update (y_ex applies both via
+      # apply_update). Only the near-empty enrollment echo STEP2s ride the
+      # handshake lane; a state-bearing STEP2 must count as an edit or a client
+      # could relabel every mutation as <<0, 1, ..>> and bypass the edit cap.
+      big_step2_b64 = Base.encode64(<<0, 1>> <> :binary.copy(<<7>>, 4_096))
+      absent = Ecto.UUID.generate()
+
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => big_step2_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
+    test "the handshake bucket is still bounded (flood shield, not an exemption)",
+         %{socket: socket} do
+      Application.put_env(:engram, :crdt_hs_rate_limit_override, 2)
+      on_exit(fn -> Application.delete_env(:engram, :crdt_hs_rate_limit_override) end)
+
+      step1_b64 = Base.encode64(<<0, 0, 0>>)
+      absent = Ecto.UUID.generate()
+
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
+      push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
+      ref = push(socket, "crdt_msg", %{"doc_id" => absent, "b64" => step1_b64})
+
+      assert_reply ref, :error, %{reason: "rate_limited"}, 3000
+    end
+
+    @tag capture_log: true
     test "crdt_msg beyond the rate limit is rejected with rate_limited error",
          %{socket: socket} do
       # Limit override = 2 (see describe setup above). Push a tiny valid frame
