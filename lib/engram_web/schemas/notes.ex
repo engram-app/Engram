@@ -23,6 +23,13 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
       content: %Schema{type: :string},
       mtime: %Schema{type: :number, format: :float},
       version: %Schema{type: :integer, nullable: true},
+      base_hash: %Schema{
+        type: :string,
+        nullable: true,
+        description:
+          "Compare-and-swap guard: the content_hash you last read for this note. " <>
+            "If the note changed since, the write returns 409 instead of merging."
+      },
       title: %Schema{type: :string, nullable: true},
       folder: %Schema{type: :string, nullable: true},
       tags: %Schema{type: :array, items: %Schema{type: :string}}
