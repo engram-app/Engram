@@ -50,7 +50,12 @@ export default defineConfig({
 		{
 			command: "mix phx.server",
 			cwd: "..",
-			url: `http://localhost:${LOCAL_BACKEND_PORT}/api/health`,
+			// /api/health is a bare liveness check (always 200 once the Endpoint
+			// boots) — it doesn't prove Postgres is attached, so it can pass
+			// before the app can actually serve a real request. /health/deep
+			// round-trips Ecto.Repo, which is the earliest point the backend is
+			// genuinely usable (#964 — boot-race false-ready flake).
+			url: `http://localhost:${LOCAL_BACKEND_PORT}/api/health/deep`,
 			timeout: 120_000,
 			reuseExistingServer: !isCI,
 			stdout: "pipe",
@@ -69,8 +74,14 @@ export default defineConfig({
 		{
 			command: `bun run dev -- --port ${LOCAL_VITE_PORT}`,
 			cwd: ".",
-			port: LOCAL_VITE_PORT,
-			timeout: 15_000,
+			// A bare `port:` check only proves Vite accepted a TCP connection —
+			// not that its /api proxy can actually reach Phoenix (#964). Poll
+			// through the proxy so this only goes green once the whole chain
+			// (Vite -> proxy -> Phoenix -> Postgres) is really up.
+			url: `http://localhost:${LOCAL_VITE_PORT}/api/health/deep`,
+			// Must cover Phoenix's boot budget too: this URL proxies to Phoenix,
+			// so a 15s cap would fail Vite while Phoenix is still legitimately booting.
+			timeout: 120_000,
 			reuseExistingServer: !isCI,
 			env: {
 				VITE_AUTH_PROVIDER: "local",
@@ -83,7 +94,8 @@ export default defineConfig({
 					{
 						command: "mix phx.server",
 						cwd: "..",
-						url: `http://localhost:${CLERK_BACKEND_PORT}/api/health`,
+						// See the "local" project's Phoenix webServer entry above (#964).
+						url: `http://localhost:${CLERK_BACKEND_PORT}/api/health/deep`,
 						timeout: 120_000,
 						reuseExistingServer: !isCI,
 						stdout: "pipe" as const,
@@ -104,8 +116,10 @@ export default defineConfig({
 					{
 						command: `bun run dev -- --port ${CLERK_VITE_PORT}`,
 						cwd: ".",
-						port: CLERK_VITE_PORT,
-						timeout: 15_000,
+						// See the "local" project's Vite webServer entry above (#964).
+						url: `http://localhost:${CLERK_VITE_PORT}/api/health/deep`,
+						// Same Phoenix-boot budget as the local Vite entry above.
+						timeout: 120_000,
 						reuseExistingServer: !isCI,
 						env: {
 							VITE_AUTH_PROVIDER: "clerk",

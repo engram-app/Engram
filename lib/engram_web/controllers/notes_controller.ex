@@ -215,7 +215,9 @@ defmodule EngramWeb.NotesController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
     path = Enum.join(List.wrap(path_parts), "/")
-    Notes.delete_note(user, vault, path)
+
+    Notes.delete_note(user, vault, path, origin_device_id: EngramWeb.OriginDevice.from_conn(conn))
+
     json(conn, %{deleted: true})
   end
 
@@ -267,7 +269,10 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
-         :ok <- Notes.delete_note_by_id(user, vault, id) do
+         :ok <-
+           Notes.delete_note_by_id(user, vault, id,
+             origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
+           ) do
       json(conn, %{deleted: true})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})

@@ -197,4 +197,56 @@ defmodule Engram.NotesBroadcastTest do
       }
     end
   end
+
+  describe "note_changed delete broadcast (self-echo attribution — 2026-07-08 wipe)" do
+    test "no-op delete of an unknown path emits NO broadcast (#971)", %{
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = Notes.delete_note(user, vault, "Ghost/Never Existed.md")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
+    end
+
+    test "delete broadcast carries the caller's origin device_id (#970)", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "del.md", "content" => "# D", "mtime" => 1.0})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      device_id = Ecto.UUID.generate()
+
+      assert :ok = Notes.delete_note(user, vault, "del.md", origin_device_id: device_id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "del.md"} = payload
+      }
+
+      assert payload["device_id"] == device_id
+    end
+
+    test "delete broadcast omits device_id when the caller has none", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "del2.md", "content" => "# D", "mtime" => 1.0})
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = Notes.delete_note(user, vault, "del2.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "del2.md"} = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
+    end
+  end
 end

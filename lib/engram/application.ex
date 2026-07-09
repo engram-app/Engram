@@ -230,12 +230,26 @@ defmodule Engram.Application do
 
   @impl true
   def prep_stop(state) do
-    # Only drain the cluster when actually clustered (SaaS prod).
+    # Only drain when actually clustered (SaaS prod). Peer disconnect happens
+    # in stop/1 — AFTER the endpoint's socket/HTTP drain — so WS clients on
+    # the dying node keep cross-node fan-out until they've reconnected away.
     if Application.get_env(:engram, :dns_cluster_query) do
       Engram.Drainer.drain()
     end
 
     state
+  end
+
+  @impl true
+  def stop(_state) do
+    # Runs after the supervision tree (endpoint included) has stopped: safe
+    # to leave the cluster now, and survivors observe a clean nodedown
+    # before the VM exits.
+    if Application.get_env(:engram, :dns_cluster_query) do
+      Engram.Drainer.disconnect_peers()
+    end
+
+    :ok
   end
 
   # Tell Phoenix to update the endpoint configuration
