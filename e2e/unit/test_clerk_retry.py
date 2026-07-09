@@ -129,16 +129,10 @@ def _mint_client(
     def fake_post(url: str, **_kwargs: object) -> requests.Response:
         if url.endswith("/sessions"):
             calls["sessions"] += 1
-            return (
-                session_responses.pop(0)
-                if len(session_responses) > 1
-                else session_responses[0]
-            )
+            return session_responses.pop(0)
         assert url.endswith("/tokens")
         calls["token_urls"].append(url)
-        return (
-            token_responses.pop(0) if len(token_responses) > 1 else token_responses[0]
-        )
+        return token_responses.pop(0)
 
     monkeypatch.setattr(client.session, "post", fake_post)
     return client, calls
@@ -153,7 +147,10 @@ def test_token_mint_404_recreates_session_and_retries_once(
             _resp(200, {"id": "sess_stale"}),
             _resp(200, {"id": "sess_fresh"}),
         ],
-        token_responses=[_resp(404, {"errors": []}), _resp(200, {"jwt": "jwt_ok"})],
+        token_responses=[
+            _resp(404, {"errors": [{"code": "resource_not_found"}]}),
+            _resp(200, {"jwt": "jwt_ok"}),
+        ],
     )
 
     token = client.create_session_token("user_x")
@@ -170,8 +167,11 @@ def test_token_mint_404_twice_raises(
 ) -> None:
     client, calls = _mint_client(
         monkeypatch,
-        session_responses=[_resp(200, {"id": "sess_a"})],
-        token_responses=[_resp(404, {"errors": []})],
+        session_responses=[_resp(200, {"id": "sess_a"}), _resp(200, {"id": "sess_b"})],
+        token_responses=[
+            _resp(404, {"errors": [{"code": "resource_not_found"}]}),
+            _resp(404, {"errors": [{"code": "resource_not_found"}]}),
+        ],
     )
 
     with pytest.raises(requests.HTTPError):
@@ -192,6 +192,25 @@ def test_token_mint_non_404_raises_immediately(
 
     with pytest.raises(requests.HTTPError):
         client.create_session_token("user_500")
+
+    assert calls["sessions"] == 1
+    assert len(calls["token_urls"]) == 1
+
+
+def test_token_mint_plain_404_fails_fast_no_recreate(
+    monkeypatch: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    """A 404 Clerk does NOT attribute to the session (no resource_not_found
+    code — e.g. a path/config regression) must fail on the first attempt:
+    no session recreate, no extra mint against the rate-limited e2e app."""
+    client, calls = _mint_client(
+        monkeypatch,
+        session_responses=[_resp(200, {"id": "sess_a"})],
+        token_responses=[_resp(404, {"errors": [{"code": "not_our_session"}]})],
+    )
+
+    with pytest.raises(requests.HTTPError):
+        client.create_session_token("user_404")
 
     assert calls["sessions"] == 1
     assert len(calls["token_urls"]) == 1

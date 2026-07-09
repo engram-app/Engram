@@ -237,11 +237,16 @@ class ClerkClient:
         (Clerk eventual-consistency lag between user create/lookup and
         session endpoint visibility). See `_create_session_with_retry`.
 
-        Also retries the token mint ONCE on 404: a just-created session id
-        can expire/vanish (or lag a replica) before the tokens call lands
-        (#978, main run 28987167162). A 404 there is definitively "session
-        gone", so recreating the session and re-minting cannot mask a
-        product bug.
+        Also retries the token mint ONCE on a 404 that Clerk explicitly
+        attributes to the session (`resource_not_found`): a just-created
+        session id can expire/vanish (or lag a replica) before the tokens
+        call lands (#978, main run 28987167162). That 404 is definitively
+        "session gone", so recreating the session and re-minting cannot
+        mask a product bug. Any OTHER 404 (path/config regression, Clerk
+        endpoint change) still fails fast on the first attempt — same
+        `_is_resource_not_found` discipline as every other retry in this
+        module, and no wasted session mints against the rate-limited
+        e2e Clerk app.
         """
         for attempt in (1, 2):
             session_id = self._create_session_with_retry(user_id)
@@ -249,7 +254,7 @@ class ClerkClient:
                 f"{self.base_url}/sessions/{session_id}/tokens",
                 timeout=10,
             )
-            if resp.status_code == 404 and attempt == 1:
+            if resp.status_code == 404 and self._is_resource_not_found(resp) and attempt == 1:
                 logger.warning(
                     "Clerk token mint 404 for session %s (user %s) — "
                     "recreating session and retrying once",
