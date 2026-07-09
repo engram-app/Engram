@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
 import { EmptyVaultState } from "../layout/empty-vault-state";
+import { noteName } from "../lib/note-name";
 
 function formatDate(iso: string): string {
 	return new Date(iso).toLocaleDateString(undefined, {
@@ -20,7 +21,7 @@ function NoteRow({ note }: NoteRowProps) {
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
 			<Link to={`/note/${note.id}`} className="block hover:text-blue-700">
 				<h3 className="font-medium text-gray-900 text-sm dark:text-gray-100">
-					{note.title || note.path}
+					{noteName(note.path) || note.path}
 				</h3>
 			</Link>
 			<footer className="mt-1 flex flex-wrap items-center gap-3 text-gray-500 text-xs dark:text-gray-400">

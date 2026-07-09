@@ -25,6 +25,7 @@ import {
 	useRenameNote,
 } from "../api/queries";
 import { useFolderTreeState } from "../layout/folder-tree-context";
+import { noteName } from "../lib/note-name";
 import { isSyntheticFolderId, synthesizeFolders } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId } from "./tree/types";
@@ -376,7 +377,7 @@ export default function FolderTree() {
 		}
 		if (p.kind === "note") {
 			const n = lookupNote(p.id);
-			return n?.title || n?.path.split("/").pop() || "Note";
+			return n ? noteName(n.path) : "Note";
 		}
 		if (p.kind === "attachment") {
 			return p.path.split("/").pop() ?? p.path;
@@ -444,7 +445,8 @@ export default function FolderTree() {
 				if (!note) {
 					break;
 				}
-				const label = note.title || note.path.split("/").pop() || note.path;
+				// Wikilinks resolve by filename in Obsidian, never by H1 title.
+				const label = noteName(note.path) || note.path;
 				navigator.clipboard
 					.writeText(`[[${label}]]`)
 					.then(() => toast.success("Copied wikilink"))

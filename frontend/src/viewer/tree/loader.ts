@@ -6,6 +6,7 @@ import {
 	type NoteSummary,
 	ROOT_FOLDER_ID,
 } from "../../api/queries";
+import { noteName } from "../../lib/note-name";
 import type { TreeItem } from "./types";
 import { formatItemId, parseItemId, ROOT_ID } from "./types";
 
@@ -179,14 +180,15 @@ function sortNotes(notes: NoteSummary[], sort: SortKey): NoteSummary[] {
 	if (sort.startsWith("created")) {
 		return copy.sort((a, b) => sign * (Date.parse(a.created_at) - Date.parse(b.created_at)));
 	}
-	return copy.sort((a, b) => sign * a.title.localeCompare(b.title));
+	return copy.sort((a, b) => sign * noteName(a.path).localeCompare(noteName(b.path)));
 }
 
 function noteToTreeItem(n: NoteSummary): Extract<TreeItem, { kind: "note" }> {
 	const last = n.path.split("/").pop() ?? n.path;
 	const dot = last.lastIndexOf(".");
 	const ext = dot > 0 ? last.slice(dot + 1).toLowerCase() : null;
-	return { kind: "note", id: n.id, path: n.path, title: n.title, ext };
+	// Display name is always the filename, never the server-derived H1 title.
+	return { kind: "note", id: n.id, path: n.path, title: noteName(n.path), ext };
 }
 
 export type SortKey =

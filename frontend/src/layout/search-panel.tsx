@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { noteName } from "@/lib/note-name";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { type SearchFilters, type SearchResult, useSearch } from "../api/queries";
 import { useRailView } from "./rail-view-context";
@@ -172,8 +173,8 @@ function ResultRow({ result }: { result: SearchResult }) {
 			to={href}
 			className="block rounded-md border border-border bg-card p-2 text-sm hover:border-primary/40 hover:bg-accent"
 		>
-			<p className="font-medium">{result.title || lastSegment(result.path)}</p>
-			{result.heading_path && result.heading_path !== result.title && (
+			<p className="font-medium">{noteName(result.path)}</p>
+			{Boolean(result.heading_path) && (
 				<p className="text-muted-foreground text-xs">↳ {result.heading_path}</p>
 			)}
 			{Boolean(result.snippet) && (
@@ -181,10 +182,6 @@ function ResultRow({ result }: { result: SearchResult }) {
 			)}
 		</Link>
 	);
-}
-
-function lastSegment(path: string): string {
-	return (path.split("/").pop() ?? path).replace(/\.md$/u, "");
 }
 
 export default SearchPanel;
