@@ -7,10 +7,8 @@
 	"license": "SEE LICENSE IN ../LICENSE",
 	"author": "Rasbandit Software Solutions LLC d/b/a Engram",
 	"trustedDependencies": [
-		"core-js",
 		"esbuild",
 		"msw",
-		"protobufjs",
 		"workerd"
 	],
 	"scripts": {

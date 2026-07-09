@@ -20,7 +20,9 @@ learned about bun's lifecycle-script trust model fixing it. Read this before tou
 ## The Fix (PR #981)
 
 `trustedDependencies` in `frontend/package.json`, pinned to today's actually-needed postinstall
-set (`core-js`, `esbuild`, `msw`, `protobufjs`, `workerd`) minus `pngquant-bin` — which blocks
+set minus `pngquant-bin`, then pruned to the entries that actually run (`esbuild`, `msw`,
+`workerd` — `core-js`/`protobufjs` never execute under bun 1.3.11 listed or not, so listing
+them only misrepresented the trust surface) — which blocks
 its lifecycle script.
 
 ## Bun trust semantics (learned empirically, bun 1.3.11)

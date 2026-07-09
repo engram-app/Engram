@@ -12,6 +12,11 @@
  * fallback needs pkg-config/libimagequant — issue #975). Before running this
  * script, fetch the binary once with:
  *   bun pm trust pngquant-bin && bun install
+ * WARNING: `bun pm trust` permanently writes pngquant-bin into
+ * package.json's trustedDependencies. REVERT that package.json change
+ * before committing (`git checkout -- frontend/package.json`) —
+ * committing it re-enables the postinstall on cold-node_modules CI and
+ * reintroduces the #975 429 flake this setup exists to prevent.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
