@@ -1,7 +1,5 @@
 # Strict TSC and Test Type-Checking Gotchas
 
-_Last verified: 2026-06-30_
-
 ## 1. Tests ARE Type-Checked by the Build
 
 `frontend/tsconfig.json` has `include: ["src"]`, which means test files living in `src/**/*.test.ts(x)` ARE subject to type-checking. The build runs `tsc --noEmit` (via `build:selfhost` and `bun run build`) with strict settings that affect test code:
