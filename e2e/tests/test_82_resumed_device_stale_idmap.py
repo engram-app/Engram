@@ -69,6 +69,15 @@ async def test_resumed_device_with_stale_idmap_syncs_both_ways(
 ):
     inst_a, inst_b, cdp_a, cdp_b = fresh_instance_pair
 
+    # This test runs near the END of the suite and inherits the whole suite's
+    # socket churn — the stream can sit mid-backoff at test start (same class
+    # PR #963 gated for test_84/85; CI run 28985769854 failed Phase 1 here).
+    # Force a known-good connection instead of waiting out the backoff timer.
+    for cdp in (cdp_a, cdp_b):
+        if not await cdp.check_stream_connected():
+            await cdp.reconnect_stream()
+        await cdp.wait_for_stream_connected(timeout=20)
+
     # Phase 1: normal sync so B earns a cursor + populated map, and learns the
     # ids of two pre-existing notes (one per direction we'll test post-resume).
     write_note(inst_a.vault_path, "E2E/Resumed-pull-seed.md", "# PullSeed\noriginal")
