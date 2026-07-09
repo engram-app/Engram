@@ -79,7 +79,9 @@ export default defineConfig({
 			// through the proxy so this only goes green once the whole chain
 			// (Vite -> proxy -> Phoenix -> Postgres) is really up.
 			url: `http://localhost:${LOCAL_VITE_PORT}/api/health/deep`,
-			timeout: 15_000,
+			// Must cover Phoenix's boot budget too: this URL proxies to Phoenix,
+			// so a 15s cap would fail Vite while Phoenix is still legitimately booting.
+			timeout: 120_000,
 			reuseExistingServer: !isCI,
 			env: {
 				VITE_AUTH_PROVIDER: "local",
@@ -116,7 +118,8 @@ export default defineConfig({
 						cwd: ".",
 						// See the "local" project's Vite webServer entry above (#964).
 						url: `http://localhost:${CLERK_VITE_PORT}/api/health/deep`,
-						timeout: 15_000,
+						// Same Phoenix-boot budget as the local Vite entry above.
+						timeout: 120_000,
 						reuseExistingServer: !isCI,
 						env: {
 							VITE_AUTH_PROVIDER: "clerk",
