@@ -176,7 +176,12 @@ async def test_push_all_keep_remote(vault_a, cdp_a, api_sync):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, api_sync):
+async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, vault_b, cdp_b, api_sync):
+    # B is deliberately alive for this test: it receives A's wipe deletes,
+    # applies them (trash), and its vault 'delete' event previously echo-pushed
+    # a path-keyed DELETE that landed AFTER A's re-upload and tombstoned the
+    # fresh note (plugin remotelyDeleted fix). Requesting the B fixtures makes
+    # that failure mode deterministic instead of depending on suite order.
     s = await _seed(cdp_a, api_sync)
     try:
         await _run_choice(cdp_a, "push-all-delete-remote")
