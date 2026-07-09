@@ -6,6 +6,11 @@
 	"private": true,
 	"license": "SEE LICENSE IN ../LICENSE",
 	"author": "Rasbandit Software Solutions LLC d/b/a Engram",
+	"trustedDependencies": [
+		"esbuild",
+		"msw",
+		"workerd"
+	],
 	"scripts": {
 		"dev": "vite",
 		"build": "bun run build:selfhost",
