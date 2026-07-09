@@ -63,6 +63,12 @@ defmodule EngramWeb.NotesController do
             current
           )
 
+        {:error, :recently_deleted} ->
+          # Delete-wins: a create at a path deleted seconds ago, identical
+          # content — a stale re-push racing an explicit delete. Refuse so the
+          # delete stands; the client converges by dropping its local copy.
+          conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+
         {:error, reason} ->
           require Logger
 
