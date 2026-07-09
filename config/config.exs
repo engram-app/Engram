@@ -76,6 +76,11 @@ config :engram, Oban,
     export: 1,
     cleanup: 1,
     indexing: 2,
+    # Overflow lane for CRDT unbind checkpoints under a reconnect storm (see
+    # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote). Kept well
+    # under POOL_SIZE (10) so draining jobs never starve REST/search of DB
+    # connections; excess jobs wait in Postgres, not on the pool.
+    crdt_checkpoint: 3,
     default: 1
   ],
   plugins: [

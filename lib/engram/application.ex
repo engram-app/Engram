@@ -19,6 +19,10 @@ defmodule Engram.Application do
     EngramWeb.RequestLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
 
+    # Initialize the unbind-checkpoint concurrency gate (a process-global
+    # :atomics counter) before any CRDT room can terminate and call unbind/3.
+    Engram.Notes.CheckpointGate.init()
+
     if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
 
     children =
