@@ -57,8 +57,13 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
 
     test "over the gate limit: overflows to the Oban queue, no synchronous write", ctx do
       %{user: user, vault: vault, note: note} = ctx
-      # Fill the gate so the next acquire is refused (simulate a storm).
-      for _ <- 1..CheckpointGate.limit(), do: CheckpointGate.acquire()
+      # Drop the limit to 1 and fill that one slot, so unbind's acquire is
+      # refused and takes the overflow path (no real rooms needed). Restore the
+      # test default afterward (the setup's on_exit also re-inits the counter).
+      prev = Application.get_env(:engram, :checkpoint_inline_limit)
+      Application.put_env(:engram, :checkpoint_inline_limit, 1)
+      on_exit(fn -> Application.put_env(:engram, :checkpoint_inline_limit, prev) end)
+      assert CheckpointGate.acquire() == true
 
       doc = edited_doc(user, note, "before AFTER")
 

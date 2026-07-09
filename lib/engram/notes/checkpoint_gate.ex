@@ -24,14 +24,22 @@ defmodule Engram.Notes.CheckpointGate do
 
   # Under POOL_SIZE (default 10), leaving headroom for REST/search/Oban queries
   # that share the same pool. The overflow path (Oban queue at concurrency 3)
-  # absorbs anything past this.
-  @limit 5
+  # absorbs anything past this. Configurable via `:checkpoint_inline_limit` so
+  # the test env can raise it out of the way (many async tests spin real rooms
+  # that share this process-global counter; a low limit would make an unrelated
+  # room's unbind overflow to the manual test Oban and never materialize).
+  @default_limit 5
 
   @spec init() :: :ok
   def init, do: :persistent_term.put(__MODULE__, :atomics.new(1, signed: true))
 
   @spec limit() :: pos_integer()
-  def limit, do: @limit
+  def limit do
+    case Application.get_env(:engram, :checkpoint_inline_limit, @default_limit) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_limit
+    end
+  end
 
   @doc """
   Try to reserve an inline-checkpoint slot. Returns `true` if a slot was granted
@@ -42,7 +50,7 @@ defmodule Engram.Notes.CheckpointGate do
   def acquire do
     ref = ref()
 
-    if :atomics.add_get(ref, 1, 1) <= @limit do
+    if :atomics.add_get(ref, 1, 1) <= limit() do
       true
     else
       # Over capacity: roll back our increment so refusals do not leak slots.

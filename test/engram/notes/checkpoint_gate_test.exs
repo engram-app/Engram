@@ -6,8 +6,12 @@ defmodule Engram.Notes.CheckpointGateTest do
   alias Engram.Notes.CheckpointGate
 
   setup do
-    # Reset the counter to a fresh atomics so each test starts empty.
+    # Reset the counter to a fresh atomics so each test starts empty, and use a
+    # small deterministic limit (test env raises the default to 1000).
     CheckpointGate.init()
+    prev = Application.get_env(:engram, :checkpoint_inline_limit)
+    Application.put_env(:engram, :checkpoint_inline_limit, 3)
+    on_exit(fn -> Application.put_env(:engram, :checkpoint_inline_limit, prev) end)
     :ok
   end
 

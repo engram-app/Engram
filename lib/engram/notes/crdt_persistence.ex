@@ -145,14 +145,14 @@ defmodule Engram.Notes.CrdtPersistence do
   # caught and logged there, so unbind always returns :ok.
   @impl true
   def unbind(%{user_id: user_id, vault_id: vault_id, note_id: note_id}, _doc_name, doc) do
-    if CheckpointGate.acquire() do
-      try do
-        Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
-      after
-        CheckpointGate.release()
-      end
-    else
-      _ =
+    _ =
+      if CheckpointGate.acquire() do
+        try do
+          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+        after
+          CheckpointGate.release()
+        end
+      else
         Enqueue.enqueue(
           Engram.Workers.CheckpointNote.new(%{
             user_id: user_id,
@@ -161,7 +161,7 @@ defmodule Engram.Notes.CrdtPersistence do
           }),
           "crdt_checkpoint"
         )
-    end
+      end
 
     :ok
   end
