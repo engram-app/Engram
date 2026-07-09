@@ -6,6 +6,12 @@
  * Pipeline: SVG -> resvg (truecolor PNG) -> pngquant --quality=95-100
  * (palette-quantized PNG). Quantization at 95-100 is visually lossless on the
  * flat-fill brand mark and trims ~58% off the file size.
+ *
+ * pngquant-bin's postinstall is deliberately NOT in trustedDependencies (its
+ * GitHub binary download 429s on the shared-egress CI runners and the source
+ * fallback needs pkg-config/libimagequant — issue #975). Before running this
+ * script, fetch the binary once with:
+ *   bun pm trust pngquant-bin && bun install
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
