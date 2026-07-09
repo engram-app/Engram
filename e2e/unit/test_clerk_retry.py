@@ -109,3 +109,89 @@ def test_session_create_raises_immediately_on_non_404(
 
     assert len(calls) == 1
     assert clock.slept == []
+
+
+# --- token-mint 404 retry (#978) -------------------------------------------
+# A Clerk session id can vanish (or not yet be visible) between POST /sessions
+# and POST /sessions/{id}/tokens — main run 28987167162 ERROR'd a whole module
+# on a 404 there. A 404 on the tokens endpoint is definitively "session gone",
+# so create_session_token must recreate the session and retry ONCE.
+
+
+def _mint_client(
+    monkeypatch: pytest.MonkeyPatch,
+    session_responses: list[requests.Response],
+    token_responses: list[requests.Response],
+) -> tuple[ClerkClient, dict]:
+    client = ClerkClient("sk_test_fake")
+    calls: dict = {"sessions": 0, "token_urls": []}
+
+    def fake_post(url: str, **_kwargs: object) -> requests.Response:
+        if url.endswith("/sessions"):
+            calls["sessions"] += 1
+            return (
+                session_responses.pop(0)
+                if len(session_responses) > 1
+                else session_responses[0]
+            )
+        assert url.endswith("/tokens")
+        calls["token_urls"].append(url)
+        return (
+            token_responses.pop(0) if len(token_responses) > 1 else token_responses[0]
+        )
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+    return client, calls
+
+
+def test_token_mint_404_recreates_session_and_retries_once(
+    monkeypatch: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    client, calls = _mint_client(
+        monkeypatch,
+        session_responses=[
+            _resp(200, {"id": "sess_stale"}),
+            _resp(200, {"id": "sess_fresh"}),
+        ],
+        token_responses=[_resp(404, {"errors": []}), _resp(200, {"jwt": "jwt_ok"})],
+    )
+
+    token = client.create_session_token("user_x")
+
+    assert token == "jwt_ok"
+    assert calls["sessions"] == 2
+    # The retry minted from the RECREATED session, not the stale id.
+    assert calls["token_urls"][0].endswith("/sessions/sess_stale/tokens")
+    assert calls["token_urls"][1].endswith("/sessions/sess_fresh/tokens")
+
+
+def test_token_mint_404_twice_raises(
+    monkeypatch: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    client, calls = _mint_client(
+        monkeypatch,
+        session_responses=[_resp(200, {"id": "sess_a"})],
+        token_responses=[_resp(404, {"errors": []})],
+    )
+
+    with pytest.raises(requests.HTTPError):
+        client.create_session_token("user_gone")
+
+    assert calls["sessions"] == 2  # exactly one recreate, no loop
+    assert len(calls["token_urls"]) == 2
+
+
+def test_token_mint_non_404_raises_immediately(
+    monkeypatch: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    client, calls = _mint_client(
+        monkeypatch,
+        session_responses=[_resp(200, {"id": "sess_a"})],
+        token_responses=[_resp(500, {"errors": [{"code": "internal"}]})],
+    )
+
+    with pytest.raises(requests.HTTPError):
+        client.create_session_token("user_500")
+
+    assert calls["sessions"] == 1
+    assert len(calls["token_urls"]) == 1
