@@ -13,9 +13,9 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
 
   setup do
     # Start every test with an empty gate, and never leak filled slots into the
-    # next test (the gate counter is process-global).
-    CheckpointGate.init()
-    on_exit(&CheckpointGate.init/0)
+    # next test (the gate is process-global).
+    CheckpointGate.reset()
+    on_exit(&CheckpointGate.reset/0)
 
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
@@ -114,6 +114,21 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
 
       {:ok, fresh} = Notes.get_note(user, vault, "p.md")
       assert fresh.content == "before AFTER"
+    end
+
+    test "snoozes (does not drop) when a live room already owns the note", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      # Simulate a live room by claiming the note's :global room name, so
+      # CrdtRegistry.lookup/1 resolves non-nil.
+      :yes = :global.register_name({:crdt_doc, note.id}, self())
+      on_exit(fn -> :global.unregister_name({:crdt_doc, note.id}) end)
+
+      assert {:snooze, _secs} =
+               perform_job(CheckpointNote, %{
+                 "user_id" => user.id,
+                 "vault_id" => vault.id,
+                 "note_id" => note.id
+               })
     end
 
     test "does NOT blank content when the note has no CRDT state (data safety)", ctx do

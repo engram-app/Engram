@@ -28,10 +28,13 @@ defmodule Engram.Workers.CheckpointNote do
     %{"user_id" => user_id, "vault_id" => vault_id, "note_id" => note_id} = args
 
     # A live room re-opened for this note between enqueue and run — it owns
-    # materialization (its own timer/unbind will checkpoint). Skip to avoid
-    # racing the live doc with a rebuilt-from-DB (possibly staler) copy.
+    # materialization. Snooze rather than return :ok: skipping would DROP this
+    # deferred checkpoint, and if the reopened room is then torn down
+    # non-gracefully (crash / node kill) its edits would stay unmaterialized in
+    # notes.content until the next bind. Snoozing keeps the job alive so it runs
+    # once the room is gone (idempotent compaction; deduped by the unique key).
     if CrdtRegistry.lookup(note_id) != nil do
-      :ok
+      {:snooze, 60}
     else
       # Deleted user is an expected lifecycle state (vault purge) — skip.
       case Accounts.get_user(user_id) do
