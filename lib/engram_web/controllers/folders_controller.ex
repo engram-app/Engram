@@ -153,6 +153,10 @@ defmodule EngramWeb.FoldersController do
 
     case Notes.create_folder_marker(user, vault, folder) do
       {:ok, marker} ->
+        # Same event the batch ops emit — lets connected devices (plugin/web)
+        # materialize the empty folder live instead of on the next pull.
+        broadcast_batch(user, vault, %{op: "create", folder: marker.folder})
+
         conn
         |> put_status(:created)
         |> json(%{folder: %{name: marker.folder, count: 0}})

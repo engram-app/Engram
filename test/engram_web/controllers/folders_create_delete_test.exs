@@ -3,11 +3,11 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   describe "POST /folders" do
@@ -22,6 +22,35 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       _ = post(conn, "/api/folders", %{"folder" => "Twice"})
       conn = post(conn, "/api/folders", %{"folder" => "Twice"})
       assert conn.status in [200, 201]
+    end
+
+    test "broadcasts folders.batch create on the sync channel", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "Live/New"})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", folder: "Live/New"}
+      }
+    end
+
+    test "broadcasts folders.batch create on idempotent re-create too", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      _ = post(conn, "/api/folders", %{"folder" => "Twice"})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "Twice"})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", folder: "Twice"}
+      }
     end
 
     test "rejects empty folder with 422", %{conn: conn} do
