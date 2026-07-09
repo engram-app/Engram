@@ -1405,7 +1405,7 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
         broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
       end
