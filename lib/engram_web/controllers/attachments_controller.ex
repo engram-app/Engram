@@ -422,7 +422,10 @@ defmodule EngramWeb.AttachmentsController do
     vault = conn.assigns.current_vault
     path = Path.join(path_parts)
 
-    Attachments.delete_attachment(user, vault, path)
+    Attachments.delete_attachment(user, vault, path,
+      origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
+    )
+
     json(conn, %{deleted: true, path: path})
   end
 

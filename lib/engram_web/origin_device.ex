@@ -10,6 +10,13 @@ defmodule EngramWeb.OriginDevice do
   The value is client-generated and treated as opaque: printable/valid UTF-8,
   length-capped, never trusted for authorization — it only ever routes an
   echo-drop on the client that already made the request.
+
+  Known limitation (accepted): the header is not bound to the authenticated
+  session, so a same-account client can spoof another device's id and make
+  that device drop a delete echo. That is strictly weaker than the API power
+  the caller already holds (it can delete anything outright), and the next
+  cursor pull reconciles unedited files. Binding device identity to the
+  session/connection is the remaining #970 work.
   """
 
   @max_bytes 64

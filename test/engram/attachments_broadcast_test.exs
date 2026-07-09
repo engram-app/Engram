@@ -43,4 +43,60 @@ defmodule Engram.AttachmentsBroadcastTest do
       }
     end
   end
+
+  describe "note_changed delete broadcast attribution (#970)" do
+    test "delete_attachment/4 stamps origin device_id into the broadcast", %{
+      user: user,
+      vault: vault
+    } do
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "photos/gone.png",
+          "content_base64" => Base.encode64("bye")
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      device_id = Ecto.UUID.generate()
+
+      assert :ok =
+               Attachments.delete_attachment(user, vault, "photos/gone.png",
+                 origin_device_id: device_id
+               )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "photos/gone.png"} = payload
+      }
+
+      assert payload["device_id"] == device_id
+    end
+
+    test "delete_attachment/3 omits device_id when no origin given", %{
+      user: user,
+      vault: vault
+    } do
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "photos/plain.png",
+          "content_base64" => Base.encode64("bye")
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert :ok = Attachments.delete_attachment(user, vault, "photos/plain.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "photos/plain.png"} = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
+    end
+  end
 end
