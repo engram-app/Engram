@@ -21,7 +21,7 @@ services:
         # Bare image refs; runner's HTTPS_PROXY config caches via FastRaid
         # transparently (see docs/context/runner-vm-setup.md Gotcha #6).
         NODE_IMAGE: node:20-slim
-        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
+        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim
         RUNNER_IMAGE: debian:bookworm-20241202-slim
     ports:
       - "${CI_ENGRAM_PORT:-8110}:4000"

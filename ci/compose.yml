@@ -33,7 +33,7 @@ services:
         # ${LOCAL_REGISTRY} treats the proxy as a registry mirror, which it is
         # not, and BuildKit fails with "unexpected media type / not found".
         NODE_IMAGE: node:20-slim
-        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-20241202-slim
+        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim
         RUNNER_IMAGE: debian:bookworm-20241202-slim
         # LAN Hex pull-through (set by CI env; empty for local dev = upstream).
         HEX_MIRROR: ${HEX_MIRROR:-}

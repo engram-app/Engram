@@ -15,8 +15,8 @@
 # Multi-stage build: compile release in builder, run in minimal image
 # cache-bust: 2026-04-18-encryption-auto-provision
 ARG ELIXIR_VERSION=1.17.3
-ARG OTP_VERSION=27.1.2
-ARG DEBIAN_VERSION=bookworm-20241202-slim
+ARG OTP_VERSION=27.3.4.14
+ARG DEBIAN_VERSION=bookworm-20260623-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
