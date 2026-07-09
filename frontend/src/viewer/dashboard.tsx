@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type NoteSummary, useFolderNotes, useVaults } from "../api/queries";
 import { EmptyVaultState } from "../layout/empty-vault-state";
+import { useRightSidebar } from "../layout/right-sidebar-context";
 import { noteName } from "../lib/note-name";
+import NoteToc from "./note-toc";
 
 function formatDate(iso: string): string {
 	return new Date(iso).toLocaleDateString(undefined, {
@@ -74,6 +76,18 @@ export default function Dashboard() {
 	const [searchParams] = useSearchParams();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
+	const { setContent: setRightContent } = useRightSidebar();
+
+	// No note open still looks like an open (empty) document: mount the same
+	// right-panel content an open note gets, so the panel chrome is present.
+	const showEmptyDoc = !folder && vaults !== undefined && vaults.length > 0;
+	useEffect(() => {
+		if (!showEmptyDoc) {
+			return;
+		}
+		setRightContent(<NoteToc content="" />);
+		return () => setRightContent(null);
+	}, [showEmptyDoc, setRightContent]);
 
 	// Deleting the last vault leaves zero active vaults. Show a create-a-vault
 	// prompt instead of the (empty) note browser. Guard against the loading
@@ -94,24 +108,14 @@ export default function Dashboard() {
 		);
 	}
 
+	// Empty document — the same pane shell NotePage renders, with nothing open.
 	return (
 		<section
-			aria-label="Welcome"
-			className="flex h-full flex-col items-center justify-center px-6"
+			aria-label="No note open"
+			className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]"
 			data-tour="dashboard-root"
 		>
-			<Card className="max-w-md text-center">
-				<CardHeader>
-					<CardTitle className="text-xl">Welcome to Engram</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-1 text-muted-foreground text-sm">
-					<p>Select a folder from the sidebar to browse your notes.</p>
-					<p>
-						Use the <strong className="font-semibold text-foreground">Search</strong> icon in the
-						sidebar to find notes by keyword or semantic query.
-					</p>
-				</CardContent>
-			</Card>
+			<p className="m-auto text-muted-foreground text-sm">No note is open</p>
 		</section>
 	);
 }
