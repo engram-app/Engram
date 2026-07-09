@@ -333,6 +333,45 @@ defmodule EngramWeb.NotesControllerTest do
       conn = delete(conn, "/api/notes/Fake/Note.md")
       assert %{"deleted" => true} = json_response(conn, 200)
     end
+
+    test "stamps the X-Device-Id header into the delete broadcast", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      post(conn, "/api/notes", %{path: "Test/Stamped.md", content: "# S", mtime: 1_000.0})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      device_id = Ecto.UUID.generate()
+
+      conn
+      |> put_req_header("x-device-id", device_id)
+      |> delete("/api/notes/Test/Stamped.md")
+      |> json_response(200)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Test/Stamped.md"} = payload
+      }
+
+      assert payload["device_id"] == device_id
+    end
+
+    test "ignores an oversized X-Device-Id header", %{conn: conn, user: user, vault: vault} do
+      post(conn, "/api/notes", %{path: "Test/BigId.md", content: "# S", mtime: 1_000.0})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      conn
+      |> put_req_header("x-device-id", String.duplicate("a", 65))
+      |> delete("/api/notes/Test/BigId.md")
+      |> json_response(200)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Test/BigId.md"} = payload
+      }
+
+      refute Map.has_key?(payload, "device_id")
+    end
   end
 
   # ---------------------------------------------------------------------------

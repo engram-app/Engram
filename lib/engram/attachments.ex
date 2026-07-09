@@ -268,8 +268,8 @@ defmodule Engram.Attachments do
   If the blob delete fails, the row stays deleted and we log a warning — a zombie blob
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
-  def delete_attachment(user, vault, path) do
-    _ = do_delete_attachment(fresh_user(user), vault, path)
+  def delete_attachment(user, vault, path, opts \\ []) do
+    _ = do_delete_attachment(fresh_user(user), vault, path, opts)
     :ok
   end
 
@@ -277,7 +277,9 @@ defmodule Engram.Attachments do
   # transitioned to deleted (`false` for an absent/already-deleted path).
   # Broadcasts + best-effort blob cleanup happen here so both the single-delete
   # API and `batch_delete/3` share one implementation and count truthfully.
-  defp do_delete_attachment(user, vault, path) do
+  # opts[:origin_device_id] is stamped into the delete broadcast (#970) so the
+  # originating device can drop its own fanout echo.
+  defp do_delete_attachment(user, vault, path, opts \\ []) do
     path = PathSanitizer.sanitize(path)
     now = DateTime.utc_now(:second)
 
@@ -331,12 +333,22 @@ defmodule Engram.Attachments do
         # trash are sent.
         _ =
           if deleted? do
-            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
+            payload = %{
               "event_type" => "delete",
               "kind" => "attachment",
               "path" => path,
               "vault_id" => vault.id
-            })
+            }
+
+            # Origin attribution (#970) — same contract as the notes delete
+            # broadcast: lets the originating device drop its own fanout echo.
+            payload =
+              case Keyword.get(opts, :origin_device_id) do
+                device_id when is_binary(device_id) -> Map.put(payload, "device_id", device_id)
+                _ -> payload
+              end
+
+            Engram.Sync.Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
           end
 
         deleted?

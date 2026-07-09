@@ -1242,7 +1242,7 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path, nil)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, nil, [])
         decrypted = decrypt_or_raise!(note, user)
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         {:ok, decrypted}
@@ -1371,9 +1371,14 @@ defmodule Engram.Notes do
   @doc """
   Soft-deletes a note. Idempotent — returns :ok even if note doesn't exist.
   Also cleans up Qdrant points and chunk records for the deleted note.
+
+  Options:
+    * `:origin_device_id` — opaque device identity of the caller (from the
+      X-Device-Id header), stamped into the `note_changed` broadcast so the
+      originating device can drop its own echo (#970).
   """
-  @spec delete_note(map(), map(), String.t()) :: :ok
-  def delete_note(user, vault, path) do
+  @spec delete_note(map(), map(), String.t(), keyword()) :: :ok
+  def delete_note(user, vault, path, opts \\ []) do
     now = DateTime.utc_now()
 
     note =
@@ -1382,6 +1387,9 @@ defmodule Engram.Notes do
         _ -> nil
       end
 
+    # No-op deletes (unknown / already-deleted path) announce nothing (#971):
+    # nothing changed, and the empty-id delete events they used to fan out
+    # were pure noise at best (mirrors do_delete_attachment's `if deleted?`).
     _ =
       if note do
         _ =
@@ -1397,27 +1405,29 @@ defmodule Engram.Notes do
             :ok = UsageMeters.dec_notes_count(user.id, updated)
           end)
 
-        Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+
+        broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
       end
 
-    broadcast_change(user.id, vault.id, "delete", path, note && note.id)
+    :ok
   end
 
   @doc """
   Soft-deletes a note by its primary key id, scoped to the given user + vault.
 
   Returns `:ok` on success, `{:error, :not_found}` when the id doesn't resolve
-  to a live note owned by the caller (unlike `delete_note/3` which is
+  to a live note owned by the caller (unlike `delete_note/4` which is
   idempotent — callers of URL-by-id endpoints want a hard 404 signal).
 
-  Delegates to `delete_note/3` once ownership is verified, so Qdrant cleanup +
+  Delegates to `delete_note/4` once ownership is verified, so Qdrant cleanup +
   usage-meter decrement + `note_changed` broadcast all run as a side-effect.
   """
-  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), String.t()) ::
+  @spec delete_note_by_id(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :ok | {:error, :not_found}
-  def delete_note_by_id(user, vault, id) when is_binary(id) do
+  def delete_note_by_id(user, vault, id, opts \\ []) when is_binary(id) do
     case get_note_by_id(user, vault, id) do
-      {:ok, note} -> delete_note(user, vault, note.path)
+      {:ok, note} -> delete_note(user, vault, note.path, opts)
       {:error, :not_found} -> {:error, :not_found}
     end
   end
@@ -1510,7 +1520,7 @@ defmodule Engram.Notes do
           |> Enum.zip(notes)
           |> Enum.each(fn
             {{:ok, note}, raw} ->
-              broadcast_change(user.id, vault.id, "delete", note.path, raw.id)
+              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
 
             {{:error, reason}, raw} ->
               # The tombstone committed; only the broadcast is lost. Fail
@@ -3095,7 +3105,7 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, nil)
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, nil, [])
 
         # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
         # 4-arity clause below carries no `id`, so a client's id-keyed
@@ -3203,7 +3213,7 @@ defmodule Engram.Notes do
       Enum.each(real_notes, fn note ->
         _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
-        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id)
+        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, [])
       end)
 
       # Root cause of the empty-folder-lingers-in-tab-B bug: an empty folder's
@@ -3215,7 +3225,7 @@ defmodule Engram.Notes do
       # emission style and position as the real-note loop above: after the
       # Repo.with_tenant transaction returns, so it never fires on rollback.
       Enum.each(markers, fn marker ->
-        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil)
+        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, [])
       end)
 
       {:ok, %{deleted: length(matches)}}
@@ -3604,9 +3614,10 @@ defmodule Engram.Notes do
           Ecto.UUID.t(),
           String.t(),
           String.t(),
-          Ecto.UUID.t() | nil
+          Ecto.UUID.t() | nil,
+          keyword()
         ) :: :ok
-  defp broadcast_change(user_id, vault_id, event_type, path, id) do
+  defp broadcast_change(user_id, vault_id, event_type, path, id, opts) do
     payload = %{
       "event_type" => event_type,
       "path" => path,
@@ -3614,6 +3625,17 @@ defmodule Engram.Notes do
     }
 
     payload = if id, do: Map.put(payload, "id", id), else: payload
+
+    # Origin attribution (#970): REST-driven changes have no socket pid to
+    # exclude via broadcast_from, so the fanout reaches the very device that
+    # made the change. Carrying the caller's X-Device-Id lets that device
+    # drop its own echo (the 2026-07-08 replace-remote wipe applied its own
+    # delete fanout and trashed the local vault).
+    payload =
+      case Keyword.get(opts, :origin_device_id) do
+        device_id when is_binary(device_id) -> Map.put(payload, "device_id", device_id)
+        _ -> payload
+      end
 
     _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
 
