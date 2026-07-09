@@ -1242,7 +1242,10 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path, nil, [])
+        # #976 (same invariant as the folder-rename cascade): the note still
+        # exists under the new path, so the old-path delete leg carries its id
+        # for delete+upsert relocation correlation on receivers.
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
         decrypted = decrypt_or_raise!(note, user)
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         {:ok, decrypted}
@@ -2270,12 +2273,14 @@ defmodule Engram.Notes do
   Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
   ordered by `(seq, id)`, paginated.
 
-  Unlike `list_changes_page/4` (the timestamp feed) this carries the FULL
-  change set: ALL kinds (notes + folder markers) and tombstones (no
-  `deleted_at` filter, no `kind == "note"` filter) so deletes / renames /
-  folder ops all flow through the unified `/sync/changes` pull. Per-vault
-  `seq` is monotonic and unique, so `(seq, id)` is a stable keyset that never
-  loses or duplicates rows across pages.
+  Unlike `list_changes_page/4` (the timestamp feed) this carries the full
+  note change set including tombstones (no `deleted_at` filter) so deletes /
+  renames all flow through the unified `/sync/changes` pull. Folder-marker
+  rows (`kind == "folder"`) are EXCLUDED (#976): they carry `path: nil`,
+  which crashed tombstone apply on pre-#216 plugins, and clients sync
+  markers via the dedicated folder-marker endpoint, never this feed.
+  Per-vault `seq` is monotonic and unique, so `(seq, id)` is a stable keyset
+  that never loses or duplicates rows across pages.
 
   Options:
 
@@ -2303,7 +2308,9 @@ defmodule Engram.Notes do
 
     base =
       from(n in Note,
-        where: n.user_id == ^user.id and n.vault_id == ^vault.id and not is_nil(n.seq),
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and not is_nil(n.seq) and
+            n.kind != "folder",
         order_by: [asc: n.seq, asc: n.id],
         limit: ^(limit + 1)
       )
@@ -3105,7 +3112,11 @@ defmodule Engram.Notes do
             "repath_note_index"
           )
 
-        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, nil, [])
+        # #976: carry the moved note's id on the old-path delete leg. The note
+        # still exists (same id, new path, upsert leg below), so receivers can
+        # correlate the delete+upsert pair by id instead of resolving by path
+        # mid-relocation — the ambiguity window the resurrection bug lived in.
+        :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
 
         # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
         # 4-arity clause below carries no `id`, so a client's id-keyed
@@ -3599,9 +3610,10 @@ defmodule Engram.Notes do
     :ok
   end
 
-  # `id` may be nil: rename's old-path "delete" signal and the id-less
-  # folder-marker delete legitimately have no note id to carry (the note
-  # either still exists under a new path, or it's a folder, not a note).
+  # `id` may be nil: only the folder-marker delete legitimately has no note
+  # id to carry (it's a folder, not a note). Rename old-path "delete" legs
+  # (single-note + folder cascade) DO carry the moved note's id since #976,
+  # so receivers can correlate the delete+upsert pair as a relocation.
   # When a note is genuinely gone (delete_note/3, batch_delete_notes/3, the
   # folder-delete cascade's real-note loop), callers MUST pass the id: the web
   # client's useNote(id) cache is keyed by id, not path, since the URL-by-id

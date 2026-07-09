@@ -141,6 +141,34 @@ defmodule Engram.NotesBroadcastTest do
       assert payload["id"] == child.id
       assert payload["path"] == "New/Child.md"
     end
+
+    # #976: the old-path delete leg used to broadcast without the note id,
+    # forcing receivers to resolve by path mid-relocation — the ambiguity
+    # window the folder-rename resurrection bug lived in. The note still
+    # exists (same id, new path), so receivers can correlate delete+upsert
+    # by id and treat the pair as a relocation.
+    test "delete broadcast for the old path carries the moved note's id", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Old/Child.md",
+          "content" => "# Child",
+          "mtime" => 1.0
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "path" => "Old/Child.md"} = payload
+      }
+
+      assert payload["id"] == child.id
+    end
   end
 
   describe "delete_folder/3 empty-folder broadcast" do
