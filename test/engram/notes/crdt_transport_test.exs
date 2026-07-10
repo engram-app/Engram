@@ -46,7 +46,11 @@ defmodule Engram.Notes.CrdtTransportTest do
       client_sv = Yex.encode_state_vector!(client)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{path: "T/B.md", content: "# B\n\none two", mtime: 2_000.0})
+        Notes.upsert_note(user, vault, %{
+          path: "T/B.md",
+          content: "# B\n\none two",
+          mtime: 2_000.0
+        })
 
       assert {:ok, %{update: delta}} = CrdtTransport.read_delta(user, vault, note.id, client_sv)
       assert :ok = Yex.apply_update(client, delta)
@@ -56,6 +60,49 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "unknown note id → {:error, :not_found}", %{user: user, vault: vault} do
       assert {:error, :not_found} =
                CrdtTransport.read_delta(user, vault, Ecto.UUID.generate(), nil)
+    end
+  end
+
+  describe "apply_update/4" do
+    test "a client update merges losslessly and advances the head", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/C.md", content: "# C\n\nseed", mtime: 1_000.0})
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      # Build a real client update: catch up, edit locally, encode the delta.
+      {:ok, %{update: full, head: head0}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      before_sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "# C\n\nseed and client edit")
+      {:ok, client_update} = Yex.encode_state_as_update(client, before_sv)
+
+      assert {:ok, %{head: head1}} =
+               CrdtTransport.apply_update(user, vault, note.id, client_update)
+
+      assert head1 != head0
+
+      # The server now serves the client's edit back to a third, empty reader.
+      {:ok, %{update: full2}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      reader = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(reader, full2)
+      assert CrdtBridge.body_of(reader) =~ "client edit"
+    end
+
+    test "garbage bytes → {:error, :invalid_update}", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/D.md", content: "# D", mtime: 1_000.0})
+
+      on_exit(fn -> Engram.Notes.CrdtRegistry.terminate_room(note.id) end)
+
+      assert {:error, :invalid_update} =
+               CrdtTransport.apply_update(user, vault, note.id, <<255, 254, 253, 0, 1, 2>>)
+    end
+
+    test "note in another vault → {:error, :not_found}", %{user: user, vault: vault} do
+      assert {:error, :not_found} =
+               CrdtTransport.apply_update(user, vault, Ecto.UUID.generate(), <<0, 0>>)
     end
   end
 end
