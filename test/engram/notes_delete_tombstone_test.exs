@@ -79,6 +79,31 @@ defmodule Engram.NotesDeleteTombstoneTest do
            )
   end
 
+  test "a re-minted-id re-push at a just-deleted path creates a fresh note, NOT delete-wins (boundary)",
+       %{user: user, vault: vault} do
+    # Boundary of the delete-wins guard: it fires on a SAME-id re-push (a stable
+    # id proves same note). A re-minted / brand-new id at the same path is
+    # INDISTINGUISHABLE from a genuinely new note created where one was just
+    # deleted, so the backend must allow it (resurrect) rather than block a
+    # legitimate re-create. The live "wedge" seen here is the PLUGIN re-minting
+    # and re-pushing a note it should have honored the delete for; that churn is
+    # tracked + fixed plugin-side (p0 engram-app/Engram-obsidian#224), not by
+    # widening this server guard (which would break real re-creates).
+    create_and_delete(user, vault, "F/n.md", "# original")
+
+    assert {:ok, note} =
+             Notes.upsert_note(user, vault, %{
+               "id" => Notes.mint_id(),
+               "path" => "F/n.md",
+               "content" => "# original with unsynced edits"
+             })
+
+    assert Repo.exists?(
+             from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at)),
+             skip_tenant_check: true
+           )
+  end
+
   test "allows a same-id re-push at the deleted path once the window has expired (restore)",
        %{user: user, vault: vault} do
     note = create_and_delete(user, vault, "ZombieTest/z.md", "# original")
