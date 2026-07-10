@@ -17,6 +17,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.CrdtRegistry
+  alias Engram.Notes.CrdtTransport
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -118,12 +119,19 @@ defmodule EngramWeb.CrdtChannel do
     # cost, never at MB-scale decode cost.
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
+         :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id) do
       SharedDoc.send_yjs_message(room, frame)
       {:noreply, socket}
     else
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
+
+      {:error, :implausible_state_vector} ->
+        # A crafted syncStep1 whose state vector would OOM-abort the whole VM
+        # in the y_ex NIF (P0 #989). Rejected before it reaches SharedDoc.
+        log_dropped(socket, doc_id, :implausible_state_vector)
+        {:reply, {:error, %{reason: "implausible_state_vector"}}, socket}
 
       {:error, :frame_too_large} ->
         log_dropped(socket, doc_id, :frame_too_large)
@@ -303,6 +311,15 @@ defmodule EngramWeb.CrdtChannel do
       {:ok, frame} -> {:ok, frame}
       :error -> {:error, :bad_base64}
     end
+  end
+
+  # A syncStep1 frame carries a client state vector that reaches the y_ex NIF
+  # (SharedDoc.send_yjs_message -> encode_state_as_update). A crafted vector
+  # OOM-aborts the ENTIRE BEAM node, uncatchable — reuse the REST transport's
+  # plausibility guard to reject it before it is applied (P0 #989). Non-step1
+  # frames pass through unchanged.
+  defp guard_frame(frame) do
+    if CrdtTransport.safe_wire_frame?(frame), do: :ok, else: {:error, :implausible_state_vector}
   end
 
   # Lazily start + observe the room for `doc_id`, caching it in assigns. On the

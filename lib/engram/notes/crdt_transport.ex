@@ -76,13 +76,45 @@ defmodule Engram.Notes.CrdtTransport do
   # wire (a 0 still costs 1 byte per varUint), so a vector claiming N clients
   # must have at least 2*N bytes left after the count header — anything
   # short of that is rejected without ever calling the NIF.
+  @doc """
+  True when `sv` is a plausibly-sized y-protocols v1 state vector — the
+  declared client count is backed by enough remaining bytes. Guards the y_ex
+  NIF against a crafted vector whose count would trigger a ~150 GB pre-alloc
+  and `abort()` the whole VM. Public so the WS sync channel reuses the exact
+  same check via `safe_wire_frame?/1` (P0 #989).
+  """
   @spec plausible_state_vector?(binary()) :: boolean()
-  defp plausible_state_vector?(sv) do
+  def plausible_state_vector?(sv) do
     case read_leb128_varuint(sv) do
       {:ok, count, rest} -> byte_size(rest) >= count * 2
       :error -> false
     end
   end
+
+  @doc """
+  True when a decoded Yjs sync frame is safe to hand to the y_ex NIF.
+
+  A syncStep1 frame is `<<0, 0, varUint8Array(state_vector)>>`; its embedded
+  client state vector flows into `Yex.encode_state_as_update/2` — the same
+  crash path `read_delta/4` guards. This unwraps the length-prefixed vector
+  and validates it with `plausible_state_vector?/1`, rejecting a crafted or
+  malformed step1 BEFORE it reaches the NIF. Non-step1 frames (step2 / update
+  route through `apply_update`, not the vector path) are always allowed here;
+  a step1 with a malformed length prefix fails closed.
+  """
+  @spec safe_wire_frame?(binary()) :: boolean()
+  def safe_wire_frame?(<<0, 0, rest::binary>>) do
+    case read_leb128_varuint(rest) do
+      {:ok, sv_len, payload} when byte_size(payload) >= sv_len ->
+        <<sv::binary-size(sv_len), _::binary>> = payload
+        plausible_state_vector?(sv)
+
+      _ ->
+        false
+    end
+  end
+
+  def safe_wire_frame?(_frame), do: true
 
   # LEB128 varuint reader, capped at 10 continuation bytes (enough for any
   # 64-bit value) so a run of 0x80 bytes can't loop unbounded either.

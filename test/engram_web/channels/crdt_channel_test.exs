@@ -238,6 +238,25 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(note.id) == nil
     end
 
+    test "a crafted syncStep1 with an implausible state vector is rejected before the NIF (P0 #989)",
+         %{socket: socket, doc_id: doc_id, note: note} do
+      # <<0, 0>> step1 + varUint8Array(<<128, 128, 128, 128, 15>>): a 5-byte
+      # state vector claiming ~2^31 client entries. Reaching the y_ex NIF
+      # (Yex.encode_state_as_update/2) would OOM-abort the ENTIRE node,
+      # uncatchable. The guard must reject it with an error reply and never
+      # start the room / touch the NIF. Deterministic bytes only — a random SV
+      # here has crashed the VM before.
+      malicious = <<0, 0, 5, 128, 128, 128, 128, 15>>
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(malicious)})
+
+      assert_reply ref, :error, %{reason: "implausible_state_vector"}, 3000
+
+      # Rejected before ensure_room, so the room never started and the frame
+      # never reached SharedDoc.send_yjs_message / the NIF.
+      assert CrdtRegistry.lookup(note.id) == nil
+    end
+
     # -------------------------------------------------------------------------
     # Log hygiene: doc_id (note_id) must appear in metadata, not the message body
     # -------------------------------------------------------------------------
