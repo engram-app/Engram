@@ -211,10 +211,17 @@ defmodule EngramWeb.McpController do
   # -- Tool dispatch (vault context) --
 
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
-  # they must never be blocked by vault resolution — `list_vaults` in particular
-  # is the discovery call a client needs to escape a multi-vault or
-  # dangling-default state (#951). `list_vaults` is handed the credential-scoped
-  # vault set so it can't advertise vaults this token/key cannot use (#729).
+  # they aren't blocked by the controller's own vault resolution — `list_vaults`
+  # is the discovery call a client uses to pick a vault in a multi-vault account.
+  # `list_vaults` is handed the credential-scoped vault set so it can't advertise
+  # vaults this token/key cannot use (#729).
+  #
+  # NOTE: this only bypasses the *controller's* resolution. `VaultPlug` still runs
+  # earlier in the pipeline and 404s the whole request when the user has no
+  # default vault (deleted default, #951) or 403s a restricted key whose permitted
+  # set excludes the default — so these calls can't yet recover from those states.
+  # Fixing that means taking MCP off the VaultPlug path (it self-resolves); see
+  # docs/context/mcp-vault-selection.md.
   defp dispatch_tool(%{name: "list_vaults"} = tool, user, args, conn) do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end
@@ -253,12 +260,14 @@ defmodule EngramWeb.McpController do
   # safe when the credential can already reach all of them — otherwise it would
   # leak vaults the credential was scoped away from (#729).
   defp search_across_accessible(tool, user, args, conn) do
-    accessible = accessible_vaults(user, conn)
-    total = length(Engram.Vaults.list_vaults(user))
+    # Fetch the vault list ONCE; derive both the accessible set and the total
+    # from it (no double query).
+    all = Engram.Vaults.list_vaults(user)
+    accessible = scope_vaults(all, conn)
 
     cond do
       accessible == [] ->
-        error_result(no_vault_message(user))
+        error_result(no_vault_message_for(all))
 
       length(accessible) == 1 ->
         call_tool(tool, user, hd(accessible), args)
@@ -266,7 +275,7 @@ defmodule EngramWeb.McpController do
       # Credential reaches every vault → one cross-vault query (no vault filter
       # == exactly the accessible set here). `{:cross_vault, _}` carries the set
       # for per-result vault labelling.
-      length(accessible) == total ->
+      length(accessible) == length(all) ->
         call_tool(tool, user, {:cross_vault, accessible}, args)
 
       # A per-vault-restricted key reaching a >1 subset: cross-vault would leak
@@ -290,13 +299,17 @@ defmodule EngramWeb.McpController do
   # its permitted vaults; an unrestricted credential all of the user's vaults.
   # Every vault-scope decision (resolve, set_vault, list_vaults) routes through
   # here so the privacy boundary is enforced in exactly one place.
-  defp accessible_vaults(user, conn) do
+  defp accessible_vaults(user, conn), do: scope_vaults(Engram.Vaults.list_vaults(user), conn)
+
+  # Narrows an already-loaded vault list to what the credential may reach, so a
+  # caller that already has the list (e.g. bare search) doesn't re-query it.
+  defp scope_vaults(vaults, conn) do
     oauth_bound = conn.assigns[:oauth_scope_vault_id]
     # One query for the API key's restricted set, then filter in memory — not a
     # per-vault DB round-trip.
     allowed = Engram.Vaults.accessible_vault_ids(conn.assigns[:current_api_key])
 
-    Engram.Vaults.list_vaults(user)
+    vaults
     |> maybe_filter_oauth(oauth_bound)
     |> filter_api_key(allowed)
   end
@@ -316,17 +329,14 @@ defmodule EngramWeb.McpController do
   # against the ACCESSIBLE set, so OAuth binding + API-key scope are enforced
   # once, here.
   defp resolve_mcp_vault(user, args, conn) do
-    accessible = accessible_vaults(user, conn)
-
     case args["vault_id"] do
+      # Named vault → single lookup + scope check. No need to load every vault.
       requested when is_binary(requested) ->
-        case Enum.find(accessible, &(to_string(&1.id) == to_string(requested))) do
-          nil -> {:error, vault_denied_message(user, requested, conn)}
-          vault -> {:ok, vault}
-        end
+        resolve_requested_vault(user, requested, conn)
 
+      # Bare call → resolve the credential's sole reachable vault, or fail loud.
       _ ->
-        case accessible do
+        case accessible_vaults(user, conn) do
           [only] ->
             {:ok, only}
 
@@ -338,6 +348,24 @@ defmodule EngramWeb.McpController do
              "You own multiple vaults — specify which one. Call list_vaults to see the IDs, " <>
                "then pass vault_id on this tool call."}
         end
+    end
+  end
+
+  # A caller-named vault: enforce OAuth binding + API-key scope with a single
+  # get_vault (not a full list). vault_denied_message re-derives the specific
+  # reason on the error path only.
+  defp resolve_requested_vault(user, requested, conn) do
+    oauth_bound = conn.assigns[:oauth_scope_vault_id]
+
+    if is_binary(oauth_bound) and to_string(requested) != to_string(oauth_bound) do
+      {:error, vault_denied_message(user, requested, conn)}
+    else
+      with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+           :ok <- Engram.Vaults.check_api_key_access(conn.assigns[:current_api_key], vault) do
+        {:ok, vault}
+      else
+        _ -> {:error, vault_denied_message(user, requested, conn)}
+      end
     end
   end
 
@@ -361,16 +389,14 @@ defmodule EngramWeb.McpController do
   # Empty accessible set: distinguish "user has no vaults at all" (sync to make
   # one) from "the credential can reach none of the user's vaults" (a scope /
   # deleted-vault problem that syncing won't fix).
-  defp no_vault_message(user) do
-    case Engram.Vaults.list_vaults(user) do
-      [] ->
-        "No vault found. Sync from Obsidian to create one."
+  defp no_vault_message(user), do: no_vault_message_for(Engram.Vaults.list_vaults(user))
 
-      _ ->
-        "This connection can't reach any of your vaults — its credential is scoped to a " <>
-          "vault that no longer exists or that it isn't permitted to use."
-    end
-  end
+  defp no_vault_message_for([]), do: "No vault found. Sync from Obsidian to create one."
+
+  defp no_vault_message_for(_vaults),
+    do:
+      "This connection can't reach any of your vaults — its credential is scoped to a " <>
+        "vault that no longer exists or that it isn't permitted to use."
 
   # -- Response helpers --
 

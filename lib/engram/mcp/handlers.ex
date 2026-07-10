@@ -522,10 +522,12 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  @doc false
   # Render Search.search/4 output for the search_notes tool. `names` maps
   # vault_id → vault name; when non-empty (cross-vault mode) each hit is labelled
-  # with its vault so the caller knows which vault to act against.
-  defp render_search({:ok, results}, names) when results != [] do
+  # with its vault so the caller knows which vault to act against. Public (doc:
+  # false) so the vault-labelling can be unit-tested without standing up Qdrant.
+  def render_search({:ok, results}, names) when results != [] do
     text =
       results
       |> Enum.with_index(1)
@@ -534,8 +536,8 @@ defmodule Engram.MCP.Handlers do
     {:ok, text}
   end
 
-  defp render_search({:ok, _empty}, _names), do: {:ok, "No results found."}
-  defp render_search({:error, _reason}, _names), do: {:ok, "Search unavailable."}
+  def render_search({:ok, _empty}, _names), do: {:ok, "No results found."}
+  def render_search({:error, _reason}, _names), do: {:ok, "Search unavailable."}
 
   defp format_search_result(r, i, names) do
     ["## Result #{i} (score: #{Float.round(r.score, 3)})"]

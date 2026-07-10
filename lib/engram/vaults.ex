@@ -600,22 +600,10 @@ defmodule Engram.Vaults do
 
   Returns `:ok` or `:forbidden`.
   """
-  def check_api_key_access(nil, _vault), do: :ok
-
   def check_api_key_access(api_key, vault) do
-    # Schemaless query: Ecto/Postgrex can't infer column types so we declare
-    # them explicitly. Both columns are `uuid` (Phase B of PG18+UUIDv7 rework).
-    restricted_vault_ids =
-      from(akv in "api_key_vaults",
-        where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
-        select: type(akv.vault_id, Ecto.UUID)
-      )
-      |> Repo.all(skip_tenant_check: true)
-
-    cond do
-      restricted_vault_ids == [] -> :ok
-      vault.id in restricted_vault_ids -> :ok
-      true -> :forbidden
+    case accessible_vault_ids(api_key) do
+      :all -> :ok
+      ids -> if vault.id in ids, do: :ok, else: :forbidden
     end
   end
 

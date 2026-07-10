@@ -20,6 +20,36 @@ defmodule Engram.MCP.HandlersSearchModeTest do
     assert vault_id["description"] =~ "ALL your vaults"
   end
 
+  describe "render_search/2 vault attribution (cross-vault mode)" do
+    test "labels each result with its vault when a names map is given" do
+      results =
+        {:ok,
+         [
+           %{score: 0.91, vault_id: "v1", source_path: "Health/A.md", text: "aaa", title: "A"},
+           %{score: 0.82, vault_id: "v2", source_path: "Work/B.md", text: "bbb"}
+         ]}
+
+      {:ok, text} = Handlers.render_search(results, %{"v1" => "Health", "v2" => "Work"})
+
+      assert text =~ "**Vault:** Health (v1)"
+      assert text =~ "**Vault:** Work (v2)"
+    end
+
+    test "single-vault mode (empty names) emits no vault label" do
+      results = {:ok, [%{score: 0.9, vault_id: "v1", source_path: "A.md", text: "x", title: "A"}]}
+
+      {:ok, text} = Handlers.render_search(results, %{})
+
+      refute text =~ "**Vault:**"
+      assert text =~ "**Title:** A"
+    end
+
+    test "empty and error results render human messages" do
+      assert Handlers.render_search({:ok, []}, %{"v1" => "Health"}) == {:ok, "No results found."}
+      assert Handlers.render_search({:error, :boom}, %{}) == {:ok, "Search unavailable."}
+    end
+  end
+
   test "mode arg maps to the Search opt (unknown falls back to hybrid)" do
     assert Handlers.search_mode(%{"mode" => "keyword"}) == :keyword
     assert Handlers.search_mode(%{"mode" => "vector"}) == :vector
