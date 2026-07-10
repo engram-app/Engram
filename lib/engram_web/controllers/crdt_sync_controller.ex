@@ -58,21 +58,25 @@ defmodule EngramWeb.CrdtSyncController do
     end
   end
 
-  defp decode_std(b64) do
+  defp decode_std(b64) when is_binary(b64) do
     case Base.decode64(b64) do
       {:ok, bin} -> {:ok, bin}
       :error -> {:error, :bad_base64}
     end
   end
 
+  defp decode_std(_), do: {:error, :bad_base64}
+
   defp decode_since(nil), do: {:ok, nil}
 
-  defp decode_since(sv) do
+  defp decode_since(sv) when is_binary(sv) do
     case Base.url_decode64(sv, padding: false) do
       {:ok, bin} -> {:ok, bin}
       :error -> {:error, :bad_since}
     end
   end
+
+  defp decode_since(_), do: {:error, :bad_since}
 
   defp error(conn, status, message) do
     conn |> put_status(status) |> json(%{error: message})

@@ -28,13 +28,25 @@ defmodule EngramWeb.CrdtSyncControllerTest do
       assert CrdtBridge.body_of(client) =~ "hello"
     end
 
-    test "404 for a note not in this vault", %{conn: conn} do
+    test "404 for an unknown note id", %{conn: conn} do
       conn = get(conn, "/api/notes/#{Ecto.UUID.generate()}/updates")
       assert json_response(conn, 404)
     end
 
     test "400 for a non-uuid id", %{conn: conn} do
       conn = get(conn, "/api/notes/not-a-uuid/updates")
+      assert json_response(conn, 400)
+    end
+
+    test "400 (not 500) when since is a repeated (list) query param", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      note = seed_note(user, vault, "T/H.md", "# H")
+
+      # ?since[]=x parses to a list, not a scalar string — must 400, not crash.
+      conn = get(conn, "/api/notes/#{note.id}/updates?since[]=x")
       assert json_response(conn, 400)
     end
   end
@@ -94,6 +106,18 @@ defmodule EngramWeb.CrdtSyncControllerTest do
         |> post("/api/notes/#{note.id}/updates", %{update: Base.encode64(<<0, 0>>)})
 
       assert json_response(conn, 401)
+    end
+
+    test "400 (not 500) when update is not a string", %{conn: conn, user: user, vault: vault} do
+      note = seed_note(user, vault, "T/G.md", "# G")
+
+      # A JSON integer (not a base64 string) must be rejected as bad input, not crash.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/api/notes/#{note.id}/updates", Jason.encode!(%{"update" => 123}))
+
+      assert json_response(conn, 400)
     end
   end
 
