@@ -11,12 +11,14 @@ defmodule Engram.Notes.CrdtTransport do
   callback encrypts + logs the update). Reads rebuild the doc read-only from the
   persisted snapshot + tail. Never span-diffs, never applies a base_hash CAS.
   """
-  require Logger
+  import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, Note}
   alias Yex.Sync.SharedDoc
+
+  require Logger
 
   @doc "sha256(state vector), url-safe base64 no padding. THE head marker."
   @spec head_marker(Yex.Doc.t()) :: String.t()
@@ -116,6 +118,31 @@ defmodule Engram.Notes.CrdtTransport do
       )
 
       {:error, :room_unavailable}
+  end
+
+  @doc """
+  Map every note in the vault to its head marker so a client can diff against
+  its local per-note heads and learn which cold notes advanced.
+  """
+  @spec vault_heads(map(), map()) :: %{String.t() => String.t()}
+  def vault_heads(user, vault) do
+    # ponytail: rebuilds every note's doc read-only — O(notes) NIF work per call,
+    # and read_delta also decrypts each note's content it then discards. NO client
+    # polls this in Phase 1; it is dormant until Phase 3. Upgrade path (spec open
+    # Q#1): persist a `crdt_head` column updated in update_v1/checkpoint, or ETag
+    # the index, before any client polls it at scale.
+    {:ok, ids} =
+      Repo.with_tenant(user.id, fn ->
+        Note
+        |> where([n], n.vault_id == ^vault.id and is_nil(n.deleted_at))
+        |> select([n], n.id)
+        |> Repo.all()
+      end)
+
+    Map.new(ids, fn note_id ->
+      {:ok, %{head: head}} = read_delta(user, vault, note_id, nil)
+      {note_id, head}
+    end)
   end
 
   # Read-only reconstruction of the canonical doc: persisted snapshot + tail

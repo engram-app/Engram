@@ -105,4 +105,23 @@ defmodule Engram.Notes.CrdtTransportTest do
                CrdtTransport.apply_update(user, vault, Ecto.UUID.generate(), <<0, 0>>)
     end
   end
+
+  describe "vault_heads/2" do
+    test "returns a marker per note and only the edited note's marker changes",
+         %{user: user, vault: vault} do
+      {:ok, a} = Notes.upsert_note(user, vault, %{path: "H/A.md", content: "# A", mtime: 1_000.0})
+      {:ok, b} = Notes.upsert_note(user, vault, %{path: "H/B.md", content: "# B", mtime: 1_000.0})
+
+      heads0 = CrdtTransport.vault_heads(user, vault)
+      assert Map.has_key?(heads0, a.id)
+      assert Map.has_key?(heads0, b.id)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{path: "H/A.md", content: "# A edited", mtime: 2_000.0})
+
+      heads1 = CrdtTransport.vault_heads(user, vault)
+      assert heads1[a.id] != heads0[a.id], "edited note's head must advance"
+      assert heads1[b.id] == heads0[b.id], "untouched note's head must be stable"
+    end
+  end
 end
