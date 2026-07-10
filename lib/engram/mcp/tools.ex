@@ -56,6 +56,18 @@ defmodule Engram.MCP.Tools do
 
   defp with_vault_id(%{name: name} = tool) when name in @vault_scoping_exempt, do: tool
 
+  # search_notes spans all vaults by default, so vault_id is an optional narrower
+  # there — not the "required when multi-vault" contract the other tools carry.
+  defp with_vault_id(%{name: "search_notes"} = tool) do
+    put_in(tool, [:inputSchema, "properties", "vault_id"], %{
+      "type" => "string",
+      "format" => "uuid",
+      "description" =>
+        "Optional: limit the search to a single vault (UUID). Omit to search across " <>
+          "ALL your vaults. Call list_vaults to see IDs."
+    })
+  end
+
   defp with_vault_id(tool),
     do: put_in(tool, [:inputSchema, "properties", "vault_id"], @vault_id_property)
 
@@ -103,9 +115,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "search_notes",
       description:
-        "Search your personal knowledge base. Finds relevant notes from your " <>
-          "Obsidian vault using semantic search. Use when the user asks about their " <>
-          "notes, vault, knowledge, or memory.",
+        "Search your personal knowledge base. Finds relevant notes using semantic " <>
+          "search. Searches across ALL your vaults by default; pass vault_id to limit " <>
+          "to one. Use when the user asks about their notes, vault, knowledge, or memory.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{

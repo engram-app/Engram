@@ -233,7 +233,7 @@ defmodule EngramWeb.McpControllerTest do
       %{conn: authed, user: user, vault_b: vault_b, default: default}
     end
 
-    test "a read with no vault_id fails loud instead of silently using the default",
+    test "a navigation read with no vault_id fails loud instead of silently using the default",
          %{conn: conn} do
       conn = call_tool(conn, "list_folders")
       resp = json_response(conn, 200)
@@ -242,6 +242,23 @@ defmodule EngramWeb.McpControllerTest do
       text = resp["result"]["content"] |> hd() |> Map.get("text")
       assert text =~ "multiple vaults"
       assert text =~ "list_vaults"
+    end
+
+    test "search_notes with no vault_id routes to cross-vault, not the multi-vault guard",
+         %{conn: conn} do
+      # Unlike navigation reads, a bare search spans every vault the credential
+      # can reach. Search execution needs Qdrant/embedder (absent in unit tests),
+      # so the tool errors — but crucially NOT with the navigation fail-loud
+      # guard, which proves it routed INTO search rather than refusing. The
+      # trapped search-unavailable log is expected here and captured.
+      {resp, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          call_tool(conn, "search_notes", %{"query" => "anything"}) |> json_response(200)
+        end)
+
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      refute text =~ "multiple vaults"
+      refute text =~ "specify which one"
     end
 
     test "a read targets the requested non-default vault", %{conn: conn, vault_b: vault_b} do
@@ -775,6 +792,46 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "Error:"
       assert text =~ "not accessible"
       refute text =~ "is valid"
+    end
+  end
+
+  # =========================================================================
+  # Cross-vault search must not leak vaults a restricted credential can't reach.
+  # A key permitted to a >1 SUBSET of the user's vaults cannot cross-vault
+  # search (Qdrant has no multi-vault filter), so it must be told to choose one
+  # rather than silently searching every vault (#729 privacy boundary).
+  # =========================================================================
+
+  describe "cross-vault search privacy for a subset-restricted key" do
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      {:ok, va} = Engram.Vaults.create_vault(user, %{name: "A"})
+      {:ok, vb} = Engram.Vaults.create_vault(user, %{name: "B"})
+      {:ok, _vc} = Engram.Vaults.create_vault(user, %{name: "C"})
+
+      {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
+      grant_api_write!(user)
+
+      # Permit the key to A and B only — NOT C. accessible = 2, total = 3.
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(va.id)},
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vb.id)}
+      ])
+
+      %{conn: build_conn() |> put_req_header("authorization", "Bearer #{api_key}")}
+    end
+
+    test "bare search on a >1 vault subset refuses to cross-vault (asks to choose)",
+         %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"query" => "anything"})
+      resp = json_response(conn, 200)
+      text = resp["result"]["content"] |> hd() |> Map.get("text")
+
+      assert resp["result"]["isError"] == true
+      assert text =~ "limited to specific vaults"
     end
   end
 

@@ -10,6 +10,16 @@ defmodule Engram.MCP.HandlersSearchModeTest do
     assert tool.inputSchema["properties"]["mode"]["default"] == "hybrid"
   end
 
+  test "search_notes vault_id is an OPTIONAL narrower (searches all vaults by default)" do
+    tool = Enum.find(Tools.list(), &(&1.name == "search_notes"))
+    vault_id = tool.inputSchema["properties"]["vault_id"]
+
+    assert vault_id["type"] == "string"
+    # Not required (unlike navigation/write tools, which need it when multi-vault).
+    refute "vault_id" in (tool.inputSchema["required"] || [])
+    assert vault_id["description"] =~ "ALL your vaults"
+  end
+
   test "mode arg maps to the Search opt (unknown falls back to hybrid)" do
     assert Handlers.search_mode(%{"mode" => "keyword"}) == :keyword
     assert Handlers.search_mode(%{"mode" => "vector"}) == :vector

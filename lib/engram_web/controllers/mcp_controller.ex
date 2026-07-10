@@ -226,15 +226,62 @@ defmodule EngramWeb.McpController do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end
 
-  defp dispatch_tool(tool, user, args, conn) do
-    case resolve_mcp_vault(user, args, conn) do
-      {:error, msg} ->
-        {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
-
-      {:ok, vault} ->
-        call_tool(tool, user, vault, args)
+  # search_notes defaults to ALL the credential's vaults (product decision
+  # 2026-07-10): a bare search spans everything the credential can reach; an
+  # explicit vault_id narrows to one.
+  defp dispatch_tool(%{name: "search_notes"} = tool, user, args, conn) do
+    if is_binary(args["vault_id"]) do
+      resolve_and_call(tool, user, args, conn)
+    else
+      search_across_accessible(tool, user, args, conn)
     end
   end
+
+  defp dispatch_tool(tool, user, args, conn) do
+    resolve_and_call(tool, user, args, conn)
+  end
+
+  defp resolve_and_call(tool, user, args, conn) do
+    case resolve_mcp_vault(user, args, conn) do
+      {:error, msg} -> error_result(msg)
+      {:ok, vault} -> call_tool(tool, user, vault, args)
+    end
+  end
+
+  # Picks the vault context for a bare (no vault_id) search. Cross-vault search
+  # (Qdrant with no vault filter) sees EVERY vault the user owns, so it is only
+  # safe when the credential can already reach all of them — otherwise it would
+  # leak vaults the credential was scoped away from (#729).
+  defp search_across_accessible(tool, user, args, conn) do
+    accessible = accessible_vaults(user, conn)
+    total = length(Engram.Vaults.list_vaults(user))
+
+    cond do
+      accessible == [] ->
+        error_result(no_vault_message(user))
+
+      length(accessible) == 1 ->
+        call_tool(tool, user, hd(accessible), args)
+
+      # Credential reaches every vault → one cross-vault query (no vault filter
+      # == exactly the accessible set here). `{:cross_vault, _}` carries the set
+      # for per-result vault labelling.
+      length(accessible) == total ->
+        call_tool(tool, user, {:cross_vault, accessible}, args)
+
+      # A per-vault-restricted key reaching a >1 subset: cross-vault would leak
+      # the vaults it can't see (Qdrant has no multi-vault filter), so require an
+      # explicit choice. Rare.
+      true ->
+        error_result(
+          "This connection is limited to specific vaults. Pass vault_id to choose one " <>
+            "(call list_vaults to see them)."
+        )
+    end
+  end
+
+  defp error_result(msg),
+    do: {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
 
   # -- Vault resolution --
 
