@@ -204,7 +204,7 @@ git commit -m "feat(crdt): REST Yjs read path (read_delta + head marker)"
 
 **Interfaces:**
 - Consumes: `Engram.Notes.note_in_vault?/3 :: boolean()`; `CrdtRegistry.ensure_started(user_id, vault_id, note_id) :: {:ok, pid()} | {:error, term()}`; `CrdtRegistry.terminate_room/1 :: :ok`; `Yex.Sync.SharedDoc.update_doc(pid, (Yex.Doc.t() -> any)) :: any`; `Yex.Sync.SharedDoc.get_doc(pid) :: Yex.Doc.t()`; `Yex.apply_update(doc, binary) :: :ok | {:error, term()}`.
-- Produces: `apply_update(user :: map(), vault :: map(), note_id :: String.t(), update :: binary()) :: {:ok, %{head: String.t()}} | {:error, :not_found | :invalid_update}`
+- Produces: `apply_update(user :: map(), vault :: map(), note_id :: String.t(), update :: binary()) :: {:ok, %{head: String.t()}} | {:error, :not_found | :invalid_update | :room_unavailable}` (`:room_unavailable` = room start/timeout/death; controller maps it to 503)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -599,6 +599,7 @@ defmodule EngramWeb.CrdtSyncController do
       {:error, :bad_base64} -> error(conn, 400, "invalid base64 update")
       {:error, :not_found} -> error(conn, 404, "note not found")
       {:error, :invalid_update} -> error(conn, 422, "update failed to apply")
+      {:error, :room_unavailable} -> error(conn, 503, "sync room unavailable, retry")
     end
   end
 
