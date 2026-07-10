@@ -97,5 +97,16 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
         payload: %{op: "delete", folder: "Live/Gone"}
       }
     end
+
+    test "does NOT broadcast when nothing was deleted (no phantom delete event)", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      assert response(delete(conn, ~p"/api/folders/NeverExisted"), 204)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+    end
   end
 end
