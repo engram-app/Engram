@@ -189,4 +189,44 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert heads1[b.id] == heads0[b.id], "untouched note's head must be stable"
     end
   end
+
+  describe "safe_wire_frame?/1 (P0 #989 — WS state-vector DoS guard)" do
+    test "non-step1 frames are always allowed (step2, update, non-sync)" do
+      assert CrdtTransport.safe_wire_frame?(<<0, 1, 5>>), "syncStep2"
+      assert CrdtTransport.safe_wire_frame?(<<0, 2, 9>>), "update"
+      assert CrdtTransport.safe_wire_frame?(<<7, 7, 7>>), "not a sync message"
+    end
+
+    test "a real step1 frame built by the library's own encoder is allowed" do
+      # Build the frame through y_ex's OWN encoder rather than hand-rolling the
+      # varUint8Array prefix, so this pins the guard's length-prefix unwrap to
+      # the actual library wire format — a future format drift breaks this test
+      # instead of silently diverging. message_encode is a pure NIF (no
+      # allocation bomb).
+      sv = Yex.encode_state_vector!(CrdtBridge.new_doc())
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      assert <<0, 0, _::binary>> = frame
+      assert CrdtTransport.safe_wire_frame?(frame)
+    end
+
+    test "a step1 with a crafted implausible state vector is rejected (never reaches the NIF)" do
+      # DELIBERATELY DETERMINISTIC: <<128, 128, 128, 128, 15>> decodes as a
+      # vector claiming ~2^31 client entries in 5 bytes. Random bytes here have
+      # crashed the whole VM in the past; safe_wire_frame?/1 must reject via
+      # pure byte math, never handing this to Yex.encode_state_as_update/2.
+      malicious_sv = <<128, 128, 128, 128, 15>>
+      frame = <<0, 0, byte_size(malicious_sv)>> <> malicious_sv
+      refute CrdtTransport.safe_wire_frame?(frame)
+    end
+
+    test "a step1 whose length prefix claims more bytes than are present is rejected" do
+      # Claims a 10-byte state vector but only 2 bytes follow the prefix.
+      refute CrdtTransport.safe_wire_frame?(<<0, 0, 10, 1, 2>>)
+    end
+
+    test "a bare or empty-vector step1 fails closed" do
+      refute CrdtTransport.safe_wire_frame?(<<0, 0>>)
+      refute CrdtTransport.safe_wire_frame?(<<0, 0, 0>>)
+    end
+  end
 end
