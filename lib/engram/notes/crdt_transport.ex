@@ -55,60 +55,67 @@ defmodule Engram.Notes.CrdtTransport do
   A malformed update yields `{:error, :invalid_update}` and mutates nothing.
   """
   @spec apply_update(map(), map(), String.t(), binary()) ::
-          {:ok, %{head: String.t()}} | {:error, :not_found | :invalid_update}
+          {:ok, %{head: String.t()}}
+          | {:error, :not_found | :invalid_update | :room_unavailable}
   def apply_update(user, vault, note_id, update) do
     if Notes.note_in_vault?(user, vault.id, note_id) do
-      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note_id)
-      parent = self()
-      ref = make_ref()
-
-      # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs inside
-      # the room and returns before update_doc does, so any {ref, :invalid}
-      # message is already in our mailbox by the time we `receive ... after 0`.
-      apply_in_room(room, note_id, fn doc ->
-        case Yex.apply_update(doc, update) do
-          :ok -> :ok
-          {:error, _} -> send(parent, {ref, :invalid})
-        end
-
-        :ok
-      end)
-
-      receive do
-        {^ref, :invalid} -> {:error, :invalid_update}
-      after
-        0 -> {:ok, %{head: head_marker(SharedDoc.get_doc(room))}}
+      with {:ok, room} <- CrdtRegistry.ensure_started(user.id, vault.id, note_id),
+           {:ok, head} <- apply_in_room(room, note_id, update) do
+        {:ok, %{head: head}}
+      else
+        {:error, :invalid_update} -> {:error, :invalid_update}
+        # ensure_started failure, or a room that timed out / died mid-apply.
+        {:error, _reason} -> {:error, :room_unavailable}
       end
     else
       {:error, :not_found}
     end
   end
 
-  # Run `fun` inside the room, tolerating benign exits (auto-exiting / shutting
-  # room). A real crash/timeout is logged, not swallowed. Mirrors
-  # CrdtDeliver.room_apply/3.
-  defp apply_in_room(room, note_id, fun) do
-    SharedDoc.update_doc(room, fun)
+  # Apply `update` to the room's doc and read the resulting head marker in the
+  # SAME synchronous in-room call, so a successful return is confirmed (never a
+  # false :ok from a raced timeout) and we never touch a possibly-dead pid
+  # afterwards. A malformed update yields {:error, :invalid_update}; a timed-out
+  # or gone room yields {:error, :room_unavailable}. Mirrors the benign-exit
+  # tolerance of CrdtDeliver.room_apply/3 but, unlike that fire-and-forget path,
+  # REPORTS failures instead of swallowing them — this is a write contract, not
+  # best-effort delivery.
+  @spec apply_in_room(pid(), String.t(), binary()) ::
+          {:ok, String.t()} | {:error, :invalid_update | :room_unavailable}
+  defp apply_in_room(room, note_id, update) do
+    parent = self()
+    ref = make_ref()
+
+    # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs to
+    # completion inside the room before this returns, so the {ref, result}
+    # message is already in our mailbox when we receive it.
+    SharedDoc.update_doc(room, fn doc ->
+      result =
+        case Yex.apply_update(doc, update) do
+          :ok -> {:ok, head_marker(doc)}
+          {:error, _} -> {:error, :invalid_update}
+        end
+
+      send(parent, {ref, result})
+      :ok
+    end)
+
+    receive do
+      {^ref, result} -> result
+    after
+      0 -> {:error, :room_unavailable}
+    end
   catch
-    :exit, {:noproc, _} ->
-      :ok
-
-    :exit, {:normal, _} ->
-      :ok
-
-    :exit, {:shutdown, _} ->
-      :ok
-
+    :exit, {:noproc, _} -> {:error, :room_unavailable}
+    :exit, {:normal, _} -> {:error, :room_unavailable}
+    :exit, {:shutdown, _} -> {:error, :room_unavailable}
     :exit, reason ->
       Logger.error(
         "crdt transport room apply exited",
-        Metadata.with_category(:error, :sync,
-          note_id: note_id,
-          reason: inspect(reason)
-        )
+        Metadata.with_category(:error, :sync, note_id: note_id, reason: inspect(reason))
       )
 
-      :ok
+      {:error, :room_unavailable}
   end
 
   # Read-only reconstruction of the canonical doc: persisted snapshot + tail
