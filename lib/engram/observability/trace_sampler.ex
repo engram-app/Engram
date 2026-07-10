@@ -6,9 +6,8 @@ defmodule Engram.Observability.TraceSampler do
   Installed as the `root:` sampler under `:parent_based` (see `runtime.exs`),
   so a `:drop` here cascades: the request's child spans (Phoenix, Ecto)
   inherit `not_recording` and are never built or exported. That keeps the
-  ~96% of trace volume that is liveness/readiness probes, the Prometheus
-  scrape, and the ALB origin-probe socket out of Tempo — without touching
-  any real-endpoint trace.
+  ~96% of trace volume that is liveness/readiness probes and the Prometheus
+  scrape out of Tempo — without touching any real-endpoint trace.
 
   The path lives in the `:"url.path"` attribute, which `opentelemetry_bandit`
   sets at span *start* (so it is present at sample time). Matching is exact:
@@ -16,17 +15,31 @@ defmodule Engram.Observability.TraceSampler do
   evaluated (`:parent_based` consults this sampler solely when there is no
   parent), so a real trace whose *child* span happens to carry `url.path=/`
   (e.g. an MCP call) is unaffected.
+
+  ## Deliberate limitations (head sampling)
+
+  The decision is made at span start, before status or duration are known, so:
+
+    * It drops probe paths **unconditionally** — a slow or 5xx health check
+      emits no trace either. Health-check failures are diagnosed via the ALB
+      `UnHealthyHostCount` alarm, 5xx metrics, and logs, not traces.
+    * It only fires on **root** spans. A probe request carrying an inbound
+      `traceparent` would be routed by `:parent_based` to a remote-parent
+      sampler and bypass the drop. Our probes (ALB, Prometheus/Alloy scrape,
+      Grafana synthetic) send no trace context, so this does not arise.
+
+  Bare `/` is intentionally **not** dropped: on self-host the backend serves
+  the SPA index at `/` (`get "/", SpaController`), so dropping it would lose
+  real page-load traces. On SaaS `/` is low-volume ALB/default traffic that
+  we accept tracing — the three probe paths already carry the ~96% of volume.
   """
 
   @behaviour :otel_sampler
 
-  # url.path values with no diagnostic value. `/` is the bare-root health
-  # ping: real SPA loads hit Cloudflare Pages, never the backend origin.
   @drop_paths MapSet.new(~w(
     /metrics
     /api/health
     /api/health/deep
-    /
     /socket/origin-probe/websocket
   ))
 
@@ -34,7 +47,7 @@ defmodule Engram.Observability.TraceSampler do
 
   @impl :otel_sampler
   def setup(%{ratio: ratio}) do
-    %{drop_paths: @drop_paths, ratio: :otel_sampler_trace_id_ratio_based.setup(ratio)}
+    %{ratio: :otel_sampler_trace_id_ratio_based.setup(ratio)}
   end
 
   @impl :otel_sampler
@@ -42,7 +55,7 @@ defmodule Engram.Observability.TraceSampler do
 
   @impl :otel_sampler
   def should_sample(ctx, trace_id, links, span_name, span_kind, attributes, config) do
-    if drop?(attributes, config.drop_paths) do
+    if drop?(attributes) do
       {:drop, [], :otel_span.tracestate(:otel_tracer.current_span_ctx(ctx))}
     else
       :otel_sampler_trace_id_ratio_based.should_sample(
@@ -62,18 +75,14 @@ defmodule Engram.Observability.TraceSampler do
   design — runs on the hot path of every root span, so any unexpected
   attribute shape returns `false` rather than raising.
   """
-  @spec drop?(term(), MapSet.t()) :: boolean()
-  def drop?(attributes, drop_paths \\ @drop_paths) do
+  @spec drop?(term()) :: boolean()
+  def drop?(attributes) do
     case lookup_path(attributes) do
-      path when is_binary(path) -> MapSet.member?(drop_paths, path)
+      path when is_binary(path) -> MapSet.member?(@drop_paths, path)
       _ -> false
     end
   end
 
   defp lookup_path(attributes) when is_map(attributes), do: Map.get(attributes, @path_key)
-
-  defp lookup_path(attributes) when is_list(attributes),
-    do: :proplists.get_value(@path_key, attributes, nil)
-
   defp lookup_path(_), do: nil
 end

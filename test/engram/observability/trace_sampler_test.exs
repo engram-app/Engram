@@ -3,7 +3,7 @@ defmodule Engram.Observability.TraceSamplerTest do
 
   alias Engram.Observability.TraceSampler
 
-  @noise_paths ~w(/metrics /api/health /api/health/deep / /socket/origin-probe/websocket)
+  @noise_paths ~w(/metrics /api/health /api/health/deep /socket/origin-probe/websocket)
 
   describe "drop?/1" do
     for path <- @noise_paths do
@@ -20,19 +20,20 @@ defmodule Engram.Observability.TraceSamplerTest do
       refute TraceSampler.drop?(%{"url.path": "/metrics/custom"})
     end
 
+    test "keeps bare / — self-host serves the SPA index there" do
+      refute TraceSampler.drop?(%{"url.path": "/"})
+    end
+
     test "keeps spans that carry no url.path (child / internal spans)" do
       refute TraceSampler.drop?(%{})
       refute TraceSampler.drop?(%{"db.system": "postgresql", "db.statement": "SELECT 1"})
     end
 
     # should_sample runs on the hot path of every span; a crash would break
-    # all tracing (or worse, request handling). It must be total.
-    test "tolerates list-shaped attributes" do
-      assert TraceSampler.drop?([{:"url.path", "/metrics"}])
-      refute TraceSampler.drop?([{:"db.system", "postgresql"}])
-    end
-
-    test "tolerates unexpected attribute shapes without raising" do
+    # all tracing (or worse, request handling). It must be total against any
+    # non-map shape (the :otel_sampler contract only ever delivers a map).
+    test "tolerates non-map attribute shapes without raising" do
+      refute TraceSampler.drop?([{:"url.path", "/metrics"}])
       refute TraceSampler.drop?(nil)
       refute TraceSampler.drop?("garbage")
     end
