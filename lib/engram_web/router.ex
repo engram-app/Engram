@@ -364,6 +364,9 @@ defmodule EngramWeb.Router do
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
     delete "/notes/by-id/:id", NotesController, :delete_by_id
+    post "/notes/:id/updates", CrdtSyncController, :post_update
+    get "/notes/:id/updates", CrdtSyncController, :get_updates
+    get "/vault/heads", CrdtSyncController, :vault_heads
     get "/notes/*path", NotesController, :show
     delete "/notes/*path", NotesController, :delete
 
