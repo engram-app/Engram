@@ -57,6 +57,45 @@ defmodule Engram.NotesDeleteTombstoneTest do
            )
   end
 
+  test "refuses a same-id re-push at the deleted path even with edited content (delete-wins over local edit)",
+       %{user: user, vault: vault} do
+    # The wedge case: a note deleted on another device is re-pushed by a client
+    # that still holds it AND has local edits (different content). It carries
+    # its own id at its own path — currently taking the resurrect-by-id path.
+    # Delete-wins: refuse so the delete stands; the client trashes its copy on
+    # `recently_deleted` instead of wedging on a 409 forever.
+    note = create_and_delete(user, vault, "ZombieTest/z.md", "# original")
+
+    assert {:error, :recently_deleted} =
+             Notes.upsert_note(user, vault, %{
+               "id" => note.id,
+               "path" => "ZombieTest/z.md",
+               "content" => "# original with unsynced local edits"
+             })
+
+    refute Repo.exists?(
+             from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at)),
+             skip_tenant_check: true
+           )
+  end
+
+  test "allows a same-id re-push at the deleted path once the window has expired (restore)",
+       %{user: user, vault: vault} do
+    note = create_and_delete(user, vault, "ZombieTest/z.md", "# original")
+    backdate_delete(note.id, 120)
+
+    # Past the delete-wins window, the same-id same-path re-push is a legitimate
+    # restore — resurrect it, don't refuse.
+    assert {:ok, restored} =
+             Notes.upsert_note(user, vault, %{
+               "id" => note.id,
+               "path" => "ZombieTest/z.md",
+               "content" => "# restored"
+             })
+
+    assert restored.id == note.id
+  end
+
   test "allows a genuinely different note re-created at the same path", %{
     user: user,
     vault: vault

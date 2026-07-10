@@ -709,11 +709,41 @@ defmodule Engram.Notes do
         {:id_collision, live}
 
       %Note{} = prior ->
-        move_note(prior, base_attrs, user, sanitized_path, folder)
+        # `prior` is a TOMBSTONE (the live case took :id_collision above). Two
+        # shapes share this branch and the path tells them apart:
+        #   - id-keyed RENAME: same id re-pushed at a DIFFERENT path (delete old
+        #     → push new) → resurrect via move_note.
+        #   - DELETE-WINS conflict: same id re-pushed at its OWN path within the
+        #     delete window — the note was deleted on another device and this is
+        #     a stale re-push (possibly carrying local edits). Refuse so the
+        #     delete stands; the client trashes its local copy on
+        #     `recently_deleted` instead of wedging on a resurrect/409 forever.
+        if recent_same_path_tombstone?(prior, sanitized_path, user) do
+          {:error, :recently_deleted}
+        else
+          move_note(prior, base_attrs, user, sanitized_path, folder)
+        end
 
       nil ->
         insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query)
     end
+  end
+
+  # A tombstone found by client id that sits at the SAME path as the incoming
+  # push and was deleted within the delete-wins window — the local-edit-vs-
+  # remote-delete signature. Distinguished from an id-keyed rename purely by
+  # path (a rename lands at a different path). Best-effort: a filter-key error
+  # falls back to false so a crypto hiccup never blocks a legitimate write.
+  defp recent_same_path_tombstone?(%Note{deleted_at: nil}, _sanitized_path, _user), do: false
+
+  defp recent_same_path_tombstone?(%Note{} = prior, sanitized_path, user) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
+
+    DateTime.compare(prior.deleted_at, cutoff) != :lt and
+      case Crypto.dek_filter_key(user) do
+        {:ok, filter_key} -> prior.path_hmac == Crypto.hmac_field(filter_key, sanitized_path)
+        _ -> false
+      end
   end
 
   defp existing_by_client_id(nil, _vault), do: nil
