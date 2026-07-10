@@ -12,7 +12,7 @@ const useSearchSpy = vi.fn((q: string, _filters?: unknown) => ({
 					{
 						id: 7,
 						path: "note.md",
-						title: "Note",
+						title: "Some H1 Heading",
 						folder: "",
 						heading_path: "",
 						snippet: "hello world",
@@ -66,11 +66,12 @@ describe("SearchPanel", () => {
 		expect(screen.getByText("alpha")).toBeInTheDocument();
 	});
 
-	it("types into the input and renders a result row", async () => {
+	it("renders a result row labeled by filename, never the derived title", async () => {
 		renderPanel();
 		const input = screen.getByPlaceholderText(/search your notes/iu) as HTMLInputElement;
 		fireEvent.change(input, { target: { value: "hello" } });
-		expect(await screen.findByText("Note")).toBeInTheDocument();
+		expect(await screen.findByText("note")).toBeInTheDocument();
+		expect(screen.queryByText("Some H1 Heading")).not.toBeInTheDocument();
 	});
 
 	it("[x] returns to Files view", () => {

@@ -218,6 +218,25 @@ defmodule EngramWeb.NotesControllerTest do
       assert resp["note"]["content"] =~ "stuff"
     end
 
+    test "returns 409 (not 500) when append re-creates at a just-deleted path with identical content",
+         %{conn: conn} do
+      # append-create derives content = "# <basename>\n\n<text>". Seed a tombstone
+      # with that exact content so the delete-wins guard (identical content_hash,
+      # same path, within window) fires on the append-create branch — which must
+      # return a clean 409, not crash format_errors/1 on the :recently_deleted atom.
+      post(conn, "/api/notes", %{
+        path: "AppendZombie.md",
+        content: "# AppendZombie\n\nseed",
+        mtime: 1_000.0
+      })
+
+      assert conn |> delete("/api/notes/AppendZombie.md") |> json_response(200)
+
+      conn = post(conn, "/api/notes/append", %{path: "AppendZombie.md", text: "seed"})
+
+      assert json_response(conn, 409) == %{"conflict" => true, "reason" => "recently_deleted"}
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn

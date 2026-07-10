@@ -64,6 +64,13 @@ defmodule Engram.Notes do
     :updated_at
   ]
 
+  # Delete-wins window: an identical re-push at a path deleted within this many
+  # seconds is refused (`:recently_deleted`), so an explicit delete is not
+  # silently undone by a stale re-push from another device that still holds the
+  # note (the cross-device resurrection race). A byte-different note or a
+  # tombstone older than the window is allowed through as a genuine re-create.
+  @delete_tombstone_window_seconds 60
+
   @doc """
   Composable query scope that restricts a `Note` query to kind='note' rows.
   Every site that wants real notes (excluding folder markers) should
@@ -522,8 +529,17 @@ defmodule Engram.Notes do
     # UPDATE ... WHERE notes_count < limit gating the insert.
     current_count = UsageMeters.notes_count(user.id)
 
-    case Billing.check_limit(user, :notes_cap, current_count) do
-      {:error, :limit_reached} ->
+    cond do
+      recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
+        # Delete-wins race: this is a fresh create (no live path match, no
+        # client-id match) at a path an explicit delete tombstoned seconds ago,
+        # carrying identical content — i.e. another device re-pushing the note
+        # it still holds. Refuse so the delete stands; the client converges by
+        # dropping its local copy. Resurrect-by-id (rename restore) never
+        # reaches here — it takes move_note's branch on a client-id match.
+        {:error, :recently_deleted}
+
+      match?({:error, :limit_reached}, Billing.check_limit(user, :notes_cap, current_count)) ->
         # Free-tier launch §4.5 — carry the resolved limit + current count
         # back to the controller so the 402 body can populate them. The
         # resolver call here is the same one check_limit already made
@@ -532,7 +548,7 @@ defmodule Engram.Notes do
         limit = Billing.effective_limit(user, :notes_cap)
         {:error, {:notes_cap_reached, limit, current_count}}
 
-      :ok ->
+      true ->
         # T3.6 — pre-allocate the row id so the AAD bind string
         # ("notes:<column>:<id>") can be computed before INSERT. As of the
         # PG18 + UUIDv7 rework (Phase B), the id is minted app-side via
@@ -693,11 +709,41 @@ defmodule Engram.Notes do
         {:id_collision, live}
 
       %Note{} = prior ->
-        move_note(prior, base_attrs, user, sanitized_path, folder)
+        # `prior` is a TOMBSTONE (the live case took :id_collision above). Two
+        # shapes share this branch and the path tells them apart:
+        #   - id-keyed RENAME: same id re-pushed at a DIFFERENT path (delete old
+        #     → push new) → resurrect via move_note.
+        #   - DELETE-WINS conflict: same id re-pushed at its OWN path within the
+        #     delete window — the note was deleted on another device and this is
+        #     a stale re-push (possibly carrying local edits). Refuse so the
+        #     delete stands; the client trashes its local copy on
+        #     `recently_deleted` instead of wedging on a resurrect/409 forever.
+        if recent_same_path_tombstone?(prior, sanitized_path, user) do
+          {:error, :recently_deleted}
+        else
+          move_note(prior, base_attrs, user, sanitized_path, folder)
+        end
 
       nil ->
         insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query)
     end
+  end
+
+  # A tombstone found by client id that sits at the SAME path as the incoming
+  # push and was deleted within the delete-wins window — the local-edit-vs-
+  # remote-delete signature. Distinguished from an id-keyed rename purely by
+  # path (a rename lands at a different path). Best-effort: a filter-key error
+  # falls back to false so a crypto hiccup never blocks a legitimate write.
+  defp recent_same_path_tombstone?(%Note{deleted_at: nil}, _sanitized_path, _user), do: false
+
+  defp recent_same_path_tombstone?(%Note{} = prior, sanitized_path, user) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
+
+    DateTime.compare(prior.deleted_at, cutoff) != :lt and
+      case Crypto.dek_filter_key(user) do
+        {:ok, filter_key} -> prior.path_hmac == Crypto.hmac_field(filter_key, sanitized_path)
+        _ -> false
+      end
   end
 
   defp existing_by_client_id(nil, _vault), do: nil
@@ -1123,6 +1169,32 @@ defmodule Engram.Notes do
            n.user_id == ^user.id and n.vault_id == ^vault.id and n.path_hmac == ^hmac and
              is_nil(n.deleted_at)
        )}
+    end
+  end
+
+  # True when `path` holds a note tombstoned within the delete-wins window whose
+  # stored content_hash equals the incoming push's — the resurrection signature
+  # (a stale re-push of the exact note just deleted). A byte-different note or a
+  # tombstone older than the window returns false, so a genuine re-create at the
+  # same path is allowed. Best-effort: a filter-key error falls back to false
+  # (never blocks a write on a crypto hiccup).
+  defp recently_deleted_twin?(user, vault_id, path, content_hash) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        hmac = Crypto.hmac_field(filter_key, path)
+        cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
+
+        Repo.exists?(
+          from(n in Note,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault_id and n.path_hmac == ^hmac and
+                n.kind == "note" and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff and
+                n.content_hash == ^content_hash
+          )
+        )
+
+      _ ->
+        false
     end
   end
 
@@ -1771,6 +1843,46 @@ defmodule Engram.Notes do
   # (second write would be an update-of-uncommitted-row) and by client id
   # (two rows with one PK in a single insert_all raises "cannot affect row
   # a second time" even under ON CONFLICT, aborting the whole batch).
+  # Set of {path_hmac, content_hash} for notes at `hmacs` tombstoned within the
+  # delete-wins window — the batch-path twin of `recently_deleted_twin?/4`.
+  defp recent_delete_twins(_user, _vault, []), do: MapSet.new()
+
+  defp recent_delete_twins(user, vault, hmacs) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@delete_tombstone_window_seconds, :second)
+
+    Repo.all(
+      from(n in Note,
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+            n.path_hmac in ^hmacs and not is_nil(n.deleted_at) and n.deleted_at >= ^cutoff,
+        select: {n.path_hmac, n.content_hash}
+      )
+    )
+    |> MapSet.new()
+  end
+
+  # Marks pending CREATE-entries whose (path_hmac, content_hash) matches a
+  # recent tombstone as per-note `recently_deleted` errors — delete-wins for the
+  # batch path. An entry whose hmac has a LIVE note is a normal update and is
+  # left alone (it takes process_batch_entry's `existing ->` branch downstream).
+  defp mark_recently_deleted(entries, existing_by_hmac, twins) do
+    if MapSet.size(twins) == 0 do
+      entries
+    else
+      Enum.map(entries, fn
+        %{result: nil, path_hmac: hmac, hash: hash} = entry ->
+          if not Map.has_key?(existing_by_hmac, hmac) and MapSet.member?(twins, {hmac, hash}) do
+            %{entry | result: {:error, %{reason: "recently_deleted"}}}
+          else
+            entry
+          end
+
+        other ->
+          other
+      end)
+    end
+  end
+
   defp mark_duplicate_paths(entries) do
     {marked, _seen} =
       Enum.map_reduce(entries, {MapSet.new(), MapSet.new()}, fn entry, {paths, ids} ->
@@ -1816,12 +1928,22 @@ defmodule Engram.Notes do
       )
       |> Map.new(&{&1.path_hmac, &1})
 
+    # Delete-wins for the batch path (same blind spot as the single upsert):
+    # an entry creating a note at a path tombstoned within the window with
+    # identical content is a stale re-push racing an explicit delete. Mark it
+    # as a per-note error so the delete stands, without aborting the batch.
+    entries =
+      mark_recently_deleted(entries, existing_by_hmac, recent_delete_twins(user, vault, hmacs))
+
     # vault_populated probe — must read BEFORE the insert_all below.
     was_empty =
       not Repo.exists?(from(n in Note, where: n.user_id == ^user.id and n.vault_id == ^vault.id))
 
     to_insert =
-      Enum.count(pending, &(not Map.has_key?(existing_by_hmac, &1.path_hmac)))
+      Enum.count(
+        entries,
+        &(is_nil(&1.result) and not Map.has_key?(existing_by_hmac, &1.path_hmac))
+      )
 
     check_batch_notes_cap!(user, to_insert)
 

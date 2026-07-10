@@ -225,6 +225,13 @@ defmodule EngramWeb.SyncChannel do
              {:error, %{reason: "version_conflict", server_note: serialize_note(server_note)}},
              socket}
 
+          {:error, :recently_deleted} ->
+            # Delete-wins: this create races an explicit delete of the same path
+            # seconds ago with identical content — the pusher still holds a note
+            # another device deleted. Refuse so the delete stands; the plugin
+            # converges by dropping its local copy on this reason.
+            {:reply, {:error, %{reason: "recently_deleted"}}, socket}
+
           {:error, changeset} ->
             {:reply, {:error, %{"reason" => format_errors(changeset)}}, socket}
         end
