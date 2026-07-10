@@ -220,8 +220,10 @@ defmodule Engram.Notes.CrdtTransport do
   # Read-only reconstruction of the canonical doc: persisted snapshot + tail
   # replay, exactly the recipe bind/3 and maybe_merge_crdt use. Spawns no room
   # and has no side effects. A decrypt/apply failure raises (loud) rather than
-  # silently returning an empty doc.
-  @spec load_doc(map(), map(), String.t()) :: {:ok, Yex.Doc.t()} | {:error, :not_found}
+  # silently returning an empty doc. No @spec: Dialyzer infers the concrete
+  # %User{}/%Vault{} arg types from the private call sites, and a hand-written
+  # map()/map() contract is a supertype of that (contract_supertype); the public
+  # read_delta/2..4 specs already document the boundary types.
   defp load_doc(user, vault, note_id) do
     case Notes.get_note_by_id(user, vault, note_id) do
       {:ok, note} ->
