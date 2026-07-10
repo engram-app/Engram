@@ -54,6 +54,9 @@ defmodule Engram.Application do
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
         clerk_strategy_child(),
+        # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
+        # must start before any CRDT room can terminate and call unbind/3.
+        Engram.Notes.CheckpointGate,
         # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
         # cluster-wide singletons via :global; this supervisor is the local
         # owner when a room is started on this node (see CrdtRegistry).
